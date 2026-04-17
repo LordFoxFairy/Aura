@@ -1,0 +1,6 @@
+{
+  "providers": [
+    {"name": "anthropic-direct", "protocol": "anthropic", "api_key_env": "ANTHROPIC_API_KEY"}
+  ],
+  "router": {"default": "anthropic-direct:claude-3-5-sonnet-latest"}
+}

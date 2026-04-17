@@ -1,3 +1,0 @@
-[model]
-provider = "ollama"
-name = "llama3"

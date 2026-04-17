@@ -1,6 +1,7 @@
 """Tests for aura.config.loader — load_config() with precedence and merge."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "config"
 
 
 def test_load_config_defaults_when_no_files(tmp_path: Path) -> None:
-    cfg = load_config(user_config=tmp_path / "u.toml", project_config=tmp_path / "p.toml")
+    cfg = load_config(user_config=tmp_path / "u.json", project_config=tmp_path / "p.json")
     assert cfg == AuraConfig()
 
 
@@ -28,25 +29,30 @@ def test_load_config_defaults_when_no_files(tmp_path: Path) -> None:
 
 def test_load_config_user_only_applies(tmp_path: Path) -> None:
     cfg = load_config(
-        user_config=FIXTURES / "user_only.toml",
-        project_config=tmp_path / "nonexistent.toml",
+        user_config=FIXTURES / "user_only.json",
+        project_config=tmp_path / "nonexistent.json",
     )
-    assert cfg.model.provider == "anthropic"
-    assert cfg.model.name == "claude-3-5-sonnet-latest"
+    assert len(cfg.providers) == 1
+    assert cfg.providers[0].name == "anthropic-direct"
+    assert cfg.providers[0].protocol == "anthropic"
+    assert cfg.router == {"default": "anthropic-direct:claude-3-5-sonnet-latest"}
 
 
 # ---------------------------------------------------------------------------
-# 3. Project config overrides user section (section-level whole replacement)
+# 3. Project config wholly replaces user's providers (no merge)
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_project_overrides_user_section() -> None:
+def test_load_config_project_wholly_replaces_user_providers(tmp_path: Path) -> None:
     cfg = load_config(
-        user_config=FIXTURES / "user_only.toml",
-        project_config=FIXTURES / "project_override.toml",
+        user_config=FIXTURES / "user_only.json",
+        project_config=FIXTURES / "project_override.json",
     )
-    assert cfg.model.provider == "ollama"
-    assert cfg.model.name == "llama3"
+    # project's providers wholly replace user's — only openrouter remains
+    assert len(cfg.providers) == 1
+    assert cfg.providers[0].name == "openrouter"
+    assert cfg.providers[0].protocol == "openai"
+    assert cfg.router == {"default": "openrouter:anthropic/claude-opus-4"}
 
 
 # ---------------------------------------------------------------------------
@@ -55,16 +61,19 @@ def test_load_config_project_overrides_user_section() -> None:
 
 
 def test_load_config_env_var_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    env_config = tmp_path / "env_config.toml"
-    env_config.write_text('[model]\nprovider = "openai"\nname = "gpt-5"\n')
+    env_config = tmp_path / "env_config.json"
+    env_config.write_text(json.dumps({
+        "providers": [{"name": "env-provider", "protocol": "openai", "api_key_env": "ENV_KEY"}],
+        "router": {"default": "env-provider:gpt-5"},
+    }))
     monkeypatch.setenv("AURA_CONFIG", str(env_config))
 
     cfg = load_config(
-        user_config=FIXTURES / "user_only.toml",
-        project_config=FIXTURES / "project_override.toml",
+        user_config=FIXTURES / "user_only.json",
+        project_config=FIXTURES / "project_override.json",
     )
-    assert cfg.model.provider == "openai"
-    assert cfg.model.name == "gpt-5"
+    assert cfg.providers[0].name == "env-provider"
+    assert cfg.router == {"default": "env-provider:gpt-5"}
 
 
 # ---------------------------------------------------------------------------
@@ -72,13 +81,13 @@ def test_load_config_env_var_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_env_var_missing_file_raises_AuraConfigError(
+def test_load_config_env_var_missing_file_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("AURA_CONFIG", str(tmp_path / "does_not_exist.toml"))
+    monkeypatch.setenv("AURA_CONFIG", str(tmp_path / "does_not_exist.json"))
 
     with pytest.raises(AuraConfigError) as exc_info:
-        load_config(user_config=tmp_path / "u.toml", project_config=tmp_path / "p.toml")
+        load_config(user_config=tmp_path / "u.json", project_config=tmp_path / "p.json")
 
     err = exc_info.value
     assert err.source == "$AURA_CONFIG"
@@ -86,35 +95,51 @@ def test_load_config_env_var_missing_file_raises_AuraConfigError(
 
 
 # ---------------------------------------------------------------------------
-# 6. Invalid TOML raises AuraConfigError with correct source
+# 6. Invalid JSON raises AuraConfigError with correct source
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_invalid_toml_raises_AuraConfigError(tmp_path: Path) -> None:
-    invalid_path = FIXTURES / "invalid.toml"
+def test_load_config_invalid_json_raises(tmp_path: Path) -> None:
+    invalid_path = FIXTURES / "invalid.json"
 
     with pytest.raises(AuraConfigError) as exc_info:
-        load_config(user_config=invalid_path, project_config=tmp_path / "p.toml")
+        load_config(user_config=invalid_path, project_config=tmp_path / "p.json")
 
     err = exc_info.value
     assert err.source == str(invalid_path)
-    # detail should contain parse error info
     assert err.detail  # non-empty
 
 
 # ---------------------------------------------------------------------------
-# 7. Pydantic ValidationError wraps as AuraConfigError with source "merged config"
+# 7. Non-object top level raises AuraConfigError mentioning "object at top level"
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_validation_error_wraps_as_AuraConfigError(
-    tmp_path: Path,
-) -> None:
-    bad_config = tmp_path / "bad_schema.toml"
-    bad_config.write_text("[tools]\nunknown_key = 1\n")
+def test_load_config_non_object_top_level_raises(tmp_path: Path) -> None:
+    bad_path = tmp_path / "array.json"
+    bad_path.write_text("[1, 2, 3]")
 
     with pytest.raises(AuraConfigError) as exc_info:
-        load_config(user_config=bad_config, project_config=tmp_path / "p.toml")
+        load_config(user_config=bad_path, project_config=tmp_path / "p.json")
+
+    err = exc_info.value
+    assert "object at top level" in err.detail
+
+
+# ---------------------------------------------------------------------------
+# 8. ValidationError wraps as AuraConfigError with source "merged config"
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_validation_error_wraps(tmp_path: Path) -> None:
+    bad_config = tmp_path / "bad_schema.json"
+    bad_config.write_text(json.dumps({
+        "router": {"default": "ghost:m"},
+        "providers": [{"name": "real", "protocol": "openai"}],
+    }))
+
+    with pytest.raises(AuraConfigError) as exc_info:
+        load_config(user_config=bad_config, project_config=tmp_path / "p.json")
 
     err = exc_info.value
     assert err.source == "merged config"
@@ -122,20 +147,24 @@ def test_load_config_validation_error_wraps_as_AuraConfigError(
 
 
 # ---------------------------------------------------------------------------
-# 8. Section-level replace: project [model] wholly replaces user's [model]
-#    (user extras disappear — NOT key-level merge)
+# 9. Top-level shallow replace: project router wholly replaces user router
 # ---------------------------------------------------------------------------
 
 
-def test_load_config_section_level_replace_drops_user_extras(tmp_path: Path) -> None:
-    user_cfg = tmp_path / "user.toml"
-    user_cfg.write_text("[model]\ntemperature = 0.7\n")
+def test_load_config_top_level_shallow_replace_drops_user_router(tmp_path: Path) -> None:
+    user_cfg = tmp_path / "user.json"
+    user_cfg.write_text(json.dumps({
+        "providers": [{"name": "openai", "protocol": "openai", "api_key_env": "OPENAI_API_KEY"}],
+        "router": {"default": "openai:gpt-4o-mini", "fast": "openai:gpt-4o-mini"},
+    }))
 
-    project_cfg = tmp_path / "project.toml"
-    project_cfg.write_text('[model]\nprovider = "anthropic"\n')
+    project_cfg = tmp_path / "project.json"
+    project_cfg.write_text(json.dumps({
+        "providers": [{"name": "openai", "protocol": "openai", "api_key_env": "OPENAI_API_KEY"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+    }))
 
     cfg = load_config(user_config=user_cfg, project_config=project_cfg)
 
-    assert cfg.model.provider == "anthropic"
-    # temperature should NOT be present — project's [model] wholly replaced user's
-    assert cfg.model.model_extra is None or "temperature" not in (cfg.model.model_extra or {})
+    assert cfg.router == {"default": "openai:gpt-4o-mini"}
+    assert "fast" not in cfg.router

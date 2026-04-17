@@ -1,0 +1,6 @@
+{
+  "providers": [
+    {"name": "openrouter", "protocol": "openai", "base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY"}
+  ],
+  "router": {"default": "openrouter:anthropic/claude-opus-4"}
+}

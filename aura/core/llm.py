@@ -70,8 +70,13 @@ _DEFAULT_KEY_ENV: dict[str, str | None] = {
 
 
 def _resolve_api_key(provider: ProviderConfig) -> str | None:
-    """Return API key for *provider* or raise MissingCredentialError."""
-    if provider.api_key is not None:
+    """Return API key for *provider* or raise MissingCredentialError.
+
+    Treats empty-string api_key as missing (fall through to api_key_env /
+    default env) — a user with `"api_key": ""` in their config clearly didn't
+    mean to hard-code an empty secret.
+    """
+    if provider.api_key:
         return provider.api_key
 
     if provider.api_key_env is not None:

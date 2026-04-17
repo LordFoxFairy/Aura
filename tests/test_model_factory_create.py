@@ -212,3 +212,35 @@ def test_create_missing_sdk_raises_install_hint(monkeypatch: pytest.MonkeyPatch)
 def test_create_errors_are_aura_config_error_subclasses() -> None:
     assert issubclass(MissingProviderDependencyError, AuraConfigError)
     assert issubclass(MissingCredentialError, AuraConfigError)
+
+
+def test_create_empty_plaintext_api_key_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty-string api_key must NOT be forwarded — treat as missing."""
+    from aura.core import llm
+
+    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("CUSTOM_KEY", raising=False)
+    monkeypatch.setenv("CUSTOM_KEY", "from-env")
+
+    provider = ProviderConfig(
+        name="x", protocol="openai", api_key="", api_key_env="CUSTOM_KEY"
+    )
+    model, _ = ModelFactory.create(provider, "gpt-4o-mini")
+
+    assert isinstance(model, _StubOpenAI)
+    assert model.kwargs["api_key"] == "from-env"  # not ""
+
+
+def test_create_empty_plaintext_api_key_with_no_fallback_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aura.core import llm
+
+    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    provider = ProviderConfig(name="x", protocol="openai", api_key="")
+    with pytest.raises(MissingCredentialError) as exc_info:
+        ModelFactory.create(provider, "gpt-4o-mini")
+    assert "OPENAI_API_KEY" in exc_info.value.detail

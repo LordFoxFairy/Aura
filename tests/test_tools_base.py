@@ -1,4 +1,4 @@
-"""Tests for aura.tools.base — AuraTool protocol, ToolResult, PermissionResult."""
+"""Tests for aura.tools.base — AuraTool protocol and ToolResult."""
 from __future__ import annotations
 
 import asyncio
@@ -6,24 +6,7 @@ import asyncio
 import pytest
 from pydantic import BaseModel
 
-from aura.tools.base import AuraTool, PermissionResult, ToolResult
-
-# ---------------------------------------------------------------------------
-# PermissionResult
-# ---------------------------------------------------------------------------
-
-
-def test_permission_result_defaults() -> None:
-    pr = PermissionResult(allow=True)
-    assert pr.allow is True
-    assert pr.reason is None
-
-
-def test_permission_result_with_reason() -> None:
-    pr = PermissionResult(allow=False, reason="nope")
-    assert pr.allow is False
-    assert pr.reason == "nope"
-
+from aura.tools.base import AuraTool, ToolResult
 
 # ---------------------------------------------------------------------------
 # ToolResult
@@ -68,9 +51,6 @@ class _EchoTool:
     is_destructive: bool = False
     is_concurrency_safe: bool = True
 
-    def check_permissions(self, params: BaseModel) -> PermissionResult:
-        return PermissionResult(allow=True)
-
     async def acall(self, params: BaseModel) -> ToolResult:
         return ToolResult(ok=True, output={"echoed": True})
 
@@ -97,9 +77,6 @@ def test_non_conforming_class_fails_isinstance() -> None:
         description: str = "missing attrs"
         # is_read_only, is_destructive, is_concurrency_safe omitted
         input_model: type[BaseModel] = _Empty
-
-        def check_permissions(self, params: BaseModel) -> PermissionResult:
-            return PermissionResult(allow=True)
 
         async def acall(self, params: BaseModel) -> ToolResult:
             return ToolResult(ok=True)

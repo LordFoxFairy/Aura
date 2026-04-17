@@ -1,15 +1,15 @@
-"""AuraTool protocol and supporting types."""
+"""AuraTool Protocol + ToolResult — framework-agnostic, no permission logic.
+
+Permission decisions are made by the loop via aura.core.permission.resolve();
+tools only declare capability flags (is_read_only / is_destructive /
+is_concurrency_safe) so the policy layer can short-circuit on read-only calls.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, NamedTuple, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
-
-
-class PermissionResult(NamedTuple):
-    allow: bool
-    reason: str | None = None
 
 
 @dataclass
@@ -28,7 +28,5 @@ class AuraTool(Protocol):
     is_read_only: bool
     is_destructive: bool
     is_concurrency_safe: bool
-
-    def check_permissions(self, params: BaseModel) -> PermissionResult: ...
 
     async def acall(self, params: BaseModel) -> ToolResult: ...

@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 
 from aura.tools.base import (  # noqa: F401  (AuraTool used for Protocol)
     AuraTool,
-    PermissionResult,
     ToolResult,
 )
 
@@ -27,9 +26,6 @@ class ReadFileTool:
     is_read_only: bool = True
     is_destructive: bool = False
     is_concurrency_safe: bool = True
-
-    def check_permissions(self, params: BaseModel) -> PermissionResult:
-        return PermissionResult(allow=True)
 
     async def acall(self, params: BaseModel) -> ToolResult:
         p = cast(ReadFileParams, params)

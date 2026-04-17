@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from aura.tools.base import AuraTool, PermissionResult
+from aura.tools.base import AuraTool
 from aura.tools.read_file import ReadFileParams, ReadFileTool
 
 
@@ -85,11 +85,6 @@ def test_read_file_is_read_only(tool: ReadFileTool) -> None:
     assert tool.is_read_only is True
     assert tool.is_destructive is False
     assert tool.is_concurrency_safe is True
-
-
-def test_read_file_permission_always_allows(tool: ReadFileTool) -> None:
-    result = tool.check_permissions(ReadFileParams(path="anything"))
-    assert result == PermissionResult(allow=True)
 
 
 def test_read_file_satisfies_protocol(tool: ReadFileTool) -> None:

@@ -1,0 +1,3 @@
+[model]
+provider = "anthropic"
+name = "claude-3-5-sonnet-latest"

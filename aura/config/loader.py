@@ -66,8 +66,7 @@ def load_config(
     # Merge: user → project → env (section-level shallow replace)
     merged: dict[str, Any] = {}
     for source_dict in (user_dict, project_dict, env_dict):
-        if source_dict:
-            merged.update(source_dict)
+        merged.update(source_dict)
 
     # Validate with pydantic; wrap any ValidationError
     try:

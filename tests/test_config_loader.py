@@ -12,16 +12,6 @@ FIXTURES = Path(__file__).parent / "fixtures" / "config"
 
 
 # ---------------------------------------------------------------------------
-# Autouse fixture: always clear AURA_CONFIG env var to prevent state leakage
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def clear_aura_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("AURA_CONFIG", raising=False)
-
-
-# ---------------------------------------------------------------------------
 # 1. Defaults when no files exist
 # ---------------------------------------------------------------------------
 
@@ -128,6 +118,7 @@ def test_load_config_validation_error_wraps_as_AuraConfigError(
 
     err = exc_info.value
     assert err.source == "merged config"
+    assert err.detail
 
 
 # ---------------------------------------------------------------------------

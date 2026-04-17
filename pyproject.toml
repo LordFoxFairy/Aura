@@ -65,6 +65,11 @@ no_implicit_reexport = true
 module = ["aura.core.*", "aura.config.*", "aura.tools.*"]
 strict = true
 
+[[tool.mypy.overrides]]
+# Optional LangChain protocol SDKs — only installed via extras; ignore missing stubs.
+module = ["langchain_openai", "langchain_anthropic", "langchain_ollama"]
+ignore_missing_imports = true
+
 # ---------------------------------------------------------------------------
 # pytest
 # ---------------------------------------------------------------------------

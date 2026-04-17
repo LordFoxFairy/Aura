@@ -1,0 +1,184 @@
+# =============================================================================
+# OS
+# =============================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# =============================================================================
+# IDE / Editors
+# =============================================================================
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.jbeval/
+*.swp
+*.swo
+*~
+.history/
+.fleet/
+
+# =============================================================================
+# AI Coding Assistants (屏蔽常用 code 工具的本地配置与上下文文件)
+# =============================================================================
+# Claude Code
+.claude/
+.claude.json
+.claude.local.json
+.claudeignore
+CLAUDE.md
+CLAUDE.local.md
+claude.md
+
+# Cursor
+.cursor/
+.cursorrules
+.cursorignore
+
+# Aider
+.aider*
+.aider.chat.history.md
+.aider.input.history
+.aider.tags.cache.v3/
+
+# Continue / Codeium / Windsurf
+.continue/
+.codeium/
+.windsurfrules
+.windsurf/
+
+# Gemini CLI / 通用 AGENTS
+GEMINI.md
+AGENTS.md
+.gemini/
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# 打包 / 分发
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 测试 / 静态分析缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.tox/
+.nox/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+*.py,cover
+nosetests.xml
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# pip
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Cython
+cython_debug/
+
+# =============================================================================
+# Node / JavaScript / TypeScript (Tauri 前端)
+# =============================================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnp.*
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# 前端构建产物
+dist/
+dist-ssr/
+.next/
+.nuxt/
+.svelte-kit/
+.astro/
+out/
+.turbo/
+.parcel-cache/
+.vite/
+
+# =============================================================================
+# Rust / Tauri
+# =============================================================================
+target/
+**/target/
+src-tauri/target/
+src-tauri/gen/schemas/
+src-tauri/WixTools/
+*.rs.bk
+# Cargo.lock: 应用/二进制项目保留、库项目忽略。Aura 是应用，故保留。
+
+# =============================================================================
+# 环境变量 / 密钥
+# =============================================================================
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+*.key
+*.crt
+secrets/
+
+# =============================================================================
+# 日志 / 临时 / 本地草稿
+# =============================================================================
+*.log
+logs/
+tmp/
+.tmp/
+scratch/
+*.bak
+*.orig

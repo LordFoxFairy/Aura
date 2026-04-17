@@ -121,6 +121,14 @@ pip-delete-this-directory.txt
 cython_debug/
 
 # =============================================================================
+# Aura runtime / user config
+# =============================================================================
+# Per-user / project-local Aura config (may contain plaintext api_key).
+# Commit .aura/config.example.json if you want a shareable template.
+.aura/
+~/.aura/
+
+# =============================================================================
 # Node / JavaScript / TypeScript (Tauri 前端)
 # =============================================================================
 node_modules/

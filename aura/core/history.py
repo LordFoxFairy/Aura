@@ -1,10 +1,11 @@
 """History helpers for the Aura agent loop.
 
 Provides:
-- openai_schema_for: converts an AuraTool to the OpenAI function-calling schema dict.
+- tool_schema_for: produces the canonical LangChain tool-binding dict for an AuraTool.
 - serialize_messages: dumps a list of LangChain BaseMessages to plain dicts.
 - deserialize_messages: rebuilds typed BaseMessage instances from those dicts.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -27,8 +28,21 @@ _MSG_TYPES: dict[str, type[BaseMessage]] = {
 }
 
 
-def openai_schema_for(tool: AuraTool) -> dict[str, Any]:
-    """Return the OpenAI function-calling schema for *tool*."""
+def tool_schema_for(tool: AuraTool) -> dict[str, Any]:
+    """Return the canonical LangChain tool-binding dict for *tool*.
+
+    LangChain's `BaseChatModel.bind_tools()` accepts this exact dict shape as
+    first-class input — each provider's binding layer
+    (ChatOpenAI / ChatAnthropic / ChatOllama) translates it into its native
+    tool format internally. The "openai function" name is a LangChain
+    historical artifact; the dict is provider-agnostic in practice.
+
+    LangChain's equivalent helper is
+    ``langchain_core.utils.function_calling.convert_to_openai_tool``. We build
+    the dict by hand because it needs ``tool.name`` and ``tool.description``
+    (which live on the ``AuraTool`` Protocol, not on the pydantic
+    ``input_model``); the helper can't read either from our object shape.
+    """
     return {
         "type": "function",
         "function": {

@@ -1,16 +1,18 @@
-"""Tests for aura.core.history — serialize/deserialize helpers and openai_schema_for."""
+"""Tests for aura.core.history — serialize/deserialize helpers and tool_schema_for."""
+
 from __future__ import annotations
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel
 
-from aura.core.history import deserialize_messages, openai_schema_for, serialize_messages
+from aura.core.history import deserialize_messages, serialize_messages, tool_schema_for
 from aura.tools.base import ToolResult
 
 # ---------------------------------------------------------------------------
 # Minimal fake tool for schema tests
 # ---------------------------------------------------------------------------
+
 
 class _FakeParams(BaseModel):
     path: str  # required — no default
@@ -30,11 +32,12 @@ class _FakeTool:
 
 
 # ---------------------------------------------------------------------------
-# openai_schema_for
+# tool_schema_for
 # ---------------------------------------------------------------------------
 
-def test_openai_schema_shape() -> None:
-    schema = openai_schema_for(_FakeTool())  # type: ignore[arg-type]
+
+def test_tool_schema_shape() -> None:
+    schema = tool_schema_for(_FakeTool())  # type: ignore[arg-type]
     assert schema["type"] == "function"
     fn = schema["function"]
     assert fn["name"] == "fake_tool"
@@ -43,8 +46,8 @@ def test_openai_schema_shape() -> None:
     assert "properties" in fn["parameters"]
 
 
-def test_openai_schema_required_covers_non_default_fields() -> None:
-    schema = openai_schema_for(_FakeTool())  # type: ignore[arg-type]
+def test_tool_schema_required_covers_non_default_fields() -> None:
+    schema = tool_schema_for(_FakeTool())  # type: ignore[arg-type]
     required = schema["function"]["parameters"]["required"]
     assert "path" in required
     assert "count" not in required
@@ -53,6 +56,7 @@ def test_openai_schema_required_covers_non_default_fields() -> None:
 # ---------------------------------------------------------------------------
 # Round-trip: all four message types in one test
 # ---------------------------------------------------------------------------
+
 
 def test_serialize_messages_roundtrip_human_ai_tool_system() -> None:
     msgs = [
@@ -93,6 +97,7 @@ def test_serialize_preserves_ai_message_tool_calls() -> None:
 # Error cases
 # ---------------------------------------------------------------------------
 
+
 def test_deserialize_unknown_type_raises_ValueError() -> None:
     with pytest.raises(ValueError, match="unknown"):
         deserialize_messages([{"type": "unknown", "content": "x"}])
@@ -106,6 +111,7 @@ def test_deserialize_missing_type_raises_ValueError() -> None:
 # ---------------------------------------------------------------------------
 # Edge case
 # ---------------------------------------------------------------------------
+
 
 def test_empty_list_roundtrips() -> None:
     assert serialize_messages([]) == []

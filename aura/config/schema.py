@@ -22,7 +22,10 @@ class ToolsConfig(BaseModel):
 class StorageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    path: str = "~/.aura/sessions.db"
+    path: str = Field(
+        default="~/.aura/sessions.db",
+        description="SQLite session DB path; ~ supported. Expand via resolved_storage_path().",
+    )
 
 
 class UIConfig(BaseModel):

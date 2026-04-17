@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from aura.config.schema import AuraConfig, AuraConfigError, ModelConfig, StorageConfig, ToolsConfig
+from aura.config.schema import AuraConfig, AuraConfigError, StorageConfig, ToolsConfig
 
 # ---------------------------------------------------------------------------
 # 1. Defaults
@@ -37,12 +37,26 @@ def test_unknown_top_level_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_model_extra_kwargs() -> None:
-    cfg = AuraConfig(model=ModelConfig.model_validate({"temperature": 0.5, "max_tokens": 4096}))
+def test_model_extra_kwargs_via_nested_dict_validation() -> None:
+    cfg = AuraConfig.model_validate({"model": {"temperature": 0.5, "max_tokens": 4096}})
     assert cfg.model.model_extra == {"temperature": 0.5, "max_tokens": 4096}
-    # Defaults still in place
     assert cfg.model.provider == "openai"
     assert cfg.model.name == "gpt-4o-mini"
+
+
+def test_full_nested_dict_happy_path() -> None:
+    cfg = AuraConfig.model_validate({
+        "model": {"provider": "anthropic", "name": "claude-3-5-sonnet-latest", "temperature": 0.2},
+        "tools": {"enabled": ["read_file"]},
+        "storage": {"path": "/tmp/aura.db"},
+        "ui": {"theme": "default"},
+    })
+    assert cfg.model.provider == "anthropic"
+    assert cfg.model.name == "claude-3-5-sonnet-latest"
+    assert cfg.model.model_extra == {"temperature": 0.2}
+    assert cfg.tools.enabled == ["read_file"]
+    assert cfg.storage.path == "/tmp/aura.db"
+    assert cfg.ui.theme == "default"
 
 
 # ---------------------------------------------------------------------------

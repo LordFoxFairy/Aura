@@ -38,6 +38,7 @@ class _Tool:
     is_destructive: bool
     is_concurrency_safe: bool
     _call: Callable[[BaseModel], Awaitable[ToolResult]]
+    max_result_size_chars: int | None
 
     async def acall(self, params: BaseModel) -> ToolResult:
         return await self._call(params)
@@ -52,6 +53,7 @@ def build_tool(
     is_read_only: bool = False,
     is_destructive: bool = False,
     is_concurrency_safe: bool = False,
+    max_result_size_chars: int | None = None,
 ) -> AuraTool:
     return cast(
         AuraTool,
@@ -63,5 +65,6 @@ def build_tool(
             is_destructive=is_destructive,
             is_concurrency_safe=is_concurrency_safe,
             _call=call,
+            max_result_size_chars=max_result_size_chars,
         ),
     )

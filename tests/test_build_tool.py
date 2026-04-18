@@ -71,3 +71,27 @@ def test_build_tool_is_frozen() -> None:
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         tool.name = "changed"
+
+
+def test_build_tool_max_result_size_chars_defaults_to_none() -> None:
+    tool = build_tool(
+        name="x",
+        description="x",
+        input_model=_MinParams,
+        call=_fixed_call,
+    )
+    assert getattr(tool, "max_result_size_chars", "not set") is None
+
+
+def test_build_tool_max_result_size_chars_is_stored() -> None:
+    from aura.tools.base import _Tool
+
+    tool = build_tool(
+        name="x",
+        description="x",
+        input_model=_MinParams,
+        call=_fixed_call,
+        max_result_size_chars=500,
+    )
+    assert isinstance(tool, _Tool)
+    assert tool.max_result_size_chars == 500

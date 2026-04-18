@@ -1,4 +1,4 @@
-"""Size-budget post-tool hook: truncate large outputs, optionally spill to disk."""
+"""Size-budget post-tool hook and usage-tracking post-model hook."""
 
 from __future__ import annotations
 
@@ -7,9 +7,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel
 
-from aura.core.hooks import PostToolHook
+from aura.core.hooks import PostModelHook, PostToolHook
 from aura.core.state import LoopState
 from aura.tools.base import AuraTool, ToolResult
 
@@ -29,14 +30,17 @@ def make_size_budget_hook(
     ) -> ToolResult:
         if not result.ok or result.output is None:
             return result
+
+        effective_max = getattr(tool, "max_result_size_chars", None) or max_chars
+
         serialized = json.dumps(result.output)
-        if len(serialized) <= max_chars:
+        if len(serialized) <= effective_max:
             return result
 
         truncation: dict[str, Any] = {
             "truncated": True,
             "total_chars": len(serialized),
-            "preview": serialized[:max_chars],
+            "preview": serialized[:effective_max],
         }
         if spill_dir is not None:
             spill_dir.mkdir(parents=True, exist_ok=True)
@@ -49,5 +53,23 @@ def make_size_budget_hook(
             output=truncation,
             display=result.display,
         )
+
+    return _hook
+
+
+def make_usage_tracking_hook() -> PostModelHook:
+    async def _hook(
+        *,
+        ai_message: AIMessage,
+        history: list[BaseMessage],
+        state: LoopState,
+        **_: Any,
+    ) -> None:
+        usage = getattr(ai_message, "usage_metadata", None)
+        if not usage:
+            return
+        total = usage.get("total_tokens")
+        if isinstance(total, int):
+            state.total_tokens_used += total
 
     return _hook

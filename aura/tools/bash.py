@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 
 from pydantic import BaseModel, Field
@@ -22,18 +21,19 @@ class BashParams(BaseModel):
     )
 
 
-def _run_sync(command: str, timeout: int) -> ToolResult:
+def _run(params: BaseModel) -> ToolResult:
+    assert isinstance(params, BashParams)
     try:
         completed = subprocess.run(
-            command,
+            params.command,
             shell=True,
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=params.timeout,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        return ToolResult(ok=False, error=f"timeout after {timeout}s: {exc}")
+        return ToolResult(ok=False, error=f"timeout after {params.timeout}s: {exc}")
     return ToolResult(
         ok=True,
         output={
@@ -44,15 +44,10 @@ def _run_sync(command: str, timeout: int) -> ToolResult:
     )
 
 
-async def _acall(params: BaseModel) -> ToolResult:
-    assert isinstance(params, BashParams)
-    return await asyncio.to_thread(_run_sync, params.command, params.timeout)
-
-
 bash: AuraTool = build_tool(
     name="bash",
     description="Run a shell command with a timeout. Returns stdout, stderr, and exit_code.",
     input_model=BashParams,
-    call=_acall,
+    call=_run,
     is_destructive=True,
 )

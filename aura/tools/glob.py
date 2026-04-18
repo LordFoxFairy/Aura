@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -26,7 +25,9 @@ class GlobParams(BaseModel):
     )
 
 
-def _glob_sync(pattern: str, root: Path, max_results: int) -> ToolResult:
+def _glob(params: BaseModel) -> ToolResult:
+    assert isinstance(params, GlobParams)
+    root = Path(params.path).expanduser().resolve()
     if not root.exists():
         return ToolResult(ok=False, error=f"not found: {root}")
     if not root.is_dir():
@@ -34,28 +35,18 @@ def _glob_sync(pattern: str, root: Path, max_results: int) -> ToolResult:
 
     files: list[str] = []
     truncated = False
-    for p in sorted(root.glob(pattern)):
+    for p in sorted(root.glob(params.pattern)):
         if not p.is_file():
             continue
         rel = p.relative_to(root) if p.is_relative_to(root) else p
         files.append(str(rel))
-        if len(files) >= max_results:
+        if len(files) >= params.max_results:
             truncated = True
             break
 
     return ToolResult(
         ok=True,
         output={"files": files, "count": len(files), "truncated": truncated},
-    )
-
-
-async def _acall(params: BaseModel) -> ToolResult:
-    assert isinstance(params, GlobParams)
-    return await asyncio.to_thread(
-        _glob_sync,
-        params.pattern,
-        Path(params.path).expanduser().resolve(),
-        params.max_results,
     )
 
 
@@ -66,7 +57,7 @@ glob: AuraTool = build_tool(
         "recursively). Returns a sorted list of relative paths."
     ),
     input_model=GlobParams,
-    call=_acall,
+    call=_glob,
     is_read_only=True,
     is_concurrency_safe=True,
     max_result_size_chars=40_000,

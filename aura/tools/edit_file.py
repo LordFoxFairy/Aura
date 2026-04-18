@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -28,15 +27,14 @@ class EditFileParams(BaseModel):
     )
 
 
-def _edit_sync(
-    path: str, old_str: str, new_str: str, replace_all: bool,
-) -> ToolResult:
-    p = Path(path).expanduser()
+def _edit(params: BaseModel) -> ToolResult:
+    assert isinstance(params, EditFileParams)
+    p = Path(params.path).expanduser()
     if not p.exists():
-        return ToolResult(ok=False, error=f"not found: {path}")
+        return ToolResult(ok=False, error=f"not found: {params.path}")
     if not p.is_file():
-        return ToolResult(ok=False, error=f"not a file: {path}")
-    if not old_str:
+        return ToolResult(ok=False, error=f"not a file: {params.path}")
+    if not params.old_str:
         return ToolResult(ok=False, error="old_str must be non-empty")
 
     try:
@@ -44,10 +42,10 @@ def _edit_sync(
     except UnicodeDecodeError as exc:
         return ToolResult(ok=False, error=f"not UTF-8: {exc}")
 
-    occurrences = content.count(old_str)
+    occurrences = content.count(params.old_str)
     if occurrences == 0:
-        return ToolResult(ok=False, error=f"old_str not found in {path}")
-    if occurrences > 1 and not replace_all:
+        return ToolResult(ok=False, error=f"old_str not found in {params.path}")
+    if occurrences > 1 and not params.replace_all:
         return ToolResult(
             ok=False,
             error=(
@@ -57,19 +55,14 @@ def _edit_sync(
         )
 
     new_content = (
-        content.replace(old_str, new_str)
-        if replace_all
-        else content.replace(old_str, new_str, 1)
+        content.replace(params.old_str, params.new_str)
+        if params.replace_all
+        else content.replace(params.old_str, params.new_str, 1)
     )
     p.write_text(new_content, encoding="utf-8")
-    return ToolResult(ok=True, output={"replacements": occurrences if replace_all else 1})
-
-
-async def _acall(params: BaseModel) -> ToolResult:
-    assert isinstance(params, EditFileParams)
-    return await asyncio.to_thread(
-        _edit_sync,
-        params.path, params.old_str, params.new_str, params.replace_all,
+    return ToolResult(
+        ok=True,
+        output={"replacements": occurrences if params.replace_all else 1},
     )
 
 
@@ -81,6 +74,6 @@ edit_file: AuraTool = build_tool(
         "ambiguous matches."
     ),
     input_model=EditFileParams,
-    call=_acall,
+    call=_edit,
     is_destructive=True,
 )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import time
 
 import pytest
 from pydantic import BaseModel
@@ -95,3 +96,44 @@ def test_build_tool_max_result_size_chars_is_stored() -> None:
     )
     assert isinstance(tool, _Tool)
     assert tool.max_result_size_chars == 500
+
+
+class _DoublerParams(BaseModel):
+    x: int
+
+
+class _EchoParams(BaseModel):
+    x: int
+
+
+def _sync_doubler(params: BaseModel) -> ToolResult:
+    assert isinstance(params, _DoublerParams)
+    time.sleep(0.01)
+    return ToolResult(ok=True, output={"doubled": params.x * 2})
+
+
+async def _async_echo(params: BaseModel) -> ToolResult:
+    assert isinstance(params, _EchoParams)
+    return ToolResult(ok=True, output={"echoed": params.x})
+
+
+@pytest.mark.asyncio
+async def test_build_tool_auto_wraps_sync_function() -> None:
+    tool = build_tool(
+        name="doubler", description="x2", input_model=_DoublerParams, call=_sync_doubler,
+        is_read_only=True,
+    )
+    result = await tool.acall(_DoublerParams(x=21))
+    assert result.ok is True
+    assert result.output == {"doubled": 42}
+
+
+@pytest.mark.asyncio
+async def test_build_tool_passes_through_async_function() -> None:
+    tool = build_tool(
+        name="echoer", description="echo", input_model=_EchoParams, call=_async_echo,
+        is_read_only=True,
+    )
+    result = await tool.acall(_EchoParams(x=7))
+    assert result.ok is True
+    assert result.output == {"echoed": 7}

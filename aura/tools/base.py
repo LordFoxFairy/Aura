@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, cast, overload, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -44,6 +46,21 @@ class _Tool:
         return await self._call(params)
 
 
+@overload
+def build_tool(
+    *,
+    name: str,
+    description: str,
+    input_model: type[BaseModel],
+    call: Callable[[BaseModel], ToolResult],
+    is_read_only: bool = False,
+    is_destructive: bool = False,
+    is_concurrency_safe: bool = False,
+    max_result_size_chars: int | None = None,
+) -> AuraTool: ...
+
+
+@overload
 def build_tool(
     *,
     name: str,
@@ -54,7 +71,28 @@ def build_tool(
     is_destructive: bool = False,
     is_concurrency_safe: bool = False,
     max_result_size_chars: int | None = None,
+) -> AuraTool: ...
+
+
+def build_tool(
+    *,
+    name: str,
+    description: str,
+    input_model: type[BaseModel],
+    call: Callable[[BaseModel], ToolResult] | Callable[[BaseModel], Awaitable[ToolResult]],
+    is_read_only: bool = False,
+    is_destructive: bool = False,
+    is_concurrency_safe: bool = False,
+    max_result_size_chars: int | None = None,
 ) -> AuraTool:
+    if inspect.iscoroutinefunction(call):
+        async_call: Callable[[BaseModel], Awaitable[ToolResult]] = call
+    else:
+        sync_call = cast(Callable[[BaseModel], ToolResult], call)
+
+        async def async_call(params: BaseModel) -> ToolResult:
+            return await asyncio.to_thread(sync_call, params)
+
     return cast(
         AuraTool,
         _Tool(
@@ -64,7 +102,7 @@ def build_tool(
             is_read_only=is_read_only,
             is_destructive=is_destructive,
             is_concurrency_safe=is_concurrency_safe,
-            _call=call,
+            _call=async_call,
             max_result_size_chars=max_result_size_chars,
         ),
     )

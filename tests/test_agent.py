@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from pydantic import BaseModel
 
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core.agent import Agent, build_agent
@@ -16,6 +17,7 @@ from aura.core.events import Final
 from aura.core.hooks import HookChain
 from aura.core.llm import UnknownModelSpecError
 from aura.core.storage import SessionStorage
+from aura.tools.base import AuraTool, ToolResult, build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -254,3 +256,125 @@ async def test_build_agent_factory_uses_modelfactory(
     db_path = config.resolved_storage_path()
     saved = SessionStorage(db_path).load("default")
     assert len(saved) == 2
+
+
+@pytest.mark.asyncio
+async def test_agent_accepts_custom_available_tools(tmp_path: Path) -> None:
+    async def _echo_call(params: BaseModel) -> ToolResult:
+        return ToolResult(ok=True, output={"echoed": "x"})
+
+    class _EchoParams(BaseModel):
+        msg: str
+
+    custom: AuraTool = build_tool(
+        name="custom_echo",
+        description="a custom tool",
+        input_model=_EchoParams,
+        call=_echo_call,
+        is_read_only=True,
+    )
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["custom_echo"]},
+    })
+
+    model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="done"))])
+    agent = Agent(
+        config=cfg,
+        model=model,
+        storage=_storage(tmp_path),
+        available_tools={"custom_echo": custom},
+    )
+
+    async for _ in agent.astream("hi"):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_agent_available_tools_overrides_builtins(tmp_path: Path) -> None:
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["read_file"]},
+    })
+
+    model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="x"))])
+    with pytest.raises(AuraConfigError) as exc_info:
+        Agent(
+            config=cfg,
+            model=model,
+            storage=_storage(tmp_path),
+            available_tools={},
+        )
+
+    assert "read_file" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_agent_copies_available_tools_dict(tmp_path: Path) -> None:
+    async def _call(params: BaseModel) -> ToolResult:
+        return ToolResult(ok=True)
+
+    class _P(BaseModel):
+        pass
+
+    t: AuraTool = build_tool(
+        name="t", description="t", input_model=_P, call=_call, is_read_only=True,
+    )
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["t"]},
+    })
+
+    my_tools: dict[str, AuraTool] = {"t": t}
+    model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="ok"))])
+    agent = Agent(
+        config=cfg, model=model, storage=_storage(tmp_path),
+        available_tools=my_tools,
+    )
+
+    my_tools.clear()
+
+    async for _ in agent.astream("go"):
+        pass
+
+
+def test_build_agent_forwards_available_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from aura.core import agent as agent_mod
+    from aura.core import llm
+
+    fake_model = FakeChatModel(turns=[])
+    monkeypatch.setattr(
+        llm.ModelFactory, "create",
+        lambda provider, name: (fake_model, provider.protocol),
+    )
+
+    async def _call(params: BaseModel) -> ToolResult:
+        return ToolResult(ok=True)
+
+    class _P(BaseModel):
+        pass
+
+    custom: AuraTool = build_tool(
+        name="zzz",
+        description="...",
+        input_model=_P,
+        call=_call,
+        is_read_only=True,
+    )
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["zzz"]},
+        "storage": {"path": str(tmp_path / "aura.db")},
+    })
+
+    agent = agent_mod.build_agent(cfg, available_tools={"zzz": custom})
+    assert agent is not None

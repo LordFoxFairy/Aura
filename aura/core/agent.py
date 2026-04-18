@@ -37,12 +37,16 @@ class Agent:
         model: BaseChatModel,
         storage: SessionStorage,
         hooks: HookChain | None = None,
+        available_tools: dict[str, AuraTool] | None = None,
     ) -> None:
         self._config = config
         self._model = model
         self._storage = storage
         self._hooks = hooks or HookChain()
         self._state = LoopState()
+        self._available_tools = (
+            dict(available_tools) if available_tools is not None else dict(_BUILTIN_TOOLS)
+        )
         self._loop = self._build_loop()
 
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
@@ -79,7 +83,7 @@ class Agent:
     def _build_registry(self) -> ToolRegistry:
         tools: list[AuraTool] = []
         for name in self._config.tools.enabled:
-            tool = _BUILTIN_TOOLS.get(name)
+            tool = self._available_tools.get(name)
             if tool is None:
                 raise AuraConfigError(
                     source="tools.enabled",
@@ -90,9 +94,18 @@ class Agent:
 
 
 def build_agent(
-    config: AuraConfig, *, hooks: HookChain | None = None
+    config: AuraConfig,
+    *,
+    hooks: HookChain | None = None,
+    available_tools: dict[str, AuraTool] | None = None,
 ) -> Agent:
     provider, model_name = ModelFactory.resolve(config.router["default"], cfg=config)
     model, _protocol = ModelFactory.create(provider, model_name)
     storage = SessionStorage(config.resolved_storage_path())
-    return Agent(config=config, model=model, storage=storage, hooks=hooks)
+    return Agent(
+        config=config,
+        model=model,
+        storage=storage,
+        hooks=hooks,
+        available_tools=available_tools,
+    )

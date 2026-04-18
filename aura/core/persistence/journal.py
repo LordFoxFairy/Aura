@@ -1,4 +1,4 @@
-"""Append-only JSONL journal — write with fsync per event for crash-durable audit."""
+"""WAL 风格 JSONL 审计日志 — append-only，每事件 flush + fsync，进程/机器崩溃不丢数据。"""
 
 from __future__ import annotations
 
@@ -37,10 +37,13 @@ def write(event: str, /, **fields: Any) -> None:
             **fields,
         }
         line = json.dumps(payload, ensure_ascii=False, default=str)
+        # 每事件独立开关 fd，不留 handle 泄漏；flush 后 fsync 保证内核缓冲落盘。
         with _path.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
             f.flush()
+            # tmpfs / 网络挂载可能拒绝 fsync，suppress 避免因此中断 agent。
             with contextlib.suppress(OSError, ValueError):
                 os.fsync(f.fileno())
     except Exception:  # noqa: BLE001
+        # contract：日志失败绝不崩 agent — 审计是可选的，业务流程不依赖它。
         pass

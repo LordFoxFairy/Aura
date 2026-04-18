@@ -1,4 +1,4 @@
-"""Agent facade — composes the loop with storage and config into the public API."""
+"""Agent facade — config + model + storage + hooks 组装成一条对话的入口层。"""
 
 from __future__ import annotations
 
@@ -62,6 +62,9 @@ class Agent:
         self._loop = self._build_loop()
 
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
+        # Invariant 2（§4.2）的事务性在此层实现：history 仅当 turn 正常完成才 save。
+        # CancelledError → yield Final + re-raise → 跳过 else 分支 → 下次从 pre-turn 状态恢复。
+        # MaxTurnsExceeded → yield Final + return → 同样跳过 save，history 保持上次持久化状态。
         journal.write(
             "astream_begin",
             session=self._session_id,
@@ -155,6 +158,7 @@ def build_agent(
     available_tools: dict[str, AuraTool] | None = None,
     session_id: str = _DEFAULT_SESSION,
 ) -> Agent:
+    # 生产便利工厂：自动解析 model + storage；Agent 构造器保持 DI 注入以便测试替换。
     provider, model_name = ModelFactory.resolve(config.router["default"], cfg=config)
     model, _protocol = ModelFactory.create(provider, model_name)
     storage = SessionStorage(config.resolved_storage_path())

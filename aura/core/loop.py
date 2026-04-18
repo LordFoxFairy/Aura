@@ -1,4 +1,4 @@
-"""Aura agent loop."""
+"""AgentLoop — 协调一次对话的 turn 循环，驱动 model → tool → model 的迭代。"""
 
 from __future__ import annotations
 
@@ -50,6 +50,7 @@ class AgentLoop:
         self._registry = registry
         self._hooks = hooks or HookChain()
         self._state = state or LoopState()
+        # bind_tools 只在构造时调一次：schema 在 registry 固定后不变，多 turn 共享同一 bound model。
         self._bound = model.bind_tools(registry.schemas()) if registry else model
 
     @property
@@ -82,6 +83,7 @@ class AgentLoop:
             )
 
     async def _invoke_model(self, history: list[BaseMessage]) -> AIMessage:
+        # turn_count 先于 pre_model hook 递增，hook 看到的是"即将开始的第 N 轮"。
         self._state.turn_count += 1
         await self._hooks.run_pre_model(history=history, state=self._state)
         ai = await self._bound.ainvoke(history)
@@ -94,6 +96,7 @@ class AgentLoop:
     async def _dispatch_tool_calls(
         self, tool_calls: list[ToolCall], history: list[BaseMessage],
     ) -> AsyncIterator[AgentEvent]:
+        # plan（解析 + pre_tool hook）→ partition batches → execute：三段式分离关注点。
         steps = await self._plan_tool_calls(tool_calls)
         journal.write(
             "tool_plan_built",
@@ -144,6 +147,7 @@ class AgentLoop:
             size=len(batch),
             tools=[s.tool_call.get("name") for s in batch],
         )
+        # 所有 ToolCallStarted 在 gather 之前 yield：用户侧看到并行 tool call 同时宣告。
         for step in batch:
             tc = step.tool_call
             yield ToolCallStarted(name=tc["name"], input=dict(tc["args"]))
@@ -155,6 +159,7 @@ class AgentLoop:
             *(self._execute_step(s) for s in batch),
         )
 
+        # invariant 1：zip strict=True 保证 ToolMessage.append 顺序严格等于 tool_call 顺序。
         for step, result in zip(batch, results, strict=True):
             tc = step.tool_call
             journal.write(
@@ -216,6 +221,7 @@ class AgentLoop:
         try:
             result = await step.tool.acall(step.params)
         except Exception as exc:  # noqa: BLE001
+            # tool 作者的 acall 不要求永不抛异常；loop 在此兜底，保证结果总能写回 history。
             result = ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         return await self._hooks.run_post_tool(
             tool=step.tool, params=step.params, result=result, state=self._state

@@ -19,6 +19,8 @@ class ToolResult:
     display: str | None = None
 
 
+# frozen dataclass 而非 Protocol：统一通过 build_tool 构造，避免 Protocol duck-typing
+# 在调用侧引入 cast()；frozen 保证 tool 元数据在注册后不可变。
 @dataclass(frozen=True)
 class AuraTool:
     name: str
@@ -76,6 +78,7 @@ def build_tool(
     if inspect.iscoroutinefunction(call):
         async_call: Callable[[BaseModel], Awaitable[ToolResult]] = call
     else:
+        # sync 函数自动包装到 asyncio.to_thread — tool 作者无需关心线程化，基础设施在此处理。
         def async_call(params: BaseModel) -> Awaitable[ToolResult]:
             return asyncio.to_thread(call, params)
 

@@ -1,4 +1,4 @@
-"""Lifecycle hooks invoked by the agent loop."""
+"""4 个生命周期 hook Protocol + HookChain — **kwargs: Any 保证向前兼容。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from aura.tools.base import AuraTool, ToolResult
 
 
 class PreModelHook(Protocol):
+    # 可原地 mutate history（compact / inject system message 等场景）；无返回值。
     async def __call__(
         self,
         *,
@@ -23,6 +24,7 @@ class PreModelHook(Protocol):
 
 
 class PostModelHook(Protocol):
+    # 只读观察（usage 累计 / audit log）；不得修改 history 或 ai_message。
     async def __call__(
         self,
         *,
@@ -34,6 +36,7 @@ class PostModelHook(Protocol):
 
 
 class PreToolHook(Protocol):
+    # 返回 ToolResult = 短路，记入 history 但不调 acall；返回 None = 放行。
     async def __call__(
         self,
         *,
@@ -45,6 +48,7 @@ class PreToolHook(Protocol):
 
 
 class PostToolHook(Protocol):
+    # 链式调用：上一个 hook 的输出作为下一个 hook 的 result 输入（变换而非观察）。
     async def __call__(
         self,
         *,
@@ -103,6 +107,7 @@ class HookChain:
         return result
 
     def merge(self, other: HookChain) -> HookChain:
+        # 非破坏性拼接：self 优先 other 后；不修改任何一方的原始列表。
         return HookChain(
             pre_model=[*self.pre_model, *other.pre_model],
             post_model=[*self.post_model, *other.post_model],

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
 from pathlib import Path
 from typing import Any
-
 
 _path: Path | None = None
 
@@ -40,9 +40,7 @@ def write(event: str, /, **fields: Any) -> None:
         with _path.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
             f.flush()
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 os.fsync(f.fileno())
-            except (OSError, ValueError):
-                pass
     except Exception:  # noqa: BLE001
         pass

@@ -8,9 +8,9 @@ from collections.abc import AsyncIterator
 from langchain_core.language_models import BaseChatModel
 
 from aura.config.schema import AuraConfig, AuraConfigError
+from aura.core import journal
 from aura.core.budget import MaxTurnsExceeded, default_hooks
 from aura.core.events import AgentEvent, Final
-from aura.core import journal
 from aura.core.hooks import HookChain
 from aura.core.llm import ModelFactory
 from aura.core.loop import AgentLoop

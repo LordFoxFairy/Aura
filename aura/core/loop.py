@@ -17,8 +17,8 @@ from langchain_core.messages import (
 )
 from pydantic import BaseModel, ValidationError
 
-from aura.core.events import AgentEvent, AssistantDelta, Final, ToolCallCompleted, ToolCallStarted
 from aura.core import journal
+from aura.core.events import AgentEvent, AssistantDelta, Final, ToolCallCompleted, ToolCallStarted
 from aura.core.hooks import HookChain
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState

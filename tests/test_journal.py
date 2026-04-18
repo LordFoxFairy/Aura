@@ -80,4 +80,4 @@ def test_write_appends_not_overwrites(tmp_path: Path) -> None:
 
     lines = (tmp_path / "events.jsonl").read_text().strip().split("\n")
     assert len(lines) == 3
-    assert [json.loads(l)["event"] for l in lines] == ["a", "b", "c"]
+    assert [json.loads(line)["event"] for line in lines] == ["a", "b", "c"]

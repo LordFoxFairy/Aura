@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from aura.config.schema import AuraConfig, AuraConfigError, LogConfig
+from aura.config.schema import AuraConfig, AuraConfigError
 
 # ---------------------------------------------------------------------------
 # 1. Defaults

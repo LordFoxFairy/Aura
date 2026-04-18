@@ -24,7 +24,7 @@ def _serialize(result: ToolResult) -> str:
 
 
 @dataclass(frozen=True)
-class _ToolStep:
+class ToolStep:
     tool_call: ToolCall
     tool: AuraTool
     params: BaseModel
@@ -57,18 +57,18 @@ class AgentLoop:
         await self._hooks.run_post_model(ai_message=ai, history=history, state=self._state)
         return ai
 
-    async def _plan_tool_calls(self, tool_calls: list[ToolCall]) -> list[_ToolStep]:
-        steps: list[_ToolStep] = []
+    async def _plan_tool_calls(self, tool_calls: list[ToolCall]) -> list[ToolStep]:
+        steps: list[ToolStep] = []
         for tc in tool_calls:
             tool = self._registry[tc["name"]]
             params = tool.input_model.model_validate(tc["args"])
             decision = await self._hooks.run_pre_tool(
                 tool=tool, params=params, state=self._state
             )
-            steps.append(_ToolStep(tool_call=tc, tool=tool, params=params, decision=decision))
+            steps.append(ToolStep(tool_call=tc, tool=tool, params=params, decision=decision))
         return steps
 
-    async def _execute_step(self, step: _ToolStep) -> ToolResult:
+    async def _execute_step(self, step: ToolStep) -> ToolResult:
         if step.decision is not None:
             return step.decision
         result = await step.tool.acall(step.params)

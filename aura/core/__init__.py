@@ -23,6 +23,11 @@ from aura.core.llm import (
     UnknownModelSpecError,
 )
 from aura.core.loop import AgentLoop, ToolStep
+from aura.core.permission import (
+    PermissionAsker,
+    PermissionSession,
+    make_permission_hook,
+)
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
 from aura.core.storage import SessionStorage
@@ -38,6 +43,8 @@ __all__ = [
     "MissingCredentialError",
     "MissingProviderDependencyError",
     "ModelFactory",
+    "PermissionAsker",
+    "PermissionSession",
     "PostModelHook",
     "PostToolHook",
     "PreModelHook",
@@ -49,6 +56,7 @@ __all__ = [
     "ToolStep",
     "UnknownModelSpecError",
     "build_agent",
+    "make_permission_hook",
     "make_size_budget_hook",
     "make_usage_tracking_hook",
 ]

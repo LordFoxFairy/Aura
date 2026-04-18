@@ -10,9 +10,29 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel
 
-from aura.core.hooks import PostModelHook, PostToolHook
+from aura.core.hooks import HookChain, PostModelHook, PostToolHook, PreModelHook
 from aura.core.state import LoopState
 from aura.tools.base import AuraTool, ToolResult
+
+
+class MaxTurnsExceeded(Exception):
+    pass
+
+
+def make_max_turns_hook(max_turns: int = 20) -> PreModelHook:
+    async def _hook(
+        *,
+        history: list[BaseMessage],
+        state: LoopState,
+        **_: Any,
+    ) -> None:
+        if state.turn_count >= max_turns:
+            raise MaxTurnsExceeded(
+                f"conversation exceeded max_turns={max_turns}; "
+                "/clear to start a new session"
+            )
+
+    return _hook
 
 
 def make_size_budget_hook(
@@ -73,3 +93,16 @@ def make_usage_tracking_hook() -> PostModelHook:
             state.total_tokens_used += total
 
     return _hook
+
+
+def default_hooks(
+    *,
+    max_result_size_chars: int = 50_000,
+    max_turns: int = 20,
+    spill_dir: Path | None = None,
+) -> HookChain:
+    return HookChain(
+        pre_model=[make_max_turns_hook(max_turns)],
+        post_model=[make_usage_tracking_hook()],
+        post_tool=[make_size_budget_hook(max_chars=max_result_size_chars, spill_dir=spill_dir)],
+    )

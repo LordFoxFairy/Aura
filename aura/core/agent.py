@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from langchain_core.language_models import BaseChatModel
 
 from aura.config.schema import AuraConfig, AuraConfigError
+from aura.core.budget import MaxTurnsExceeded, default_hooks
 from aura.core.events import AgentEvent, Final
 from aura.core.hooks import HookChain
 from aura.core.llm import ModelFactory
@@ -59,6 +60,9 @@ class Agent:
         except asyncio.CancelledError:
             yield Final(message="(cancelled)")
             raise
+        except MaxTurnsExceeded as exc:
+            yield Final(message=f"({exc})")
+            return
         else:
             self._storage.save(self._session_id, history)
 
@@ -69,6 +73,7 @@ class Agent:
 
     def clear_session(self) -> None:
         self._storage.clear(self._session_id)
+        self._state.reset()
 
     @property
     def state(self) -> LoopState:
@@ -123,7 +128,7 @@ def build_agent(
         config=config,
         model=model,
         storage=storage,
-        hooks=hooks,
+        hooks=hooks if hooks is not None else default_hooks(),
         available_tools=available_tools,
         session_id=session_id,
     )

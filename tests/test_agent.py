@@ -424,3 +424,70 @@ def test_build_agent_forwards_available_tools(
 
     agent = agent_mod.build_agent(cfg, available_tools={"zzz": custom})
     assert agent is not None
+
+
+@pytest.mark.asyncio
+async def test_astream_max_turns_yields_graceful_final(tmp_path: Path) -> None:
+    from aura.core.budget import make_max_turns_hook
+    from aura.core.events import Final
+    from aura.core.hooks import HookChain
+
+    cfg = _minimal_config(enabled=[])
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(content="hi")),
+    ])
+    hooks = HookChain(pre_model=[make_max_turns_hook(0)])
+    agent = Agent(
+        config=cfg, model=model, storage=_storage(tmp_path), hooks=hooks,
+    )
+
+    events: list[Any] = []
+    async for ev in agent.astream("go"):
+        events.append(ev)
+
+    finals = [e for e in events if isinstance(e, Final)]
+    assert len(finals) == 1
+    assert "max_turns" in finals[0].message
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_clear_session_also_resets_state_counters(tmp_path: Path) -> None:
+    cfg = _minimal_config(enabled=[])
+    model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="hi"))])
+    agent = Agent(config=cfg, model=model, storage=_storage(tmp_path))
+
+    async for _ in agent.astream("x"):
+        pass
+    assert agent.state.turn_count == 1
+
+    agent.clear_session()
+    assert agent.state.turn_count == 0
+    agent.close()
+
+
+def test_build_agent_uses_default_hooks_when_none_supplied(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from aura.core import llm
+    from aura.core.agent import build_agent
+
+    fake = FakeChatModel(turns=[])
+    monkeypatch.setattr(
+        llm.ModelFactory, "create",
+        lambda provider, name: (fake, provider.protocol),
+    )
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+        "storage": {"path": str(tmp_path / "db")},
+    })
+
+    agent = build_agent(cfg)
+
+    assert len(agent._hooks.pre_model) >= 1
+    assert len(agent._hooks.post_model) >= 1
+    assert len(agent._hooks.post_tool) >= 1
+    agent.close()

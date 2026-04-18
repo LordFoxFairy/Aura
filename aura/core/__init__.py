@@ -1,7 +1,13 @@
 """Core agent loop, state, registry, hooks, and built-in hook factories."""
 
 from aura.core.agent import Agent, build_agent
-from aura.core.budget import make_size_budget_hook, make_usage_tracking_hook
+from aura.core.budget import (
+    MaxTurnsExceeded,
+    default_hooks,
+    make_max_turns_hook,
+    make_size_budget_hook,
+    make_usage_tracking_hook,
+)
 from aura.core.events import (
     AgentEvent,
     AssistantDelta,
@@ -40,6 +46,7 @@ __all__ = [
     "Final",
     "HookChain",
     "LoopState",
+    "MaxTurnsExceeded",
     "MissingCredentialError",
     "MissingProviderDependencyError",
     "ModelFactory",
@@ -56,6 +63,8 @@ __all__ = [
     "ToolStep",
     "UnknownModelSpecError",
     "build_agent",
+    "default_hooks",
+    "make_max_turns_hook",
     "make_permission_hook",
     "make_size_budget_hook",
     "make_usage_tracking_hook",

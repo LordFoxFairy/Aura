@@ -15,7 +15,7 @@ from langchain_core.messages import (
     ToolCall,
     ToolMessage,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from aura.core.events import AgentEvent, AssistantDelta, Final, ToolCallCompleted, ToolCallStarted
 from aura.core.hooks import HookChain
@@ -31,8 +31,8 @@ def _serialize(result: ToolResult) -> str:
 @dataclass(frozen=True)
 class ToolStep:
     tool_call: ToolCall
-    tool: AuraTool
-    params: BaseModel
+    tool: AuraTool | None
+    params: BaseModel | None
     decision: ToolResult | None
 
 
@@ -103,8 +103,23 @@ class AgentLoop:
     async def _plan_tool_calls(self, tool_calls: list[ToolCall]) -> list[ToolStep]:
         steps: list[ToolStep] = []
         for tc in tool_calls:
-            tool = self._registry[tc["name"]]
-            params = tool.input_model.model_validate(tc["args"])
+            tool = self._registry.get(tc["name"])
+            if tool is None:
+                steps.append(ToolStep(
+                    tool_call=tc, tool=None, params=None,
+                    decision=ToolResult(ok=False, error=f"unknown tool: {tc['name']!r}"),
+                ))
+                continue
+
+            try:
+                params = tool.input_model.model_validate(tc["args"])
+            except ValidationError as exc:
+                steps.append(ToolStep(
+                    tool_call=tc, tool=tool, params=None,
+                    decision=ToolResult(ok=False, error=f"invalid args: {exc}"),
+                ))
+                continue
+
             decision = await self._hooks.run_pre_tool(
                 tool=tool, params=params, state=self._state
             )
@@ -114,7 +129,12 @@ class AgentLoop:
     async def _execute_step(self, step: ToolStep) -> ToolResult:
         if step.decision is not None:
             return step.decision
-        result = await step.tool.acall(step.params)
+        assert step.tool is not None
+        assert step.params is not None
+        try:
+            result = await step.tool.acall(step.params)
+        except Exception as exc:  # noqa: BLE001
+            result = ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         return await self._hooks.run_post_tool(
             tool=step.tool, params=step.params, result=result, state=self._state
         )

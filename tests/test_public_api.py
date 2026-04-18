@@ -67,6 +67,7 @@ def test_aura_config_exports() -> None:
     from aura.config import (  # noqa: F401
         AuraConfig,
         AuraConfigError,
+        LogConfig,
         ProviderConfig,
         StorageConfig,
         ToolsConfig,
@@ -75,4 +76,5 @@ def test_aura_config_exports() -> None:
     )
 
     assert AuraConfig.__name__ == "AuraConfig"
+    assert LogConfig.__name__ == "LogConfig"
     assert callable(load_config)

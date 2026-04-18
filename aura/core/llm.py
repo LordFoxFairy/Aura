@@ -8,7 +8,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 
 from aura.config.schema import AuraConfig, AuraConfigError, ProviderConfig
-from aura.core.journal import journal
+from aura.core import journal
 
 
 class UnknownModelSpecError(AuraConfigError):
@@ -82,7 +82,7 @@ def _resolve_api_key(provider: ProviderConfig) -> str | None:
     if provider.api_key_env is not None:
         key = os.environ.get(provider.api_key_env)
         if not key:
-            journal().write(
+            journal.write(
                 "credential_missing",
                 provider=provider.name,
                 env_var=provider.api_key_env,
@@ -99,7 +99,7 @@ def _resolve_api_key(provider: ProviderConfig) -> str | None:
 
     key = os.environ.get(default_env)
     if not key:
-        journal().write(
+        journal.write(
             "credential_missing",
             provider=provider.name,
             env_var=default_env,
@@ -137,7 +137,7 @@ class ModelFactory:
         provider_name, sep, model_name = resolved.partition(":")
 
         if not sep:
-            journal().write("model_resolve_failed", spec=spec, reason="no_colon")
+            journal.write("model_resolve_failed", spec=spec, reason="no_colon")
             raise UnknownModelSpecError(
                 "model spec",
                 f"{spec!r} is not a router alias and not in 'provider:model' form",
@@ -145,7 +145,7 @@ class ModelFactory:
 
         for provider in cfg.providers:
             if provider.name == provider_name:
-                journal().write(
+                journal.write(
                     "model_resolved",
                     spec=spec,
                     provider=provider_name,
@@ -153,7 +153,7 @@ class ModelFactory:
                 )
                 return (provider, model_name)
 
-        journal().write(
+        journal.write(
             "model_resolve_failed",
             spec=spec,
             reason="unknown_provider",
@@ -179,7 +179,7 @@ class ModelFactory:
         if api_key is not None:
             kwargs["api_key"] = api_key
 
-        journal().write(
+        journal.write(
             "model_create_attempt",
             provider=provider.name,
             protocol=provider.protocol,
@@ -202,7 +202,7 @@ class ModelFactory:
                 source="provider", detail=f"unknown protocol: {provider.protocol}"
             )
 
-        journal().write(
+        journal.write(
             "model_created",
             provider=provider.name,
             protocol=provider.protocol,

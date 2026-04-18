@@ -10,22 +10,23 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from aura.config.schema import AuraConfig
+from aura.core import journal as journal_module
 from aura.core.agent import Agent
-from aura.core.journal import reset_journal, setup_file_journal
 from aura.core.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 
 @pytest.fixture(autouse=True)
 def _reset() -> Any:
+    journal_module.reset()
     yield
-    reset_journal()
+    journal_module.reset()
 
 
 @pytest.mark.asyncio
 async def test_astream_emits_layered_events(tmp_path: Path) -> None:
     log = tmp_path / "events.jsonl"
-    setup_file_journal(log)
+    journal_module.configure(log)
 
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],

@@ -4,6 +4,7 @@ from aura.config.loader import load_config
 from aura.config.schema import (
     AuraConfig,
     AuraConfigError,
+    LogConfig,
     ProviderConfig,
     StorageConfig,
     ToolsConfig,
@@ -13,6 +14,7 @@ from aura.config.schema import (
 __all__ = [
     "AuraConfig",
     "AuraConfigError",
+    "LogConfig",
     "ProviderConfig",
     "StorageConfig",
     "ToolsConfig",

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from aura.config.schema import AuraConfig, AuraConfigError
+from aura.config.schema import AuraConfig, AuraConfigError, LogConfig
 
 # ---------------------------------------------------------------------------
 # 1. Defaults
@@ -250,4 +250,37 @@ def test_provider_config_unknown_top_level_still_raises() -> None:
                 "temperature": 0.7,
             }],
             "router": {"default": "x:gpt-4o-mini"},
+        })
+
+
+# ---------------------------------------------------------------------------
+# 15. LogConfig
+# ---------------------------------------------------------------------------
+
+
+def test_log_config_defaults() -> None:
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "x", "protocol": "openai"}],
+        "router": {"default": "x:m"},
+    })
+    assert cfg.log.enabled is False
+    assert cfg.log.path == "~/.aura/logs/events.jsonl"
+
+
+def test_log_config_custom_enabled() -> None:
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "x", "protocol": "openai"}],
+        "router": {"default": "x:m"},
+        "log": {"enabled": True, "path": "/tmp/aura.jsonl"},
+    })
+    assert cfg.log.enabled is True
+    assert cfg.log.path == "/tmp/aura.jsonl"
+
+
+def test_log_config_unknown_key_raises() -> None:
+    with pytest.raises(ValidationError):
+        AuraConfig.model_validate({
+            "providers": [{"name": "x", "protocol": "openai"}],
+            "router": {"default": "x:m"},
+            "log": {"enabled": True, "bogus": 1},
         })

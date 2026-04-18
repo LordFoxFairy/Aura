@@ -10,7 +10,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core.journal import journal
+from aura.core import journal
 
 
 def _read_json(path: Path, source: str) -> dict[str, Any]:
@@ -51,7 +51,7 @@ def load_config(
 
     env_path_str = os.environ.get("AURA_CONFIG", "")
 
-    journal().write(
+    journal.write(
         "config_load_begin",
         user_config=str(user_config),
         project_config=str(project_config),
@@ -70,7 +70,7 @@ def load_config(
     if env_path_str:
         env_path = Path(env_path_str)
         if not env_path.exists():
-            journal().write(
+            journal.write(
                 "config_load_failed",
                 reason="env_config_missing",
                 path=str(env_path),
@@ -88,10 +88,10 @@ def load_config(
     try:
         cfg = AuraConfig.model_validate(merged)
     except ValidationError as exc:
-        journal().write("config_load_failed", reason="validation", detail=str(exc))
+        journal.write("config_load_failed", reason="validation", detail=str(exc))
         raise AuraConfigError(source="merged config", detail=str(exc)) from exc
 
-    journal().write(
+    journal.write(
         "config_load_end",
         providers=[p.name for p in cfg.providers],
         router_keys=list(cfg.router.keys()),

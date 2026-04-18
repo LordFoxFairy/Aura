@@ -8,8 +8,8 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel
 
+from aura.core import journal
 from aura.core.hooks import HookChain
-from aura.core.journal import journal
 from aura.core.state import LoopState
 from aura.tools.base import AuraTool, ToolResult
 
@@ -18,7 +18,7 @@ def make_event_logger_hooks() -> HookChain:
     async def _pre_model(
         *, history: list[BaseMessage], state: LoopState, **_: Any,
     ) -> None:
-        journal().write(
+        journal.write(
             "pre_model",
             turn=state.turn_count,
             history_len=len(history),
@@ -33,7 +33,7 @@ def make_event_logger_hooks() -> HookChain:
     ) -> None:
         usage = getattr(ai_message, "usage_metadata", None) or {}
         content = str(ai_message.content) if ai_message.content else ""
-        journal().write(
+        journal.write(
             "post_model",
             turn=state.turn_count,
             content_chars=len(content),
@@ -46,7 +46,7 @@ def make_event_logger_hooks() -> HookChain:
     async def _pre_tool(
         *, tool: AuraTool, params: BaseModel, state: LoopState, **_: Any,
     ) -> ToolResult | None:
-        journal().write(
+        journal.write(
             "pre_tool",
             turn=state.turn_count,
             tool=tool.name,
@@ -68,7 +68,7 @@ def make_event_logger_hooks() -> HookChain:
             if result.output is not None
             else 0
         )
-        journal().write(
+        journal.write(
             "post_tool",
             turn=state.turn_count,
             tool=tool.name,

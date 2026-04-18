@@ -8,74 +8,76 @@ from typing import Any
 
 import pytest
 
-from aura.core.journal import (
-    journal,
-    reset_journal,
-    set_journal,
-    setup_file_journal,
-)
+from aura.core import journal as journal_module
 
 
 @pytest.fixture(autouse=True)
 def _reset() -> Any:
+    journal_module.reset()
     yield
-    reset_journal()
+    journal_module.reset()
 
 
-def test_default_is_noop() -> None:
-    reset_journal()
-    journal().write("anything", a=1)
+def test_default_is_disabled() -> None:
+    assert journal_module.is_configured() is False
+    journal_module.write("anything", a=1)
 
 
-def test_setup_file_journal_writes_jsonl(tmp_path: Path) -> None:
+def test_configure_enables_writes(tmp_path: Path) -> None:
     log = tmp_path / "events.jsonl"
-    j = setup_file_journal(log)
-    journal().write("first_event", foo=1)
-    journal().write("second_event", bar="x")
-    j.close()
-
+    journal_module.configure(log)
+    assert journal_module.is_configured() is True
+    journal_module.write("first", foo=1)
+    journal_module.write("second", bar="x")
     lines = log.read_text(encoding="utf-8").strip().split("\n")
     assert len(lines) == 2
     first = json.loads(lines[0])
-    assert first["event"] == "first_event"
+    assert first["event"] == "first"
     assert first["foo"] == 1
     assert "ts" in first
 
 
-def test_file_journal_never_raises_on_serialization_error(tmp_path: Path) -> None:
-    j = setup_file_journal(tmp_path / "events.jsonl")
+def test_reset_disables_writes(tmp_path: Path) -> None:
+    log = tmp_path / "events.jsonl"
+    journal_module.configure(log)
+    journal_module.write("pre_reset")
+    journal_module.reset()
+    assert journal_module.is_configured() is False
+    journal_module.write("post_reset")
+    lines = log.read_text(encoding="utf-8").strip().split("\n")
+    assert len(lines) == 1
+    assert json.loads(lines[0])["event"] == "pre_reset"
+
+
+def test_write_never_raises_on_serialization_error(tmp_path: Path) -> None:
+    journal_module.configure(tmp_path / "events.jsonl")
 
     class NotJsonable:
         def __repr__(self) -> str:
             raise RuntimeError("explode")
 
-    journal().write("bad_payload", obj=NotJsonable())
-    j.close()
+    journal_module.write("bad", obj=NotJsonable())
 
 
-def test_file_journal_fsyncs_on_each_write(tmp_path: Path) -> None:
-    """Verify entries are durable — write N events, read back, count lines."""
-    log = tmp_path / "events.jsonl"
-    j = setup_file_journal(log)
+def test_file_opened_and_closed_per_write(tmp_path: Path) -> None:
+    """Using `with` per-event means no lingering fd."""
+    journal_module.configure(tmp_path / "events.jsonl")
     for i in range(5):
-        journal().write(f"event_{i}")
-    lines = log.read_text(encoding="utf-8").strip().split("\n")
+        journal_module.write(f"event_{i}")
+
+    lines = (tmp_path / "events.jsonl").read_text().strip().split("\n")
     assert len(lines) == 5
-    j.close()
 
 
-def test_set_journal_allows_recording_fake() -> None:
-    class Recorder:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, object]]] = []
+def test_write_appends_not_overwrites(tmp_path: Path) -> None:
+    journal_module.configure(tmp_path / "events.jsonl")
+    journal_module.write("a")
+    journal_module.write("b")
+    journal_module.reset()
 
-        def write(self, event: str, /, **fields: object) -> None:
-            self.calls.append((event, dict(fields)))
+    journal_module.configure(tmp_path / "events.jsonl")
+    journal_module.write("c")
 
-        def close(self) -> None:
-            return
-
-    rec = Recorder()
-    set_journal(rec)
-    journal().write("hello", x=1)
-    assert rec.calls == [("hello", {"x": 1})]
+    lines = (tmp_path / "events.jsonl").read_text().strip().split("\n")
+    assert len(lines) == 3
+    assert [json.loads(l)["event"] for l in lines] == ["a", "b", "c"]

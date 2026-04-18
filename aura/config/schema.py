@@ -41,6 +41,13 @@ class UIConfig(BaseModel):
     theme: str = "default"
 
 
+class LogConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    path: str = "~/.aura/logs/events.jsonl"
+
+
 class AuraConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -53,6 +60,7 @@ class AuraConfig(BaseModel):
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    log: LogConfig = Field(default_factory=LogConfig)
 
     @model_validator(mode="after")
     def _validate_cross_refs(self) -> AuraConfig:

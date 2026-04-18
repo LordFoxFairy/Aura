@@ -1,5 +1,6 @@
 """Core agent loop, state, registry, hooks, and built-in hook factories."""
 
+from aura.core import journal
 from aura.core.agent import Agent, build_agent
 from aura.core.budget import (
     MaxTurnsExceeded,
@@ -22,7 +23,6 @@ from aura.core.hooks import (
     PreModelHook,
     PreToolHook,
 )
-from aura.core.journal import Journal, journal, reset_journal, set_journal, setup_file_journal
 from aura.core.llm import (
     MissingCredentialError,
     MissingProviderDependencyError,
@@ -46,7 +46,6 @@ __all__ = [
     "AssistantDelta",
     "Final",
     "HookChain",
-    "Journal",
     "LoopState",
     "MaxTurnsExceeded",
     "MissingCredentialError",
@@ -71,7 +70,4 @@ __all__ = [
     "make_permission_hook",
     "make_size_budget_hook",
     "make_usage_tracking_hook",
-    "reset_journal",
-    "set_journal",
-    "setup_file_journal",
 ]

@@ -11,8 +11,8 @@ from rich.console import Console
 from aura.cli.commands import dispatch
 from aura.cli.render import Renderer
 from aura.cli.spinner import ThinkingSpinner
+from aura.core import journal
 from aura.core.agent import Agent
-from aura.core.journal import journal
 
 InputFn = Callable[[str], Awaitable[str]]
 
@@ -28,7 +28,7 @@ async def run_repl_async(
     console: Console | None = None,
     verbose: bool = False,
 ) -> None:
-    journal().write("repl_started")
+    journal.write("repl_started")
     _input = input_fn if input_fn is not None else _default_input
     _console = console if console is not None else Console()
     renderer = Renderer(_console)
@@ -37,21 +37,21 @@ async def run_repl_async(
         try:
             line = await _input("aura> ")
         except (EOFError, KeyboardInterrupt):
-            journal().write("repl_exit", reason="eof_or_ctrlc")
+            journal.write("repl_exit", reason="eof_or_ctrlc")
             _console.print()
             return
 
-        journal().write("user_input", line=line[:500])
+        journal.write("user_input", line=line[:500])
 
         result = dispatch(line, agent)
         if result.handled:
-            journal().write(
+            journal.write(
                 "slash_command",
                 line=line[:200],
                 kind=result.kind,
             )
             if result.kind == "exit":
-                journal().write("repl_exit", reason="slash_exit")
+                journal.write("repl_exit", reason="slash_exit")
                 return
             if result.text:
                 _console.print(result.text)

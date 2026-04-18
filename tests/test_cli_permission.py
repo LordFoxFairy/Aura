@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from aura.cli.permission import make_cli_asker
-from aura.core.permission import PermissionSession
+from aura.core.hooks.permission import PermissionSession
 from aura.tools.base import AuraTool, ToolResult, build_tool
 
 

@@ -8,7 +8,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 
 from aura.config.schema import AuraConfig, AuraConfigError, ProviderConfig
-from aura.core import journal
+from aura.core.persistence import journal
 
 
 class UnknownModelSpecError(AuraConfigError):

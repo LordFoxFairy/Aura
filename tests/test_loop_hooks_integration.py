@@ -9,9 +9,9 @@ import pytest
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from pydantic import BaseModel
 
-from aura.core.budget import make_size_budget_hook
 from aura.core.events import AgentEvent, ToolCallCompleted
 from aura.core.hooks import HookChain
+from aura.core.hooks.budget import make_size_budget_hook
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState

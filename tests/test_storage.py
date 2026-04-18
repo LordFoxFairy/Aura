@@ -7,7 +7,7 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
-from aura.core.storage import SessionStorage
+from aura.core.persistence.storage import SessionStorage
 
 # ---------------------------------------------------------------------------
 # Helpers

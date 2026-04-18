@@ -11,8 +11,8 @@ from rich.console import Console
 from aura.cli.commands import dispatch
 from aura.cli.render import Renderer
 from aura.cli.spinner import ThinkingSpinner
-from aura.core import journal
 from aura.core.agent import Agent
+from aura.core.persistence import journal
 
 InputFn = Callable[[str], Awaitable[str]]
 

@@ -8,8 +8,8 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel
 
-from aura.core import journal
 from aura.core.hooks import HookChain
+from aura.core.persistence import journal
 from aura.core.state import LoopState
 from aura.tools.base import AuraTool, ToolResult
 

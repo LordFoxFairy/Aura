@@ -8,8 +8,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from aura.core import journal
-from aura.core.permission import PermissionAsker, PermissionSession
+from aura.core.hooks.permission import PermissionAsker, PermissionSession
+from aura.core.persistence import journal
 from aura.tools.base import AuraTool
 
 

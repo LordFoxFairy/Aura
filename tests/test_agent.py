@@ -16,7 +16,7 @@ from aura.core.agent import Agent, build_agent
 from aura.core.events import Final
 from aura.core.hooks import HookChain
 from aura.core.llm import UnknownModelSpecError
-from aura.core.storage import SessionStorage
+from aura.core.persistence.storage import SessionStorage
 from aura.tools.base import AuraTool, ToolResult, build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -427,9 +427,9 @@ def test_build_agent_forwards_available_tools(
 
 @pytest.mark.asyncio
 async def test_astream_max_turns_yields_graceful_final(tmp_path: Path) -> None:
-    from aura.core.budget import make_max_turns_hook
     from aura.core.events import Final
     from aura.core.hooks import HookChain
+    from aura.core.hooks.budget import make_max_turns_hook
 
     cfg = _minimal_config(enabled=[])
     model = FakeChatModel(turns=[

@@ -13,8 +13,8 @@ from pathlib import Path
 
 from langchain_core.messages import BaseMessage
 
-from aura.core import journal
 from aura.core.history import deserialize_messages, serialize_messages
+from aura.core.persistence import journal
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS messages (

@@ -63,8 +63,8 @@ def main() -> int:
     from aura.core import journal
     from aura.core.agent import build_agent
     from aura.core.hooks import HookChain
-    from aura.core.logging import wrap_with_event_logger
-    from aura.core.permission import PermissionSession, make_permission_hook
+    from aura.core.hooks.logging import wrap_with_event_logger
+    from aura.core.hooks.permission import PermissionSession, make_permission_hook
 
     console = Console()
 

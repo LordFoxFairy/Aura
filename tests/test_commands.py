@@ -9,7 +9,7 @@ from aura.cli.commands import dispatch
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.llm import UnknownModelSpecError
-from aura.core.storage import SessionStorage
+from aura.core.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
 

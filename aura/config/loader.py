@@ -10,7 +10,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core import journal
+from aura.core.persistence import journal
 
 
 def _read_json(path: Path, source: str) -> dict[str, Any]:

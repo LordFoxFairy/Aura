@@ -9,8 +9,8 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
-from aura.core.budget import make_size_budget_hook
 from aura.core.hooks import PostToolHook
+from aura.core.hooks.budget import make_size_budget_hook
 from aura.core.state import LoopState
 from aura.tools.base import AuraTool, ToolResult, build_tool
 
@@ -151,7 +151,7 @@ async def test_no_per_tool_budget_falls_back_to_global() -> None:
 
 
 async def test_usage_tracking_hook_accumulates_total_tokens() -> None:
-    from aura.core.budget import make_usage_tracking_hook
+    from aura.core.hooks.budget import make_usage_tracking_hook
 
     hook = make_usage_tracking_hook()
     state = LoopState()
@@ -170,7 +170,7 @@ async def test_usage_tracking_hook_accumulates_total_tokens() -> None:
 
 
 async def test_usage_tracking_hook_handles_missing_usage_metadata() -> None:
-    from aura.core.budget import make_usage_tracking_hook
+    from aura.core.hooks.budget import make_usage_tracking_hook
 
     hook = make_usage_tracking_hook()
     state = LoopState()
@@ -181,7 +181,7 @@ async def test_usage_tracking_hook_handles_missing_usage_metadata() -> None:
 
 
 async def test_max_turns_hook_allows_under_limit() -> None:
-    from aura.core.budget import make_max_turns_hook
+    from aura.core.hooks.budget import make_max_turns_hook
 
     hook = make_max_turns_hook(5)
     state = LoopState()
@@ -190,7 +190,7 @@ async def test_max_turns_hook_allows_under_limit() -> None:
 
 
 async def test_max_turns_hook_raises_at_limit() -> None:
-    from aura.core.budget import MaxTurnsExceeded, make_max_turns_hook
+    from aura.core.hooks.budget import MaxTurnsExceeded, make_max_turns_hook
 
     hook = make_max_turns_hook(5)
     state = LoopState()
@@ -201,8 +201,8 @@ async def test_max_turns_hook_raises_at_limit() -> None:
 
 
 def test_default_hooks_returns_populated_chain() -> None:
-    from aura.core.budget import default_hooks
     from aura.core.hooks import HookChain
+    from aura.core.hooks.budget import default_hooks
 
     hooks = default_hooks()
     assert isinstance(hooks, HookChain)
@@ -214,7 +214,7 @@ def test_default_hooks_returns_populated_chain() -> None:
 def test_default_hooks_overrides_take_effect() -> None:
     import asyncio
 
-    from aura.core.budget import MaxTurnsExceeded, default_hooks
+    from aura.core.hooks.budget import MaxTurnsExceeded, default_hooks
 
     hooks = default_hooks(max_turns=2)
     state = LoopState()

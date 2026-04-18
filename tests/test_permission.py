@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel
 
-from aura.core.permission import (
+from aura.core.hooks.permission import (
     PermissionSession,
     make_permission_hook,
 )

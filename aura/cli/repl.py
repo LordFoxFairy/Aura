@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 
+from aura import __version__
 from aura.cli.commands import dispatch
 from aura.cli.render import Renderer
 from aura.cli.spinner import ThinkingSpinner
@@ -32,6 +36,8 @@ async def run_repl_async(
     _input = input_fn if input_fn is not None else _default_input
     _console = console if console is not None else Console()
     renderer = Renderer(_console)
+
+    _print_welcome(agent, _console)
 
     while True:
         try:
@@ -61,6 +67,19 @@ async def run_repl_async(
 
         if verbose:
             _print_verbose_summary(agent, _console)
+
+
+def _print_welcome(agent: Agent, console: Console) -> None:
+    body = Text()
+    body.append("✱ Welcome to Aura", style="bold")
+    body.append(f" v{__version__}\n\n", style="dim")
+    body.append("/help", style="cyan")
+    body.append(" for help\n\n", style="dim")
+    body.append("cwd: ", style="dim")
+    body.append(f"{Path.cwd()}\n", style="")
+    body.append("model: ", style="dim")
+    body.append(agent.current_model, style="")
+    console.print(Panel(body, border_style="cyan", padding=(0, 2)))
 
 
 def _print_verbose_summary(agent: Agent, console: Console) -> None:

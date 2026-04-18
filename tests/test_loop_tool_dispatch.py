@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
+from pathlib import Path
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel
 
+from aura.config.schema import AuraConfig
+from aura.core.agent import Agent
 from aura.core.events import AgentEvent, Final, ToolCallCompleted, ToolCallStarted
 from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
+from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
 from aura.tools.base import AuraTool, ToolResult, build_tool
 from tests.conftest import FakeChatModel, FakeTurn
@@ -118,3 +124,53 @@ async def test_run_turn_tool_call_output_serialized_as_json() -> None:
     assert isinstance(tool_msg_content, str)
     parsed = json.loads(tool_msg_content)
     assert parsed == {"echoed": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_parallel_safe_tools_run_concurrently(tmp_path: Path) -> None:
+    """Two is_concurrency_safe tools in one AIMessage run via asyncio.gather.
+    We verify parallelism by timing: each tool sleeps 0.2s; serial would take
+    0.4s, parallel should finish in <0.35s.
+    """
+    class _P(BaseModel):
+        pass
+
+    async def _slow_read(p: BaseModel) -> ToolResult:
+        await asyncio.sleep(0.2)
+        return ToolResult(ok=True, output={"ok": True})
+
+    slow = build_tool(
+        name="slow_safe",
+        description="slow read-only",
+        input_model=_P,
+        call=_slow_read,
+        is_read_only=True,
+        is_concurrency_safe=True,
+    )
+
+    tool_calls = [
+        {"name": "slow_safe", "args": {}, "id": "tc_1"},
+        {"name": "slow_safe", "args": {}, "id": "tc_2"},
+    ]
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(content="", tool_calls=tool_calls)),
+        FakeTurn(message=AIMessage(content="done")),
+    ])
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["slow_safe"]},
+    })
+    agent = Agent(
+        config=cfg, model=model, storage=SessionStorage(tmp_path / "db"),
+        available_tools={"slow_safe": slow},
+    )
+
+    start = time.monotonic()
+    async for _ in agent.astream("go"):
+        pass
+    elapsed = time.monotonic() - start
+    agent.close()
+
+    assert elapsed < 0.35, f"expected parallel <0.35s, got {elapsed:.2f}s"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -91,7 +92,7 @@ class AgentLoop:
         return ai
 
     async def _dispatch_tool_calls(
-        self, tool_calls: list[ToolCall], history: list[BaseMessage]
+        self, tool_calls: list[ToolCall], history: list[BaseMessage],
     ) -> AsyncIterator[AgentEvent]:
         steps = await self._plan_tool_calls(tool_calls)
         journal.write(
@@ -105,34 +106,81 @@ class AgentLoop:
                 for s in steps
             ],
         )
-        for step in steps:
+
+        batches = ToolRegistry.partition_batches(steps)
+        for batch in batches:
+            if len(batch) == 1:
+                async for event in self._run_batch_serial(batch[0], history):
+                    yield event
+            else:
+                async for event in self._run_batch_parallel(batch, history):
+                    yield event
+
+    async def _run_batch_serial(
+        self, step: ToolStep, history: list[BaseMessage],
+    ) -> AsyncIterator[AgentEvent]:
+        tc = step.tool_call
+        yield ToolCallStarted(name=tc["name"], input=dict(tc["args"]))
+        journal.write(
+            "tool_execute_begin", tool=tc["name"], tool_call_id=tc["id"],
+        )
+        result = await self._execute_step(step)
+        journal.write(
+            "tool_execute_end",
+            tool=tc["name"], tool_call_id=tc["id"],
+            ok=result.ok, error=result.error,
+        )
+        self._append_tool_message(history, tc, result)
+        yield ToolCallCompleted(
+            name=tc["name"], output=result.output, error=result.error,
+        )
+
+    async def _run_batch_parallel(
+        self, batch: list[ToolStep], history: list[BaseMessage],
+    ) -> AsyncIterator[AgentEvent]:
+        journal.write(
+            "tool_batch_begin",
+            turn=self._state.turn_count,
+            size=len(batch),
+            tools=[s.tool_call.get("name") for s in batch],
+        )
+        for step in batch:
             tc = step.tool_call
             yield ToolCallStarted(name=tc["name"], input=dict(tc["args"]))
-
             journal.write(
-                "tool_execute_begin",
-                tool=tc["name"],
-                tool_call_id=tc["id"],
+                "tool_execute_begin", tool=tc["name"], tool_call_id=tc["id"],
             )
-            result = await self._execute_step(step)
+
+        results = await asyncio.gather(
+            *(self._execute_step(s) for s in batch),
+        )
+
+        for step, result in zip(batch, results, strict=True):
+            tc = step.tool_call
             journal.write(
                 "tool_execute_end",
-                tool=tc["name"],
-                tool_call_id=tc["id"],
-                ok=result.ok,
-                error=result.error,
+                tool=tc["name"], tool_call_id=tc["id"],
+                ok=result.ok, error=result.error,
+            )
+            self._append_tool_message(history, tc, result)
+            yield ToolCallCompleted(
+                name=tc["name"], output=result.output, error=result.error,
             )
 
-            status: Literal["success", "error"] = "success" if result.ok else "error"
-            history.append(
-                ToolMessage(
-                    content=_serialize(result),
-                    tool_call_id=tc["id"],
-                    name=tc["name"],
-                    status=status,
-                )
+        journal.write("tool_batch_end", turn=self._state.turn_count, size=len(batch))
+
+    def _append_tool_message(
+        self, history: list[BaseMessage], tc: ToolCall, result: ToolResult,
+    ) -> None:
+        status: Literal["success", "error"] = "success" if result.ok else "error"
+        history.append(
+            ToolMessage(
+                content=_serialize(result),
+                tool_call_id=tc["id"],
+                name=tc["name"],
+                status=status,
             )
-            yield ToolCallCompleted(name=tc["name"], output=result.output, error=result.error)
+        )
 
     async def _plan_tool_calls(self, tool_calls: list[ToolCall]) -> list[ToolStep]:
         steps: list[ToolStep] = []

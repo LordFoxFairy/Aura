@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from typing import TYPE_CHECKING
 
 from aura.core.history import tool_schema_for
 from aura.tools.base import AuraTool
+
+if TYPE_CHECKING:
+    from aura.core.loop import ToolStep
 
 
 class ToolRegistry:
@@ -37,3 +41,25 @@ class ToolRegistry:
 
     def schemas(self) -> list[dict[str, object]]:
         return [tool_schema_for(t) for t in self._by_name.values()]
+
+    @staticmethod
+    def partition_batches(steps: list[ToolStep]) -> list[list[ToolStep]]:
+        batches: list[list[ToolStep]] = []
+        current: list[ToolStep] = []
+        for step in steps:
+            tool = step.tool
+            safe = (
+                tool is not None
+                and tool.is_concurrency_safe
+                and step.decision is None
+            )
+            if safe:
+                current.append(step)
+                continue
+            if current:
+                batches.append(current)
+                current = []
+            batches.append([step])
+        if current:
+            batches.append(current)
+        return batches

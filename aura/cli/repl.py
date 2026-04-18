@@ -50,14 +50,27 @@ async def run_repl_async(
 async def _run_turn(
     agent: Agent, prompt: str, renderer: Renderer, console: Console,
 ) -> None:
-    task: asyncio.Task[None] | None = None
-
-    async def _stream() -> None:
+    async def _stream(stop_status: Callable[[], None]) -> None:
+        stopped = False
         async for event in agent.astream(prompt):
+            if not stopped:
+                stop_status()
+                stopped = True
             renderer.on_event(event)
+        if not stopped:
+            stop_status()
         renderer.finish()
 
-    task = asyncio.create_task(_stream())
+    status = console.status("[bold cyan]thinking…[/bold cyan]", spinner="dots")
+    status.start()
+    stopped_once: list[bool] = [False]
+
+    def _stop() -> None:
+        if not stopped_once[0]:
+            status.stop()
+            stopped_once[0] = True
+
+    task = asyncio.create_task(_stream(_stop))
     try:
         await task
     except asyncio.CancelledError:
@@ -66,3 +79,5 @@ async def _run_turn(
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+    finally:
+        _stop()

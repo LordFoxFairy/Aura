@@ -78,7 +78,7 @@ async def test_astream_does_not_persist_on_cancellation(tmp_path: Path) -> None:
     storage.save("default", prior)
 
     class _SlowFakeChatModel(FakeChatModel):
-        async def _astream(
+        async def _agenerate(
             self,
             messages: list[BaseMessage],
             stop: list[str] | None = None,
@@ -86,7 +86,7 @@ async def test_astream_does_not_persist_on_cancellation(tmp_path: Path) -> None:
             **_: Any,
         ) -> Any:
             await asyncio.sleep(10)
-            yield
+            return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **_)
 
     model = _SlowFakeChatModel()
     agent = Agent(config=_minimal_config(), model=model, storage=storage)

@@ -10,7 +10,6 @@ from typing import Literal
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
-    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     ToolCall,
@@ -61,33 +60,26 @@ class AgentLoop:
         history.append(HumanMessage(content=user_prompt))
 
         while True:
-            self._state.turn_count += 1
-            await self._hooks.run_pre_model(history=history, state=self._state)
+            ai = await self._invoke_model(history)
 
-            acc: AIMessageChunk | None = None
-            async for chunk in self._bound.astream(history):
-                if not isinstance(chunk, AIMessageChunk):
-                    continue
-                if chunk.content:
-                    yield AssistantDelta(text=str(chunk.content))
-                acc = chunk if acc is None else acc + chunk
-
-            ai = (
-                AIMessage(content=acc.content, tool_calls=list(acc.tool_calls or []))
-                if acc is not None
-                else AIMessage(content="")
-            )
-            history.append(ai)
-            await self._hooks.run_post_model(
-                ai_message=ai, history=history, state=self._state,
-            )
-
+            if ai.content:
+                yield AssistantDelta(text=str(ai.content))
             if not ai.tool_calls:
                 yield Final(message=str(ai.content))
                 return
 
             async for event in self._dispatch_tool_calls(ai.tool_calls, history):
                 yield event
+
+    async def _invoke_model(self, history: list[BaseMessage]) -> AIMessage:
+        self._state.turn_count += 1
+        await self._hooks.run_pre_model(history=history, state=self._state)
+        ai = await self._bound.ainvoke(history)
+        history.append(ai)
+        await self._hooks.run_post_model(
+            ai_message=ai, history=history, state=self._state,
+        )
+        return ai
 
     async def _dispatch_tool_calls(
         self, tool_calls: list[ToolCall], history: list[BaseMessage]

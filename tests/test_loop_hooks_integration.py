@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from pydantic import BaseModel
 
+from aura.core.budget import make_size_budget_hook
 from aura.core.events import AgentEvent, ToolCallCompleted
 from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
@@ -207,3 +211,46 @@ async def test_hooks_see_monotonic_turn_count() -> None:
         pass
 
     assert observed == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_budget_hook_truncates_large_tool_output(tmp_path: Path) -> None:
+    async def _big_call(params: BaseModel) -> ToolResult:
+        return ToolResult(ok=True, output={"content": "x" * 20_000})
+
+    class _P(BaseModel):
+        pass
+
+    big_tool: AuraTool = build_tool(
+        name="big",
+        description="emits large output",
+        input_model=_P,
+        call=_big_call,
+        is_read_only=True,
+    )
+
+    hooks = HookChain(post_tool=[make_size_budget_hook(max_chars=500, spill_dir=tmp_path)])
+
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(content="", tool_calls=[
+            {"name": "big", "args": {}, "id": "tc_1"},
+        ])),
+        FakeTurn(message=AIMessage(content="done")),
+    ])
+    loop = AgentLoop(
+        model=model,
+        registry=ToolRegistry([big_tool]),
+        hooks=hooks,
+    )
+
+    history: list[BaseMessage] = []
+    async for _ in loop.run_turn(user_prompt="go", history=history):
+        pass
+
+    tool_msgs = [m for m in history if isinstance(m, ToolMessage)]
+    assert len(tool_msgs) == 1
+    payload = json.loads(str(tool_msgs[0].content))
+    assert payload["truncated"] is True
+    assert payload["total_chars"] > 500
+    assert "spill_path" in payload
+    assert Path(payload["spill_path"]).exists()

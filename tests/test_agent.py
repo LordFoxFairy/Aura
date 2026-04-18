@@ -514,9 +514,9 @@ async def test_agent_builds_system_prompt(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_system_prompt_prepended_to_model_messages(tmp_path: Path) -> None:
     """AgentLoop がモデルを呼ぶ際、SystemMessage が最初に来ることを確認。"""
+
     from langchain_core.messages import SystemMessage
-    from typing import Any
-    from langchain_core.outputs import ChatResult, ChatGeneration
+    from langchain_core.outputs import ChatResult
 
     received: list[list[BaseMessage]] = []
 
@@ -534,7 +534,7 @@ async def test_system_prompt_prepended_to_model_messages(tmp_path: Path) -> None
     cfg = _minimal_config(enabled=[])
     agent = Agent(
         config=cfg,
-        model=_CapturingFake(turns=[FakeTurn(message=AIMessage(content="hi"))]),
+        model=_CapturingFake(turns=[FakeTurn(message=AIMessage(content="hi"))]),  # type: ignore[call-arg]
         storage=_storage(tmp_path),
     )
     async for _ in agent.astream("hello"):

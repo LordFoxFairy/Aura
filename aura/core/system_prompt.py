@@ -8,7 +8,6 @@ from pathlib import Path
 
 from aura.core.registry import ToolRegistry
 
-
 _AURA_MD_FILENAME = "AURA.md"
 _AURA_MD_MAX_BYTES = 10 * 1024  # 10 KB cap — 超限截断，防巨型 README 吞 context
 _AURA_MD_MAX_WALK = 10  # 向上最多走 10 级父目录

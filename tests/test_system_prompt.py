@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import datetime as dt
 from pathlib import Path
-from pydantic import BaseModel
 
-import pytest
+from pydantic import BaseModel
 
 from aura.core.registry import ToolRegistry
 from aura.core.system_prompt import (
-    _AURA_MD_MAX_BYTES,
     build_system_prompt,
 )
 from aura.tools.base import AuraTool, ToolResult, build_tool
@@ -20,7 +18,12 @@ def _empty_registry() -> ToolRegistry:
     return ToolRegistry([])
 
 
-def _make_tool(name: str, description: str, read_only: bool = False, destructive: bool = False) -> AuraTool:
+def _make_tool(
+    name: str,
+    description: str,
+    read_only: bool = False,
+    destructive: bool = False,
+) -> AuraTool:
     class _P(BaseModel):
         pass
 
@@ -47,7 +50,7 @@ def test_identity_section_mentions_aura(tmp_path: Path) -> None:
 
 
 def test_environment_section_includes_cwd_and_date(tmp_path: Path) -> None:
-    fixed_now = dt.datetime(2026, 4, 17, tzinfo=dt.timezone.utc)
+    fixed_now = dt.datetime(2026, 4, 17, tzinfo=dt.UTC)
     result = build_system_prompt(
         registry=_empty_registry(),
         cwd=tmp_path,

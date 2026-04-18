@@ -89,7 +89,8 @@ class AgentLoop:
         # turn_count 先于 pre_model hook 递增，hook 看到的是"即将开始的第 N 轮"。
         self._state.turn_count += 1
         await self._hooks.run_pre_model(history=history, state=self._state)
-        # SystemMessage 不持久化到 history —— 每次调 model 前临时插入，保证总是拿到最新环境（日期/cwd/tools）。
+        # SystemMessage 不持久化到 history —— 每次调 model 前临时插入，
+        # 保证总是拿到最新环境（日期/cwd/tools）。
         messages = (
             [SystemMessage(content=self._system_prompt), *history]
             if self._system_prompt

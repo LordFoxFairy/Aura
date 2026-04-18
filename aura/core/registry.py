@@ -1,4 +1,4 @@
-"""Tool registry — wraps a dict with uniqueness + schema emission + partitioning."""
+"""Name-keyed collection of AuraTool instances used by the agent loop."""
 
 from __future__ import annotations
 
@@ -9,13 +9,6 @@ from aura.tools.base import AuraTool
 
 
 class ToolRegistry:
-    """Immutable, name-keyed collection of AuraTool instances.
-
-    Built once per Agent. Enforces unique names at construction. Emits LangChain
-    tool schemas on demand. Future-ready: `partition_batches()` will group
-    consecutive concurrency-safe calls for parallel dispatch (MVP is serial).
-    """
-
     def __init__(self, tools: Iterable[AuraTool]) -> None:
         by_name: dict[str, AuraTool] = {}
         for t in tools:
@@ -43,8 +36,4 @@ class ToolRegistry:
         return list(self._by_name)
 
     def schemas(self) -> list[dict[str, object]]:
-        """LangChain tool-binding dicts in registration order."""
         return [tool_schema_for(t) for t in self._by_name.values()]
-
-    # Future: partition_batches(calls) → list[list[call]] for parallel dispatch.
-    # Stub omitted for MVP per spec §7 "Concurrent batching: phase 4+".

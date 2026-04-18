@@ -1,4 +1,5 @@
 """Tests for aura.config.schema — AuraConfig pydantic v2 schema."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -44,10 +45,12 @@ def test_unknown_top_level_raises() -> None:
 
 def test_unknown_key_on_provider_raises() -> None:
     with pytest.raises(ValidationError):
-        AuraConfig.model_validate({
-            "providers": [{"name": "x", "protocol": "openai", "bogus": 1}],
-            "router": {"default": "x:m"},
-        })
+        AuraConfig.model_validate(
+            {
+                "providers": [{"name": "x", "protocol": "openai", "bogus": 1}],
+                "router": {"default": "x:m"},
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -57,11 +60,13 @@ def test_unknown_key_on_provider_raises() -> None:
 
 def test_unknown_key_on_tools_raises() -> None:
     with pytest.raises(ValidationError):
-        AuraConfig.model_validate({
-            "tools": {"enabled": [], "bogus": 1},
-            "providers": [{"name": "x", "protocol": "openai"}],
-            "router": {"default": "x:m"},
-        })
+        AuraConfig.model_validate(
+            {
+                "tools": {"enabled": [], "bogus": 1},
+                "providers": [{"name": "x", "protocol": "openai"}],
+                "router": {"default": "x:m"},
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -71,13 +76,15 @@ def test_unknown_key_on_tools_raises() -> None:
 
 def test_duplicate_provider_names_raises() -> None:
     with pytest.raises(ValidationError, match="duplicate"):
-        AuraConfig.model_validate({
-            "providers": [
-                {"name": "openai", "protocol": "openai"},
-                {"name": "openai", "protocol": "anthropic"},
-            ],
-            "router": {"default": "openai:gpt-4o-mini"},
-        })
+        AuraConfig.model_validate(
+            {
+                "providers": [
+                    {"name": "openai", "protocol": "openai"},
+                    {"name": "openai", "protocol": "anthropic"},
+                ],
+                "router": {"default": "openai:gpt-4o-mini"},
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -87,10 +94,12 @@ def test_duplicate_provider_names_raises() -> None:
 
 def test_router_missing_default_raises() -> None:
     with pytest.raises(ValidationError, match="default"):
-        AuraConfig.model_validate({
-            "router": {},
-            "providers": [{"name": "x", "protocol": "openai"}],
-        })
+        AuraConfig.model_validate(
+            {
+                "router": {},
+                "providers": [{"name": "x", "protocol": "openai"}],
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -100,10 +109,12 @@ def test_router_missing_default_raises() -> None:
 
 def test_router_unknown_provider_raises() -> None:
     with pytest.raises(ValidationError, match="ghost"):
-        AuraConfig.model_validate({
-            "router": {"default": "ghost:m"},
-            "providers": [{"name": "real", "protocol": "openai"}],
-        })
+        AuraConfig.model_validate(
+            {
+                "router": {"default": "ghost:m"},
+                "providers": [{"name": "real", "protocol": "openai"}],
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -113,10 +124,12 @@ def test_router_unknown_provider_raises() -> None:
 
 def test_router_value_missing_colon_raises() -> None:
     with pytest.raises(ValidationError):
-        AuraConfig.model_validate({
-            "router": {"default": "no-colon"},
-            "providers": [{"name": "x", "protocol": "openai"}],
-        })
+        AuraConfig.model_validate(
+            {
+                "router": {"default": "no-colon"},
+                "providers": [{"name": "x", "protocol": "openai"}],
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -126,10 +139,12 @@ def test_router_value_missing_colon_raises() -> None:
 
 def test_invalid_protocol_raises() -> None:
     with pytest.raises(ValidationError):
-        AuraConfig.model_validate({
-            "providers": [{"name": "x", "protocol": "bogus"}],
-            "router": {"default": "x:m"},
-        })
+        AuraConfig.model_validate(
+            {
+                "providers": [{"name": "x", "protocol": "bogus"}],
+                "router": {"default": "x:m"},
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -151,16 +166,18 @@ def test_resolved_storage_path_expands_home(
 
 
 def test_full_nested_dict_happy_path() -> None:
-    cfg = AuraConfig.model_validate({
-        "providers": [
-            {"name": "a", "protocol": "openai", "api_key_env": "A"},
-            {"name": "b", "protocol": "anthropic", "api_key_env": "B"},
-        ],
-        "router": {"default": "a:gpt-4o-mini", "claude": "b:claude-3-5-sonnet-latest"},
-        "tools": {"enabled": ["read_file"]},
-        "storage": {"path": "/tmp/x.db"},
-        "ui": {"theme": "default"},
-    })
+    cfg = AuraConfig.model_validate(
+        {
+            "providers": [
+                {"name": "a", "protocol": "openai", "api_key_env": "A"},
+                {"name": "b", "protocol": "anthropic", "api_key_env": "B"},
+            ],
+            "router": {"default": "a:gpt-4o-mini", "claude": "b:claude-3-5-sonnet-latest"},
+            "tools": {"enabled": ["read_file"]},
+            "storage": {"path": "/tmp/x.db"},
+            "ui": {"theme": "default"},
+        }
+    )
     assert len(cfg.providers) == 2
     assert cfg.providers[0].name == "a"
     assert cfg.providers[1].name == "b"
@@ -176,10 +193,12 @@ def test_full_nested_dict_happy_path() -> None:
 
 
 def test_model_name_with_colon_preserved_in_router() -> None:
-    cfg = AuraConfig.model_validate({
-        "providers": [{"name": "p", "protocol": "anthropic"}],
-        "router": {"default": "p:claude-3.5-haiku:20241022"},
-    })
+    cfg = AuraConfig.model_validate(
+        {
+            "providers": [{"name": "p", "protocol": "anthropic"}],
+            "router": {"default": "p:claude-3.5-haiku:20241022"},
+        }
+    )
     assert cfg.router["default"] == "p:claude-3.5-haiku:20241022"
 
 

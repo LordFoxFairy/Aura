@@ -1,4 +1,5 @@
 """ModelFactory — resolves model specs to (ProviderConfig, model_name) and creates LLM instances."""
+
 from __future__ import annotations
 
 import os
@@ -25,6 +26,7 @@ class MissingCredentialError(AuraConfigError):
 # Lazy import helpers — zero import cost when protocol not used
 # ---------------------------------------------------------------------------
 
+
 def _load_openai_class() -> type[BaseChatModel]:
     try:
         from langchain_openai import ChatOpenAI
@@ -33,8 +35,7 @@ def _load_openai_class() -> type[BaseChatModel]:
             source="provider sdk",
             detail="langchain_openai not installed. Run: pip install 'aura[openai]'",
         ) from exc
-    return ChatOpenAI  # type: ignore[no-any-return]
-
+    return ChatOpenAI
 
 def _load_anthropic_class() -> type[BaseChatModel]:
     try:
@@ -44,8 +45,7 @@ def _load_anthropic_class() -> type[BaseChatModel]:
             source="provider sdk",
             detail="langchain_anthropic not installed. Run: pip install 'aura[anthropic]'",
         ) from exc
-    return ChatAnthropic  # type: ignore[no-any-return]
-
+    return ChatAnthropic
 
 def _load_ollama_class() -> type[BaseChatModel]:
     try:
@@ -55,8 +55,7 @@ def _load_ollama_class() -> type[BaseChatModel]:
             source="provider sdk",
             detail="langchain_ollama not installed. Run: pip install 'aura[ollama]'",
         ) from exc
-    return ChatOllama  # type: ignore[no-any-return]
-
+    return ChatOllama
 
 # ---------------------------------------------------------------------------
 # Secret resolution
@@ -107,6 +106,7 @@ def _resolve_api_key(provider: ProviderConfig) -> str | None:
 # ---------------------------------------------------------------------------
 # ModelFactory
 # ---------------------------------------------------------------------------
+
 
 class ModelFactory:
     """Namespace class for model resolution utilities."""

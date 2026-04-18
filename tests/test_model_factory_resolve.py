@@ -1,4 +1,5 @@
 """Tests for ModelFactory.resolve — Task 13."""
+
 from __future__ import annotations
 
 import pytest

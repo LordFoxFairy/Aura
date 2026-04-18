@@ -1,4 +1,5 @@
 """Tests for aura.core.events — AgentEvent union and dataclasses."""
+
 import dataclasses
 
 import pytest

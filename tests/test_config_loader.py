@@ -1,4 +1,5 @@
 """Tests for aura.config.loader — load_config() with precedence and merge."""
+
 from __future__ import annotations
 
 import json
@@ -62,10 +63,16 @@ def test_load_config_project_wholly_replaces_user_providers(tmp_path: Path) -> N
 
 def test_load_config_env_var_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env_config = tmp_path / "env_config.json"
-    env_config.write_text(json.dumps({
-        "providers": [{"name": "env-provider", "protocol": "openai", "api_key_env": "ENV_KEY"}],
-        "router": {"default": "env-provider:gpt-5"},
-    }))
+    env_config.write_text(
+        json.dumps(
+            {
+                "providers": [
+                    {"name": "env-provider", "protocol": "openai", "api_key_env": "ENV_KEY"}
+                ],
+                "router": {"default": "env-provider:gpt-5"},
+            }
+        )
+    )
     monkeypatch.setenv("AURA_CONFIG", str(env_config))
 
     cfg = load_config(
@@ -133,10 +140,14 @@ def test_load_config_non_object_top_level_raises(tmp_path: Path) -> None:
 
 def test_load_config_validation_error_wraps(tmp_path: Path) -> None:
     bad_config = tmp_path / "bad_schema.json"
-    bad_config.write_text(json.dumps({
-        "router": {"default": "ghost:m"},
-        "providers": [{"name": "real", "protocol": "openai"}],
-    }))
+    bad_config.write_text(
+        json.dumps(
+            {
+                "router": {"default": "ghost:m"},
+                "providers": [{"name": "real", "protocol": "openai"}],
+            }
+        )
+    )
 
     with pytest.raises(AuraConfigError) as exc_info:
         load_config(user_config=bad_config, project_config=tmp_path / "p.json")
@@ -153,16 +164,28 @@ def test_load_config_validation_error_wraps(tmp_path: Path) -> None:
 
 def test_load_config_top_level_shallow_replace_drops_user_router(tmp_path: Path) -> None:
     user_cfg = tmp_path / "user.json"
-    user_cfg.write_text(json.dumps({
-        "providers": [{"name": "openai", "protocol": "openai", "api_key_env": "OPENAI_API_KEY"}],
-        "router": {"default": "openai:gpt-4o-mini", "fast": "openai:gpt-4o-mini"},
-    }))
+    user_cfg.write_text(
+        json.dumps(
+            {
+                "providers": [
+                    {"name": "openai", "protocol": "openai", "api_key_env": "OPENAI_API_KEY"}
+                ],
+                "router": {"default": "openai:gpt-4o-mini", "fast": "openai:gpt-4o-mini"},
+            }
+        )
+    )
 
     project_cfg = tmp_path / "project.json"
-    project_cfg.write_text(json.dumps({
-        "providers": [{"name": "openai", "protocol": "openai", "api_key_env": "OPENAI_API_KEY"}],
-        "router": {"default": "openai:gpt-4o-mini"},
-    }))
+    project_cfg.write_text(
+        json.dumps(
+            {
+                "providers": [
+                    {"name": "openai", "protocol": "openai", "api_key_env": "OPENAI_API_KEY"}
+                ],
+                "router": {"default": "openai:gpt-4o-mini"},
+            }
+        )
+    )
 
     cfg = load_config(user_config=user_cfg, project_config=project_cfg)
 

@@ -1,4 +1,5 @@
 """Tests for aura.tools.base — AuraTool protocol and ToolResult."""
+
 from __future__ import annotations
 
 import asyncio

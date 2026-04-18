@@ -1,4 +1,4 @@
-"""Tests for aura.core.loop.run_turn — happy path (text-only, no tool dispatch)."""
+"""Tests for AgentLoop.run_turn — happy path (text-only, no tool dispatch)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from aura.core.events import AgentEvent, AssistantDelta, Final
 from aura.core.hooks import HookChain
-from aura.core.loop import run_turn
+from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
 from aura.tools.base import AuraTool, ToolResult, build_tool
 from tests.conftest import FakeChatModel, FakeTurn
@@ -18,15 +18,10 @@ from tests.conftest import FakeChatModel, FakeTurn
 async def test_run_turn_happy_path_single_message() -> None:
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="hello world"))])
     history: list[BaseMessage] = []
+    loop = AgentLoop(model=model, registry=ToolRegistry(()), hooks=HookChain())
 
     events: list[AgentEvent] = []
-    async for ev in run_turn(
-        user_prompt="hi",
-        history=history,
-        model=model,
-        registry=ToolRegistry(()),
-        hooks=HookChain(),
-    ):
+    async for ev in loop.run_turn(user_prompt="hi", history=history):
         events.append(ev)
 
     assert events == [AssistantDelta(text="hello world"), Final(message="hello world")]
@@ -41,14 +36,9 @@ async def test_run_turn_happy_path_single_message() -> None:
 async def test_run_turn_no_registry_skips_bind_tools() -> None:
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="ok"))])
     history: list[BaseMessage] = []
+    loop = AgentLoop(model=model, registry=ToolRegistry(()), hooks=HookChain())
 
-    async for _ in run_turn(
-        user_prompt="hello",
-        history=history,
-        model=model,
-        registry=ToolRegistry(()),
-        hooks=HookChain(),
-    ):
+    async for _ in loop.run_turn(user_prompt="hello", history=history):
         pass
 
     assert model.seen_bound_tools == []
@@ -78,14 +68,9 @@ async def test_run_turn_with_registry_calls_bind_tools_once() -> None:
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="done"))])
     history: list[BaseMessage] = []
     registry = ToolRegistry([_echo_tool])
+    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
 
-    async for _ in run_turn(
-        user_prompt="echo me",
-        history=history,
-        model=model,
-        registry=registry,
-        hooks=HookChain(),
-    ):
+    async for _ in loop.run_turn(user_prompt="echo me", history=history):
         pass
 
     assert len(model.seen_bound_tools) == 1
@@ -98,15 +83,10 @@ async def test_run_turn_with_registry_calls_bind_tools_once() -> None:
 async def test_run_turn_empty_content_still_emits_final() -> None:
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content=""))])
     history: list[BaseMessage] = []
+    loop = AgentLoop(model=model, registry=ToolRegistry(()), hooks=HookChain())
 
     events: list[AgentEvent] = []
-    async for ev in run_turn(
-        user_prompt="test",
-        history=history,
-        model=model,
-        registry=ToolRegistry(()),
-        hooks=HookChain(),
-    ):
+    async for ev in loop.run_turn(user_prompt="test", history=history):
         events.append(ev)
 
     deltas = [e for e in events if isinstance(e, AssistantDelta)]

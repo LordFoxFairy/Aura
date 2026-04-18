@@ -1,9 +1,4 @@
-"""AuraTool Protocol + ToolResult — framework-agnostic, no permission logic.
-
-Permission decisions are made by the loop via aura.core.permission.resolve();
-tools only declare capability flags (is_read_only / is_destructive /
-is_concurrency_safe) so the policy layer can short-circuit on read-only calls.
-"""
+"""Tool contract for the Aura agent loop."""
 
 from __future__ import annotations
 
@@ -36,8 +31,6 @@ class AuraTool(Protocol):
 
 @dataclass(frozen=True)
 class _Tool:
-    """Concrete tool produced by build_tool(). Satisfies the AuraTool Protocol structurally."""
-
     name: str
     description: str
     input_model: type[BaseModel]
@@ -60,14 +53,6 @@ def build_tool(
     is_destructive: bool = False,
     is_concurrency_safe: bool = False,
 ) -> AuraTool:
-    """Build an AuraTool from a minimal declarative spec.
-
-    Fail-closed defaults: destructive=False but concurrency_safe=False too — caller must
-    explicitly opt in to parallel-safe dispatch. This is the claude-code buildTool pattern
-    adapted for Python (spec §3.2).
-
-    The returned object satisfies the AuraTool Protocol structurally (runtime_checkable).
-    """
     return cast(
         AuraTool,
         _Tool(

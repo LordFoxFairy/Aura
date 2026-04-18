@@ -1,4 +1,5 @@
 """Tests for ModelFactory.create — lazy SDK loading + secret resolution."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -15,6 +16,7 @@ from aura.core.llm import (
 # ---------------------------------------------------------------------------
 # Stub classes — record kwargs, don't hit the network
 # ---------------------------------------------------------------------------
+
 
 class _StubOpenAI:
     def __init__(self, **kwargs: Any) -> None:
@@ -39,6 +41,7 @@ def _stub_kwargs(model: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Happy-path tests
 # ---------------------------------------------------------------------------
+
 
 def test_create_openai_happy_path_uses_default_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     from aura.core import llm
@@ -163,6 +166,7 @@ def test_create_ollama_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
 # Error-path tests
 # ---------------------------------------------------------------------------
 
+
 def test_create_missing_default_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     from aura.core import llm
 
@@ -223,9 +227,7 @@ def test_create_empty_plaintext_api_key_falls_back_to_env(monkeypatch: pytest.Mo
     monkeypatch.delenv("CUSTOM_KEY", raising=False)
     monkeypatch.setenv("CUSTOM_KEY", "from-env")
 
-    provider = ProviderConfig(
-        name="x", protocol="openai", api_key="", api_key_env="CUSTOM_KEY"
-    )
+    provider = ProviderConfig(name="x", protocol="openai", api_key="", api_key_env="CUSTOM_KEY")
     model, _ = ModelFactory.create(provider, "gpt-4o-mini")
 
     assert isinstance(model, _StubOpenAI)

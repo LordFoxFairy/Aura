@@ -1,4 +1,5 @@
 """load_config() — read JSON configs with precedence and top-level shallow merge."""
+
 from __future__ import annotations
 
 import json

@@ -53,12 +53,18 @@ def test_aura_tools_exports() -> None:
         ToolResult,
         bash,
         build_tool,
+        edit_file,
+        glob,
+        grep,
         read_file,
         write_file,
     )
 
     assert callable(build_tool)
     assert bash.name == "bash"
+    assert edit_file.name == "edit_file"
+    assert glob.name == "glob"
+    assert grep.name == "grep"
     assert read_file.name == "read_file"
     assert write_file.name == "write_file"
 

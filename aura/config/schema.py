@@ -23,7 +23,11 @@ class ProviderConfig(BaseModel):
 class ToolsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    enabled: list[str] = Field(default_factory=lambda: ["read_file", "write_file", "bash"])
+    enabled: list[str] = Field(
+        default_factory=lambda: [
+            "bash", "edit_file", "glob", "grep", "read_file", "write_file",
+        ],
+    )
 
 
 class StorageConfig(BaseModel):

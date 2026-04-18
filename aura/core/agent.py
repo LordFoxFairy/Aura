@@ -19,13 +19,19 @@ from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
 from aura.tools.base import AuraTool
 from aura.tools.bash import bash
+from aura.tools.edit_file import edit_file
+from aura.tools.glob import glob
+from aura.tools.grep import grep
 from aura.tools.read_file import read_file
 from aura.tools.write_file import write_file
 
 _BUILTIN_TOOLS: dict[str, AuraTool] = {
+    "bash": bash,
+    "edit_file": edit_file,
+    "glob": glob,
+    "grep": grep,
     "read_file": read_file,
     "write_file": write_file,
-    "bash": bash,
 }
 
 _DEFAULT_SESSION = "default"

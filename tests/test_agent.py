@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import BaseModel
 
 from aura.config.schema import AuraConfig, AuraConfigError
@@ -79,15 +78,15 @@ async def test_astream_does_not_persist_on_cancellation(tmp_path: Path) -> None:
     storage.save("default", prior)
 
     class _SlowFakeChatModel(FakeChatModel):
-        async def _agenerate(
+        async def _astream(
             self,
             messages: list[BaseMessage],
             stop: list[str] | None = None,
             run_manager: Any = None,
             **_: Any,
-        ) -> ChatResult:
+        ) -> Any:
             await asyncio.sleep(10)
-            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="never"))])
+            yield
 
     model = _SlowFakeChatModel()
     agent = Agent(config=_minimal_config(), model=model, storage=storage)

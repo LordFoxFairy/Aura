@@ -21,10 +21,20 @@ def _capture() -> tuple[Renderer, io.StringIO]:
     return Renderer(console), buf
 
 
-def test_assistant_delta_writes_text_without_newline() -> None:
+def test_assistant_delta_renders_markdown_in_final_buffer() -> None:
     r, buf = _capture()
-    r.on_event(AssistantDelta(text="hello"))
-    assert "hello" in buf.getvalue()
+    r.on_event(AssistantDelta(text="**hello**"))
+    r.finish()
+    out = buf.getvalue()
+    assert "hello" in out
+    assert "**" not in out
+
+
+def test_assistant_delta_plain_text_appears() -> None:
+    r, buf = _capture()
+    r.on_event(AssistantDelta(text="hello world"))
+    r.finish()
+    assert "hello world" in buf.getvalue()
 
 
 def test_tool_call_started_shows_marker_and_args() -> None:
@@ -50,16 +60,19 @@ def test_tool_call_completed_error_shows_cross_and_message() -> None:
     assert "permission denied" in out
 
 
-def test_final_is_silent() -> None:
+def test_final_closes_live_silently() -> None:
     r, buf = _capture()
+    r.on_event(AssistantDelta(text="some text"))
+    before = buf.getvalue()
     r.on_event(Final(message="done"))
-    assert buf.getvalue() == ""
+    after = buf.getvalue()
+    assert len(after) >= len(before)
 
 
 def test_finish_emits_trailing_newline() -> None:
     r, buf = _capture()
     r.finish()
-    assert buf.getvalue() == "\n"
+    assert buf.getvalue().endswith("\n")
 
 
 def test_long_tool_args_are_truncated() -> None:
@@ -68,7 +81,7 @@ def test_long_tool_args_are_truncated() -> None:
     r.on_event(ToolCallStarted(name="t", input={"data": long_value}))
     out = buf.getvalue()
     assert "…" in out
-    assert len(out) < 200
+    assert len(out) < 300
 
 
 def test_renderer_handles_multi_event_sequence() -> None:

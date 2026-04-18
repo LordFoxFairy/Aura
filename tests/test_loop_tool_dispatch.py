@@ -81,7 +81,7 @@ async def test_run_turn_two_ainvoke_calls_made() -> None:
     async for _ in loop.run_turn(user_prompt="call echo", history=history):
         pass
 
-    assert model.ainvoke_calls == 2
+    assert model.astream_calls == 2
 
 
 @pytest.mark.asyncio

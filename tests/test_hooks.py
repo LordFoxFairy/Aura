@@ -191,3 +191,21 @@ async def test_hooks_receive_state_kwarg() -> None:
     await hooks.run_pre_model(history=[], state=s)
 
     assert received == [s]
+
+
+def test_pre_model_hook_protocol_accepts_correct_signature() -> None:
+    async def ok_hook(*, history: list[BaseMessage], state: LoopState, **_: object) -> None:
+        return None
+
+    chain = HookChain(pre_model=[ok_hook])
+    assert len(chain.pre_model) == 1
+
+
+def test_post_tool_hook_protocol_accepts_correct_signature() -> None:
+    async def ok_hook(
+        *, tool: AuraTool, params: BaseModel, result: ToolResult, state: LoopState, **_: object
+    ) -> ToolResult:
+        return result
+
+    chain = HookChain(post_tool=[ok_hook])
+    assert len(chain.post_tool) == 1

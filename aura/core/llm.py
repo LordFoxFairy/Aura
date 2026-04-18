@@ -151,7 +151,7 @@ class ModelFactory:
         """
         api_key = _resolve_api_key(provider)
 
-        kwargs: dict[str, Any] = {"model": model_name}
+        kwargs: dict[str, Any] = {**provider.params, "model": model_name}
         if provider.base_url is not None:
             kwargs["base_url"] = provider.base_url
         if api_key is not None:

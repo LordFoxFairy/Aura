@@ -246,3 +246,50 @@ def test_create_empty_plaintext_api_key_with_no_fallback_raises(
     with pytest.raises(MissingCredentialError) as exc_info:
         ModelFactory.create(provider, "gpt-4o-mini")
     assert "OPENAI_API_KEY" in exc_info.value.detail
+
+
+def test_create_forwards_provider_params_to_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aura.core import llm
+
+    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+
+    provider = ProviderConfig(
+        name="openai",
+        protocol="openai",
+        params={"temperature": 0.3, "max_tokens": 4096, "timeout": 30},
+    )
+    model, _ = ModelFactory.create(provider, "gpt-4o-mini")
+
+    kw = _stub_kwargs(model)
+    assert kw["temperature"] == 0.3
+    assert kw["max_tokens"] == 4096
+    assert kw["timeout"] == 30
+    assert kw["model"] == "gpt-4o-mini"
+    assert kw["api_key"] == "k"
+
+
+def test_create_resolved_fields_win_over_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If a user puts 'model' in params, the resolved model_name still wins."""
+    from aura.core import llm
+
+    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+
+    provider = ProviderConfig(
+        name="openai",
+        protocol="openai",
+        params={"model": "wrong-name", "base_url": "bad"},
+        base_url="https://good.example",
+    )
+    model, _ = ModelFactory.create(provider, "gpt-4o-mini")
+
+    kw = _stub_kwargs(model)
+    assert kw["model"] == "gpt-4o-mini"
+    assert kw["base_url"] == "https://good.example"

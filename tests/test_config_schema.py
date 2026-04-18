@@ -212,3 +212,42 @@ def test_aura_config_error_shape() -> None:
     assert err.source == "user_config"
     assert err.detail == "boom"
     assert str(err) == "user_config: boom"
+
+
+# ---------------------------------------------------------------------------
+# 14. ProviderConfig.params field
+# ---------------------------------------------------------------------------
+
+
+def test_provider_config_params_default_empty() -> None:
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "x", "protocol": "openai"}],
+        "router": {"default": "x:gpt-4o-mini"},
+    })
+    assert cfg.providers[0].params == {}
+
+
+def test_provider_config_params_accepts_langchain_kwargs() -> None:
+    cfg = AuraConfig.model_validate({
+        "providers": [{
+            "name": "x",
+            "protocol": "openai",
+            "params": {"temperature": 0.7, "max_tokens": 4096, "timeout": 60},
+        }],
+        "router": {"default": "x:gpt-4o-mini"},
+    })
+    assert cfg.providers[0].params == {
+        "temperature": 0.7, "max_tokens": 4096, "timeout": 60,
+    }
+
+
+def test_provider_config_unknown_top_level_still_raises() -> None:
+    with pytest.raises(ValidationError):
+        AuraConfig.model_validate({
+            "providers": [{
+                "name": "x",
+                "protocol": "openai",
+                "temperature": 0.7,
+            }],
+            "router": {"default": "x:gpt-4o-mini"},
+        })

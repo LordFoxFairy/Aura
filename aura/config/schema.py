@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -17,6 +17,7 @@ class ProviderConfig(BaseModel):
     api_key_env: str | None = None
     api_key: str | None = None
     models: list[str] = Field(default_factory=list)
+    params: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolsConfig(BaseModel):

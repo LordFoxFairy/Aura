@@ -25,6 +25,7 @@ async def run_repl_async(
     *,
     input_fn: InputFn | None = None,
     console: Console | None = None,
+    verbose: bool = False,
 ) -> None:
     _input = input_fn if input_fn is not None else _default_input
     _console = console if console is not None else Console()
@@ -46,6 +47,19 @@ async def run_repl_async(
             continue
 
         await _run_turn(agent, line, renderer, _console)
+
+        if verbose:
+            _print_verbose_summary(agent, _console)
+
+
+def _print_verbose_summary(agent: Agent, console: Console) -> None:
+    default = agent._config.router.get("default", "?")
+    state = agent.state
+    console.print(
+        f"[dim]\\[turn {state.turn_count} \u00b7 "
+        f"{state.total_tokens_used:,} tokens \u00b7 "
+        f"{default}][/dim]"
+    )
 
 
 async def _run_turn(

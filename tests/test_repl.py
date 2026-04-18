@@ -88,3 +88,42 @@ async def test_eof_exits_cleanly(tmp_path: Path) -> None:
         agent, input_fn=_ScriptedInput([]), console=console,
     )
     agent.close()
+
+
+async def test_verbose_prints_turn_summary(tmp_path: Path) -> None:
+    agent = _agent(
+        tmp_path,
+        turns=[FakeTurn(message=AIMessage(content="hi"))],
+    )
+    console, buf = _capture_console()
+
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["hello", "/exit"]),
+        console=console,
+        verbose=True,
+    )
+
+    out = buf.getvalue()
+    assert "turn 1" in out
+    assert "tokens" in out
+    agent.close()
+
+
+async def test_non_verbose_does_not_print_summary(tmp_path: Path) -> None:
+    agent = _agent(
+        tmp_path,
+        turns=[FakeTurn(message=AIMessage(content="hi"))],
+    )
+    console, buf = _capture_console()
+
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["hello", "/exit"]),
+        console=console,
+        verbose=False,
+    )
+
+    out = buf.getvalue()
+    assert "turn 1" not in out
+    agent.close()

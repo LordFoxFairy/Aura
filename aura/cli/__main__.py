@@ -5,8 +5,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from typing import TYPE_CHECKING
 
 from aura import __version__
+
+if TYPE_CHECKING:
+    from rich.console import Console
+
+    from aura.config.schema import AuraConfig
+
+
+def _force_utf8_streams() -> None:
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 def _make_parser() -> argparse.ArgumentParser:
@@ -21,9 +34,19 @@ def _make_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _warn_plaintext_api_keys(config: AuraConfig, console: Console) -> None:
+    for provider in config.providers:
+        if provider.api_key:
+            console.print(
+                f"[yellow]Warning: provider {provider.name!r} uses a plaintext "
+                f"api_key in config. Prefer api_key_env for security.[/yellow]"
+            )
+
+
 def main() -> int:
+    _force_utf8_streams()
     parser = _make_parser()
-    parser.parse_args()
+    args = parser.parse_args()
 
     from rich.console import Console
 
@@ -39,6 +62,7 @@ def main() -> int:
 
     try:
         config = load_config()
+        _warn_plaintext_api_keys(config, console)
         session = PermissionSession()
         asker = make_cli_asker(session)
         hooks = HookChain(pre_tool=[make_permission_hook(asker=asker, session=session)])
@@ -51,7 +75,7 @@ def main() -> int:
         return 2
 
     try:
-        asyncio.run(run_repl_async(agent, console=console))
+        asyncio.run(run_repl_async(agent, console=console, verbose=args.verbose))
     finally:
         agent.close()
 

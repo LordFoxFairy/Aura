@@ -17,6 +17,7 @@ from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
+from aura.core.system_prompt import build_system_prompt
 from aura.tools.base import AuraTool
 from aura.tools.bash import bash
 from aura.tools.edit_file import edit_file
@@ -59,6 +60,8 @@ class Agent:
             dict(available_tools) if available_tools is not None else dict(_BUILTIN_TOOLS)
         )
         self._session_id = session_id
+        self._registry = self._build_registry()
+        self._system_prompt = build_system_prompt(registry=self._registry)
         self._loop = self._build_loop()
 
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
@@ -116,12 +119,32 @@ class Agent:
     def state(self) -> LoopState:
         return self._state
 
+    @property
+    def config(self) -> AuraConfig:
+        """只读视图；CLI 层用来查 router / providers，避免摸 `_config`。"""
+        return self._config
+
+    @property
+    def current_model(self) -> str:
+        """当前 default 对应的 'provider:model' 字符串。"""
+        return self._config.router.get("default", "")
+
+    @property
+    def router_aliases(self) -> dict[str, str]:
+        """除 'default' 之外的别名 → 'provider:model' 映射。"""
+        return {k: v for k, v in self._config.router.items() if k != "default"}
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
     def _build_loop(self) -> AgentLoop:
         return AgentLoop(
             model=self._model,
-            registry=self._build_registry(),
+            registry=self._registry,
             hooks=self._hooks,
             state=self._state,
+            system_prompt=self._system_prompt,
         )
 
     def _build_registry(self) -> ToolRegistry:

@@ -465,6 +465,89 @@ async def test_clear_session_also_resets_state_counters(tmp_path: Path) -> None:
     agent.close()
 
 
+def test_agent_current_model_reads_router_default(tmp_path: Path) -> None:
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini", "opus": "openai:gpt-4o"},
+        "tools": {"enabled": []},
+    })
+    agent = Agent(
+        config=cfg, model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+    assert agent.current_model == "openai:gpt-4o-mini"
+    agent.close()
+
+
+def test_agent_router_aliases_excludes_default(tmp_path: Path) -> None:
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini", "opus": "openai:gpt-4o"},
+        "tools": {"enabled": []},
+    })
+    agent = Agent(
+        config=cfg, model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+    assert agent.router_aliases == {"opus": "openai:gpt-4o"}
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_builds_system_prompt(tmp_path: Path) -> None:
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+    })
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[FakeTurn(message=AIMessage(content="hi"))]),
+        storage=_storage(tmp_path),
+    )
+    assert "Aura" in agent._system_prompt
+    async for _ in agent.astream("hello"):
+        pass
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_prepended_to_model_messages(tmp_path: Path) -> None:
+    """AgentLoop がモデルを呼ぶ際、SystemMessage が最初に来ることを確認。"""
+    from langchain_core.messages import SystemMessage
+    from typing import Any
+    from langchain_core.outputs import ChatResult, ChatGeneration
+
+    received: list[list[BaseMessage]] = []
+
+    class _CapturingFake(FakeChatModel):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: Any = None,
+            **_: Any,
+        ) -> ChatResult:
+            received.append(list(messages))
+            return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **_)
+
+    cfg = _minimal_config(enabled=[])
+    agent = Agent(
+        config=cfg,
+        model=_CapturingFake(turns=[FakeTurn(message=AIMessage(content="hi"))]),
+        storage=_storage(tmp_path),
+    )
+    async for _ in agent.astream("hello"):
+        pass
+    agent.close()
+
+    assert received
+    first_call_messages = received[0]
+    assert len(first_call_messages) >= 2
+    assert isinstance(first_call_messages[0], SystemMessage)
+    assert "Aura" in first_call_messages[0].content
+
+
 def test_build_agent_uses_default_hooks_when_none_supplied(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

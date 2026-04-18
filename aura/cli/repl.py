@@ -64,12 +64,11 @@ async def run_repl_async(
 
 
 def _print_verbose_summary(agent: Agent, console: Console) -> None:
-    default = agent._config.router.get("default", "?")
     state = agent.state
     console.print(
         f"[dim]\\[turn {state.turn_count} \u00b7 "
         f"{state.total_tokens_used:,} tokens \u00b7 "
-        f"{default}][/dim]"
+        f"{agent.current_model}][/dim]"
     )
 
 

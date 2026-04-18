@@ -13,6 +13,7 @@ from langchain_core.messages import (
     AIMessage,
     BaseMessage,
     HumanMessage,
+    SystemMessage,
     ToolCall,
     ToolMessage,
 )
@@ -46,10 +47,12 @@ class AgentLoop:
         registry: ToolRegistry,
         hooks: HookChain | None = None,
         state: LoopState | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         self._registry = registry
         self._hooks = hooks or HookChain()
         self._state = state or LoopState()
+        self._system_prompt = system_prompt
         # bind_tools 只在构造时调一次：schema 在 registry 固定后不变，多 turn 共享同一 bound model。
         self._bound = model.bind_tools(registry.schemas()) if registry else model
 
@@ -86,7 +89,13 @@ class AgentLoop:
         # turn_count 先于 pre_model hook 递增，hook 看到的是"即将开始的第 N 轮"。
         self._state.turn_count += 1
         await self._hooks.run_pre_model(history=history, state=self._state)
-        ai = await self._bound.ainvoke(history)
+        # SystemMessage 不持久化到 history —— 每次调 model 前临时插入，保证总是拿到最新环境（日期/cwd/tools）。
+        messages = (
+            [SystemMessage(content=self._system_prompt), *history]
+            if self._system_prompt
+            else history
+        )
+        ai = await self._bound.ainvoke(messages)
         history.append(ai)
         await self._hooks.run_post_model(
             ai_message=ai, history=history, state=self._state,

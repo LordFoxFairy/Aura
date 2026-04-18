@@ -1,5 +1,7 @@
 """Core agent loop, state, registry, hooks, and built-in hook factories."""
 
+# errors は依存を持たない ── agent より先にロードして config.schema の循環 import を防ぐ。
+from aura.core.errors import AuraError
 from aura.core.agent import Agent, build_agent
 from aura.core.events import (
     AgentEvent,
@@ -38,6 +40,7 @@ from aura.core.state import LoopState
 __all__ = [
     "Agent",
     "AgentEvent",
+    "AuraError",
     "AgentLoop",
     "AssistantDelta",
     "Final",

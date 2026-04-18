@@ -70,11 +70,11 @@ def _handle_model(spec: str, agent: Agent) -> CommandResult:
 
 
 def _model_status(agent: Agent) -> str:
-    default = agent._config.router.get("default", "?")
-    aliases = sorted(k for k in agent._config.router if k != "default")
+    default = agent.current_model or "?"
+    aliases = sorted(agent.router_aliases)
     lines = [f"current default: {default}"]
     if aliases:
         lines.append("aliases:")
         for alias in aliases:
-            lines.append(f"  {alias} -> {agent._config.router[alias]}")
+            lines.append(f"  {alias} -> {agent.router_aliases[alias]}")
     return "\n".join(lines)

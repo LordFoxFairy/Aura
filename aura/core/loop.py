@@ -8,8 +8,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langchain_core.messages.tool import ToolCall
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    ToolCall,
+    ToolMessage,
+)
 from pydantic import BaseModel
 
 from aura.core.events import AgentEvent, AssistantDelta, Final, ToolCallCompleted, ToolCallStarted
@@ -49,6 +54,23 @@ class AgentLoop:
     def state(self) -> LoopState:
         return self._state
 
+    async def run_turn(
+        self, *, user_prompt: str, history: list[BaseMessage]
+    ) -> AsyncIterator[AgentEvent]:
+        history.append(HumanMessage(content=user_prompt))
+
+        while True:
+            ai = await self._invoke_model(history)
+
+            if ai.content:
+                yield AssistantDelta(text=str(ai.content))
+            if not ai.tool_calls:
+                yield Final(message=str(ai.content))
+                return
+
+            async for event in self._dispatch_tool_calls(ai.tool_calls, history):
+                yield event
+
     async def _invoke_model(self, history: list[BaseMessage]) -> AIMessage:
         self._state.turn_count += 1
         await self._hooks.run_pre_model(history=history, state=self._state)
@@ -56,25 +78,6 @@ class AgentLoop:
         history.append(ai)
         await self._hooks.run_post_model(ai_message=ai, history=history, state=self._state)
         return ai
-
-    async def _plan_tool_calls(self, tool_calls: list[ToolCall]) -> list[ToolStep]:
-        steps: list[ToolStep] = []
-        for tc in tool_calls:
-            tool = self._registry[tc["name"]]
-            params = tool.input_model.model_validate(tc["args"])
-            decision = await self._hooks.run_pre_tool(
-                tool=tool, params=params, state=self._state
-            )
-            steps.append(ToolStep(tool_call=tc, tool=tool, params=params, decision=decision))
-        return steps
-
-    async def _execute_step(self, step: ToolStep) -> ToolResult:
-        if step.decision is not None:
-            return step.decision
-        result = await step.tool.acall(step.params)
-        return await self._hooks.run_post_tool(
-            tool=step.tool, params=step.params, result=result, state=self._state
-        )
 
     async def _dispatch_tool_calls(
         self, tool_calls: list[ToolCall], history: list[BaseMessage]
@@ -97,19 +100,21 @@ class AgentLoop:
             )
             yield ToolCallCompleted(name=tc["name"], output=result.output, error=result.error)
 
-    async def run_turn(
-        self, *, user_prompt: str, history: list[BaseMessage]
-    ) -> AsyncIterator[AgentEvent]:
-        history.append(HumanMessage(content=user_prompt))
+    async def _plan_tool_calls(self, tool_calls: list[ToolCall]) -> list[ToolStep]:
+        steps: list[ToolStep] = []
+        for tc in tool_calls:
+            tool = self._registry[tc["name"]]
+            params = tool.input_model.model_validate(tc["args"])
+            decision = await self._hooks.run_pre_tool(
+                tool=tool, params=params, state=self._state
+            )
+            steps.append(ToolStep(tool_call=tc, tool=tool, params=params, decision=decision))
+        return steps
 
-        while True:
-            ai = await self._invoke_model(history)
-
-            if ai.content:
-                yield AssistantDelta(text=str(ai.content))
-            if not ai.tool_calls:
-                yield Final(message=str(ai.content))
-                return
-
-            async for event in self._dispatch_tool_calls(ai.tool_calls, history):
-                yield event
+    async def _execute_step(self, step: ToolStep) -> ToolResult:
+        if step.decision is not None:
+            return step.decision
+        result = await step.tool.acall(step.params)
+        return await self._hooks.run_post_tool(
+            tool=step.tool, params=step.params, result=result, state=self._state
+        )

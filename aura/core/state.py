@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
 class LoopState:
     turn_count: int = 0
     total_tokens_used: int = 0
-    custom: dict[str, object] = field(default_factory=dict)
+    custom: dict[str, Any] = field(default_factory=dict)

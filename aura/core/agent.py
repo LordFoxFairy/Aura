@@ -38,6 +38,7 @@ class Agent:
         storage: SessionStorage,
         hooks: HookChain | None = None,
         available_tools: dict[str, AuraTool] | None = None,
+        session_id: str = _DEFAULT_SESSION,
     ) -> None:
         self._config = config
         self._model = model
@@ -47,10 +48,11 @@ class Agent:
         self._available_tools = (
             dict(available_tools) if available_tools is not None else dict(_BUILTIN_TOOLS)
         )
+        self._session_id = session_id
         self._loop = self._build_loop()
 
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
-        history = self._storage.load(_DEFAULT_SESSION)
+        history = self._storage.load(self._session_id)
         try:
             async for event in self._loop.run_turn(user_prompt=prompt, history=history):
                 yield event
@@ -58,7 +60,7 @@ class Agent:
             yield Final(message="(cancelled)")
             raise
         else:
-            self._storage.save(_DEFAULT_SESSION, history)
+            self._storage.save(self._session_id, history)
 
     def switch_model(self, spec: str) -> None:
         provider, model_name = ModelFactory.resolve(spec, cfg=self._config)
@@ -66,7 +68,7 @@ class Agent:
         self._loop = self._build_loop()
 
     def clear_session(self) -> None:
-        self._storage.clear(_DEFAULT_SESSION)
+        self._storage.clear(self._session_id)
 
     @property
     def state(self) -> LoopState:
@@ -92,12 +94,27 @@ class Agent:
             tools.append(tool)
         return ToolRegistry(tools)
 
+    def close(self) -> None:
+        self._storage.close()
+
+    async def __aenter__(self) -> Agent:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object | None,
+    ) -> None:
+        self.close()
+
 
 def build_agent(
     config: AuraConfig,
     *,
     hooks: HookChain | None = None,
     available_tools: dict[str, AuraTool] | None = None,
+    session_id: str = _DEFAULT_SESSION,
 ) -> Agent:
     provider, model_name = ModelFactory.resolve(config.router["default"], cfg=config)
     model, _protocol = ModelFactory.create(provider, model_name)
@@ -108,4 +125,5 @@ def build_agent(
         storage=storage,
         hooks=hooks,
         available_tools=available_tools,
+        session_id=session_id,
     )

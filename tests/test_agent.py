@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -341,6 +342,51 @@ async def test_agent_copies_available_tools_dict(tmp_path: Path) -> None:
 
     async for _ in agent.astream("go"):
         pass
+
+
+@pytest.mark.asyncio
+async def test_agent_close_closes_storage(tmp_path: Path) -> None:
+    cfg = _minimal_config()
+    storage = _storage(tmp_path)
+    model = FakeChatModel(turns=[])
+    agent = Agent(config=cfg, model=model, storage=storage)
+
+    agent.close()
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        storage.load("default")
+
+
+@pytest.mark.asyncio
+async def test_agent_async_context_manager_closes_storage(tmp_path: Path) -> None:
+    cfg = _minimal_config()
+    storage = _storage(tmp_path)
+    model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="hi"))])
+
+    async with Agent(config=cfg, model=model, storage=storage) as agent:
+        async for _ in agent.astream("go"):
+            pass
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        storage.load("default")
+
+
+@pytest.mark.asyncio
+async def test_agent_respects_custom_session_id(tmp_path: Path) -> None:
+    cfg = _minimal_config()
+    model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="ok"))])
+    storage = _storage(tmp_path)
+    agent = Agent(
+        config=cfg, model=model, storage=storage, session_id="my-session",
+    )
+
+    async for _ in agent.astream("go"):
+        pass
+
+    assert storage.load("default") == []
+    loaded = storage.load("my-session")
+    assert len(loaded) == 2
+    agent.close()
 
 
 def test_build_agent_forwards_available_tools(

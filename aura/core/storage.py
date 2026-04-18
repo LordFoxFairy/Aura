@@ -84,3 +84,15 @@ class SessionStorage:
         cur = self._conn.cursor()
         cur.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
         self._conn.commit()
+
+    def list_sessions(self) -> list[str]:
+        cur = self._conn.cursor()
+        cur.execute("SELECT DISTINCT session_id FROM messages ORDER BY session_id")
+        return [row[0] for row in cur.fetchall()]
+
+    def exists(self, session_id: str) -> bool:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM messages WHERE session_id = ? LIMIT 1", (session_id,),
+        )
+        return cur.fetchone() is not None

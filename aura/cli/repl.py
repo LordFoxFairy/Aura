@@ -10,6 +10,7 @@ from rich.console import Console
 
 from aura.cli.commands import dispatch
 from aura.cli.render import Renderer
+from aura.cli.spinner import ThinkingSpinner
 from aura.core.agent import Agent
 
 InputFn = Callable[[str], Awaitable[str]]
@@ -50,34 +51,32 @@ async def run_repl_async(
 async def _run_turn(
     agent: Agent, prompt: str, renderer: Renderer, console: Console,
 ) -> None:
-    async def _stream(stop_status: Callable[[], None]) -> None:
-        stopped = False
+    spinner = ThinkingSpinner(console)
+    spinner.start()
+    spinner_stopped = False
+
+    async def _stop_spinner() -> None:
+        nonlocal spinner_stopped
+        if not spinner_stopped:
+            spinner_stopped = True
+            await spinner.stop()
+
+    async def _stream() -> None:
         async for event in agent.astream(prompt):
-            if not stopped:
-                stop_status()
-                stopped = True
+            await _stop_spinner()
             renderer.on_event(event)
-        if not stopped:
-            stop_status()
+        await _stop_spinner()
         renderer.finish()
 
-    status = console.status("[bold cyan]thinking…[/bold cyan]", spinner="dots")
-    status.start()
-    stopped_once: list[bool] = [False]
-
-    def _stop() -> None:
-        if not stopped_once[0]:
-            status.stop()
-            stopped_once[0] = True
-
-    task = asyncio.create_task(_stream(_stop))
+    task = asyncio.create_task(_stream())
     try:
         await task
     except asyncio.CancelledError:
-        pass
+        await _stop_spinner()
     except KeyboardInterrupt:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+        await _stop_spinner()
     finally:
-        _stop()
+        await _stop_spinner()

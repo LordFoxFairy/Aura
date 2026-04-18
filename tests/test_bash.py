@@ -1,46 +1,41 @@
-"""Tests for aura.tools.bash — BashTool."""
+"""Tests for aura.tools.bash — bash singleton."""
+
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
 from aura.tools.base import AuraTool
-from aura.tools.bash import BashParams, BashTool
-
-
-@pytest.fixture()
-def tool() -> BashTool:
-    return BashTool()
-
+from aura.tools.bash import BashParams, bash
 
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
 
 
-async def test_bash_success_echo(tool: BashTool) -> None:
-    result = await tool.acall(BashParams(command="echo hello"))
+async def test_bash_success_echo() -> None:
+    result = await bash.acall(BashParams(command="echo hello"))
     assert result.ok is True
     assert result.output["stdout"] == "hello\n"
     assert result.output["exit_code"] == 0
     assert result.output["stderr"] == ""
 
 
-async def test_bash_nonzero_exit_returns_ok_true(tool: BashTool) -> None:
-    result = await tool.acall(BashParams(command="exit 42"))
+async def test_bash_nonzero_exit_returns_ok_true() -> None:
+    result = await bash.acall(BashParams(command="exit 42"))
     assert result.ok is True
     assert result.output["exit_code"] == 42
 
 
-async def test_bash_nonzero_exit_captures_stderr(tool: BashTool) -> None:
-    result = await tool.acall(BashParams(command="echo err >&2; exit 1"))
+async def test_bash_nonzero_exit_captures_stderr() -> None:
+    result = await bash.acall(BashParams(command="echo err >&2; exit 1"))
     assert result.ok is True
     assert "err" in result.output["stderr"]
     assert result.output["exit_code"] == 1
 
 
-async def test_bash_pipe_works(tool: BashTool) -> None:
-    result = await tool.acall(BashParams(command="echo hello | tr a-z A-Z"))
+async def test_bash_pipe_works() -> None:
+    result = await bash.acall(BashParams(command="echo hello | tr a-z A-Z"))
     assert result.ok is True
     assert "HELLO" in result.output["stdout"]
 
@@ -50,8 +45,8 @@ async def test_bash_pipe_works(tool: BashTool) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_bash_timeout(tool: BashTool) -> None:
-    result = await tool.acall(BashParams(command="sleep 5", timeout=1))
+async def test_bash_timeout() -> None:
+    result = await bash.acall(BashParams(command="sleep 5", timeout=1))
     assert result.ok is False
     assert result.error is not None
     assert "timeout" in result.error.lower()
@@ -62,18 +57,18 @@ async def test_bash_timeout(tool: BashTool) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_bash_capability_flags(tool: BashTool) -> None:
-    assert tool.is_read_only is False
-    assert tool.is_destructive is True
-    assert tool.is_concurrency_safe is False
+def test_bash_capability_flags() -> None:
+    assert bash.is_read_only is False
+    assert bash.is_destructive is True
+    assert bash.is_concurrency_safe is False
 
 
-def test_bash_no_check_permissions_method(tool: BashTool) -> None:
-    assert not hasattr(tool, "check_permissions")
+def test_bash_no_check_permissions_method() -> None:
+    assert not hasattr(bash, "check_permissions")
 
 
-def test_bash_satisfies_protocol(tool: BashTool) -> None:
-    assert isinstance(tool, AuraTool) is True
+def test_bash_satisfies_protocol() -> None:
+    assert isinstance(bash, AuraTool) is True
 
 
 # ---------------------------------------------------------------------------

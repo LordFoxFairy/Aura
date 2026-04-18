@@ -8,7 +8,8 @@ from pydantic import BaseModel
 
 from aura.core.events import AgentEvent, AssistantDelta, Final
 from aura.core.loop import run_turn
-from aura.tools.base import AuraTool, ToolResult
+from aura.core.registry import ToolRegistry
+from aura.tools.base import AuraTool, ToolResult, build_tool
 from tests.conftest import FakeChatModel, FakeTurn, text_chunk  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -27,7 +28,7 @@ async def test_run_turn_happy_path_two_text_chunks() -> None:
         user_prompt="hi",
         history=history,
         model=model,
-        registry={},
+        registry=ToolRegistry(()),
         provider="openai",
     ):
         events.append(ev)
@@ -68,7 +69,7 @@ async def test_run_turn_no_registry_skips_bind_tools() -> None:
         user_prompt="hello",
         history=history,
         model=model,
-        registry={},
+        registry=ToolRegistry(()),
         provider="openai",
     ):
         pass
@@ -86,16 +87,19 @@ class _EchoParams(BaseModel):
     msg: str
 
 
-class _EchoTool:
-    name = "echo"
-    description = "echoes input"
-    input_model = _EchoParams
-    is_read_only = True
-    is_destructive = False
-    is_concurrency_safe = True
+async def _echo_call(params: BaseModel) -> ToolResult:
+    assert isinstance(params, _EchoParams)
+    return ToolResult(ok=True, output={"echoed": params.msg})
 
-    async def acall(self, params: _EchoParams) -> ToolResult:
-        return ToolResult(ok=True, output={"echoed": params.msg})
+
+_echo_tool: AuraTool = build_tool(
+    name="echo",
+    description="echoes input",
+    input_model=_EchoParams,
+    call=_echo_call,
+    is_read_only=True,
+    is_concurrency_safe=True,
+)
 
 
 @pytest.mark.asyncio
@@ -103,7 +107,7 @@ async def test_run_turn_with_registry_calls_bind_tools_once() -> None:
     turn = FakeTurn(chunks=[text_chunk("done", final=True)])
     model = FakeChatModel(turns=[turn])
     history: list[BaseMessage] = []
-    registry: dict[str, AuraTool] = {"echo": _EchoTool()}  # type: ignore[dict-item]
+    registry = ToolRegistry([_echo_tool])
 
     async for _ in run_turn(
         user_prompt="echo me",
@@ -138,7 +142,7 @@ async def test_run_turn_empty_content_chunks_are_skipped() -> None:
         user_prompt="test",
         history=history,
         model=model,
-        registry={},
+        registry=ToolRegistry(()),
         provider="openai",
     ):
         events.append(ev)

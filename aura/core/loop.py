@@ -23,8 +23,8 @@ from langchain_core.messages import (
 )
 
 from aura.core.events import AgentEvent, AssistantDelta, Final, ToolCallCompleted, ToolCallStarted
-from aura.core.history import tool_schema_for
-from aura.tools.base import AuraTool, ToolResult
+from aura.core.registry import ToolRegistry
+from aura.tools.base import ToolResult
 
 
 async def run_turn(
@@ -32,7 +32,7 @@ async def run_turn(
     user_prompt: str,
     history: list[BaseMessage],
     model: BaseChatModel,
-    registry: dict[str, AuraTool],
+    registry: ToolRegistry,
     provider: str,
 ) -> AsyncIterator[AgentEvent]:
     """Run one user turn to completion, yielding events as the stream progresses.
@@ -49,7 +49,7 @@ async def run_turn(
     """
     history.append(HumanMessage(content=user_prompt))
 
-    bound = model.bind_tools([tool_schema_for(t) for t in registry.values()]) if registry else model
+    bound = model.bind_tools(registry.schemas()) if len(registry) > 0 else model
 
     while True:
         acc: AIMessageChunk | None = None

@@ -10,11 +10,12 @@ from pydantic import BaseModel
 
 from aura.core.events import AgentEvent, Final, ToolCallCompleted, ToolCallStarted
 from aura.core.loop import run_turn
-from aura.tools.base import AuraTool, ToolResult
+from aura.core.registry import ToolRegistry
+from aura.tools.base import AuraTool, ToolResult, build_tool
 from tests.conftest import FakeChatModel, FakeTurn, text_chunk, tool_call_chunk
 
 # ---------------------------------------------------------------------------
-# Shared test fixture: _EchoTool
+# Shared test fixture: _echo_tool built via build_tool factory
 # ---------------------------------------------------------------------------
 
 
@@ -22,23 +23,26 @@ class _EchoParams(BaseModel):
     msg: str
 
 
-class _EchoTool:
-    name = "echo"
-    description = "echoes input"
-    input_model = _EchoParams
-    is_read_only = True
-    is_destructive = False
-    is_concurrency_safe = True
-
-    async def acall(self, params: _EchoParams) -> ToolResult:
-        return ToolResult(ok=True, output={"echoed": params.msg})
+async def _echo_call(params: BaseModel) -> ToolResult:
+    assert isinstance(params, _EchoParams)
+    return ToolResult(ok=True, output={"echoed": params.msg})
 
 
-def _make_model_and_registry() -> tuple[FakeChatModel, dict[str, AuraTool]]:
+_echo_tool: AuraTool = build_tool(
+    name="echo",
+    description="echoes input",
+    input_model=_EchoParams,
+    call=_echo_call,
+    is_read_only=True,
+    is_concurrency_safe=True,
+)
+
+
+def _make_model_and_registry() -> tuple[FakeChatModel, ToolRegistry]:
     turn1 = FakeTurn(chunks=[tool_call_chunk("echo", '{"msg": "hi"}', "tc_1")])
     turn2 = FakeTurn(chunks=[text_chunk("done", final=True)])
     model = FakeChatModel(turns=[turn1, turn2])
-    registry: dict[str, AuraTool] = {"echo": _EchoTool()}  # type: ignore[dict-item]
+    registry = ToolRegistry([_echo_tool])
     return model, registry
 
 

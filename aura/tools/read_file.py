@@ -1,16 +1,13 @@
-"""read_file built-in tool — read UTF-8 text files up to 1 MB."""
+"""read_file tool — UTF-8 read with 1MB cap."""
+
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import cast
 
 from pydantic import BaseModel, Field
 
-from aura.tools.base import (  # noqa: F401  (AuraTool used for Protocol)
-    AuraTool,
-    ToolResult,
-)
+from aura.tools.base import AuraTool, ToolResult, build_tool
 
 _MAX_BYTES = 1024 * 1024  # 1 MB
 
@@ -19,33 +16,31 @@ class ReadFileParams(BaseModel):
     path: str = Field(description="Absolute or relative file path to read.")
 
 
-class ReadFileTool:
-    name: str = "read_file"
-    description: str = "Read a UTF-8 text file (up to 1 MB)."
-    input_model: type[BaseModel] = ReadFileParams
-    is_read_only: bool = True
-    is_destructive: bool = False
-    is_concurrency_safe: bool = True
+def _read_sync(path: str) -> ToolResult:
+    p = Path(path)
+    if not p.exists():
+        return ToolResult(ok=False, error=f"not found: {path}")
+    size = p.stat().st_size
+    if size > _MAX_BYTES:
+        return ToolResult(ok=False, error=f"too large: {size} bytes > 1 MB")
+    try:
+        content = p.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        return ToolResult(ok=False, error=f"not UTF-8: {exc}")
+    lines = len(content.splitlines())
+    return ToolResult(ok=True, output={"content": content, "lines": lines})
 
-    async def acall(self, params: BaseModel) -> ToolResult:
-        p = cast(ReadFileParams, params)
-        return await asyncio.to_thread(self._read_sync, p.path)
 
-    @staticmethod
-    def _read_sync(path: str) -> ToolResult:
-        p = Path(path)
+async def _acall(params: BaseModel) -> ToolResult:
+    assert isinstance(params, ReadFileParams)
+    return await asyncio.to_thread(_read_sync, params.path)
 
-        if not p.exists():
-            return ToolResult(ok=False, error=f"not found: {path}")
 
-        size = p.stat().st_size
-        if size > _MAX_BYTES:
-            return ToolResult(ok=False, error=f"too large: {size} bytes > 1 MB")
-
-        try:
-            content = p.read_text(encoding="utf-8")
-        except UnicodeDecodeError as exc:
-            return ToolResult(ok=False, error=f"not UTF-8: {exc}")
-
-        lines = len(content.splitlines())
-        return ToolResult(ok=True, output={"content": content, "lines": lines})
+read_file: AuraTool = build_tool(
+    name="read_file",
+    description="Read a UTF-8 text file (up to 1 MB).",
+    input_model=ReadFileParams,
+    call=_acall,
+    is_read_only=True,
+    is_concurrency_safe=True,
+)

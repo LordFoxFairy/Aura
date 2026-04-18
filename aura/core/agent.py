@@ -11,6 +11,7 @@ from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core.budget import MaxTurnsExceeded, default_hooks
 from aura.core.events import AgentEvent, Final
 from aura.core.hooks import HookChain
+from aura.core.journal import journal
 from aura.core.llm import ModelFactory
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
@@ -53,27 +54,52 @@ class Agent:
         self._loop = self._build_loop()
 
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
+        journal().write(
+            "astream_begin",
+            session=self._session_id,
+            prompt_preview=prompt[:200],
+        )
         history = self._storage.load(self._session_id)
         try:
             async for event in self._loop.run_turn(user_prompt=prompt, history=history):
                 yield event
         except asyncio.CancelledError:
+            journal().write("astream_cancelled", session=self._session_id)
             yield Final(message="(cancelled)")
             raise
         except MaxTurnsExceeded as exc:
+            journal().write(
+                "astream_max_turns",
+                session=self._session_id,
+                detail=str(exc),
+            )
             yield Final(message=f"({exc})")
             return
         else:
             self._storage.save(self._session_id, history)
+            journal().write(
+                "astream_end",
+                session=self._session_id,
+                history_len=len(history),
+                total_tokens=self._state.total_tokens_used,
+            )
 
     def switch_model(self, spec: str) -> None:
+        journal().write("model_switch_attempt", spec=spec)
         provider, model_name = ModelFactory.resolve(spec, cfg=self._config)
         self._model, _protocol = ModelFactory.create(provider, model_name)
         self._loop = self._build_loop()
+        journal().write(
+            "model_switched",
+            spec=spec,
+            provider=provider.name,
+            model=model_name,
+        )
 
     def clear_session(self) -> None:
         self._storage.clear(self._session_id)
         self._state.reset()
+        journal().write("session_cleared", session=self._session_id)
 
     @property
     def state(self) -> LoopState:

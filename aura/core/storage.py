@@ -14,6 +14,7 @@ from pathlib import Path
 from langchain_core.messages import BaseMessage
 
 from aura.core.history import deserialize_messages, serialize_messages
+from aura.core.journal import journal
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -51,6 +52,9 @@ class SessionStorage:
 
     def save(self, session_id: str, messages: list[BaseMessage]) -> None:
         """Full replacement: wipe session's rows and insert the current list."""
+        journal().write(
+            "storage_save", session=session_id, count=len(messages),
+        )
         cur = self._conn.cursor()
         cur.execute("BEGIN")
         try:
@@ -77,10 +81,15 @@ class SessionStorage:
             (session_id,),
         )
         dicts = [json.loads(row[0]) for row in cur.fetchall()]
-        return deserialize_messages(dicts)
+        messages = deserialize_messages(dicts)
+        journal().write(
+            "storage_load", session=session_id, count=len(messages),
+        )
+        return messages
 
     def clear(self, session_id: str) -> None:
         """Delete all rows for *session_id*."""
+        journal().write("storage_clear", session=session_id)
         cur = self._conn.cursor()
         cur.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
         self._conn.commit()

@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 
 from aura.core.events import AgentEvent, AssistantDelta, Final, ToolCallCompleted, ToolCallStarted
 from aura.core.hooks import HookChain
+from aura.core.journal import journal
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
 from aura.tools.base import AuraTool, ToolResult
@@ -60,16 +61,24 @@ class AgentLoop:
         history.append(HumanMessage(content=user_prompt))
 
         while True:
+            journal().write("turn_begin", turn=self._state.turn_count + 1)
             ai = await self._invoke_model(history)
 
             if ai.content:
                 yield AssistantDelta(text=str(ai.content))
             if not ai.tool_calls:
+                journal().write("turn_end", turn=self._state.turn_count, ended_with="final")
                 yield Final(message=str(ai.content))
                 return
 
             async for event in self._dispatch_tool_calls(ai.tool_calls, history):
                 yield event
+            journal().write(
+                "turn_end",
+                turn=self._state.turn_count,
+                ended_with="tool_loop",
+                tool_count=len(ai.tool_calls),
+            )
 
     async def _invoke_model(self, history: list[BaseMessage]) -> AIMessage:
         self._state.turn_count += 1
@@ -85,11 +94,34 @@ class AgentLoop:
         self, tool_calls: list[ToolCall], history: list[BaseMessage]
     ) -> AsyncIterator[AgentEvent]:
         steps = await self._plan_tool_calls(tool_calls)
+        journal().write(
+            "tool_plan_built",
+            turn=self._state.turn_count,
+            steps=[
+                {
+                    "tool": s.tool_call.get("name"),
+                    "short_circuited": s.decision is not None,
+                }
+                for s in steps
+            ],
+        )
         for step in steps:
             tc = step.tool_call
             yield ToolCallStarted(name=tc["name"], input=dict(tc["args"]))
 
+            journal().write(
+                "tool_execute_begin",
+                tool=tc["name"],
+                tool_call_id=tc["id"],
+            )
             result = await self._execute_step(step)
+            journal().write(
+                "tool_execute_end",
+                tool=tc["name"],
+                tool_call_id=tc["id"],
+                ok=result.ok,
+                error=result.error,
+            )
 
             status: Literal["success", "error"] = "success" if result.ok else "error"
             history.append(

@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 
 from aura.config.schema import AuraConfig, AuraConfigError, ProviderConfig
+from aura.core.journal import journal
 
 
 class UnknownModelSpecError(AuraConfigError):
@@ -81,6 +82,11 @@ def _resolve_api_key(provider: ProviderConfig) -> str | None:
     if provider.api_key_env is not None:
         key = os.environ.get(provider.api_key_env)
         if not key:
+            journal().write(
+                "credential_missing",
+                provider=provider.name,
+                env_var=provider.api_key_env,
+            )
             raise MissingCredentialError(
                 source="env",
                 detail=f"${provider.api_key_env} not set for provider {provider.name!r}",
@@ -93,6 +99,11 @@ def _resolve_api_key(provider: ProviderConfig) -> str | None:
 
     key = os.environ.get(default_env)
     if not key:
+        journal().write(
+            "credential_missing",
+            provider=provider.name,
+            env_var=default_env,
+        )
         raise MissingCredentialError(
             source="env",
             detail=(
@@ -126,17 +137,28 @@ class ModelFactory:
         provider_name, sep, model_name = resolved.partition(":")
 
         if not sep:
-            # spec was not a router alias AND has no colon
+            journal().write("model_resolve_failed", spec=spec, reason="no_colon")
             raise UnknownModelSpecError(
                 "model spec",
                 f"{spec!r} is not a router alias and not in 'provider:model' form",
             )
 
-        # Linear scan — providers list is short (1-5 in practice)
         for provider in cfg.providers:
             if provider.name == provider_name:
+                journal().write(
+                    "model_resolved",
+                    spec=spec,
+                    provider=provider_name,
+                    model=model_name,
+                )
                 return (provider, model_name)
 
+        journal().write(
+            "model_resolve_failed",
+            spec=spec,
+            reason="unknown_provider",
+            provider_name=provider_name,
+        )
         raise UnknownModelSpecError(
             "model spec",
             f"unknown provider {provider_name!r} in spec {spec!r}; "
@@ -157,6 +179,14 @@ class ModelFactory:
         if api_key is not None:
             kwargs["api_key"] = api_key
 
+        journal().write(
+            "model_create_attempt",
+            provider=provider.name,
+            protocol=provider.protocol,
+            model=model_name,
+            has_base_url=provider.base_url is not None,
+        )
+
         if provider.protocol == "openai":
             cls = _load_openai_class()
             model = cls(**kwargs)
@@ -172,4 +202,9 @@ class ModelFactory:
                 source="provider", detail=f"unknown protocol: {provider.protocol}"
             )
 
+        journal().write(
+            "model_created",
+            provider=provider.name,
+            protocol=provider.protocol,
+        )
         return model, provider.protocol

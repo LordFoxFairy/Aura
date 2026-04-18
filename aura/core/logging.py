@@ -1,30 +1,25 @@
-"""JSONL event logger — a HookChain that observes all 4 lifecycle events."""
+"""HookChain that writes lifecycle events to the global journal."""
 
 from __future__ import annotations
 
 import json
-import logging
-import time
-from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel
 
 from aura.core.hooks import HookChain
+from aura.core.journal import journal
 from aura.core.state import LoopState
 from aura.tools.base import AuraTool, ToolResult
 
 
-def make_event_logger_hooks(log_path: Path) -> HookChain:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    logger = _configure_logger(log_path)
-
+def make_event_logger_hooks() -> HookChain:
     async def _pre_model(
         *, history: list[BaseMessage], state: LoopState, **_: Any,
     ) -> None:
-        _emit(
-            logger, "pre_model",
+        journal().write(
+            "pre_model",
             turn=state.turn_count,
             history_len=len(history),
         )
@@ -38,8 +33,8 @@ def make_event_logger_hooks(log_path: Path) -> HookChain:
     ) -> None:
         usage = getattr(ai_message, "usage_metadata", None) or {}
         content = str(ai_message.content) if ai_message.content else ""
-        _emit(
-            logger, "post_model",
+        journal().write(
+            "post_model",
             turn=state.turn_count,
             content_chars=len(content),
             content_preview=_trim(content, 500),
@@ -51,8 +46,8 @@ def make_event_logger_hooks(log_path: Path) -> HookChain:
     async def _pre_tool(
         *, tool: AuraTool, params: BaseModel, state: LoopState, **_: Any,
     ) -> ToolResult | None:
-        _emit(
-            logger, "pre_tool",
+        journal().write(
+            "pre_tool",
             turn=state.turn_count,
             tool=tool.name,
             is_destructive=tool.is_destructive,
@@ -73,8 +68,8 @@ def make_event_logger_hooks(log_path: Path) -> HookChain:
             if result.output is not None
             else 0
         )
-        _emit(
-            logger, "post_tool",
+        journal().write(
+            "post_tool",
             turn=state.turn_count,
             tool=tool.name,
             ok=result.ok,
@@ -91,8 +86,8 @@ def make_event_logger_hooks(log_path: Path) -> HookChain:
     )
 
 
-def wrap_with_event_logger(inner: HookChain, log_path: Path) -> HookChain:
-    log = make_event_logger_hooks(log_path)
+def wrap_with_event_logger(inner: HookChain) -> HookChain:
+    log = make_event_logger_hooks()
     return HookChain(
         pre_model=[*log.pre_model, *inner.pre_model],
         post_model=[*inner.post_model, *log.post_model],
@@ -101,41 +96,14 @@ def wrap_with_event_logger(inner: HookChain, log_path: Path) -> HookChain:
     )
 
 
-def _configure_logger(log_path: Path) -> logging.Logger:
-    logger_name = f"aura.events.{log_path}"
-    logger = logging.getLogger(logger_name)
-    if not logger.handlers:
-        handler = logging.FileHandler(log_path, encoding="utf-8")
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        logger.addHandler(handler)
-        logger.setLevel(logging.INFO)
-        logger.propagate = False
-    return logger
-
-
-def _emit(logger: logging.Logger, event: str, **fields: Any) -> None:
-    try:
-        payload: dict[str, Any] = {
-            "ts": round(time.time(), 3),
-            "event": event,
-            **fields,
-        }
-        logger.info(json.dumps(payload, ensure_ascii=False, default=str))
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _trim(text: str, max_len: int) -> str:
-    if len(text) <= max_len:
-        return text
-    return text[:max_len] + "\u2026"
+    return text if len(text) <= max_len else text[:max_len] + "\u2026"
 
 
 def _preview_params(params: BaseModel) -> str:
     try:
         return _trim(
-            json.dumps(params.model_dump(), ensure_ascii=False, default=str),
-            200,
+            json.dumps(params.model_dump(), ensure_ascii=False, default=str), 200,
         )
     except Exception:  # noqa: BLE001
         return "<unserializable>"

@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aura import __version__
@@ -53,6 +52,8 @@ def main() -> int:
     parser = _make_parser()
     args = parser.parse_args()
 
+    from pathlib import Path
+
     from rich.console import Console
 
     from aura.cli.permission import make_cli_asker
@@ -61,26 +62,48 @@ def main() -> int:
     from aura.config.schema import AuraConfigError
     from aura.core.agent import build_agent
     from aura.core.hooks import HookChain
+    from aura.core.journal import journal, setup_file_journal
+    from aura.core.logging import wrap_with_event_logger
     from aura.core.permission import PermissionSession, make_permission_hook
 
     console = Console()
 
+    if args.log:
+        log_path = Path.home() / ".aura" / "logs" / "events.jsonl"
+        setup_file_journal(log_path)
+        console.print(f"[dim]event log: {log_path}[/dim]")
+
+    journal().write(
+        "startup",
+        version=__version__,
+        verbose=args.verbose,
+        log_enabled=bool(args.log),
+    )
+
     try:
+        journal().write("config_load_attempt")
         config = load_config()
+        journal().write(
+            "config_loaded",
+            providers=[p.name for p in config.providers],
+            default_spec=config.router.get("default", ""),
+        )
         _warn_plaintext_api_keys(config, console)
         session = PermissionSession()
         asker = make_cli_asker(session)
-        hooks = HookChain(pre_tool=[make_permission_hook(asker=asker, session=session)])
+        hooks = HookChain(
+            pre_tool=[make_permission_hook(asker=asker, session=session)],
+        )
         if args.log:
-            from aura.core.logging import wrap_with_event_logger
-            log_path = Path.home() / ".aura" / "logs" / "events.jsonl"
-            hooks = wrap_with_event_logger(hooks, log_path)
-            console.print(f"[dim]event log: {log_path}[/dim]")
+            hooks = wrap_with_event_logger(hooks)
         agent = build_agent(config, hooks=hooks)
+        journal().write("agent_built")
     except AuraConfigError as exc:
+        journal().write("startup_failed", reason="config", detail=str(exc))
         console.print(f"[red]config error: {exc}[/red]")
         return 2
     except Exception as exc:  # noqa: BLE001
+        journal().write("startup_failed", reason="unexpected", detail=str(exc))
         console.print(f"[red]startup error: {exc}[/red]")
         return 2
 
@@ -88,6 +111,7 @@ def main() -> int:
         asyncio.run(run_repl_async(agent, console=console, verbose=args.verbose))
     finally:
         agent.close()
+        journal().write("shutdown")
 
     return 0
 

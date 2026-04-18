@@ -101,3 +101,11 @@ class HookChain:
                 tool=tool, params=params, result=result, state=state,
             )
         return result
+
+    def merge(self, other: HookChain) -> HookChain:
+        return HookChain(
+            pre_model=[*self.pre_model, *other.pre_model],
+            post_model=[*self.post_model, *other.post_model],
+            pre_tool=[*self.pre_tool, *other.pre_tool],
+            post_tool=[*self.post_tool, *other.post_tool],
+        )

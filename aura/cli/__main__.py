@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from aura import __version__
@@ -30,6 +31,10 @@ def _make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"aura {__version__}")
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="verbose output",
+    )
+    parser.add_argument(
+        "--log", action="store_true",
+        help="write event log to ~/.aura/logs/events.jsonl",
     )
     return parser
 
@@ -66,6 +71,11 @@ def main() -> int:
         session = PermissionSession()
         asker = make_cli_asker(session)
         hooks = HookChain(pre_tool=[make_permission_hook(asker=asker, session=session)])
+        if args.log:
+            from aura.core.logging import wrap_with_event_logger
+            log_path = Path.home() / ".aura" / "logs" / "events.jsonl"
+            hooks = wrap_with_event_logger(hooks, log_path)
+            console.print(f"[dim]event log: {log_path}[/dim]")
         agent = build_agent(config, hooks=hooks)
     except AuraConfigError as exc:
         console.print(f"[red]config error: {exc}[/red]")

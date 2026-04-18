@@ -40,7 +40,7 @@ def test_build_tool_fail_closed_defaults() -> None:
     assert tool.is_concurrency_safe is False
 
 
-def test_build_tool_satisfies_protocol() -> None:
+def test_build_tool_returns_aura_tool_instance() -> None:
     tool = build_tool(
         name="minimal",
         description="minimal tool",
@@ -71,7 +71,7 @@ def test_build_tool_is_frozen() -> None:
         call=_fixed_call,
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        tool.name = "changed"
+        tool.name = "changed"  # type: ignore[misc]
 
 
 def test_build_tool_max_result_size_chars_defaults_to_none() -> None:
@@ -85,8 +85,6 @@ def test_build_tool_max_result_size_chars_defaults_to_none() -> None:
 
 
 def test_build_tool_max_result_size_chars_is_stored() -> None:
-    from aura.tools.base import _Tool
-
     tool = build_tool(
         name="x",
         description="x",
@@ -94,7 +92,7 @@ def test_build_tool_max_result_size_chars_is_stored() -> None:
         call=_fixed_call,
         max_result_size_chars=500,
     )
-    assert isinstance(tool, _Tool)
+    assert isinstance(tool, AuraTool)
     assert tool.max_result_size_chars == 500
 
 

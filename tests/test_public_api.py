@@ -57,6 +57,7 @@ def test_aura_tools_exports() -> None:
         glob,
         grep,
         read_file,
+        web_fetch,
         write_file,
     )
 
@@ -66,6 +67,7 @@ def test_aura_tools_exports() -> None:
     assert glob.name == "glob"
     assert grep.name == "grep"
     assert read_file.name == "read_file"
+    assert web_fetch.name == "web_fetch"
     assert write_file.name == "write_file"
 
 

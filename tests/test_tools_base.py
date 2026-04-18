@@ -1,13 +1,11 @@
-"""Tests for aura.tools.base — AuraTool protocol and ToolResult."""
+"""Tests for aura.tools.base — AuraTool dataclass and ToolResult."""
 
 from __future__ import annotations
-
-import asyncio
 
 import pytest
 from pydantic import BaseModel
 
-from aura.tools.base import AuraTool, ToolResult
+from aura.tools.base import AuraTool, ToolResult, build_tool
 
 # ---------------------------------------------------------------------------
 # ToolResult
@@ -36,7 +34,7 @@ def test_tool_result_ok_is_required() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Minimal duck-typed class for Protocol tests
+# AuraTool nominal isinstance checks
 # ---------------------------------------------------------------------------
 
 
@@ -44,42 +42,26 @@ class _Empty(BaseModel):
     pass
 
 
-class _EchoTool:
-    name: str = "echo"
-    description: str = "echoes input"
-    input_model: type[BaseModel] = _Empty
-    is_read_only: bool = True
-    is_destructive: bool = False
-    is_concurrency_safe: bool = True
+@pytest.mark.asyncio
+async def test_build_tool_returns_aura_tool_instance() -> None:
+    def _call(params: BaseModel) -> ToolResult:
+        return ToolResult(ok=True)
 
-    async def acall(self, params: BaseModel) -> ToolResult:
-        return ToolResult(ok=True, output={"echoed": True})
-
-
-# ---------------------------------------------------------------------------
-# Protocol isinstance checks
-# ---------------------------------------------------------------------------
+    tool = build_tool(
+        name="x", description="x", input_model=_Empty, call=_call, is_read_only=True,
+    )
+    assert isinstance(tool, AuraTool)
+    assert tool.name == "x"
 
 
-def test_minimal_duck_typed_class_satisfies_protocol() -> None:
-    assert isinstance(_EchoTool(), AuraTool) is True
+@pytest.mark.asyncio
+async def test_aura_tool_acall_returns_tool_result() -> None:
+    def _call(params: BaseModel) -> ToolResult:
+        return ToolResult(ok=True, output={"k": 1})
 
-
-def test_acall_returns_tool_result() -> None:
-    tool = _EchoTool()
-    result = asyncio.run(tool.acall(_Empty()))
-    assert isinstance(result, ToolResult)
+    tool = build_tool(
+        name="x", description="x", input_model=_Empty, call=_call, is_read_only=True,
+    )
+    result = await tool.acall(_Empty())
     assert result.ok is True
-
-
-def test_non_conforming_class_fails_isinstance() -> None:
-    class _Missing:
-        name: str = "bad"
-        description: str = "missing attrs"
-        # is_read_only, is_destructive, is_concurrency_safe omitted
-        input_model: type[BaseModel] = _Empty
-
-        async def acall(self, params: BaseModel) -> ToolResult:
-            return ToolResult(ok=True)
-
-    assert isinstance(_Missing(), AuraTool) is False
+    assert result.output == {"k": 1}

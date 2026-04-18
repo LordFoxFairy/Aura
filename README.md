@@ -6,6 +6,23 @@ A lightweight Python agent with an explicit async loop, pluggable LLM providers,
 
 Aura owns the agent loop. LangChain is used strictly as a uniform `BaseChatModel` client over OpenAI / Anthropic / Ollama and any OpenAI-compatible endpoint (OpenRouter, DeepSeek-OAI mode, self-hosted). The loop dispatches tool calls through a registry of `AuraTool` instances; permission, size budgets, token accounting, and auditing plug in as `HookChain` entries, not as loop-body logic. Config is JSON with a `providers[]` list + `router{}` alias table.
 
+## Why not LangChain `BaseTool`?
+
+Aura treats LangChain as a **client-only** layer (BaseChatModel +
+message types + `bind_tools`). Our `AuraTool` is a plain pydantic+
+dataclass contract:
+
+- Tools don't import LangChain. Schema for `bind_tools()` is derived
+  from pydantic (`model_json_schema()`) — no `args_schema` / `invoke` /
+  `ainvoke` indirection.
+- LangChain never dispatches Aura tools. The loop owns dispatch: it
+  reads `AIMessage.tool_calls` and calls `registry[name].acall(params)`
+  directly. Using `BaseTool` would open a second dispatch path through
+  `BaseTool.invoke` that could fire unexpectedly.
+- Tools stay framework-agnostic. Swapping out LangChain (for the openai
+  SDK directly, for example) only touches `ModelFactory`; the tool
+  contract is stable.
+
 ## Install
 
 ```bash

@@ -23,6 +23,7 @@ from aura.tools.edit_file import edit_file
 from aura.tools.glob import glob
 from aura.tools.grep import grep
 from aura.tools.read_file import read_file
+from aura.tools.web_fetch import web_fetch
 from aura.tools.write_file import write_file
 
 _BUILTIN_TOOLS: dict[str, AuraTool] = {
@@ -31,6 +32,7 @@ _BUILTIN_TOOLS: dict[str, AuraTool] = {
     "glob": glob,
     "grep": grep,
     "read_file": read_file,
+    "web_fetch": web_fetch,
     "write_file": write_file,
 }
 

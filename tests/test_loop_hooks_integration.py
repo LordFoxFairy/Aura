@@ -1,4 +1,4 @@
-"""Integration tests: HookChain wired into run_turn."""
+"""Integration tests: HookChain wired into AgentLoop."""
 
 from __future__ import annotations
 
@@ -8,8 +8,9 @@ from pydantic import BaseModel
 
 from aura.core.events import AgentEvent, ToolCallCompleted
 from aura.core.hooks import HookChain
-from aura.core.loop import run_turn
+from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
+from aura.core.state import LoopState
 from aura.tools.base import AuraTool, ToolResult, build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -53,20 +54,17 @@ def _final_turn(text: str = "done") -> FakeTurn:
 async def test_pre_model_fires_before_each_ainvoke() -> None:
     counter = {"n": 0}
 
-    async def count(*, history: list[BaseMessage]) -> None:
+    async def count(
+        *, history: list[BaseMessage], state: LoopState, **_: object
+    ) -> None:
         counter["n"] += 1
 
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     registry = ToolRegistry([_echo_tool])
     hooks = HookChain(pre_model=[count])
+    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
 
-    async for _ in run_turn(
-        user_prompt="go",
-        history=[],
-        model=model,
-        registry=registry,
-        hooks=hooks,
-    ):
+    async for _ in loop.run_turn(user_prompt="go", history=[]):
         pass
 
     assert counter["n"] == 2
@@ -76,20 +74,17 @@ async def test_pre_model_fires_before_each_ainvoke() -> None:
 async def test_post_model_fires_after_each_ainvoke_with_ai_message() -> None:
     seen: list[AIMessage] = []
 
-    async def capture(*, ai_message: AIMessage, history: list[BaseMessage]) -> None:
+    async def capture(
+        *, ai_message: AIMessage, history: list[BaseMessage], state: LoopState, **_: object
+    ) -> None:
         seen.append(ai_message)
 
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     registry = ToolRegistry([_echo_tool])
     hooks = HookChain(post_model=[capture])
+    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
 
-    async for _ in run_turn(
-        user_prompt="go",
-        history=[],
-        model=model,
-        registry=registry,
-        hooks=hooks,
-    ):
+    async for _ in loop.run_turn(user_prompt="go", history=[]):
         pass
 
     assert len(seen) == 2
@@ -102,21 +97,18 @@ async def test_pre_tool_fires_before_acall_and_can_deny() -> None:
     _acall_counter = 0
     denied = ToolResult(ok=False, error="denied")
 
-    async def deny(*, tool: AuraTool, params: BaseModel) -> ToolResult | None:
+    async def deny(
+        *, tool: AuraTool, params: BaseModel, state: LoopState, **_: object
+    ) -> ToolResult | None:
         return denied
 
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     registry = ToolRegistry([_echo_tool])
     hooks = HookChain(pre_tool=[deny])
+    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
 
     events: list[AgentEvent] = []
-    async for ev in run_turn(
-        user_prompt="go",
-        history=[],
-        model=model,
-        registry=registry,
-        hooks=hooks,
-    ):
+    async for ev in loop.run_turn(user_prompt="go", history=[]):
         events.append(ev)
 
     assert _acall_counter == 0
@@ -127,21 +119,18 @@ async def test_pre_tool_fires_before_acall_and_can_deny() -> None:
 
 @pytest.mark.asyncio
 async def test_post_tool_fires_after_acall_and_can_rewrite_output() -> None:
-    async def truncate(*, tool: AuraTool, params: BaseModel, result: ToolResult) -> ToolResult:
+    async def truncate(
+        *, tool: AuraTool, params: BaseModel, result: ToolResult, state: LoopState, **_: object
+    ) -> ToolResult:
         return ToolResult(ok=True, output={"truncated": True})
 
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     registry = ToolRegistry([_echo_tool])
     hooks = HookChain(post_tool=[truncate])
+    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
 
     history: list[BaseMessage] = []
-    async for _ in run_turn(
-        user_prompt="go",
-        history=history,
-        model=model,
-        registry=registry,
-        hooks=hooks,
-    ):
+    async for _ in loop.run_turn(user_prompt="go", history=history):
         pass
 
     import json
@@ -155,17 +144,25 @@ async def test_post_tool_fires_after_acall_and_can_rewrite_output() -> None:
 async def test_hooks_all_fire_in_order_for_tool_turn() -> None:
     event_log: list[str] = []
 
-    async def pre_model(*, history: list[BaseMessage]) -> None:
+    async def pre_model(
+        *, history: list[BaseMessage], state: LoopState, **_: object
+    ) -> None:
         event_log.append("pre_model")
 
-    async def post_model(*, ai_message: AIMessage, history: list[BaseMessage]) -> None:
+    async def post_model(
+        *, ai_message: AIMessage, history: list[BaseMessage], state: LoopState, **_: object
+    ) -> None:
         event_log.append("post_model")
 
-    async def pre_tool(*, tool: AuraTool, params: BaseModel) -> ToolResult | None:
+    async def pre_tool(
+        *, tool: AuraTool, params: BaseModel, state: LoopState, **_: object
+    ) -> ToolResult | None:
         event_log.append("pre_tool")
         return None
 
-    async def post_tool(*, tool: AuraTool, params: BaseModel, result: ToolResult) -> ToolResult:
+    async def post_tool(
+        *, tool: AuraTool, params: BaseModel, result: ToolResult, state: LoopState, **_: object
+    ) -> ToolResult:
         event_log.append("post_tool")
         return result
 
@@ -177,14 +174,36 @@ async def test_hooks_all_fire_in_order_for_tool_turn() -> None:
         pre_tool=[pre_tool],
         post_tool=[post_tool],
     )
+    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
 
-    async for _ in run_turn(
-        user_prompt="go",
-        history=[],
-        model=model,
-        registry=registry,
-        hooks=hooks,
-    ):
+    async for _ in loop.run_turn(user_prompt="go", history=[]):
         pass
 
     assert event_log[:4] == ["pre_model", "post_model", "pre_tool", "post_tool"]
+
+
+@pytest.mark.asyncio
+async def test_hooks_see_monotonic_turn_count() -> None:
+    """Pre_model hooks see turn_count incrementing across turns."""
+    observed: list[int] = []
+
+    async def record(
+        *, history: list[BaseMessage], state: LoopState, **_: object
+    ) -> None:
+        observed.append(state.turn_count)
+
+    hooks = HookChain(pre_model=[record])
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(content="", tool_calls=[
+            {"name": "echo", "args": {"msg": "x"}, "id": "tc_1"}
+        ])),
+        FakeTurn(message=AIMessage(content="done")),
+    ])
+    registry = ToolRegistry([_echo_tool])
+    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
+
+    history: list[BaseMessage] = []
+    async for _ in loop.run_turn(user_prompt="go", history=history):
+        pass
+
+    assert observed == [1, 2]

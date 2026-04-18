@@ -1,4 +1,4 @@
-"""Tests for aura.core.loop.run_turn — single tool-call round trip."""
+"""Tests for AgentLoop.run_turn — single tool-call round trip."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from aura.core.events import AgentEvent, Final, ToolCallCompleted, ToolCallStarted
 from aura.core.hooks import HookChain
-from aura.core.loop import run_turn
+from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
 from aura.tools.base import AuraTool, ToolResult, build_tool
 from tests.conftest import FakeChatModel, FakeTurn
@@ -52,13 +52,8 @@ async def test_run_turn_single_tool_call_roundtrip() -> None:
     history: list[BaseMessage] = []
 
     events: list[AgentEvent] = []
-    async for ev in run_turn(
-        user_prompt="call echo",
-        history=history,
-        model=model,
-        registry=registry,
-        hooks=HookChain(),
-    ):
+    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
+    async for ev in loop.run_turn(user_prompt="call echo", history=history):
         events.append(ev)
 
     key_events = [e for e in events if isinstance(e, (ToolCallStarted, ToolCallCompleted, Final))]
@@ -82,13 +77,8 @@ async def test_run_turn_two_ainvoke_calls_made() -> None:
     model, registry = _make_model_and_registry()
     history: list[BaseMessage] = []
 
-    async for _ in run_turn(
-        user_prompt="call echo",
-        history=history,
-        model=model,
-        registry=registry,
-        hooks=HookChain(),
-    ):
+    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
+    async for _ in loop.run_turn(user_prompt="call echo", history=history):
         pass
 
     assert model.ainvoke_calls == 2
@@ -100,13 +90,8 @@ async def test_run_turn_tool_call_event_contents() -> None:
     history: list[BaseMessage] = []
 
     events: list[AgentEvent] = []
-    async for ev in run_turn(
-        user_prompt="call echo",
-        history=history,
-        model=model,
-        registry=registry,
-        hooks=HookChain(),
-    ):
+    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
+    async for ev in loop.run_turn(user_prompt="call echo", history=history):
         events.append(ev)
 
     started = next(e for e in events if isinstance(e, ToolCallStarted))
@@ -125,13 +110,8 @@ async def test_run_turn_tool_call_output_serialized_as_json() -> None:
     model, registry = _make_model_and_registry()
     history: list[BaseMessage] = []
 
-    async for _ in run_turn(
-        user_prompt="call echo",
-        history=history,
-        model=model,
-        registry=registry,
-        hooks=HookChain(),
-    ):
+    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
+    async for _ in loop.run_turn(user_prompt="call echo", history=history):
         pass
 
     tool_msg_content = history[2].content

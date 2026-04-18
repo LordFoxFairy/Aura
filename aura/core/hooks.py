@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel
 
+from aura.core.state import LoopState
 from aura.tools.base import AuraTool, ToolResult
 
 PreModelHook = Callable[..., Awaitable[None]]
@@ -23,26 +24,35 @@ class HookChain:
     pre_tool: list[PreToolHook] = field(default_factory=list)
     post_tool: list[PostToolHook] = field(default_factory=list)
 
-    async def run_pre_model(self, *, history: list[BaseMessage]) -> None:
+    async def run_pre_model(
+        self, *, history: list[BaseMessage], state: LoopState
+    ) -> None:
         for hook in self.pre_model:
-            await hook(history=history)
+            await hook(history=history, state=state)
 
-    async def run_post_model(self, *, ai_message: AIMessage, history: list[BaseMessage]) -> None:
+    async def run_post_model(
+        self, *, ai_message: AIMessage, history: list[BaseMessage], state: LoopState
+    ) -> None:
         for hook in self.post_model:
-            await hook(ai_message=ai_message, history=history)
+            await hook(ai_message=ai_message, history=history, state=state)
 
     async def run_pre_tool(
-        self, *, tool: AuraTool, params: BaseModel
+        self, *, tool: AuraTool, params: BaseModel, state: LoopState
     ) -> ToolResult | None:
         for hook in self.pre_tool:
-            decision = await hook(tool=tool, params=params)
+            decision = await hook(tool=tool, params=params, state=state)
             if decision is not None:
                 return decision
         return None
 
     async def run_post_tool(
-        self, *, tool: AuraTool, params: BaseModel, result: ToolResult
+        self,
+        *,
+        tool: AuraTool,
+        params: BaseModel,
+        result: ToolResult,
+        state: LoopState,
     ) -> ToolResult:
         for hook in self.post_tool:
-            result = await hook(tool=tool, params=params, result=result)
+            result = await hook(tool=tool, params=params, result=result, state=state)
         return result

@@ -59,9 +59,9 @@ def main() -> int:
     from aura.cli.permission import make_cli_asker
     from aura.cli.repl import run_repl_async
     from aura.config.loader import load_config
-    from aura.config.schema import AuraConfigError
     from aura.core import journal
     from aura.core.agent import build_agent
+    from aura.core.errors import AuraError
     from aura.core.hooks import HookChain
     from aura.core.hooks.logging import wrap_with_event_logger
     from aura.core.hooks.permission import PermissionSession, make_permission_hook
@@ -76,9 +76,9 @@ def main() -> int:
             providers=[p.name for p in config.providers],
             default_spec=config.router.get("default", ""),
         )
-    except AuraConfigError as exc:
-        journal.write("startup_failed", reason="config", detail=str(exc))
-        console.print(f"[red]config error: {exc}[/red]")
+    except AuraError as exc:
+        journal.write("startup_failed", reason=type(exc).__name__, detail=str(exc))
+        console.print(f"[red]{type(exc).__name__}: {exc}[/red]")
         return 2
     except Exception as exc:  # noqa: BLE001
         journal.write("startup_failed", reason="unexpected", detail=str(exc))
@@ -108,9 +108,9 @@ def main() -> int:
             hooks = wrap_with_event_logger(hooks)
         agent = build_agent(config, hooks=hooks)
         journal.write("agent_built")
-    except AuraConfigError as exc:
-        journal.write("startup_failed", reason="config", detail=str(exc))
-        console.print(f"[red]config error: {exc}[/red]")
+    except AuraError as exc:
+        journal.write("startup_failed", reason=type(exc).__name__, detail=str(exc))
+        console.print(f"[red]{type(exc).__name__}: {exc}[/red]")
         return 2
     except Exception as exc:  # noqa: BLE001
         journal.write("startup_failed", reason="unexpected", detail=str(exc))

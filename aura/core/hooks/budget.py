@@ -10,12 +10,13 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel
 
+from aura.core.errors import AuraError
 from aura.core.hooks import HookChain, PostModelHook, PostToolHook, PreModelHook
 from aura.core.state import LoopState
 from aura.tools.base import AuraTool, ToolResult
 
 
-class MaxTurnsExceeded(Exception):
+class MaxTurnsExceeded(AuraError):
     pass
 
 

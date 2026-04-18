@@ -8,6 +8,7 @@ def test_aura_top_level_exports() -> None:
         Agent,
         AuraConfig,
         AuraConfigError,
+        AuraError,
         build_agent,
         load_config,
     )
@@ -15,6 +16,8 @@ def test_aura_top_level_exports() -> None:
     assert Agent.__name__ == "Agent"
     assert AuraConfig.__name__ == "AuraConfig"
     assert AuraConfigError.__name__ == "AuraConfigError"
+    assert AuraError.__name__ == "AuraError"
+    assert issubclass(AuraConfigError, AuraError)
     assert callable(build_agent)
     assert callable(load_config)
 
@@ -25,6 +28,7 @@ def test_aura_core_exports() -> None:
         AgentEvent,
         AgentLoop,
         AssistantDelta,
+        AuraError,
         Final,
         HookChain,
         LoopState,

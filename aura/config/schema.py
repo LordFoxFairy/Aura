@@ -95,7 +95,17 @@ class AuraConfig(BaseModel):
         return Path(self.storage.path).expanduser()
 
 
-class AuraConfigError(Exception):
+class AuraError(Exception):
+    """所有 Aura-specific 异常的根基类。
+
+    约定：任何代码想对"Aura 出了点意料之内的问题"做统一处理（CLI 顶层
+    error panel、embedder 的 catch-around-astream），都应 `except AuraError`。
+    stdlib / 第三方异常（例如 asyncio.CancelledError、ValidationError）不被
+    它捕获 —— 那些需要各自的 handler。
+    """
+
+
+class AuraConfigError(AuraError):
     def __init__(self, source: str, detail: str) -> None:
         super().__init__(f"{source}: {detail}")
         self.source = source

@@ -7,20 +7,16 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel
 
 from aura.core.events import AgentEvent, AssistantDelta, Final
+from aura.core.hooks import HookChain
 from aura.core.loop import run_turn
 from aura.core.registry import ToolRegistry
 from aura.tools.base import AuraTool, ToolResult, build_tool
-from tests.conftest import FakeChatModel, FakeTurn, text_chunk  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# Test 1: two text chunks → [AssistantDelta, AssistantDelta, Final]
-# ---------------------------------------------------------------------------
+from tests.conftest import FakeChatModel, FakeTurn
 
 
 @pytest.mark.asyncio
-async def test_run_turn_happy_path_two_text_chunks() -> None:
-    turn = FakeTurn(chunks=[text_chunk("hello ", final=False), text_chunk("world", final=True)])
-    model = FakeChatModel(turns=[turn])
+async def test_run_turn_happy_path_single_message() -> None:
+    model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="hello world"))])
     history: list[BaseMessage] = []
 
     events: list[AgentEvent] = []
@@ -29,24 +25,11 @@ async def test_run_turn_happy_path_two_text_chunks() -> None:
         history=history,
         model=model,
         registry=ToolRegistry(()),
-        provider="openai",
+        hooks=HookChain(),
     ):
         events.append(ev)
 
-    # Exactly 3 events: delta, delta, final
-    assert len(events) == 3
-    assert isinstance(events[0], AssistantDelta)
-    assert isinstance(events[1], AssistantDelta)
-    assert isinstance(events[2], Final)
-
-    # Delta texts in order
-    assert events[0].text == "hello "
-    assert events[1].text == "world"
-
-    # Final message is concatenated
-    assert events[2].message == "hello world"
-
-    # History has 2 messages: Human + AI
+    assert events == [AssistantDelta(text="hello world"), Final(message="hello world")]
     assert len(history) == 2
     assert isinstance(history[0], HumanMessage)
     assert history[0].content == "hi"
@@ -54,15 +37,9 @@ async def test_run_turn_happy_path_two_text_chunks() -> None:
     assert history[1].content == "hello world"
 
 
-# ---------------------------------------------------------------------------
-# Test 2: empty registry skips bind_tools
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_run_turn_no_registry_skips_bind_tools() -> None:
-    turn = FakeTurn(chunks=[text_chunk("ok", final=True)])
-    model = FakeChatModel(turns=[turn])
+    model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="ok"))])
     history: list[BaseMessage] = []
 
     async for _ in run_turn(
@@ -70,17 +47,11 @@ async def test_run_turn_no_registry_skips_bind_tools() -> None:
         history=history,
         model=model,
         registry=ToolRegistry(()),
-        provider="openai",
+        hooks=HookChain(),
     ):
         pass
 
-    # No bind_tools call should have been made
     assert model.seen_bound_tools == []
-
-
-# ---------------------------------------------------------------------------
-# Test 3: non-empty registry calls bind_tools once with correct schema
-# ---------------------------------------------------------------------------
 
 
 class _EchoParams(BaseModel):
@@ -104,8 +75,7 @@ _echo_tool: AuraTool = build_tool(
 
 @pytest.mark.asyncio
 async def test_run_turn_with_registry_calls_bind_tools_once() -> None:
-    turn = FakeTurn(chunks=[text_chunk("done", final=True)])
-    model = FakeChatModel(turns=[turn])
+    model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="done"))])
     history: list[BaseMessage] = []
     registry = ToolRegistry([_echo_tool])
 
@@ -114,27 +84,19 @@ async def test_run_turn_with_registry_calls_bind_tools_once() -> None:
         history=history,
         model=model,
         registry=registry,
-        provider="openai",
+        hooks=HookChain(),
     ):
         pass
 
-    # bind_tools called exactly once
     assert len(model.seen_bound_tools) == 1
     bound_schemas = model.seen_bound_tools[0]
-    # One tool schema passed
     assert len(bound_schemas) == 1
     assert bound_schemas[0]["function"]["name"] == "echo"
 
 
-# ---------------------------------------------------------------------------
-# Test 4: empty-content chunks are skipped (no AssistantDelta for them)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_run_turn_empty_content_chunks_are_skipped() -> None:
-    turn = FakeTurn(chunks=[text_chunk("", final=False), text_chunk("only", final=True)])
-    model = FakeChatModel(turns=[turn])
+async def test_run_turn_empty_content_still_emits_final() -> None:
+    model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content=""))])
     history: list[BaseMessage] = []
 
     events: list[AgentEvent] = []
@@ -143,16 +105,13 @@ async def test_run_turn_empty_content_chunks_are_skipped() -> None:
         history=history,
         model=model,
         registry=ToolRegistry(()),
-        provider="openai",
+        hooks=HookChain(),
     ):
         events.append(ev)
 
-    # Only one AssistantDelta (for "only"), not two
     deltas = [e for e in events if isinstance(e, AssistantDelta)]
-    assert len(deltas) == 1
-    assert deltas[0].text == "only"
+    assert len(deltas) == 0
 
-    # Final is still emitted
     finals = [e for e in events if isinstance(e, Final)]
     assert len(finals) == 1
-    assert finals[0].message == "only"
+    assert finals[0].message == ""

@@ -34,20 +34,20 @@ def load_project_memory(cwd: Path, *, force_reload: bool = False) -> str:
 
     fragments: list[str] = []
 
-    user_content = _read_with_imports(Path.home() / _AURA_DIR / _AURA_MD)
+    user_content = read_with_imports(Path.home() / _AURA_DIR / _AURA_MD)
     if user_content is not None:
         fragments.append(user_content)
 
     for ancestor in ancestors:
-        top = _read_with_imports(ancestor / _AURA_MD)
+        top = read_with_imports(ancestor / _AURA_MD)
         if top is not None:
             fragments.append(top)
-        nested = _read_with_imports(ancestor / _AURA_DIR / _AURA_MD)
+        nested = read_with_imports(ancestor / _AURA_DIR / _AURA_MD)
         if nested is not None:
             fragments.append(nested)
 
     for ancestor in ancestors:
-        local = _read_with_imports(ancestor / _AURA_LOCAL_MD)
+        local = read_with_imports(ancestor / _AURA_LOCAL_MD)
         if local is not None:
             fragments.append(local)
 
@@ -80,8 +80,11 @@ def _read_raw(path: Path) -> str | None:
     return data.decode("utf-8", errors="replace")
 
 
-def _read_with_imports(path: Path) -> str | None:
-    """读文件并展开 `@imports`；失败返回 None（与 Task 1 语义一致）。"""
+def read_with_imports(path: Path) -> str | None:
+    """读单个文件并展开 `@imports`；缺失 / 目录 / 权限拒绝 → None。
+
+    作为 project_memory 的公共 API，被 Context (B3 progressive 加载) 复用。
+    """
     raw = _read_raw(path)
     if raw is None:
         return None

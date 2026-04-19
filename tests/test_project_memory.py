@@ -8,7 +8,11 @@ from typing import Any, cast
 
 import pytest
 
-from aura.core.project_memory import clear_cache, load_project_memory
+from aura.core.project_memory import (
+    clear_cache,
+    load_project_memory,
+    read_with_imports,
+)
 
 
 def _patch_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
@@ -541,3 +545,25 @@ class TestCache:
         assert counter["calls"] == reads_after_b1
         load_project_memory(cwd_b)  # 命中 b 缓存
         assert counter["calls"] == reads_after_b1
+
+
+class TestReadWithImports:
+    """`read_with_imports` 作为公共 API —— 被 Context 复用。"""
+
+    def test_missing_file_returns_none(self, tmp_path: Path) -> None:
+        assert read_with_imports(tmp_path / "nope.md") is None
+
+    def test_directory_returns_none(self, tmp_path: Path) -> None:
+        (tmp_path / "a_dir").mkdir()
+        assert read_with_imports(tmp_path / "a_dir") is None
+
+    def test_plain_content_returned_verbatim(self, tmp_path: Path) -> None:
+        f = tmp_path / "x.md"
+        f.write_text("HELLO")
+        assert read_with_imports(f) == "HELLO"
+
+    def test_expands_imports(self, tmp_path: Path) -> None:
+        (tmp_path / "child.md").write_text("CHILD")
+        f = tmp_path / "parent.md"
+        f.write_text("pre\n@./child.md\npost")
+        assert read_with_imports(f) == "pre\nCHILD\npost"

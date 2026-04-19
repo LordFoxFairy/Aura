@@ -91,6 +91,10 @@ def make_event_logger_hooks() -> HookChain:
 
 
 def wrap_with_event_logger(inner: HookChain) -> HookChain:
+    """Splice the journal logger around *inner* so the audit trail brackets
+    the business hooks: log runs FIRST on `pre_*` (capture what was asked,
+    before any hook can deny) and LAST on `post_*` (capture the final
+    result, after any hook has mutated it)."""
     log = make_event_logger_hooks()
     return HookChain(
         pre_model=[*log.pre_model, *inner.pre_model],

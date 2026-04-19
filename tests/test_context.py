@@ -13,8 +13,8 @@ from langchain_core.messages import (
     SystemMessage,
 )
 
-from aura.core.context import Context, NestedFragment, _render_todos_body
-from aura.core.rules import Rule, RulesBundle
+from aura.core.memory.context import Context, NestedFragment, _render_todos_body
+from aura.core.memory.rules import Rule, RulesBundle
 
 
 def _rule(source: Path, base_dir: Path, globs: tuple[str, ...], body: str) -> Rule:

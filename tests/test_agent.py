@@ -13,11 +13,11 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core import project_memory, rules
 from aura.core.agent import Agent, build_agent
 from aura.core.events import Final
 from aura.core.hooks import HookChain
 from aura.core.llm import UnknownModelSpecError
+from aura.core.memory import project_memory, rules
 from aura.core.persistence.storage import SessionStorage
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn

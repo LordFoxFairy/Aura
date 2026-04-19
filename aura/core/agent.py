@@ -10,18 +10,18 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core import project_memory, rules
-from aura.core.context import Context
 from aura.core.events import AgentEvent, Final
 from aura.core.hooks import HookChain
 from aura.core.hooks.budget import MaxTurnsExceeded, default_hooks
 from aura.core.llm import ModelFactory
 from aura.core.loop import AgentLoop
+from aura.core.memory import project_memory, rules
+from aura.core.memory.context import Context
+from aura.core.memory.system_prompt import build_system_prompt
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
-from aura.core.system_prompt import build_system_prompt
 from aura.tools import BUILTIN_TOOLS
 from aura.tools.todo_write import make_todo_write_tool
 

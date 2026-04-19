@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 
-from aura.core.project_memory import (
+from aura.core.memory.project_memory import (
     clear_cache,
     load_project_memory,
     read_with_imports,

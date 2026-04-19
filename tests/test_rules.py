@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 
-from aura.core.rules import (
+from aura.core.memory.rules import (
     Rule,
     RulesBundle,
     clear_cache,

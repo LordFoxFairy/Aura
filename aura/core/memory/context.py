@@ -23,9 +23,9 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
-from aura.core import project_memory
-from aura.core.rules import Rule, RulesBundle
-from aura.core.rules import match as match_rules
+from aura.core.memory import project_memory
+from aura.core.memory.rules import Rule, RulesBundle
+from aura.core.memory.rules import match as match_rules
 
 _AURA_MD = "AURA.md"
 _AURA_DIR = ".aura"

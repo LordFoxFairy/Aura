@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from aura.core.system_prompt import build_system_prompt
+from aura.core.memory.system_prompt import build_system_prompt
 
 
 def test_identity_section_mentions_aura(tmp_path: Path) -> None:

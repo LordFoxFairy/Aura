@@ -6,7 +6,7 @@
   与 `bundle.conditional`（progressive）。
 - `clear_cache(cwd)`：None 清空全部；指定 cwd 清除对应条目（不存在则静默）。
 - `match(bundle, path)`：对 `bundle.conditional` 里的每条规则，用
-  `pathspec.gitwildmatch` 逐条尝试匹配；去重并按 `source_path` 排序返回。
+  `pathspec.gitignore` 逐条尝试匹配；去重并按 `source_path` 排序返回。
 - 错误策略（B10）：缺文件 / 目录占位 / 权限拒绝 / 非 UTF-8 / YAML 解析失败 /
   glob 编译失败 —— 一律静默跳过。
 """
@@ -272,7 +272,7 @@ def _rule_matches_path(rule: Rule, resolved_path: Path) -> bool:
         # pathspec 在编译/匹配阶段对各种畸形 glob 抛出多种异常类型
         # （`GitIgnorePatternError`、`re.error` 等）；全部静默跳过即可。
         try:
-            spec = pathspec.PathSpec.from_lines("gitwildmatch", [glob])
+            spec = pathspec.PathSpec.from_lines("gitignore", [glob])
             if spec.match_file(match_target):
                 return True
         except Exception:  # noqa: BLE001

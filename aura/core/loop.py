@@ -238,13 +238,15 @@ class AgentLoop:
         )
 
     def _maybe_trigger_path(self, step: ToolStep) -> None:
-        """B7: feed successful path-aware tool calls into Context progressive state."""
-        assert step.tool is not None
-        assert step.args is not None
-        arg_name = PATH_TRIGGER_TOOLS.get(step.tool.name)
+        """B7: feed successful path-aware tool calls into Context progressive state.
+
+        调用点在 `_execute_step` 成功分支（decision 为 None + ainvoke 未抛），
+        故 step.tool 与 step.args 此处必非 None（由 _plan_tool_calls 保证）。
+        """
+        arg_name = PATH_TRIGGER_TOOLS.get(step.tool.name)  # type: ignore[union-attr]
         if arg_name is None:
             return
-        raw = step.args.get(arg_name)
+        raw = step.args.get(arg_name)  # type: ignore[union-attr]
         if not isinstance(raw, str) or not raw:
             return
         try:

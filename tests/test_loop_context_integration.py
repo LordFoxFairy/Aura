@@ -59,8 +59,7 @@ def _noop_tool(name: str) -> BaseTool:
 
 def _py_rule(tmp_path: Path) -> Rule:
     return Rule(
-        source_path=(tmp_path / "py.md").resolve()
-        if (tmp_path / "py.md").exists() else tmp_path / "py.md",
+        source_path=tmp_path / "py.md",
         base_dir=tmp_path.resolve(),
         globs=("**/*.py",),
         content="PY-RULE-BODY",

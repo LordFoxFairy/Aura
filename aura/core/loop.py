@@ -42,8 +42,8 @@ PATH_TRIGGER_TOOLS: dict[str, str] = {
 def _serialize(result: ToolResult) -> str:
     # `default=str` + `ensure_ascii=False`：遇到非 JSON-native 值
     # （datetime / Path / bytes）降级为字符串而非抛异常。
-    # 这里抛出会越过 `_append_tool_message` 的 try/except 外层，导致那一条
-    # ToolMessage 漏 append —— 破坏 tool_call.id 与 ToolMessage 的严格对齐。
+    # 这里抛出会导致那一条 ToolMessage 漏 append —— 破坏 tool_call.id 与
+    # ToolMessage 的严格对齐。
     if result.ok:
         return json.dumps(result.output, default=str, ensure_ascii=False)
     return result.error or "tool failed"
@@ -198,25 +198,22 @@ class AgentLoop:
                 tool=tc["name"], tool_call_id=tc["id"],
                 ok=result.ok, error=result.error,
             )
-            self._append_tool_message(history, tc, result)
+            # tool_call.id 与 ToolMessage 必须严格一一对齐 —— 这里直接 append，
+            # 不抽函数；`_serialize` 已保证绝不抛出（default=str 兜底）。
+            status: Literal["success", "error"] = "success" if result.ok else "error"
+            history.append(
+                ToolMessage(
+                    content=_serialize(result),
+                    tool_call_id=tc["id"],
+                    name=tc["name"],
+                    status=status,
+                )
+            )
             yield ToolCallCompleted(
                 name=tc["name"], output=result.output, error=result.error,
             )
 
         journal.write("tool_batch_end", turn=self._state.turn_count, size=len(batch))
-
-    def _append_tool_message(
-        self, history: list[BaseMessage], tc: ToolCall, result: ToolResult,
-    ) -> None:
-        status: Literal["success", "error"] = "success" if result.ok else "error"
-        history.append(
-            ToolMessage(
-                content=_serialize(result),
-                tool_call_id=tc["id"],
-                name=tc["name"],
-                status=status,
-            )
-        )
 
     async def _plan_tool_calls(self, tool_calls: list[ToolCall]) -> list[ToolStep]:
         steps: list[ToolStep] = []

@@ -51,7 +51,18 @@ class Agent:
         # BEFORE `_build_registry` resolves `config.tools.enabled`.
         self._available_tools["todo_write"] = make_todo_write_tool(self._state)
         self._session_id = session_id
-        self._registry = self._build_registry()
+        # Inline registry construction: config.tools.enabled → lookup → ToolRegistry.
+        # 只在 __init__ 被构造一次；无需抽方法。
+        tools: list[BaseTool] = []
+        for name in self._config.tools.enabled:
+            tool = self._available_tools.get(name)
+            if tool is None:
+                raise AuraConfigError(
+                    source="tools.enabled",
+                    detail=f"unknown tool name: {name!r}",
+                )
+            tools.append(tool)
+        self._registry = ToolRegistry(tools)
         self._cwd = Path.cwd()
         self._system_prompt = build_system_prompt()
         self._primary_memory = project_memory.load_project_memory(self._cwd)
@@ -160,18 +171,6 @@ class Agent:
             rules=self._rules,
             todos_provider=lambda: self._state.custom.get("todos", []),
         )
-
-    def _build_registry(self) -> ToolRegistry:
-        tools: list[BaseTool] = []
-        for name in self._config.tools.enabled:
-            tool = self._available_tools.get(name)
-            if tool is None:
-                raise AuraConfigError(
-                    source="tools.enabled",
-                    detail=f"unknown tool name: {name!r}",
-                )
-            tools.append(tool)
-        return ToolRegistry(tools)
 
     def close(self) -> None:
         self._storage.close()

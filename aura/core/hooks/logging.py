@@ -46,12 +46,16 @@ def make_event_logger_hooks() -> HookChain:
     async def _pre_tool(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: Any,
     ) -> ToolResult | None:
+        try:
+            args_preview = _trim(json.dumps(args, ensure_ascii=False, default=str), 200)
+        except Exception:  # noqa: BLE001
+            args_preview = "<unserializable>"
         journal.write(
             "pre_tool",
             turn=state.turn_count,
             tool=tool.name,
             is_destructive=(tool.metadata or {}).get("is_destructive", False),
-            args_preview=_preview_args(args),
+            args_preview=args_preview,
         )
         return None
 
@@ -98,10 +102,3 @@ def wrap_with_event_logger(inner: HookChain) -> HookChain:
 
 def _trim(text: str, max_len: int) -> str:
     return text if len(text) <= max_len else text[:max_len] + "\u2026"
-
-
-def _preview_args(args: dict[str, Any]) -> str:
-    try:
-        return _trim(json.dumps(args, ensure_ascii=False, default=str), 200)
-    except Exception:  # noqa: BLE001
-        return "<unserializable>"

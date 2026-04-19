@@ -14,13 +14,6 @@ from pydantic import BaseModel, Field
 from aura.core.state import LoopState
 from aura.tools.base import build_tool
 
-_DESCRIPTION = (
-    "Update the todo list for the current session. Use this proactively to "
-    "track multi-step work — write a todo list upfront and update it as you "
-    "complete items. Keep exactly one item in_progress when actively working; "
-    "mark completed the moment an item is done."
-)
-
 
 class TodoItem(BaseModel):
     content: str = Field(..., min_length=1, description="Imperative form of the task")
@@ -46,10 +39,12 @@ def make_todo_write_tool(state: LoopState) -> BaseTool:
 
     return build_tool(
         name="todo_write",
-        description=_DESCRIPTION,
+        description=(
+            "Update the todo list for the current session. Use this proactively to "
+            "track multi-step work — write a todo list upfront and update it as you "
+            "complete items. Keep exactly one item in_progress when actively working; "
+            "mark completed the moment an item is done."
+        ),
         args_schema=TodoWriteParams,
         func=_run,
-        is_read_only=False,
-        is_destructive=False,
-        is_concurrency_safe=False,
     )

@@ -29,7 +29,8 @@ def load_project_memory(cwd: Path, *, force_reload: bool = False) -> str:
     if not force_reload and resolved in _primary_cache:
         return _primary_cache[resolved]
 
-    ancestors = _ancestors_outer_to_inner(resolved)
+    # Path.parents 是 inner→outer；反转后拼上 cwd 自身，即 root-most 最先、cwd 最后
+    ancestors = [*reversed(list(resolved.parents)), resolved]
 
     fragments: list[str] = []
 
@@ -61,11 +62,6 @@ def clear_cache(cwd: Path | None = None) -> None:
         _primary_cache.clear()
         return
     _primary_cache.pop(cwd.resolve(), None)
-
-
-def _ancestors_outer_to_inner(resolved_cwd: Path) -> list[Path]:
-    # Path.parents 是 inner→outer；反转后拼上 cwd 自身，即 root-most 最先、cwd 最后
-    return [*reversed(list(resolved_cwd.parents)), resolved_cwd]
 
 
 def _read_raw(path: Path) -> str | None:

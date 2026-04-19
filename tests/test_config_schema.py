@@ -24,7 +24,8 @@ def test_defaults() -> None:
     assert p.base_url is None
     assert cfg.router == {"default": "openai:gpt-4o-mini"}
     assert cfg.tools.enabled == [
-        "bash", "edit_file", "glob", "grep", "read_file", "web_fetch", "write_file",
+        "bash", "edit_file", "glob", "grep", "read_file",
+        "todo_write", "web_fetch", "write_file",
     ]
     assert cfg.ui.theme == "default"
     assert cfg.storage.path == "~/.aura/sessions.db"

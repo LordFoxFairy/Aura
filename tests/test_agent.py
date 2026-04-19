@@ -684,3 +684,124 @@ async def test_storage_does_not_persist_context_memory_human_messages(
     assert any(isinstance(m, AIMessage) and m.content == "hi" for m in saved)
     assert not any(isinstance(m, ToolMessage) for m in saved)
     agent.close()
+
+
+# ---------------------------------------------------------------------------
+# Task 3 (C-2) — todo_write wire-in (spec AC 13-15)
+# ---------------------------------------------------------------------------
+
+
+class _CapturingFakeChatModel(FakeChatModel):
+    """FakeChatModel that records the messages list seen per _agenerate call."""
+
+    def __init__(self, turns: list[FakeTurn] | None = None, **kwargs: Any) -> None:
+        super().__init__(turns=turns, **kwargs)
+        self.__dict__["seen_messages"] = []
+
+    @property
+    def seen_messages(self) -> list[list[BaseMessage]]:
+        return self.__dict__["seen_messages"]  # type: ignore[no-any-return]
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **_: Any,
+    ) -> Any:
+        self.__dict__["seen_messages"].append(list(messages))
+        return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **_)
+
+
+def test_todo_write_registered_when_enabled(tmp_path: Path) -> None:
+    cfg = _minimal_config(enabled=["todo_write"])
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+    assert "todo_write" in agent._available_tools
+    assert "todo_write" in [t.name for t in agent._registry.tools()]
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_todo_write_tool_call_injects_todos_on_next_turn(tmp_path: Path) -> None:
+    cfg = _minimal_config(enabled=["todo_write"])
+    model = _CapturingFakeChatModel(turns=[
+        FakeTurn(message=AIMessage(
+            content="",
+            tool_calls=[{
+                "id": "tc_1",
+                "name": "todo_write",
+                "args": {"todos": [{
+                    "content": "SMOKE",
+                    "status": "pending",
+                    "activeForm": "Running SMOKE",
+                }]},
+            }],
+        )),
+        FakeTurn(message=AIMessage(content="ok")),
+    ])
+    agent = Agent(config=cfg, model=model, storage=_storage(tmp_path))
+
+    async for _ in agent.astream("hi"):
+        pass
+
+    # Turn 2 messages should include a <todos> HumanMessage reflecting the state
+    # set by the turn-1 tool call.
+    assert len(model.seen_messages) == 2
+    turn2 = model.seen_messages[1]
+    todo_humans = [
+        m for m in turn2
+        if isinstance(m, HumanMessage) and str(m.content).startswith("<todos>")
+    ]
+    assert len(todo_humans) == 1
+    body = str(todo_humans[0].content)
+    assert "SMOKE" in body
+    assert "pending" in body
+    assert "Running SMOKE" in body
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_clear_session_wipes_todos(tmp_path: Path) -> None:
+    cfg = _minimal_config(enabled=["todo_write"])
+    model = _CapturingFakeChatModel(turns=[
+        FakeTurn(message=AIMessage(
+            content="",
+            tool_calls=[{
+                "id": "tc_1",
+                "name": "todo_write",
+                "args": {"todos": [{
+                    "content": "SMOKE",
+                    "status": "pending",
+                    "activeForm": "Running SMOKE",
+                }]},
+            }],
+        )),
+        FakeTurn(message=AIMessage(content="ok")),
+        FakeTurn(message=AIMessage(content="post-clear")),
+    ])
+    agent = Agent(config=cfg, model=model, storage=_storage(tmp_path))
+
+    # Turn establishing todos.
+    async for _ in agent.astream("hi"):
+        pass
+    assert agent._state.custom.get("todos")
+
+    # Clear session — custom state (incl. todos) wiped.
+    agent.clear_session()
+    assert agent._state.custom.get("todos", []) == []
+
+    # Next turn should have NO <todos> HumanMessage.
+    async for _ in agent.astream("after-clear"):
+        pass
+
+    post_clear_messages = model.seen_messages[-1]
+    todo_humans = [
+        m for m in post_clear_messages
+        if isinstance(m, HumanMessage) and str(m.content).startswith("<todos>")
+    ]
+    assert todo_humans == []
+    agent.close()

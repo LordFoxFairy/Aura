@@ -23,6 +23,7 @@ from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
 from aura.core.system_prompt import build_system_prompt
 from aura.tools import BUILTIN_TOOLS
+from aura.tools.todo_write import make_todo_write_tool
 
 _DEFAULT_SESSION = "default"
 
@@ -46,6 +47,9 @@ class Agent:
         self._available_tools = (
             dict(available_tools) if available_tools is not None else dict(BUILTIN_TOOLS)
         )
+        # Stateful tools (factory-bound to `self._state`) must be merged in
+        # BEFORE `_build_registry` resolves `config.tools.enabled`.
+        self._available_tools["todo_write"] = make_todo_write_tool(self._state)
         self._session_id = session_id
         self._registry = self._build_registry()
         self._cwd = Path.cwd()
@@ -152,6 +156,7 @@ class Agent:
             system_prompt=self._system_prompt,
             primary_memory=self._primary_memory,
             rules=self._rules,
+            todos_provider=lambda: self._state.custom.get("todos", []),
         )
 
     def _build_registry(self) -> ToolRegistry:

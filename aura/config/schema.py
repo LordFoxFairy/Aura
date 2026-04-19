@@ -3,18 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from aura.errors import AuraError
-
-if TYPE_CHECKING:
-    # Avoid a circular import at module load — ``store`` imports
-    # ``AuraConfigError`` from this module. The annotation only needs the
-    # type at check time; pydantic resolves the forward reference via
-    # ``model_rebuild`` at the bottom of this file.
-    from aura.core.permissions.store import PermissionsConfig
+from aura.schemas.permissions import PermissionsConfig
 
 
 class ProviderConfig(BaseModel):
@@ -111,11 +105,3 @@ class AuraConfigError(AuraError):
         super().__init__(f"{source}: {detail}")
         self.source = source
         self.detail = detail
-
-
-# Resolve the forward reference on ``AuraConfig.permissions``. Imported here
-# (not at module top) to break the circular import with ``store``, which
-# needs ``AuraConfigError`` defined above.
-from aura.core.permissions.store import PermissionsConfig  # noqa: E402
-
-AuraConfig.model_rebuild()

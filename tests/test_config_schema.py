@@ -216,7 +216,7 @@ def test_log_config_unknown_key_raises() -> None:
 
 
 def test_permissions_config_surfaced_on_aura_config() -> None:
-    from aura.core.permissions.store import PermissionsConfig
+    from aura.schemas.permissions import PermissionsConfig
 
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "x", "protocol": "openai"}],

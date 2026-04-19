@@ -31,10 +31,9 @@ class RuleSet:
     def matches(
         self, tool_name: str, args: dict[str, Any], tool: BaseTool,
     ) -> Rule | None:
-        for rule in self.rules:
-            if rule.matches(tool_name, args, tool):
-                return rule
-        return None
+        return next(
+            (r for r in self.rules if r.matches(tool_name, args, tool)), None,
+        )
 
 
 @dataclass
@@ -56,10 +55,9 @@ class SessionRuleSet:
     def matches(
         self, tool_name: str, args: dict[str, Any], tool: BaseTool,
     ) -> Rule | None:
-        for rule in self._rules:
-            if rule.matches(tool_name, args, tool):
-                return rule
-        return None
+        return next(
+            (r for r in self._rules if r.matches(tool_name, args, tool)), None,
+        )
 
     def rules(self) -> tuple[Rule, ...]:
         return tuple(self._rules)

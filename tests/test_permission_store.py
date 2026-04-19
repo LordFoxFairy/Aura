@@ -203,3 +203,49 @@ def test_save_rule_writes_to_project_not_local_by_default(tmp_path: Path) -> Non
     save_rule(tmp_path, Rule(tool="bash", content="npm test"))
     assert (tmp_path / ".aura" / "settings.json").exists()
     assert not (tmp_path / ".aura" / "settings.local.json").exists()
+
+
+def test_save_rule_scope_local_writes_to_settings_local_json(tmp_path: Path) -> None:
+    rule = Rule(tool="bash", content="ssh prod")
+    save_rule(tmp_path, rule, scope="local")
+    # Round-trip via load: local-scope rule should appear in merged allow list.
+    cfg = load(tmp_path)
+    assert rule.to_string() in cfg.allow
+    # settings.local.json created; settings.json must not exist.
+    assert (tmp_path / ".aura" / "settings.local.json").is_file()
+    assert not (tmp_path / ".aura" / "settings.json").exists()
+
+
+def test_save_rule_scope_project_writes_to_settings_json(tmp_path: Path) -> None:
+    rule = Rule(tool="bash", content="npm test")
+    save_rule(tmp_path, rule, scope="project")
+    assert (tmp_path / ".aura" / "settings.json").is_file()
+    assert not (tmp_path / ".aura" / "settings.local.json").exists()
+    cfg = load(tmp_path)
+    assert cfg.allow == [rule.to_string()]
+
+
+def test_save_rule_local_scope_de_dupes(tmp_path: Path) -> None:
+    rule = Rule(tool="bash", content="npm test")
+    save_rule(tmp_path, rule, scope="local")
+    save_rule(tmp_path, rule, scope="local")
+    cfg = load(tmp_path)
+    assert cfg.allow == [rule.to_string()]
+
+
+def test_save_rule_local_scope_atomic_write_failure_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(self: Path, target: Path | str) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "replace", _boom)
+    with pytest.raises(PermissionStoreError) as exc_info:
+        save_rule(tmp_path, Rule(tool="bash", content=None), scope="local")
+    assert "disk full" in exc_info.value.detail
+    assert "settings.local.json" in exc_info.value.source
+
+
+def test_save_rule_scope_invalid_raises(tmp_path: Path) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        save_rule(tmp_path, Rule(tool="bash", content=None), scope="bogus")  # type: ignore[arg-type]

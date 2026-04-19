@@ -19,6 +19,7 @@ from aura.schemas.events import (
     ToolCallCompleted,
     ToolCallStarted,
 )
+from aura.schemas.permissions import PermissionsConfig
 from aura.schemas.state import LoopState
 from aura.schemas.todos import TodoItem, TodoStatus
 from aura.schemas.tool import ToolError, ToolResult, tool_metadata
@@ -28,6 +29,7 @@ __all__ = [
     "AssistantDelta",
     "Final",
     "LoopState",
+    "PermissionsConfig",
     "TodoItem",
     "TodoStatus",
     "ToolCallCompleted",

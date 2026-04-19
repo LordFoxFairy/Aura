@@ -32,10 +32,12 @@ offending file — silent typos in a security-relevant config are not
 acceptable. Top-level unrelated sections (e.g. future ``ui``) are passed
 through on write untouched; the permissions store owns only its own key.
 
-``save_rule`` always writes to ``settings.json`` (project-scoped persist).
-Machine-local rules are set by manually editing ``settings.local.json`` —
-there is no CLI path that writes to it, by design (the common case is
-team-shared, so the default should shoulder the common case).
+``save_rule`` defaults to writing ``settings.json`` (project-scoped) —
+the common case is team-shared, so the default shoulders it. The
+``scope="local"`` keyword opts into ``settings.local.json`` for
+machine-local rules. Backend supports both scopes; the MVP CLI prompt
+(§8.2) only exposes project scope — exposing a scope picker in the
+prompt is Task 8+ work that no longer requires backend changes.
 """
 
 from __future__ import annotations
@@ -44,20 +46,13 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
 from aura.config.schema import AuraConfigError
 from aura.core.permissions.rule import InvalidRuleError, Rule
 from aura.core.permissions.session import RuleSet
 from aura.errors import AuraError
-
-
-class PermissionsConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["default", "bypass"] = "default"
-    allow: list[str] = Field(default_factory=list)
-    safety_exempt: list[str] = Field(default_factory=list)
+from aura.schemas.permissions import PermissionsConfig
 
 
 class PermissionStoreError(AuraError):
@@ -170,14 +165,8 @@ def load_ruleset(project_root: Path) -> RuleSet:
     return RuleSet(rules=tuple(parsed))
 
 
-def save_rule(project_root: Path, rule: Rule) -> None:
-    """Persist ``rule`` to ``settings.json`` (project-scoped).
-
-    Never writes to ``settings.local.json`` — the default CLI flow
-    assumes shared persistence. Users who want machine-local rules edit
-    that file manually.
-    """
-    settings = _settings_path(project_root)
+def _write_rule_to_file(settings: Path, rule: Rule) -> None:
+    """Shared atomic-write body. ``settings`` is the resolved target file."""
     settings.parent.mkdir(parents=True, exist_ok=True)
 
     top = _read_top_level(settings)
@@ -199,3 +188,31 @@ def save_rule(project_root: Path, rule: Rule) -> None:
         # Leave the .tmp for the caller/user to inspect; atomic rename
         # either fully succeeded or did not happen at all.
         raise PermissionStoreError(source=str(settings), detail=str(exc)) from exc
+
+
+def save_rule(
+    project_root: Path,
+    rule: Rule,
+    *,
+    scope: Literal["project", "local"] = "project",
+) -> None:
+    """Persist ``rule`` to the scope-selected settings file.
+
+    - ``scope="project"`` (default) writes to ``./.aura/settings.json`` —
+      shared / committed. This is the MVP CLI default (§8.2).
+    - ``scope="local"`` writes to ``./.aura/settings.local.json`` —
+      machine-local, gitignored by convention. Backend-only today; the
+      CLI prompt doesn't expose the choice yet (§9 deferred item).
+
+    Both scopes share the atomic-write pattern (tmp + ``Path.replace``),
+    rule-string dedup, and preserve-unrelated-top-level-keys behavior.
+    """
+    if scope == "project":
+        settings = _settings_path(project_root)
+    elif scope == "local":
+        settings = _settings_local_path(project_root)
+    else:
+        raise ValueError(
+            f"scope must be 'project' or 'local', got {scope!r}",
+        )
+    _write_rule_to_file(settings, rule)

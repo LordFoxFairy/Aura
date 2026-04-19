@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 
 from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import BaseTool
 
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core.events import AgentEvent, Final
@@ -18,7 +19,6 @@ from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
 from aura.core.system_prompt import build_system_prompt
-from aura.tools.base import AuraTool
 from aura.tools.bash import bash
 from aura.tools.edit_file import edit_file
 from aura.tools.glob import glob
@@ -27,7 +27,7 @@ from aura.tools.read_file import read_file
 from aura.tools.web_fetch import web_fetch
 from aura.tools.write_file import write_file
 
-_BUILTIN_TOOLS: dict[str, AuraTool] = {
+_BUILTIN_TOOLS: dict[str, BaseTool] = {
     "bash": bash,
     "edit_file": edit_file,
     "glob": glob,
@@ -48,7 +48,7 @@ class Agent:
         model: BaseChatModel,
         storage: SessionStorage,
         hooks: HookChain | None = None,
-        available_tools: dict[str, AuraTool] | None = None,
+        available_tools: dict[str, BaseTool] | None = None,
         session_id: str = _DEFAULT_SESSION,
     ) -> None:
         self._config = config
@@ -148,7 +148,7 @@ class Agent:
         )
 
     def _build_registry(self) -> ToolRegistry:
-        tools: list[AuraTool] = []
+        tools: list[BaseTool] = []
         for name in self._config.tools.enabled:
             tool = self._available_tools.get(name)
             if tool is None:
@@ -178,7 +178,7 @@ def build_agent(
     config: AuraConfig,
     *,
     hooks: HookChain | None = None,
-    available_tools: dict[str, AuraTool] | None = None,
+    available_tools: dict[str, BaseTool] | None = None,
     session_id: str = _DEFAULT_SESSION,
 ) -> Agent:
     # 生产便利工厂：自动解析 model + storage；Agent 构造器保持 DI 注入以便测试替换。

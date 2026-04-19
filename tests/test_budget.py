@@ -1,40 +1,43 @@
-"""Tests for aura.core.budget."""
+"""Tests for aura.core.hooks.budget."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.core.hooks import PostToolHook
 from aura.core.hooks.budget import make_size_budget_hook
 from aura.core.state import LoopState
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import ToolResult, build_tool
 
 
 class _P(BaseModel):
     pass
 
 
-async def _no_op_call(params: BaseModel) -> ToolResult:
-    return ToolResult(ok=True)
+def _no_op() -> dict[str, Any]:
+    return {}
 
 
-_stub_tool: AuraTool = build_tool(
+_stub_tool: BaseTool = build_tool(
     name="stub",
     description="stub",
-    input_model=_P,
-    call=_no_op_call,
+    args_schema=_P,
+    func=_no_op,
 )
 
 
 async def _invoke(hook: PostToolHook, result: ToolResult) -> ToolResult:
+    args: dict[str, Any] = {}
     return await hook(
         tool=_stub_tool,
-        params=_P(),
+        args=args,
         result=result,
         state=LoopState(),
     )
@@ -111,11 +114,11 @@ async def test_preview_is_json_prefix(tmp_path: Path) -> None:
 
 
 async def test_per_tool_max_result_size_chars_overrides_global() -> None:
-    narrow_tool: AuraTool = build_tool(
+    narrow_tool: BaseTool = build_tool(
         name="narrow",
         description="small budget",
-        input_model=_P,
-        call=_no_op_call,
+        args_schema=_P,
+        func=_no_op,
         max_result_size_chars=50,
     )
 
@@ -123,7 +126,7 @@ async def test_per_tool_max_result_size_chars_overrides_global() -> None:
     result = ToolResult(ok=True, output={"content": "x" * 1000})
 
     out = await hook(
-        tool=narrow_tool, params=_P(), result=result, state=LoopState(),
+        tool=narrow_tool, args={}, result=result, state=LoopState(),
     )
 
     assert isinstance(out.output, dict)
@@ -133,18 +136,18 @@ async def test_per_tool_max_result_size_chars_overrides_global() -> None:
 
 
 async def test_no_per_tool_budget_falls_back_to_global() -> None:
-    plain_tool: AuraTool = build_tool(
+    plain_tool: BaseTool = build_tool(
         name="plain",
         description="no budget",
-        input_model=_P,
-        call=_no_op_call,
+        args_schema=_P,
+        func=_no_op,
     )
 
     hook = make_size_budget_hook(max_chars=100)
     result = ToolResult(ok=True, output={"content": "x" * 500})
 
     out = await hook(
-        tool=plain_tool, params=_P(), result=result, state=LoopState(),
+        tool=plain_tool, args={}, result=result, state=LoopState(),
     )
 
     assert out.output.get("truncated") is True

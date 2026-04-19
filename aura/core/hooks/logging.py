@@ -6,12 +6,12 @@ import json
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage
-from pydantic import BaseModel
+from langchain_core.tools import BaseTool
 
 from aura.core.hooks import HookChain
 from aura.core.persistence import journal
 from aura.core.state import LoopState
-from aura.tools.base import AuraTool, ToolResult
+from aura.tools.base import ToolResult
 
 
 def make_event_logger_hooks() -> HookChain:
@@ -44,21 +44,21 @@ def make_event_logger_hooks() -> HookChain:
         )
 
     async def _pre_tool(
-        *, tool: AuraTool, params: BaseModel, state: LoopState, **_: Any,
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: Any,
     ) -> ToolResult | None:
         journal.write(
             "pre_tool",
             turn=state.turn_count,
             tool=tool.name,
-            is_destructive=tool.is_destructive,
-            params_preview=_preview_params(params),
+            is_destructive=(tool.metadata or {}).get("is_destructive", False),
+            args_preview=_preview_args(args),
         )
         return None
 
     async def _post_tool(
         *,
-        tool: AuraTool,
-        params: BaseModel,
+        tool: BaseTool,
+        args: dict[str, Any],
         result: ToolResult,
         state: LoopState,
         **_: Any,
@@ -100,10 +100,8 @@ def _trim(text: str, max_len: int) -> str:
     return text if len(text) <= max_len else text[:max_len] + "\u2026"
 
 
-def _preview_params(params: BaseModel) -> str:
+def _preview_args(args: dict[str, Any]) -> str:
     try:
-        return _trim(
-            json.dumps(params.model_dump(), ensure_ascii=False, default=str), 200,
-        )
+        return _trim(json.dumps(args, ensure_ascii=False, default=str), 200)
     except Exception:  # noqa: BLE001
         return "<unserializable>"

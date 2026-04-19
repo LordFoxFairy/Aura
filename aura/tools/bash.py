@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import subprocess
+from typing import Any
 
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import ToolError, build_tool
 
 _DEFAULT_TIMEOUT = 30
 
@@ -21,32 +23,29 @@ class BashParams(BaseModel):
     )
 
 
-def _run(params: BashParams) -> ToolResult:
+def _run(command: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
     try:
         completed = subprocess.run(
-            params.command,
+            command,
             shell=True,
             capture_output=True,
             text=True,
-            timeout=params.timeout,
+            timeout=timeout,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
-        return ToolResult(ok=False, error=f"timeout after {params.timeout}s: {exc}")
-    return ToolResult(
-        ok=True,
-        output={
-            "stdout": completed.stdout,
-            "stderr": completed.stderr,
-            "exit_code": completed.returncode,
-        },
-    )
+        raise ToolError(f"timeout after {timeout}s: {exc}") from exc
+    return {
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "exit_code": completed.returncode,
+    }
 
 
-bash: AuraTool = build_tool(
+bash: BaseTool = build_tool(
     name="bash",
     description="Run a shell command with a timeout. Returns stdout, stderr, and exit_code.",
-    input_model=BashParams,
-    call=_run,
+    args_schema=BashParams,
+    func=_run,
     is_destructive=True,
 )

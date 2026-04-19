@@ -3,23 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
-from pydantic import BaseModel
+from langchain_core.tools import BaseTool
 
 from aura.cli.render import compact_args
 from aura.core.hooks.permission import PermissionAsker, PermissionSession
 from aura.core.persistence import journal
-from aura.tools.base import AuraTool
 
 
 def make_cli_asker(session: PermissionSession) -> PermissionAsker:
-    async def _ask(tool: AuraTool, params: BaseModel) -> bool:
-        args_preview = compact_args(params.model_dump())
+    async def _ask(tool: BaseTool, args: dict[str, Any]) -> bool:
+        args_preview = compact_args(args)
         journal.write(
             "permission_asked",
             tool=tool.name,
-            is_destructive=tool.is_destructive,
-            params_preview=args_preview,
+            is_destructive=(tool.metadata or {}).get("is_destructive", False),
+            args_preview=args_preview,
         )
         prompt = (
             f"\n  tool: {tool.name}({args_preview})\n"

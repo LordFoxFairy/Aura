@@ -52,15 +52,8 @@ def test_core_does_not_import_ui_frameworks() -> None:
     assert violations == [], f"Core-layer UI-framework leak: {violations}"
 
 
-def test_tools_do_not_import_langchain() -> None:
-    """aura/tools/** must not import any langchain package (core or providers)."""
-    violations = _violations("tools", ("langchain",))
-    assert violations == [], f"Tools-layer langchain leak: {violations}"
-
-
-def test_cli_does_not_import_langchain_core_except_via_aura_core() -> None:
-    """aura/cli/** legitimately talks LangChain message types through aura.core.
-    Direct langchain_core imports from cli would be a leaky abstraction.
-    """
-    violations = _violations("cli", ("langchain_core",))
-    assert violations == [], f"CLI reaching directly into langchain_core: {violations}"
+# NOTE: Post-refactor (AuraTool → LangChain StructuredTool), both aura/tools/**
+# and aura/cli/** legitimately import from langchain_core (BaseTool, StructuredTool).
+# The old "tools-layer must not import langchain" and "cli must not import
+# langchain_core" invariants no longer apply — tools *are* LangChain BaseTool
+# instances by design. Those two tests were removed as architecturally obsolete.

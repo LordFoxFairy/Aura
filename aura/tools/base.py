@@ -1,16 +1,20 @@
-"""Tool contract for the Aura agent loop."""
+"""Tool contract for the Aura agent loop.
+
+Tools are LangChain ``StructuredTool`` instances built via :func:`build_tool`.
+Project-specific flags (``is_read_only`` / ``is_destructive`` /
+``is_concurrency_safe`` / ``max_result_size_chars``) live in ``tool.metadata``
+so that ``bind_tools([t1, t2])`` accepts them natively; read them inline with
+``(tool.metadata or {}).get("is_destructive", False)``.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, TypeVar, overload
+from typing import Any, TypeVar
 
+from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
-
-_TParams = TypeVar("_TParams", bound=BaseModel)
 
 
 @dataclass
@@ -21,76 +25,36 @@ class ToolResult:
     display: str | None = None
 
 
-# frozen dataclass 而非 Protocol：统一通过 build_tool 构造，避免 Protocol duck-typing
-# 在调用侧引入 cast()；frozen 保证 tool 元数据在注册后不可变。
-@dataclass(frozen=True)
-class AuraTool:
-    name: str
-    description: str
-    input_model: type[BaseModel]
-    is_read_only: bool
-    is_destructive: bool
-    is_concurrency_safe: bool
-    max_result_size_chars: int | None
-    _call: Callable[[BaseModel], Awaitable[ToolResult]]
-
-    async def acall(self, params: BaseModel) -> ToolResult:
-        return await self._call(params)
+class ToolError(Exception):
+    """Raise from a tool function to surface a user-facing error message."""
 
 
-@overload
-def build_tool(
-    *,
-    name: str,
-    description: str,
-    input_model: type[_TParams],
-    call: Callable[[_TParams], ToolResult],
-    is_read_only: bool = False,
-    is_destructive: bool = False,
-    is_concurrency_safe: bool = False,
-    max_result_size_chars: int | None = None,
-) -> AuraTool: ...
-
-
-@overload
-def build_tool(
-    *,
-    name: str,
-    description: str,
-    input_model: type[_TParams],
-    call: Callable[[_TParams], Awaitable[ToolResult]],
-    is_read_only: bool = False,
-    is_destructive: bool = False,
-    is_concurrency_safe: bool = False,
-    max_result_size_chars: int | None = None,
-) -> AuraTool: ...
+_TParams = TypeVar("_TParams", bound=BaseModel)
 
 
 def build_tool(
     *,
     name: str,
     description: str,
-    input_model: type[BaseModel],
-    call: Callable[..., Any],
+    args_schema: type[_TParams],
+    func: Callable[..., Any] | None = None,
+    coroutine: Callable[..., Awaitable[Any]] | None = None,
     is_read_only: bool = False,
     is_destructive: bool = False,
     is_concurrency_safe: bool = False,
     max_result_size_chars: int | None = None,
-) -> AuraTool:
-    if inspect.iscoroutinefunction(call):
-        async_call: Callable[[BaseModel], Awaitable[ToolResult]] = call
-    else:
-        # sync 函数自动包装到 asyncio.to_thread — tool 作者无需关心线程化，基础设施在此处理。
-        def async_call(params: BaseModel) -> Awaitable[ToolResult]:
-            return asyncio.to_thread(call, params)
-
-    return AuraTool(
+) -> BaseTool:
+    metadata: dict[str, Any] = {
+        "is_read_only": is_read_only,
+        "is_destructive": is_destructive,
+        "is_concurrency_safe": is_concurrency_safe,
+        "max_result_size_chars": max_result_size_chars,
+    }
+    return StructuredTool.from_function(
+        func=func,
+        coroutine=coroutine,
         name=name,
         description=description,
-        input_model=input_model,
-        is_read_only=is_read_only,
-        is_destructive=is_destructive,
-        is_concurrency_safe=is_concurrency_safe,
-        max_result_size_chars=max_result_size_chars,
-        _call=async_call,
+        args_schema=args_schema,
+        metadata=metadata,
     )

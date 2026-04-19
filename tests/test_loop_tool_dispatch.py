@@ -6,9 +6,11 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.config.schema import AuraConfig
@@ -18,7 +20,7 @@ from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -26,16 +28,15 @@ class _EchoParams(BaseModel):
     msg: str
 
 
-async def _echo_call(params: BaseModel) -> ToolResult:
-    assert isinstance(params, _EchoParams)
-    return ToolResult(ok=True, output={"echoed": params.msg})
+def _echo(msg: str) -> dict[str, Any]:
+    return {"echoed": msg}
 
 
-_echo_tool: AuraTool = build_tool(
+_echo_tool: BaseTool = build_tool(
     name="echo",
     description="echoes input",
-    input_model=_EchoParams,
-    call=_echo_call,
+    args_schema=_EchoParams,
+    func=_echo,
     is_read_only=True,
     is_concurrency_safe=True,
 )
@@ -135,15 +136,15 @@ async def test_parallel_safe_tools_run_concurrently(tmp_path: Path) -> None:
     class _P(BaseModel):
         pass
 
-    async def _slow_read(p: BaseModel) -> ToolResult:
+    async def _slow_read() -> dict[str, Any]:
         await asyncio.sleep(0.2)
-        return ToolResult(ok=True, output={"ok": True})
+        return {"ok": True}
 
     slow = build_tool(
         name="slow_safe",
         description="slow read-only",
-        input_model=_P,
-        call=_slow_read,
+        args_schema=_P,
+        coroutine=_slow_read,
         is_read_only=True,
         is_concurrency_safe=True,
     )

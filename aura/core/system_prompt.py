@@ -55,10 +55,11 @@ def _tools_section(registry: ToolRegistry) -> str:
         return "<tools>none enabled</tools>"
     lines = ["<tools>"]
     for tool in registry:
+        meta = tool.metadata or {}
         flags = []
-        if tool.is_read_only:
+        if meta.get("is_read_only", False):
             flags.append("read-only")
-        if tool.is_destructive:
+        if meta.get("is_destructive", False):
             flags.append("destructive")
         flag_str = f" [{', '.join(flags)}]" if flags else ""
         lines.append(f"- {tool.name}{flag_str}: {tool.description}")

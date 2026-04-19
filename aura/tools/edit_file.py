@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import ToolError, build_tool
 
 
 class EditFileParams(BaseModel):
@@ -27,52 +29,46 @@ class EditFileParams(BaseModel):
     )
 
 
-def _edit(params: EditFileParams) -> ToolResult:
-    p = Path(params.path).expanduser()
+def _edit(path: str, old_str: str, new_str: str, replace_all: bool = False) -> dict[str, Any]:
+    p = Path(path).expanduser()
     if not p.exists():
-        return ToolResult(ok=False, error=f"not found: {params.path}")
+        raise ToolError(f"not found: {path}")
     if not p.is_file():
-        return ToolResult(ok=False, error=f"not a file: {params.path}")
-    if not params.old_str:
-        return ToolResult(ok=False, error="old_str must be non-empty")
+        raise ToolError(f"not a file: {path}")
+    if not old_str:
+        raise ToolError("old_str must be non-empty")
 
     try:
         content = p.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
-        return ToolResult(ok=False, error=f"not UTF-8: {exc}")
+        raise ToolError(f"not UTF-8: {exc}") from exc
 
-    occurrences = content.count(params.old_str)
+    occurrences = content.count(old_str)
     if occurrences == 0:
-        return ToolResult(ok=False, error=f"old_str not found in {params.path}")
-    if occurrences > 1 and not params.replace_all:
-        return ToolResult(
-            ok=False,
-            error=(
-                f"old_str matches {occurrences} times; set replace_all=True "
-                "or narrow old_str to a unique region"
-            ),
+        raise ToolError(f"old_str not found in {path}")
+    if occurrences > 1 and not replace_all:
+        raise ToolError(
+            f"old_str matches {occurrences} times; set replace_all=True "
+            "or narrow old_str to a unique region"
         )
 
     new_content = (
-        content.replace(params.old_str, params.new_str)
-        if params.replace_all
-        else content.replace(params.old_str, params.new_str, 1)
+        content.replace(old_str, new_str)
+        if replace_all
+        else content.replace(old_str, new_str, 1)
     )
     p.write_text(new_content, encoding="utf-8")
-    return ToolResult(
-        ok=True,
-        output={"replacements": occurrences if params.replace_all else 1},
-    )
+    return {"replacements": occurrences if replace_all else 1}
 
 
-edit_file: AuraTool = build_tool(
+edit_file: BaseTool = build_tool(
     name="edit_file",
     description=(
         "Edit a file by string replacement. Finds old_str (which must be unique unless "
         "replace_all=True) and replaces it with new_str. Fails loudly on 0 or "
         "ambiguous matches."
     ),
-    input_model=EditFileParams,
-    call=_edit,
+    args_schema=EditFileParams,
+    func=_edit,
     is_destructive=True,
 )

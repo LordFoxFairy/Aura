@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import ToolError, build_tool
 
 
 class WriteFileParams(BaseModel):
@@ -14,21 +16,21 @@ class WriteFileParams(BaseModel):
     content: str = Field(description="UTF-8 text content to write. Overwrites any existing file.")
 
 
-def _write(params: WriteFileParams) -> ToolResult:
-    p = Path(params.path)
+def _write(path: str, content: str) -> dict[str, Any]:
+    p = Path(path)
     if not p.parent.exists():
-        return ToolResult(ok=False, error=f"parent directory does not exist: {p.parent}")
+        raise ToolError(f"parent directory does not exist: {p.parent}")
     if p.is_dir():
-        return ToolResult(ok=False, error=f"path is a directory: {params.path}")
-    data = params.content.encode("utf-8")
+        raise ToolError(f"path is a directory: {path}")
+    data = content.encode("utf-8")
     p.write_bytes(data)
-    return ToolResult(ok=True, output={"written": len(data)})
+    return {"written": len(data)}
 
 
-write_file: AuraTool = build_tool(
+write_file: BaseTool = build_tool(
     name="write_file",
     description="Create or overwrite a UTF-8 text file. Parent directory must exist.",
-    input_model=WriteFileParams,
-    call=_write,
+    args_schema=WriteFileParams,
+    func=_write,
     is_destructive=True,
 )

@@ -7,6 +7,7 @@ import sys
 
 import pytest
 
+from aura.tools.base import ToolError
 from aura.tools.web_fetch import WebFetchParams, _fetch
 
 _wf_mod = importlib.import_module("aura.tools.web_fetch")
@@ -32,9 +33,8 @@ class _FakeResponse:
 
 
 def test_web_fetch_rejects_non_http_url() -> None:
-    result = _fetch(WebFetchParams(url="file:///etc/passwd"))
-    assert result.ok is False
-    assert "http(s) URL" in (result.error or "")
+    with pytest.raises(ToolError, match="http"):
+        _fetch(url="file:///etc/passwd")
 
 
 def test_web_fetch_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,11 +44,10 @@ def test_web_fetch_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
         return _FakeResponse(fake_body, status=200, content_type="text/plain")
 
     monkeypatch.setattr(_wf_mod, "urlopen", _fake_urlopen)
-    result = _fetch(WebFetchParams(url="https://example.com"))
-    assert result.ok is True
-    assert result.output["status"] == 200
-    assert result.output["content"] == "hello world"
-    assert result.output["truncated"] is False
+    out = _fetch(url="https://example.com")
+    assert out["status"] == 200
+    assert out["content"] == "hello world"
+    assert out["truncated"] is False
 
 
 def test_web_fetch_truncation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,10 +57,9 @@ def test_web_fetch_truncation(monkeypatch: pytest.MonkeyPatch) -> None:
         return _FakeResponse(large_body, status=200)
 
     monkeypatch.setattr(_wf_mod, "urlopen", _fake_urlopen)
-    result = _fetch(WebFetchParams(url="https://example.com"))
-    assert result.ok is True
-    assert result.output["truncated"] is True
-    assert len(result.output["content"]) == 1024 * 1024
+    out = _fetch(url="https://example.com")
+    assert out["truncated"] is True
+    assert len(out["content"]) == 1024 * 1024
 
 
 def test_web_fetch_url_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,17 +69,17 @@ def test_web_fetch_url_error(monkeypatch: pytest.MonkeyPatch) -> None:
         raise URLError("connection refused")
 
     monkeypatch.setattr(_wf_mod, "urlopen", _fake_urlopen)
-    result = _fetch(WebFetchParams(url="https://example.com"))
-    assert result.ok is False
-    assert "fetch failed" in (result.error or "")
+    with pytest.raises(ToolError, match="fetch failed"):
+        _fetch(url="https://example.com")
 
 
 def test_web_fetch_capability_flags() -> None:
     from aura.tools.web_fetch import web_fetch
 
-    assert web_fetch.is_read_only is True
-    assert web_fetch.is_destructive is False
-    assert web_fetch.is_concurrency_safe is True
+    meta = web_fetch.metadata or {}
+    assert meta.get("is_read_only") is True
+    assert meta.get("is_destructive") is False
+    assert meta.get("is_concurrency_safe") is True
 
 
 def test_web_fetch_timeout_bounds() -> None:

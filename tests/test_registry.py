@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.history import tool_schema_for
 from aura.core.loop import ToolStep
 from aura.core.registry import ToolRegistry
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import ToolResult, build_tool
 from aura.tools.read_file import read_file
 
 # ---------------------------------------------------------------------------
@@ -24,23 +26,27 @@ class _BParams(BaseModel):
     y: int
 
 
-async def _noop(params: BaseModel) -> ToolResult:
-    return ToolResult(ok=True)
+def _noop_a(x: str) -> dict[str, Any]:
+    return {}
 
 
-_tool_a: AuraTool = build_tool(
+def _noop_b(y: int) -> dict[str, Any]:
+    return {}
+
+
+_tool_a: BaseTool = build_tool(
     name="tool_a",
     description="first tool",
-    input_model=_AParams,
-    call=_noop,
+    args_schema=_AParams,
+    func=_noop_a,
     is_read_only=True,
 )
 
-_tool_b: AuraTool = build_tool(
+_tool_b: BaseTool = build_tool(
     name="tool_b",
     description="second tool",
-    input_model=_BParams,
-    call=_noop,
+    args_schema=_BParams,
+    func=_noop_b,
 )
 
 
@@ -66,8 +72,8 @@ def test_registry_duplicate_name_raises() -> None:
     dup = build_tool(
         name="tool_a",
         description="duplicate",
-        input_model=_AParams,
-        call=_noop,
+        args_schema=_AParams,
+        func=_noop_a,
     )
     with pytest.raises(ValueError, match="duplicate tool name"):
         ToolRegistry([_tool_a, dup])
@@ -84,17 +90,16 @@ def test_registry_missing_name_raises_keyerror() -> None:
         _ = reg["ghost"]
 
 
-def test_registry_schemas_match_tool_schema_for() -> None:
-    tools = [_tool_a, _tool_b]
-    reg = ToolRegistry(tools)
-    expected = [tool_schema_for(t) for t in tools]
-    assert reg.schemas() == expected
-
-
 def test_registry_contains() -> None:
     reg = ToolRegistry([read_file])
     assert "read_file" in reg
     assert "ghost" not in reg
+
+
+def test_registry_tools_returns_list_in_order() -> None:
+    reg = ToolRegistry([_tool_a, _tool_b])
+    tools = reg.tools()
+    assert [t.name for t in tools] == ["tool_a", "tool_b"]
 
 
 async def test_partition_empty_steps_returns_empty() -> None:
@@ -105,17 +110,17 @@ async def test_partition_all_safe_returns_single_batch() -> None:
     class _P(BaseModel):
         pass
 
-    async def _c(params: BaseModel) -> ToolResult:
-        return ToolResult(ok=True)
+    def _c() -> dict[str, Any]:
+        return {}
 
     t = build_tool(
-        name="t", description="t", input_model=_P, call=_c,
+        name="t", description="t", args_schema=_P, func=_c,
         is_read_only=True, is_concurrency_safe=True,
     )
     steps = [
         ToolStep(
             tool_call={"name": "t", "args": {}, "id": f"tc_{i}"},
-            tool=t, params=_P(), decision=None,
+            tool=t, args={}, decision=None,
         )
         for i in range(3)
     ]
@@ -129,22 +134,22 @@ async def test_partition_interleaved_unsafe_breaks_batches() -> None:
     class _P(BaseModel):
         pass
 
-    async def _c(p: BaseModel) -> ToolResult:
-        return ToolResult(ok=True)
+    def _c() -> dict[str, Any]:
+        return {}
 
     safe_tool = build_tool(
-        name="s", description="s", input_model=_P, call=_c,
+        name="s", description="s", args_schema=_P, func=_c,
         is_read_only=True, is_concurrency_safe=True,
     )
     unsafe_tool = build_tool(
-        name="u", description="u", input_model=_P, call=_c,
+        name="u", description="u", args_schema=_P, func=_c,
         is_destructive=True, is_concurrency_safe=False,
     )
 
-    def _step(tool: AuraTool, name: str, idx: int) -> ToolStep:
+    def _step(tool: BaseTool, name: str, idx: int) -> ToolStep:
         return ToolStep(
             tool_call={"name": name, "args": {}, "id": f"tc_{idx}"},
-            tool=tool, params=_P(), decision=None,
+            tool=tool, args={}, decision=None,
         )
 
     steps = [
@@ -164,26 +169,26 @@ async def test_partition_short_circuited_step_goes_solo() -> None:
     class _P(BaseModel):
         pass
 
-    async def _c(p: BaseModel) -> ToolResult:
-        return ToolResult(ok=True)
+    def _c() -> dict[str, Any]:
+        return {}
 
     safe = build_tool(
-        name="s", description="s", input_model=_P, call=_c,
+        name="s", description="s", args_schema=_P, func=_c,
         is_read_only=True, is_concurrency_safe=True,
     )
 
     steps = [
         ToolStep(
             tool_call={"name": "s", "args": {}, "id": "1"},
-            tool=safe, params=_P(), decision=None,
+            tool=safe, args={}, decision=None,
         ),
         ToolStep(
             tool_call={"name": "s", "args": {}, "id": "2"},
-            tool=safe, params=_P(), decision=ToolResult(ok=False, error="denied"),
+            tool=safe, args={}, decision=ToolResult(ok=False, error="denied"),
         ),
         ToolStep(
             tool_call={"name": "s", "args": {}, "id": "3"},
-            tool=safe, params=_P(), decision=None,
+            tool=safe, args={}, decision=None,
         ),
     ]
     batches = ToolRegistry.partition_batches(steps)

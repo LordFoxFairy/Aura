@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage
-from pydantic import BaseModel
+from langchain_core.tools import BaseTool
 
 from aura.core.errors import AuraError
 from aura.core.hooks import HookChain, PostModelHook, PostToolHook, PreModelHook
 from aura.core.state import LoopState
-from aura.tools.base import AuraTool, ToolResult
+from aura.tools.base import ToolResult
 
 
 class MaxTurnsExceeded(AuraError):
@@ -43,8 +43,8 @@ def make_size_budget_hook(
 ) -> PostToolHook:
     async def _hook(
         *,
-        tool: AuraTool,
-        params: BaseModel,
+        tool: BaseTool,
+        args: dict[str, Any],
         result: ToolResult,
         state: LoopState,
         **_: Any,
@@ -52,7 +52,7 @@ def make_size_budget_hook(
         if not result.ok or result.output is None:
             return result
 
-        effective_max = getattr(tool, "max_result_size_chars", None) or max_chars
+        effective_max = (tool.metadata or {}).get("max_result_size_chars") or max_chars
 
         serialized = json.dumps(result.output)
         if len(serialized) <= effective_max:

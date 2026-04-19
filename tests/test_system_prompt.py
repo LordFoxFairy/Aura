@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import datetime as dt
 from pathlib import Path
+from typing import Any
 
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.core.registry import ToolRegistry
 from aura.core.system_prompt import (
     build_system_prompt,
 )
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import build_tool
 
 
 def _empty_registry() -> ToolRegistry:
@@ -23,24 +25,24 @@ def _make_tool(
     description: str,
     read_only: bool = False,
     destructive: bool = False,
-) -> AuraTool:
+) -> BaseTool:
     class _P(BaseModel):
         pass
 
-    async def _call(params: BaseModel) -> ToolResult:
-        return ToolResult(ok=True)
+    def _call() -> dict[str, Any]:
+        return {}
 
     return build_tool(
         name=name,
         description=description,
-        input_model=_P,
-        call=_call,
+        args_schema=_P,
+        func=_call,
         is_read_only=read_only,
         is_destructive=destructive,
     )
 
 
-def _registry_with(*tools: AuraTool) -> ToolRegistry:
+def _registry_with(*tools: BaseTool) -> ToolRegistry:
     return ToolRegistry(list(tools))
 
 

@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from langchain_core.messages import AIMessage, BaseMessage
-from pydantic import BaseModel
+from langchain_core.tools import BaseTool
 
 from aura.core.state import LoopState
-from aura.tools.base import AuraTool, ToolResult
+from aura.tools.base import ToolResult
 
 
 class PreModelHook(Protocol):
@@ -36,12 +36,12 @@ class PostModelHook(Protocol):
 
 
 class PreToolHook(Protocol):
-    # 返回 ToolResult = 短路，记入 history 但不调 acall；返回 None = 放行。
+    # 返回 ToolResult = 短路，记入 history 但不调 ainvoke；返回 None = 放行。
     async def __call__(
         self,
         *,
-        tool: AuraTool,
-        params: BaseModel,
+        tool: BaseTool,
+        args: dict[str, Any],
         state: LoopState,
         **kwargs: Any,
     ) -> ToolResult | None: ...
@@ -52,8 +52,8 @@ class PostToolHook(Protocol):
     async def __call__(
         self,
         *,
-        tool: AuraTool,
-        params: BaseModel,
+        tool: BaseTool,
+        args: dict[str, Any],
         result: ToolResult,
         state: LoopState,
         **kwargs: Any,
@@ -84,10 +84,10 @@ class HookChain:
             await hook(ai_message=ai_message, history=history, state=state)
 
     async def run_pre_tool(
-        self, *, tool: AuraTool, params: BaseModel, state: LoopState,
+        self, *, tool: BaseTool, args: dict[str, Any], state: LoopState,
     ) -> ToolResult | None:
         for hook in self.pre_tool:
-            decision = await hook(tool=tool, params=params, state=state)
+            decision = await hook(tool=tool, args=args, state=state)
             if decision is not None:
                 return decision
         return None
@@ -95,14 +95,14 @@ class HookChain:
     async def run_post_tool(
         self,
         *,
-        tool: AuraTool,
-        params: BaseModel,
+        tool: BaseTool,
+        args: dict[str, Any],
         result: ToolResult,
         state: LoopState,
     ) -> ToolResult:
         for hook in self.post_tool:
             result = await hook(
-                tool=tool, params=params, result=result, state=state,
+                tool=tool, args=args, result=result, state=state,
             )
         return result
 

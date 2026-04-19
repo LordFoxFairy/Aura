@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.config.schema import AuraConfig, AuraConfigError
@@ -17,7 +18,7 @@ from aura.core.events import Final
 from aura.core.hooks import HookChain
 from aura.core.llm import UnknownModelSpecError
 from aura.core.persistence.storage import SessionStorage
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -260,17 +261,17 @@ async def test_build_agent_factory_uses_modelfactory(
 
 @pytest.mark.asyncio
 async def test_agent_accepts_custom_available_tools(tmp_path: Path) -> None:
-    async def _echo_call(params: BaseModel) -> ToolResult:
-        return ToolResult(ok=True, output={"echoed": "x"})
+    def _echo(msg: str) -> dict[str, Any]:
+        return {"echoed": "x"}
 
     class _EchoParams(BaseModel):
         msg: str
 
-    custom: AuraTool = build_tool(
+    custom: BaseTool = build_tool(
         name="custom_echo",
         description="a custom tool",
-        input_model=_EchoParams,
-        call=_echo_call,
+        args_schema=_EchoParams,
+        func=_echo,
         is_read_only=True,
     )
 
@@ -314,14 +315,14 @@ async def test_agent_available_tools_overrides_builtins(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_agent_copies_available_tools_dict(tmp_path: Path) -> None:
-    async def _call(params: BaseModel) -> ToolResult:
-        return ToolResult(ok=True)
+    def _call() -> dict[str, Any]:
+        return {}
 
     class _P(BaseModel):
         pass
 
-    t: AuraTool = build_tool(
-        name="t", description="t", input_model=_P, call=_call, is_read_only=True,
+    t: BaseTool = build_tool(
+        name="t", description="t", args_schema=_P, func=_call, is_read_only=True,
     )
 
     cfg = AuraConfig.model_validate({
@@ -330,7 +331,7 @@ async def test_agent_copies_available_tools_dict(tmp_path: Path) -> None:
         "tools": {"enabled": ["t"]},
     })
 
-    my_tools: dict[str, AuraTool] = {"t": t}
+    my_tools: dict[str, BaseTool] = {"t": t}
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="ok"))])
     agent = Agent(
         config=cfg, model=model, storage=_storage(tmp_path),
@@ -400,17 +401,17 @@ def test_build_agent_forwards_available_tools(
         lambda provider, name: (fake_model, provider.protocol),
     )
 
-    async def _call(params: BaseModel) -> ToolResult:
-        return ToolResult(ok=True)
+    def _call() -> dict[str, Any]:
+        return {}
 
     class _P(BaseModel):
         pass
 
-    custom: AuraTool = build_tool(
+    custom: BaseTool = build_tool(
         name="zzz",
         description="...",
-        input_model=_P,
-        call=_call,
+        args_schema=_P,
+        func=_call,
         is_read_only=True,
     )
 

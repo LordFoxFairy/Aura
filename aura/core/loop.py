@@ -17,14 +17,15 @@ from langchain_core.messages import (
     ToolCall,
     ToolMessage,
 )
-from pydantic import BaseModel, ValidationError
+from langchain_core.tools import BaseTool
+from pydantic import ValidationError
 
 from aura.core.events import AgentEvent, AssistantDelta, Final, ToolCallCompleted, ToolCallStarted
 from aura.core.hooks import HookChain
 from aura.core.persistence import journal
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
-from aura.tools.base import AuraTool, ToolResult
+from aura.tools.base import ToolError, ToolResult
 
 
 def _serialize(result: ToolResult) -> str:
@@ -34,8 +35,8 @@ def _serialize(result: ToolResult) -> str:
 @dataclass(frozen=True)
 class ToolStep:
     tool_call: ToolCall
-    tool: AuraTool | None
-    params: BaseModel | None
+    tool: BaseTool | None
+    args: dict[str, object] | None
     decision: ToolResult | None
 
 
@@ -54,7 +55,8 @@ class AgentLoop:
         self._state = state or LoopState()
         self._system_prompt = system_prompt
         # bind_tools 只在构造时调一次：schema 在 registry 固定后不变，多 turn 共享同一 bound model。
-        self._bound = model.bind_tools(registry.schemas()) if registry else model
+        # BaseTool 列表直接传给 bind_tools —— LangChain 各 provider 内部翻译成 native 工具格式。
+        self._bound = model.bind_tools(registry.tools()) if registry else model
 
     @property
     def state(self) -> LoopState:
@@ -203,36 +205,45 @@ class AgentLoop:
             tool = self._registry.get(tc["name"])
             if tool is None:
                 steps.append(ToolStep(
-                    tool_call=tc, tool=None, params=None,
+                    tool_call=tc, tool=None, args=None,
                     decision=ToolResult(ok=False, error=f"unknown tool: {tc['name']!r}"),
                 ))
                 continue
 
+            # 早校验：用 tool.args_schema 在派发前把 pydantic 错误转成 decision 短路，
+            # 避免 ainvoke 抛 ValidationError 打断 batch。
+            raw_args = dict(tc["args"])
+            schema = tool.args_schema
             try:
-                params = tool.input_model.model_validate(tc["args"])
+                if isinstance(schema, type) and hasattr(schema, "model_validate"):
+                    schema.model_validate(raw_args)
             except ValidationError as exc:
                 steps.append(ToolStep(
-                    tool_call=tc, tool=tool, params=None,
+                    tool_call=tc, tool=tool, args=None,
                     decision=ToolResult(ok=False, error=f"invalid args: {exc}"),
                 ))
                 continue
 
             decision = await self._hooks.run_pre_tool(
-                tool=tool, params=params, state=self._state
+                tool=tool, args=raw_args, state=self._state
             )
-            steps.append(ToolStep(tool_call=tc, tool=tool, params=params, decision=decision))
+            steps.append(ToolStep(tool_call=tc, tool=tool, args=raw_args, decision=decision))
         return steps
 
     async def _execute_step(self, step: ToolStep) -> ToolResult:
         if step.decision is not None:
             return step.decision
         assert step.tool is not None
-        assert step.params is not None
+        assert step.args is not None
         try:
-            result = await step.tool.acall(step.params)
+            output = await step.tool.ainvoke(step.args)
+            result = ToolResult(ok=True, output=output)
+        except ToolError as exc:
+            # 工具作者主动抛的用户态错误，消息原样给模型看。
+            result = ToolResult(ok=False, error=str(exc))
         except Exception as exc:  # noqa: BLE001
-            # tool 作者的 acall 不要求永不抛异常；loop 在此兜底，保证结果总能写回 history。
+            # 任意异常兜底：保证结果总能写回 history，避免 tool_call id 漏匹配。
             result = ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         return await self._hooks.run_post_tool(
-            tool=step.tool, params=step.params, result=result, state=self._state
+            tool=step.tool, args=step.args, result=result, state=self._state
         )

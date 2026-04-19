@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.core.events import AgentEvent, Final, ToolCallCompleted
 from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import ToolResult, build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -18,30 +21,29 @@ class _EchoParams(BaseModel):
     msg: str
 
 
-async def _echo_call(params: BaseModel) -> ToolResult:
-    assert isinstance(params, _EchoParams)
-    return ToolResult(ok=True, output={"echoed": params.msg})
+def _echo(msg: str) -> dict[str, Any]:
+    return {"echoed": msg}
 
 
-_echo_tool: AuraTool = build_tool(
+_echo_tool: BaseTool = build_tool(
     name="echo",
     description="echoes input",
-    input_model=_EchoParams,
-    call=_echo_call,
+    args_schema=_EchoParams,
+    func=_echo,
     is_read_only=True,
     is_concurrency_safe=True,
 )
 
 
-async def _exploding_call(params: BaseModel) -> ToolResult:
+def _explode(msg: str) -> dict[str, Any]:
     raise RuntimeError("kaboom")
 
 
-_exploding_tool: AuraTool = build_tool(
+_exploding_tool: BaseTool = build_tool(
     name="exploder",
     description="always raises",
-    input_model=_EchoParams,
-    call=_exploding_call,
+    args_schema=_EchoParams,
+    func=_explode,
     is_destructive=True,
 )
 
@@ -102,7 +104,7 @@ async def test_invalid_args_emit_error_tool_message_and_continues() -> None:
 
 
 @pytest.mark.asyncio
-async def test_acall_exception_emits_error_tool_message_with_exception_info() -> None:
+async def test_invoke_exception_emits_error_tool_message_with_exception_info() -> None:
     model = FakeChatModel(turns=[
         FakeTurn(message=AIMessage(content="", tool_calls=[
             {"name": "exploder", "args": {"msg": "x"}, "id": "tc_1"}
@@ -130,7 +132,8 @@ async def test_post_tool_sees_exception_result() -> None:
     seen: list[ToolResult] = []
 
     async def capture(
-        *, tool: AuraTool, params: BaseModel, result: ToolResult, state: object, **_: object
+        *, tool: BaseTool, args: dict[str, Any], result: ToolResult, state: object,
+        **_: object,
     ) -> ToolResult:
         seen.append(result)
         return result
@@ -159,7 +162,9 @@ async def test_post_tool_sees_exception_result() -> None:
 async def test_pre_tool_not_fired_for_unknown_tool() -> None:
     calls: list[str] = []
 
-    async def record(*, tool: AuraTool, params: BaseModel, state: object, **_: object) -> None:
+    async def record(
+        *, tool: BaseTool, args: dict[str, Any], state: object, **_: object
+    ) -> None:
         calls.append(tool.name)
         return None
 

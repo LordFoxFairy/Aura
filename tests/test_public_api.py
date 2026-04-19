@@ -53,7 +53,7 @@ def test_aura_core_exports() -> None:
 
 def test_aura_tools_exports() -> None:
     from aura.tools import (  # noqa: F401
-        AuraTool,
+        ToolError,
         ToolResult,
         bash,
         build_tool,

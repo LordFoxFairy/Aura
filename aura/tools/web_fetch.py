@@ -6,9 +6,10 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from aura.tools.base import AuraTool, ToolResult, build_tool  # noqa: TC001
+from aura.tools.base import ToolError, build_tool
 
 _DEFAULT_TIMEOUT = 30
 _MAX_BYTES = 1024 * 1024
@@ -22,20 +23,20 @@ class WebFetchParams(BaseModel):
     )
 
 
-def _fetch(params: WebFetchParams) -> ToolResult:
-    if not (params.url.startswith("http://") or params.url.startswith("https://")):
-        return ToolResult(ok=False, error=f"not an http(s) URL: {params.url}")
+def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise ToolError(f"not an http(s) URL: {url}")
 
-    req = Request(params.url, headers={"User-Agent": "aura/0.1.0"})
+    req = Request(url, headers={"User-Agent": "aura/0.1.0"})
     try:
-        with urlopen(req, timeout=params.timeout) as resp:  # noqa: S310
+        with urlopen(req, timeout=timeout) as resp:  # noqa: S310
             data = resp.read(_MAX_BYTES + 1)
             status = resp.status
             content_type = resp.headers.get("Content-Type", "") or ""
     except URLError as exc:
-        return ToolResult(ok=False, error=f"fetch failed: {exc}")
+        raise ToolError(f"fetch failed: {exc}") from exc
     except TimeoutError as exc:
-        return ToolResult(ok=False, error=f"fetch timed out after {params.timeout}s: {exc}")
+        raise ToolError(f"fetch timed out after {timeout}s: {exc}") from exc
 
     truncated = len(data) > _MAX_BYTES
     if truncated:
@@ -43,23 +44,23 @@ def _fetch(params: WebFetchParams) -> ToolResult:
     content = data.decode("utf-8", errors="replace")
 
     output: dict[str, Any] = {
-        "url": params.url,
+        "url": url,
         "status": status,
         "content_type": content_type,
         "content": content,
         "truncated": truncated,
     }
-    return ToolResult(ok=True, output=output)
+    return output
 
 
-web_fetch: AuraTool = build_tool(
+web_fetch: BaseTool = build_tool(
     name="web_fetch",
     description=(
         "Fetch an HTTP(S) URL via GET. Returns text content (UTF-8 with "
         "replacement). Max 1 MB, truncates if larger. No auth / cookies."
     ),
-    input_model=WebFetchParams,
-    call=_fetch,
+    args_schema=WebFetchParams,
+    func=_fetch,
     is_read_only=True,
     is_concurrency_safe=True,
     max_result_size_chars=60_000,

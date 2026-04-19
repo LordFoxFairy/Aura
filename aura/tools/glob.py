@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import ToolError, build_tool
 
 
 class GlobParams(BaseModel):
@@ -25,38 +27,35 @@ class GlobParams(BaseModel):
     )
 
 
-def _glob(params: GlobParams) -> ToolResult:
-    root = Path(params.path).expanduser().resolve()
+def _glob(pattern: str, path: str = ".", max_results: int = 500) -> dict[str, Any]:
+    root = Path(path).expanduser().resolve()
     if not root.exists():
-        return ToolResult(ok=False, error=f"not found: {root}")
+        raise ToolError(f"not found: {root}")
     if not root.is_dir():
-        return ToolResult(ok=False, error=f"not a directory: {root}")
+        raise ToolError(f"not a directory: {root}")
 
     files: list[str] = []
     truncated = False
-    for p in sorted(root.glob(params.pattern)):
+    for p in sorted(root.glob(pattern)):
         if not p.is_file():
             continue
         rel = p.relative_to(root) if p.is_relative_to(root) else p
         files.append(str(rel))
-        if len(files) >= params.max_results:
+        if len(files) >= max_results:
             truncated = True
             break
 
-    return ToolResult(
-        ok=True,
-        output={"files": files, "count": len(files), "truncated": truncated},
-    )
+    return {"files": files, "count": len(files), "truncated": truncated}
 
 
-glob: AuraTool = build_tool(
+glob: BaseTool = build_tool(
     name="glob",
     description=(
         "List files matching a pathname pattern (e.g. '**/*.py' for all Python files "
         "recursively). Returns a sorted list of relative paths."
     ),
-    input_model=GlobParams,
-    call=_glob,
+    args_schema=GlobParams,
+    func=_glob,
     is_read_only=True,
     is_concurrency_safe=True,
     max_result_size_chars=40_000,

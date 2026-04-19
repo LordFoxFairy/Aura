@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from aura.tools.base import AuraTool
+from aura.tools.base import ToolError
 from aura.tools.bash import BashParams, bash
 
 # ---------------------------------------------------------------------------
@@ -14,30 +14,26 @@ from aura.tools.bash import BashParams, bash
 
 
 async def test_bash_success_echo() -> None:
-    result = await bash.acall(BashParams(command="echo hello"))
-    assert result.ok is True
-    assert result.output["stdout"] == "hello\n"
-    assert result.output["exit_code"] == 0
-    assert result.output["stderr"] == ""
+    out = await bash.ainvoke({"command": "echo hello"})
+    assert out["stdout"] == "hello\n"
+    assert out["exit_code"] == 0
+    assert out["stderr"] == ""
 
 
 async def test_bash_nonzero_exit_returns_ok_true() -> None:
-    result = await bash.acall(BashParams(command="exit 42"))
-    assert result.ok is True
-    assert result.output["exit_code"] == 42
+    out = await bash.ainvoke({"command": "exit 42"})
+    assert out["exit_code"] == 42
 
 
 async def test_bash_nonzero_exit_captures_stderr() -> None:
-    result = await bash.acall(BashParams(command="echo err >&2; exit 1"))
-    assert result.ok is True
-    assert "err" in result.output["stderr"]
-    assert result.output["exit_code"] == 1
+    out = await bash.ainvoke({"command": "echo err >&2; exit 1"})
+    assert "err" in out["stderr"]
+    assert out["exit_code"] == 1
 
 
 async def test_bash_pipe_works() -> None:
-    result = await bash.acall(BashParams(command="echo hello | tr a-z A-Z"))
-    assert result.ok is True
-    assert "HELLO" in result.output["stdout"]
+    out = await bash.ainvoke({"command": "echo hello | tr a-z A-Z"})
+    assert "HELLO" in out["stdout"]
 
 
 # ---------------------------------------------------------------------------
@@ -46,29 +42,24 @@ async def test_bash_pipe_works() -> None:
 
 
 async def test_bash_timeout() -> None:
-    result = await bash.acall(BashParams(command="sleep 5", timeout=1))
-    assert result.ok is False
-    assert result.error is not None
-    assert "timeout" in result.error.lower()
+    with pytest.raises(ToolError, match="timeout"):
+        await bash.ainvoke({"command": "sleep 5", "timeout": 1})
 
 
 # ---------------------------------------------------------------------------
-# Capability flags / protocol
+# Capability flags
 # ---------------------------------------------------------------------------
 
 
 def test_bash_capability_flags() -> None:
-    assert bash.is_read_only is False
-    assert bash.is_destructive is True
-    assert bash.is_concurrency_safe is False
+    meta = bash.metadata or {}
+    assert meta.get("is_read_only") is False
+    assert meta.get("is_destructive") is True
+    assert meta.get("is_concurrency_safe") is False
 
 
 def test_bash_no_check_permissions_method() -> None:
     assert not hasattr(bash, "check_permissions")
-
-
-def test_bash_satisfies_protocol() -> None:
-    assert isinstance(bash, AuraTool) is True
 
 
 # ---------------------------------------------------------------------------

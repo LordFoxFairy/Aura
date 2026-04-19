@@ -2,28 +2,31 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.core.hooks import HookChain
 from aura.core.state import LoopState
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import ToolResult, build_tool
 
 
 class _P(BaseModel):
     x: int = 0
 
 
-async def _noop_call(params: BaseModel) -> ToolResult:
-    return ToolResult(ok=True, output={})
+def _noop(x: int = 0) -> dict[str, Any]:
+    return {}
 
 
-_stub_tool: AuraTool = build_tool(
+_stub_tool: BaseTool = build_tool(
     name="stub",
     description="stub",
-    input_model=_P,
-    call=_noop_call,
+    args_schema=_P,
+    func=_noop,
 )
 
 
@@ -32,15 +35,15 @@ async def test_hookchain_empty_is_noop() -> None:
     chain = HookChain()
     history: list[BaseMessage] = []
     ai_msg = AIMessage(content="hi")
-    params = _P()
+    args: dict[str, Any] = {}
     result = ToolResult(ok=True, output={})
     state = LoopState()
 
     await chain.run_pre_model(history=history, state=state)
     await chain.run_post_model(ai_message=ai_msg, history=history, state=state)
-    decision = await chain.run_pre_tool(tool=_stub_tool, params=params, state=state)
+    decision = await chain.run_pre_tool(tool=_stub_tool, args=args, state=state)
     final = await chain.run_post_tool(
-        tool=_stub_tool, params=params, result=result, state=state
+        tool=_stub_tool, args=args, result=result, state=state
     )
 
     assert history == []
@@ -86,12 +89,12 @@ async def test_pre_tool_short_circuits_with_tool_result() -> None:
     denied = ToolResult(ok=False, error="denied")
 
     async def deny(
-        *, tool: AuraTool, params: BaseModel, state: LoopState, **_: object
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
     ) -> ToolResult | None:
         return denied
 
     chain = HookChain(pre_tool=[deny])
-    result = await chain.run_pre_tool(tool=_stub_tool, params=_P(), state=LoopState())
+    result = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
     assert result is denied
 
@@ -102,19 +105,19 @@ async def test_pre_tool_first_short_circuit_wins() -> None:
     decision = ToolResult(ok=False, error="first")
 
     async def first(
-        *, tool: AuraTool, params: BaseModel, state: LoopState, **_: object
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
     ) -> ToolResult | None:
         call_log.append("first")
         return decision
 
     async def second(
-        *, tool: AuraTool, params: BaseModel, state: LoopState, **_: object
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
     ) -> ToolResult | None:
         call_log.append("second")
         return ToolResult(ok=False, error="second")
 
     chain = HookChain(pre_tool=[first, second])
-    result = await chain.run_pre_tool(tool=_stub_tool, params=_P(), state=LoopState())
+    result = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
     assert result is decision
     assert call_log == ["first"]
@@ -123,14 +126,16 @@ async def test_pre_tool_first_short_circuit_wins() -> None:
 @pytest.mark.asyncio
 async def test_post_tool_chains_in_order() -> None:
     async def append_a(
-        *, tool: AuraTool, params: BaseModel, result: ToolResult, state: LoopState, **_: object
+        *, tool: BaseTool, args: dict[str, Any], result: ToolResult, state: LoopState,
+        **_: object,
     ) -> ToolResult:
         out = list(result.output) if isinstance(result.output, list) else []
         out.append("a")
         return ToolResult(ok=True, output=out)
 
     async def append_b(
-        *, tool: AuraTool, params: BaseModel, result: ToolResult, state: LoopState, **_: object
+        *, tool: BaseTool, args: dict[str, Any], result: ToolResult, state: LoopState,
+        **_: object,
     ) -> ToolResult:
         out = list(result.output) if isinstance(result.output, list) else []
         out.append("b")
@@ -138,7 +143,7 @@ async def test_post_tool_chains_in_order() -> None:
 
     chain = HookChain(post_tool=[append_a, append_b])
     final = await chain.run_post_tool(
-        tool=_stub_tool, params=_P(), result=ToolResult(ok=True, output=[]), state=LoopState()
+        tool=_stub_tool, args={}, result=ToolResult(ok=True, output=[]), state=LoopState()
     )
 
     assert final.output == ["a", "b"]
@@ -167,12 +172,12 @@ async def test_multiple_hooks_of_same_type_run_in_registration_order() -> None:
 @pytest.mark.asyncio
 async def test_pre_tool_chain_returns_none_when_all_return_none() -> None:
     async def pass_through(
-        *, tool: AuraTool, params: BaseModel, state: LoopState, **_: object
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
     ) -> ToolResult | None:
         return None
 
     chain = HookChain(pre_tool=[pass_through, pass_through])
-    result = await chain.run_pre_tool(tool=_stub_tool, params=_P(), state=LoopState())
+    result = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
     assert result is None
 
@@ -203,7 +208,8 @@ def test_pre_model_hook_protocol_accepts_correct_signature() -> None:
 
 def test_post_tool_hook_protocol_accepts_correct_signature() -> None:
     async def ok_hook(
-        *, tool: AuraTool, params: BaseModel, result: ToolResult, state: LoopState, **_: object
+        *, tool: BaseTool, args: dict[str, Any], result: ToolResult, state: LoopState,
+        **_: object,
     ) -> ToolResult:
         return result
 

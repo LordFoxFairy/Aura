@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.core.events import AgentEvent, ToolCallCompleted
@@ -15,7 +17,7 @@ from aura.core.hooks.budget import make_size_budget_hook
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
-from aura.tools.base import AuraTool, ToolResult, build_tool
+from aura.tools.base import ToolResult, build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -23,21 +25,20 @@ class _EchoParams(BaseModel):
     msg: str
 
 
-_acall_counter = 0
+_invoke_counter = 0
 
 
-async def _echo_call(params: BaseModel) -> ToolResult:
-    global _acall_counter
-    _acall_counter += 1
-    assert isinstance(params, _EchoParams)
-    return ToolResult(ok=True, output={"echoed": params.msg})
+def _echo(msg: str) -> dict[str, Any]:
+    global _invoke_counter
+    _invoke_counter += 1
+    return {"echoed": msg}
 
 
-_echo_tool: AuraTool = build_tool(
+_echo_tool: BaseTool = build_tool(
     name="echo",
     description="echoes input",
-    input_model=_EchoParams,
-    call=_echo_call,
+    args_schema=_EchoParams,
+    func=_echo,
     is_read_only=True,
     is_concurrency_safe=True,
 )
@@ -96,13 +97,13 @@ async def test_post_model_fires_after_each_ainvoke_with_ai_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_fires_before_acall_and_can_deny() -> None:
-    global _acall_counter
-    _acall_counter = 0
+async def test_pre_tool_fires_before_invoke_and_can_deny() -> None:
+    global _invoke_counter
+    _invoke_counter = 0
     denied = ToolResult(ok=False, error="denied")
 
     async def deny(
-        *, tool: AuraTool, params: BaseModel, state: LoopState, **_: object
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
     ) -> ToolResult | None:
         return denied
 
@@ -115,16 +116,17 @@ async def test_pre_tool_fires_before_acall_and_can_deny() -> None:
     async for ev in loop.run_turn(user_prompt="go", history=[]):
         events.append(ev)
 
-    assert _acall_counter == 0
+    assert _invoke_counter == 0
 
     completed = next(e for e in events if isinstance(e, ToolCallCompleted))
     assert completed.error == "denied"
 
 
 @pytest.mark.asyncio
-async def test_post_tool_fires_after_acall_and_can_rewrite_output() -> None:
+async def test_post_tool_fires_after_invoke_and_can_rewrite_output() -> None:
     async def truncate(
-        *, tool: AuraTool, params: BaseModel, result: ToolResult, state: LoopState, **_: object
+        *, tool: BaseTool, args: dict[str, Any], result: ToolResult, state: LoopState,
+        **_: object,
     ) -> ToolResult:
         return ToolResult(ok=True, output={"truncated": True})
 
@@ -137,7 +139,6 @@ async def test_post_tool_fires_after_acall_and_can_rewrite_output() -> None:
     async for _ in loop.run_turn(user_prompt="go", history=history):
         pass
 
-    import json
     raw = history[2].content
     assert isinstance(raw, str)
     tool_msg_content = json.loads(raw)
@@ -159,13 +160,14 @@ async def test_hooks_all_fire_in_order_for_tool_turn() -> None:
         event_log.append("post_model")
 
     async def pre_tool(
-        *, tool: AuraTool, params: BaseModel, state: LoopState, **_: object
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
     ) -> ToolResult | None:
         event_log.append("pre_tool")
         return None
 
     async def post_tool(
-        *, tool: AuraTool, params: BaseModel, result: ToolResult, state: LoopState, **_: object
+        *, tool: BaseTool, args: dict[str, Any], result: ToolResult, state: LoopState,
+        **_: object,
     ) -> ToolResult:
         event_log.append("post_tool")
         return result
@@ -215,17 +217,17 @@ async def test_hooks_see_monotonic_turn_count() -> None:
 
 @pytest.mark.asyncio
 async def test_budget_hook_truncates_large_tool_output(tmp_path: Path) -> None:
-    async def _big_call(params: BaseModel) -> ToolResult:
-        return ToolResult(ok=True, output={"content": "x" * 20_000})
+    def _big() -> dict[str, Any]:
+        return {"content": "x" * 20_000}
 
     class _P(BaseModel):
         pass
 
-    big_tool: AuraTool = build_tool(
+    big_tool: BaseTool = build_tool(
         name="big",
         description="emits large output",
-        input_model=_P,
-        call=_big_call,
+        args_schema=_P,
+        func=_big,
         is_read_only=True,
     )
 

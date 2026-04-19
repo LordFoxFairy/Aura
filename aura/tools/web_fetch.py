@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from langchain_core.tools import BaseTool
@@ -23,9 +26,45 @@ class WebFetchParams(BaseModel):
     )
 
 
+def _reject_private_host(host: str) -> None:
+    """SSRF 防御：阻止解析到私网/回环/link-local/multicast/metadata IP 的 host。
+
+    claude-code WebFetchTool 同思路 —— 即使 DNS 指向 169.254.169.254
+    （云厂商 metadata）或 127.0.0.1，也一律拒。
+    """
+    try:
+        # getaddrinfo 覆盖 IPv4 + IPv6；任一结果是私网就拒。
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise ToolError(f"dns resolve failed for {host!r}: {exc}") from exc
+
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise ToolError(
+                f"refusing to fetch {host!r} — resolves to non-public IP {addr}"
+            )
+
+
 def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ToolError(f"not an http(s) URL: {url}")
+
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        raise ToolError(f"malformed URL (no host): {url}")
+    _reject_private_host(parsed.hostname)
 
     req = Request(url, headers={"User-Agent": "aura/0.1.0"})
     try:

@@ -24,10 +24,8 @@ class ToolsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: list[str] = Field(
-        # bash 不在默认 enabled 里：它 is_destructive=True 会触发 permission asker，
-        # 首次启动突然弹 y/N/a 提示对新用户是惊吓。想用 bash 在 config.tools.enabled 显式加上。
         default_factory=lambda: [
-            "edit_file", "glob", "grep", "read_file", "web_fetch", "write_file",
+            "bash", "edit_file", "glob", "grep", "read_file", "web_fetch", "write_file",
         ],
     )
 

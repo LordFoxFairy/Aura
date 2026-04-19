@@ -13,6 +13,10 @@ from pydantic import BaseModel, Field
 from aura.core.state import LoopState
 from aura.tools.base import build_tool
 
+# NOTE: 渲染格式由 aura/core/context.py 的 _render_todos_body 负责。
+# 这里只定义 tool 契约与 state 写入；"如何把 todos 变成 HumanMessage"
+# 是 Context 层的职责，避免 core → tools 方向反转。
+
 _DESCRIPTION = (
     "Update the todo list for the current session. Use this proactively to "
     "track multi-step work — write a todo list upfront and update it as you "
@@ -33,18 +37,6 @@ class TodoWriteParams(BaseModel):
     todos: list[TodoItem] = Field(
         ..., description="Complete new list; replaces prior state"
     )
-
-
-def render_todos(todos: list[dict[str, Any]]) -> str:
-    lines: list[str] = []
-    for t in todos:
-        if t["status"] == "completed":
-            lines.append(f"- [completed] {t['content']}")
-        else:
-            lines.append(
-                f"- [{t['status']}] {t['content']} (active: {t['activeForm']})"
-            )
-    return "\n".join(lines)
 
 
 def make_todo_write_tool(state: LoopState) -> BaseTool:

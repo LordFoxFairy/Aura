@@ -10,7 +10,6 @@ from aura.tools.todo_write import (
     TodoItem,
     TodoWriteParams,
     make_todo_write_tool,
-    render_todos,
 )
 
 # ---------------------------------------------------------------------------
@@ -169,34 +168,3 @@ def test_tool_metadata_and_name() -> None:
     assert meta.get("is_concurrency_safe") is False
 
 
-# ---------------------------------------------------------------------------
-# render_todos helper
-# ---------------------------------------------------------------------------
-
-
-def test_render_todos_non_completed_includes_active_form() -> None:
-    body = render_todos(
-        [{"content": "a", "status": "pending", "activeForm": "Doing a"}]
-    )
-    assert "a" in body
-    assert "pending" in body
-    assert "Doing a" in body
-
-
-def test_render_todos_completed_omits_active_form() -> None:
-    body = render_todos(
-        [{"content": "done-task", "status": "completed", "activeForm": "Did it"}]
-    )
-    assert "done-task" in body
-    assert "completed" in body
-
-
-def test_render_todos_multi_line_no_trailing_newline() -> None:
-    body = render_todos(
-        [
-            {"content": "a", "status": "pending", "activeForm": "Doing a"},
-            {"content": "b", "status": "completed", "activeForm": "Did b"},
-        ]
-    )
-    assert body.count("\n") == 1
-    assert not body.endswith("\n")

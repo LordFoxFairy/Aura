@@ -26,7 +26,6 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from aura.core import project_memory
 from aura.core.rules import Rule, RulesBundle
 from aura.core.rules import match as match_rules
-from aura.tools.todo_write import render_todos
 
 _AURA_MD = "AURA.md"
 _AURA_DIR = ".aura"
@@ -147,7 +146,7 @@ class Context:
         if self._todos_provider is not None:
             todos = self._todos_provider()
             if todos:
-                body = render_todos(todos)
+                body = _render_todos_body(todos)
                 messages.append(HumanMessage(f"<todos>\n{body}\n</todos>"))
 
         messages.extend(history)
@@ -176,6 +175,21 @@ def _is_under(path: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _render_todos_body(todos: list[dict[str, Any]]) -> str:
+    """渲染 todos 列表为 `<todos>` HumanMessage 的 body。格式稳定但不 spec-lock：
+    测试只断言 content/status/activeForm 三个子串的存在，不锁具体行格式。
+    """
+    lines: list[str] = []
+    for t in todos:
+        if t["status"] == "completed":
+            lines.append(f"- [completed] {t['content']}")
+        else:
+            lines.append(
+                f"- [{t['status']}] {t['content']} (active: {t['activeForm']})"
+            )
+    return "\n".join(lines)
 
 
 def _intermediate_dirs(start: Path, cwd: Path) -> list[Path]:

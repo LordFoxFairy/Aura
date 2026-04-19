@@ -13,7 +13,7 @@ from langchain_core.messages import (
     SystemMessage,
 )
 
-from aura.core.context import Context, NestedFragment
+from aura.core.context import Context, NestedFragment, _render_todos_body
 from aura.core.rules import Rule, RulesBundle
 
 
@@ -553,3 +553,37 @@ def test_ac17_auto_clear_roundtrip_provider_returning_empty_list(
     )
     out = ctx.build([])
     assert all("<todos>" not in str(m.content) for m in out)
+
+
+# ---------------------------------------------------------------------------
+# _render_todos_body (moved from tests/test_todo_write.py — renderer lives in
+# context.py, not tools/, to keep core → tools direction clean)
+# ---------------------------------------------------------------------------
+
+
+def test_render_todos_body_non_completed_includes_active_form() -> None:
+    body = _render_todos_body(
+        [{"content": "a", "status": "pending", "activeForm": "Doing a"}]
+    )
+    assert "a" in body
+    assert "pending" in body
+    assert "Doing a" in body
+
+
+def test_render_todos_body_completed_omits_active_form() -> None:
+    body = _render_todos_body(
+        [{"content": "done-task", "status": "completed", "activeForm": "Did it"}]
+    )
+    assert "done-task" in body
+    assert "completed" in body
+
+
+def test_render_todos_body_multi_line_no_trailing_newline() -> None:
+    body = _render_todos_body(
+        [
+            {"content": "a", "status": "pending", "activeForm": "Doing a"},
+            {"content": "b", "status": "completed", "activeForm": "Did b"},
+        ]
+    )
+    assert body.count("\n") == 1
+    assert not body.endswith("\n")

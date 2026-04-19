@@ -1,4 +1,4 @@
-"""Tests for aura.tools.edit_file — edit_file singleton."""
+"""Tests for aura.tools.edit_file."""
 
 from __future__ import annotations
 

@@ -9,10 +9,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from aura.core.persistence.storage import SessionStorage
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _four_messages() -> list[BaseMessage]:
     return [
@@ -23,13 +19,7 @@ def _four_messages() -> list[BaseMessage]:
     ]
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 def test_save_and_load_roundtrips(tmp_path: Path) -> None:
-    """Save 4 messages and load them back; verify order, types, and key fields."""
     with SessionStorage(tmp_path / "aura.db") as store:
         msgs = _four_messages()
         store.save("default", msgs)
@@ -51,7 +41,6 @@ def test_save_and_load_roundtrips(tmp_path: Path) -> None:
 
 
 def test_save_is_full_replace_not_append(tmp_path: Path) -> None:
-    """Second save replaces, not appends: 3 msgs → 1 msg → load returns exactly 1."""
     with SessionStorage(tmp_path / "aura.db") as store:
         store.save(
             "default",
@@ -69,7 +58,6 @@ def test_save_is_full_replace_not_append(tmp_path: Path) -> None:
 
 
 def test_sessions_are_isolated(tmp_path: Path) -> None:
-    """Saving to one session_id does not affect another."""
     with SessionStorage(tmp_path / "aura.db") as store:
         store.save("default", [HumanMessage(content="default-msg")])
         store.save("other", [HumanMessage(content="other-msg")])
@@ -84,7 +72,6 @@ def test_sessions_are_isolated(tmp_path: Path) -> None:
 
 
 def test_clear_deletes_only_target_session(tmp_path: Path) -> None:
-    """clear(a) wipes a's rows; b's rows remain intact."""
     with SessionStorage(tmp_path / "aura.db") as store:
         store.save("a", [HumanMessage(content="from-a")])
         store.save("b", [HumanMessage(content="from-b")])
@@ -99,14 +86,12 @@ def test_clear_deletes_only_target_session(tmp_path: Path) -> None:
 
 
 def test_load_empty_session_returns_empty_list(tmp_path: Path) -> None:
-    """Loading a never-saved session returns an empty list, not an error."""
     with SessionStorage(tmp_path / "aura.db") as store:
         result = store.load("nonexistent-session")
     assert result == []
 
 
 def test_parent_dir_auto_created(tmp_path: Path) -> None:
-    """SessionStorage auto-creates the parent directory when it doesn't exist."""
     db_path = tmp_path / "nonexistent_subdir" / "aura.db"
     assert not db_path.parent.exists()
     with SessionStorage(db_path) as store:
@@ -116,7 +101,6 @@ def test_parent_dir_auto_created(tmp_path: Path) -> None:
 
 
 def test_turn_index_is_message_ordinal(tmp_path: Path) -> None:
-    """turn_index is per-message ordinal (0, 1, 2), one row per BaseMessage."""
     db_path = tmp_path / "aura.db"
     with SessionStorage(db_path) as store:
         store.save(
@@ -139,7 +123,6 @@ def test_turn_index_is_message_ordinal(tmp_path: Path) -> None:
 
 
 def test_save_empty_list(tmp_path: Path) -> None:
-    """Saving an empty list does not crash and loads back as empty list."""
     with SessionStorage(tmp_path / "aura.db") as store:
         store.save("empty-session", [])
         result = store.load("empty-session")

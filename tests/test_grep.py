@@ -1,4 +1,4 @@
-"""Tests for aura.tools.grep — grep singleton."""
+"""Tests for aura.tools.grep."""
 
 from __future__ import annotations
 

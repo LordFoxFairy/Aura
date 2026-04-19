@@ -25,7 +25,6 @@ def test_max_turns_exceeded_is_aura_error() -> None:
 
 
 def test_llm_errors_are_aura_error_descendants() -> None:
-    # Via transitive inheritance through AuraConfigError
     assert issubclass(UnknownModelSpecError, AuraError)
     assert issubclass(MissingProviderDependencyError, AuraError)
     assert issubclass(MissingCredentialError, AuraError)
@@ -47,10 +46,7 @@ def test_catching_aura_error_catches_all_subclasses() -> None:
 def test_aura_error_does_not_catch_stdlib_exceptions() -> None:
     import pytest
 
-    # Importing here for clarity: AuraError should NOT be caught by unrelated
-    # stdlib exception types, and vice versa.
     with pytest.raises(ValueError):
         raise ValueError("not an AuraError")
 
-    # Verify a plain ValueError is not an AuraError
     assert not isinstance(ValueError("x"), AuraError)

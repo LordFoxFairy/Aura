@@ -1,4 +1,4 @@
-"""Tests for ModelFactory.resolve — Task 13."""
+"""Tests for ModelFactory.resolve — router alias and direct provider:model specs."""
 
 from __future__ import annotations
 
@@ -12,18 +12,9 @@ def _cfg(providers: list[dict[str, str]], router: dict[str, str]) -> AuraConfig:
     return AuraConfig.model_validate({"providers": providers, "router": router})
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 _OPENAI_PROVIDER = {"name": "openai", "protocol": "openai"}
 _OPENROUTER_PROVIDER = {"name": "openrouter", "protocol": "openai"}
 _ANTHROPIC_PROVIDER = {"name": "anthropic-direct", "protocol": "anthropic"}
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_router_alias_default() -> None:

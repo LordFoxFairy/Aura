@@ -13,10 +13,6 @@ from aura.core.registry import ToolRegistry
 from aura.tools.base import ToolResult, build_tool
 from aura.tools.read_file import read_file
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 class _AParams(BaseModel):
     x: str
@@ -48,11 +44,6 @@ _tool_b: BaseTool = build_tool(
     args_schema=_BParams,
     func=_noop_b,
 )
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 def test_registry_empty_is_empty() -> None:

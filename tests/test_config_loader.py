@@ -13,19 +13,9 @@ from aura.config.schema import AuraConfig, AuraConfigError
 FIXTURES = Path(__file__).parent / "fixtures" / "config"
 
 
-# ---------------------------------------------------------------------------
-# 1. Defaults when no files exist
-# ---------------------------------------------------------------------------
-
-
 def test_load_config_defaults_when_no_files(tmp_path: Path) -> None:
     cfg = load_config(user_config=tmp_path / "u.json", project_config=tmp_path / "p.json")
     assert cfg == AuraConfig()
-
-
-# ---------------------------------------------------------------------------
-# 2. User-only config applies
-# ---------------------------------------------------------------------------
 
 
 def test_load_config_user_only_applies(tmp_path: Path) -> None:
@@ -39,26 +29,15 @@ def test_load_config_user_only_applies(tmp_path: Path) -> None:
     assert cfg.router == {"default": "anthropic-direct:claude-3-5-sonnet-latest"}
 
 
-# ---------------------------------------------------------------------------
-# 3. Project config wholly replaces user's providers (no merge)
-# ---------------------------------------------------------------------------
-
-
 def test_load_config_project_wholly_replaces_user_providers(tmp_path: Path) -> None:
     cfg = load_config(
         user_config=FIXTURES / "user_only.json",
         project_config=FIXTURES / "project_override.json",
     )
-    # project's providers wholly replace user's — only openrouter remains
     assert len(cfg.providers) == 1
     assert cfg.providers[0].name == "openrouter"
     assert cfg.providers[0].protocol == "openai"
     assert cfg.router == {"default": "openrouter:anthropic/claude-opus-4"}
-
-
-# ---------------------------------------------------------------------------
-# 4. AURA_CONFIG env var wins over project + user
-# ---------------------------------------------------------------------------
 
 
 def test_load_config_env_var_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,11 +62,6 @@ def test_load_config_env_var_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert cfg.router == {"default": "env-provider:gpt-5"}
 
 
-# ---------------------------------------------------------------------------
-# 5. AURA_CONFIG pointing to missing file raises AuraConfigError
-# ---------------------------------------------------------------------------
-
-
 def test_load_config_env_var_missing_file_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -101,11 +75,6 @@ def test_load_config_env_var_missing_file_raises(
     assert "not found" in err.detail
 
 
-# ---------------------------------------------------------------------------
-# 6. Invalid JSON raises AuraConfigError with correct source
-# ---------------------------------------------------------------------------
-
-
 def test_load_config_invalid_json_raises(tmp_path: Path) -> None:
     invalid_path = FIXTURES / "invalid.json"
 
@@ -114,12 +83,7 @@ def test_load_config_invalid_json_raises(tmp_path: Path) -> None:
 
     err = exc_info.value
     assert err.source == str(invalid_path)
-    assert err.detail  # non-empty
-
-
-# ---------------------------------------------------------------------------
-# 7. Non-object top level raises AuraConfigError mentioning "object at top level"
-# ---------------------------------------------------------------------------
+    assert err.detail
 
 
 def test_load_config_non_object_top_level_raises(tmp_path: Path) -> None:
@@ -131,11 +95,6 @@ def test_load_config_non_object_top_level_raises(tmp_path: Path) -> None:
 
     err = exc_info.value
     assert "object at top level" in err.detail
-
-
-# ---------------------------------------------------------------------------
-# 8. ValidationError wraps as AuraConfigError with source "merged config"
-# ---------------------------------------------------------------------------
 
 
 def test_load_config_validation_error_wraps(tmp_path: Path) -> None:
@@ -155,11 +114,6 @@ def test_load_config_validation_error_wraps(tmp_path: Path) -> None:
     err = exc_info.value
     assert err.source == "merged config"
     assert err.detail
-
-
-# ---------------------------------------------------------------------------
-# 9. Top-level shallow replace: project router wholly replaces user router
-# ---------------------------------------------------------------------------
 
 
 def test_load_config_top_level_shallow_replace_drops_user_router(tmp_path: Path) -> None:

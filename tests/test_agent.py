@@ -1,4 +1,4 @@
-"""Tests for aura.core.agent.Agent + build_agent."""
+"""Tests for aura.core.agent.Agent and build_agent."""
 
 from __future__ import annotations
 
@@ -515,8 +515,6 @@ async def test_agent_builds_system_prompt(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_system_prompt_prepended_to_model_messages(tmp_path: Path) -> None:
-    """AgentLoop がモデルを呼ぶ際、SystemMessage が最初に来ることを確認。"""
-
     from langchain_core.messages import SystemMessage
     from langchain_core.outputs import ChatResult
 
@@ -577,11 +575,6 @@ def test_build_agent_uses_default_hooks_when_none_supplied(
     agent.close()
 
 
-# ---------------------------------------------------------------------------
-# Task 7 — Agent + Context wire-in integration (spec B1/B6-B9)
-# ---------------------------------------------------------------------------
-
-
 def _chdir(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
     """同时 chdir + monkeypatch Path.home，避免用户真实 HOME 干扰加载。"""
     monkeypatch.chdir(path)
@@ -629,10 +622,11 @@ async def test_agent_reuses_cache_on_repeat_construction(
     _chdir(monkeypatch, tmp_path)
     (tmp_path / "AURA.md").write_text("V1", encoding="utf-8")
 
-    # 第一次构造 populates caches.
+    # First construction populates caches.
     _agent(tmp_path, turns=[]).close()
 
-    # 改盘上文件；第二次构造若读盘则能看见 V2，若命中缓存则仍是 V1。
+    # Mutate the on-disk file; a second construction that re-reads disk would
+    # see V2, but cache hits should still return V1.
     (tmp_path / "AURA.md").write_text("V2", encoding="utf-8")
 
     agent2 = _agent(tmp_path, turns=[])
@@ -674,7 +668,8 @@ async def test_storage_does_not_persist_context_memory_human_messages(
         pass
 
     saved = storage.load("default")
-    # 仅有 user prompt + assistant reply — 不包含 <project-memory> / <nested-memory> / <rule> tag。
+    # Only the user prompt + assistant reply should be persisted; context-memory
+    # tags (<project-memory>, <nested-memory>, <rule>) must not leak into storage.
     for msg in saved:
         content = str(msg.content)
         assert "<project-memory>" not in content
@@ -684,11 +679,6 @@ async def test_storage_does_not_persist_context_memory_human_messages(
     assert any(isinstance(m, AIMessage) and m.content == "hi" for m in saved)
     assert not any(isinstance(m, ToolMessage) for m in saved)
     agent.close()
-
-
-# ---------------------------------------------------------------------------
-# Task 3 (C-2) — todo_write wire-in (spec AC 13-15)
-# ---------------------------------------------------------------------------
 
 
 class _CapturingFakeChatModel(FakeChatModel):
@@ -748,8 +738,8 @@ async def test_todo_write_tool_call_injects_todos_on_next_turn(tmp_path: Path) -
     async for _ in agent.astream("hi"):
         pass
 
-    # Turn 2 messages should include a <todos> HumanMessage reflecting the state
-    # set by the turn-1 tool call.
+    # Turn 2's messages should include a <todos> HumanMessage reflecting the
+    # state set by the turn-1 tool call.
     assert len(model.seen_messages) == 2
     turn2 = model.seen_messages[1]
     todo_humans = [
@@ -790,11 +780,11 @@ async def test_clear_session_wipes_todos(tmp_path: Path) -> None:
         pass
     assert agent._state.custom.get("todos")
 
-    # Clear session — custom state (incl. todos) wiped.
+    # clear_session wipes custom state including todos.
     agent.clear_session()
     assert agent._state.custom.get("todos", []) == []
 
-    # Next turn should have NO <todos> HumanMessage.
+    # The next turn must not carry a <todos> HumanMessage.
     async for _ in agent.astream("after-clear"):
         pass
 

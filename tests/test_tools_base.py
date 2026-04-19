@@ -1,4 +1,4 @@
-"""Tests for aura.tools.base — ToolResult dataclass and build_tool factory."""
+"""Tests for aura.tools.base."""
 
 from __future__ import annotations
 
@@ -9,10 +9,6 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.tools.base import ToolError, ToolResult, build_tool
-
-# ---------------------------------------------------------------------------
-# ToolResult
-# ---------------------------------------------------------------------------
 
 
 def test_tool_result_required_ok() -> None:
@@ -34,11 +30,6 @@ def test_tool_result_full_fields() -> None:
 def test_tool_result_ok_is_required() -> None:
     with pytest.raises(TypeError):
         ToolResult()  # type: ignore[call-arg]
-
-
-# ---------------------------------------------------------------------------
-# build_tool returns a BaseTool with metadata-encoded flags
-# ---------------------------------------------------------------------------
 
 
 class _Empty(BaseModel):

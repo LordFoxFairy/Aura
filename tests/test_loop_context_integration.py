@@ -1,4 +1,4 @@
-"""Integration: AgentLoop → Context path-trigger propagation (spec B7 + B8)."""
+"""Integration tests for AgentLoop to Context path-trigger propagation."""
 
 from __future__ import annotations
 
@@ -86,9 +86,7 @@ def _final_turn(text: str = "done") -> FakeTurn:
     return FakeTurn(message=AIMessage(content=text))
 
 
-# ---------------------------------------------------------------------------
-# Success triggers
-# ---------------------------------------------------------------------------
+# --- Success triggers ---
 
 
 @pytest.mark.asyncio
@@ -157,9 +155,7 @@ async def test_parallel_tool_calls_all_paths_propagate(tmp_path: Path) -> None:
     assert ("b.py",) in matched_globs
 
 
-# ---------------------------------------------------------------------------
-# No-trigger paths
-# ---------------------------------------------------------------------------
+# --- No-trigger paths ---
 
 
 @pytest.mark.asyncio
@@ -186,7 +182,7 @@ async def test_failed_tool_call_does_not_trigger(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_bash_tool_success_does_not_trigger(tmp_path: Path) -> None:
     ctx = _context_with_py_rule(tmp_path)
-    # bash tool w/ arbitrary args shape; PATH_TRIGGER_TOOLS excludes bash by name.
+    # PATH_TRIGGER_TOOLS excludes bash by name, so the args shape is irrelevant.
     bash = _ok_tool("bash")
     model = FakeChatModel(turns=[
         _tool_turn("bash", args={"path": "anything.py"}),
@@ -245,14 +241,11 @@ async def test_short_circuited_tool_does_not_trigger(tmp_path: Path) -> None:
     assert ctx._matched_rules == []
 
 
-# ---------------------------------------------------------------------------
-# Rule injection reaches the next model call
-# ---------------------------------------------------------------------------
+# --- Rule injection reaches the next model call ---
 
 
 @pytest.mark.asyncio
 async def test_matched_rule_injected_into_next_model_call(tmp_path: Path) -> None:
-    """After a successful read_file, the second ainvoke must include the <rule> tag."""
     target = tmp_path / "x.py"
     target.write_text("", encoding="utf-8")
 
@@ -285,10 +278,10 @@ async def test_matched_rule_injected_into_next_model_call(tmp_path: Path) -> Non
         pass
 
     assert len(captured) == 2
-    # First call: no rule yet.
+    # First model call: no rule injected yet.
     first_contents = "\n".join(str(m.content) for m in captured[0])
     assert "PY-RULE-BODY" not in first_contents
-    # Second call: rule injected after tool touched .py path.
+    # Second model call: rule injected after the tool touched a .py path.
     second_contents = "\n".join(str(m.content) for m in captured[1])
     assert "<rule" in second_contents
     assert "PY-RULE-BODY" in second_contents

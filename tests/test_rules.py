@@ -1,4 +1,4 @@
-"""Tests for aura.core.rules (Task 4): discovery, frontmatter, glob match, cache."""
+"""Tests for aura.core.memory.rules: discovery, frontmatter, glob match, cache."""
 
 from __future__ import annotations
 
@@ -34,11 +34,6 @@ def _reset_rules_cache() -> Iterator[None]:
     clear_cache()
     yield
     clear_cache()
-
-
-# ---------------------------------------------------------------------------
-# Discovery (11 tests)
-# ---------------------------------------------------------------------------
 
 
 class TestDiscovery:
@@ -140,7 +135,7 @@ class TestDiscovery:
         assert len(bundle.unconditional) == 1
         content = bundle.unconditional[0].content
         assert content.endswith("\n… (truncated)")
-        # 200 lines kept; L199 present, L200 onwards NOT present
+        # 200 lines retained: L199 is present, L200 onwards is not.
         assert "L199" in content
         assert "L200" not in content
 
@@ -159,7 +154,7 @@ class TestDiscovery:
         assert len(bundle.unconditional) == 1
         content = bundle.unconditional[0].content
         assert content.endswith("\n… (truncated)")
-        # body up-to-truncation is at most 4096 bytes
+        # Body up-to-truncation is at most 4096 bytes.
         trimmed = content[: -len("\n… (truncated)")]
         assert len(trimmed.encode("utf-8")) <= 4096
 
@@ -178,7 +173,7 @@ class TestDiscovery:
         bundle = load_rules(cwd)
         sources = {r.source_path.name for r in bundle.unconditional}
         assert sources == {"top.md", "nested.md"}
-        # user-layer base_dir is ~
+        # user-layer rules use ~ as their base_dir.
         for r in bundle.unconditional:
             assert r.base_dir == home.resolve()
 
@@ -186,7 +181,7 @@ class TestDiscovery:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _isolate_user_layer(monkeypatch, tmp_path)
-        # ancestor has .aura/rules/ — it should NOT be scanned
+        # Ancestor has .aura/rules/ — it must NOT be scanned.
         ancestor = tmp_path / "outer"
         (ancestor / ".aura" / "rules").mkdir(parents=True)
         (ancestor / ".aura" / "rules" / "ancestor.md").write_text("ANCESTOR\n")
@@ -199,7 +194,7 @@ class TestDiscovery:
 
         bundle = load_rules(cwd)
         names = {r.source_path.name for r in bundle.unconditional}
-        # "ancestor.md" must NOT appear; subdir of cwd's rules/ DOES
+        # ancestor.md must NOT appear; subdirs of cwd's rules/ are included.
         assert "ancestor.md" not in names
         assert names == {"at-cwd.md", "nested.md"}
 
@@ -225,7 +220,7 @@ class TestDiscovery:
         cwd = tmp_path / "project"
         rules_dir = cwd / ".aura" / "rules"
         rules_dir.mkdir(parents=True)
-        # unbalanced bracket in YAML list
+        # Unbalanced bracket in YAML list.
         (rules_dir / "bad.md").write_text(
             "---\npaths: [broken\n---\nbody\n"
         )
@@ -234,17 +229,12 @@ class TestDiscovery:
         )
 
         bundle = load_rules(cwd)
-        # bad.md silently skipped; ok.md preserved; load does not crash
+        # bad.md is silently skipped; ok.md preserved; load does not crash.
         names_c = {r.source_path.name for r in bundle.conditional}
         names_u = {r.source_path.name for r in bundle.unconditional}
         assert "bad.md" not in names_c
         assert "bad.md" not in names_u
         assert names_c == {"ok.md"}
-
-
-# ---------------------------------------------------------------------------
-# Matching (5 tests)
-# ---------------------------------------------------------------------------
 
 
 def _make_rule(source: Path, base_dir: Path, globs: tuple[str, ...]) -> Rule:
@@ -276,7 +266,7 @@ class TestMatching:
     def test_13_double_star_any_py_matches_abs(
         self, tmp_path: Path
     ) -> None:
-        # user-layer style: base_dir=~, target is elsewhere
+        # user-layer style: base_dir is ~, target lives elsewhere.
         home = tmp_path / "home"
         home.mkdir()
         rule_file = home / ".aura" / "rules" / "any.md"
@@ -316,11 +306,11 @@ class TestMatching:
         rule_file = proj / ".aura" / "rules" / "bad.md"
         rule_file.parent.mkdir(parents=True)
         rule_file.write_text("body")
-        # `[z-a]` is a bad character range → pathspec raises on compile
+        # `[z-a]` is a bad character range; pathspec raises on compile.
         rule = _make_rule(rule_file, proj, ("[z-a]",))
 
         bundle = RulesBundle(unconditional=[], conditional=[rule])
-        # Should not raise; returns empty list
+        # match() must not raise; it returns an empty list.
         assert match(bundle, target) == []
 
     def test_16_match_output_dedup_and_sorted(
@@ -336,7 +326,8 @@ class TestMatching:
         rf_z.parent.mkdir(parents=True)
         rf_z.write_text("b")
         rf_a.write_text("b")
-        r_z = _make_rule(rf_z, proj, ("*.py", "*.py"))  # dup globs still → single rule entry
+        # Duplicate globs still collapse to a single rule entry.
+        r_z = _make_rule(rf_z, proj, ("*.py", "*.py"))
         r_a = _make_rule(rf_a, proj, ("*.py",))
 
         bundle = RulesBundle(unconditional=[], conditional=[r_z, r_a])
@@ -344,11 +335,6 @@ class TestMatching:
         assert [r.source_path for r in result] == sorted(
             [rf_a.resolve(), rf_z.resolve()]
         )
-
-
-# ---------------------------------------------------------------------------
-# Cache (3 tests)
-# ---------------------------------------------------------------------------
 
 
 class TestCache:
@@ -378,7 +364,8 @@ class TestCache:
         reads_after_first = counter["calls"]
         assert reads_after_first > 0
         second = load_rules(cwd)
-        assert second is first  # cached reference
+        # Same cached reference, no new reads.
+        assert second is first
         assert counter["calls"] == reads_after_first
 
     def test_18_clear_cache_forces_rescan(

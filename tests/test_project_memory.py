@@ -1,4 +1,4 @@
-"""Tests for aura.core.project_memory.load_project_memory (Task 1+2+3)."""
+"""Tests for aura.core.memory.project_memory."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from aura.core.memory.project_memory import (
 
 
 def _patch_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
-    # 只打 Path.home()，避免污染进程 $HOME 影响其它测试
+    # 只打 Path.home()，避免污染进程 $HOME 影响其它测试。
     monkeypatch.setattr(Path, "home", lambda: home)
 
 
@@ -119,7 +119,7 @@ def test_full_stack_canonical_order(
 def test_walk_up_halts_at_filesystem_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # 用一个孤立 tmp 目录，向上到根都没有 AURA.md —— 应无错误，空串
+    # 隔离 tmp 目录向上到根没有任何 AURA.md —— 应不报错，返回空串。
     _patch_home(monkeypatch, tmp_path / "home")
     (tmp_path / "home").mkdir()
 
@@ -137,7 +137,7 @@ def test_aura_md_path_is_directory_is_silently_skipped(
 
     cwd = tmp_path / "project"
     cwd.mkdir()
-    # AURA.md 是一个目录而非文件 —— 应跳过，不抛异常
+    # AURA.md 是一个目录而非文件 —— 应静默跳过，不抛异常。
     (cwd / "AURA.md").mkdir()
 
     assert load_project_memory(cwd) == ""
@@ -151,11 +151,12 @@ def test_non_utf8_bytes_decoded_with_replacement(
 
     cwd = tmp_path / "project"
     cwd.mkdir()
-    # 写入无效 UTF-8 字节序列
+    # 写入无效 UTF-8 字节序列。
     (cwd / "AURA.md").write_bytes(b"good\xff\xfebad")
 
     result = load_project_memory(cwd)
-    assert "\ufffd" in result  # 替换字符
+    # \ufffd 是 UTF-8 解码失败时的替换字符。
+    assert "\ufffd" in result
     assert "good" in result
     assert "bad" in result
 
@@ -172,17 +173,17 @@ def test_symlinked_cwd_walks_resolved_ancestors(
     (real_outer / "AURA.md").write_text("real-outer")
     (real_inner / "AURA.md").write_text("real-inner")
 
-    # 符号链接指向 real_inner
+    # 符号链接指向 real_inner。
     link = tmp_path / "link_to_inner"
     link.symlink_to(real_inner)
 
-    # 通过符号链接进入 —— resolve 后应看到 real_outer 和 real_inner 层级
+    # 通过符号链接进入 —— resolve 后应看到 real_outer 和 real_inner 层级。
     result = load_project_memory(link)
     assert result == "real-outer\n\nreal-inner"
 
 
 class TestAtImports:
-    """Covers B4: `@imports` expansion at load time (depth 5, cycle, fence, etc.)."""
+    """`@imports` expansion at load time: depth cap, cycle, code fences, etc."""
 
     def test_01_relative_dot_slash_child(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -235,7 +236,7 @@ class TestAtImports:
 
         cwd = tmp_path / "project"
         cwd.mkdir()
-        # a(=AURA.md) → b → c → d → e; e has plain content.
+        # Chain: AURA.md → b → c → d → e; e has plain content.
         (cwd / "AURA.md").write_text("A\n@./b.md")
         (cwd / "b.md").write_text("B\n@./c.md")
         (cwd / "c.md").write_text("C\n@./d.md")
@@ -252,7 +253,8 @@ class TestAtImports:
 
         cwd = tmp_path / "project"
         cwd.mkdir()
-        # a → b → c → d → e → f; f should NOT be expanded (line removed from e).
+        # Chain: AURA.md → b → c → d → e → f; f must NOT be expanded (its
+        # @-line is dropped from e once the depth cap is hit).
         (cwd / "AURA.md").write_text("A\n@./b.md")
         (cwd / "b.md").write_text("B\n@./c.md")
         (cwd / "c.md").write_text("C\n@./d.md")
@@ -261,7 +263,7 @@ class TestAtImports:
         (cwd / "f.md").write_text("F")
 
         result = load_project_memory(cwd)
-        # e's @./f.md line is dropped; E-pre + E-post remain; F never appears.
+        # e's @./f.md line is dropped; E-pre and E-post remain; F never appears.
         assert "F" not in result
         assert "E-pre" in result and "E-post" in result
         assert "@./f.md" not in result
@@ -392,7 +394,8 @@ class TestAtImports:
         (outer / "AURA.md").write_text("@./child.md")
         (outer / "child.md").write_text("OUTER-CHILD")
 
-        # cwd = inner；但 outer/AURA.md 中 @./child.md 解析相对于 outer/，而非 cwd。
+        # cwd 是 inner，但 outer/AURA.md 中的 @./child.md 解析相对于 outer/，
+        # 而非 cwd。
         result = load_project_memory(inner)
         assert "OUTER-CHILD" in result
 
@@ -413,18 +416,19 @@ class TestAtImports:
 
 
 class TestCache:
-    """Covers B2 final paragraph: memoize + force_reload + clear_cache."""
+    """Memoization: force_reload and clear_cache semantics."""
 
     @pytest.fixture(autouse=True)
     def _reset_cache(self) -> Iterator[None]:
-        # 每个 test 之前后都清空模块级缓存，避免跨 test 串味
+        # 每个 test 前后都清空模块级缓存，避免跨 test 串味。
         clear_cache()
         yield
         clear_cache()
 
     @staticmethod
     def _install_open_counter(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
-        # Path.open 同时为 read_bytes / read_text 底层调用；计数它即与具体读方式解耦
+        # Path.open 是 read_bytes / read_text 的底层调用；计数它即可与具体
+        # 读法解耦。
         counter = {"calls": 0}
         original_open = cast(Any, Path.open)
 
@@ -448,10 +452,11 @@ class TestCache:
         counter = self._install_open_counter(monkeypatch)
         first = load_project_memory(cwd)
         reads_after_first = counter["calls"]
-        assert reads_after_first > 0  # 第一次必然有磁盘读
+        # 第一次必然有磁盘读。
+        assert reads_after_first > 0
         second = load_project_memory(cwd)
         assert second == first
-        # 第二次命中缓存 —— 没有新增读
+        # 第二次命中缓存，没有新增读。
         assert counter["calls"] == reads_after_first
 
     def test_02_force_reload_bypasses_cache(
@@ -486,7 +491,7 @@ class TestCache:
         reads_after_first = counter["calls"]
         clear_cache(cwd)
         load_project_memory(cwd)
-        # clear 之后再读应再次触发磁盘 I/O
+        # clear 之后再读应再次触发磁盘 I/O。
         assert counter["calls"] > reads_after_first
 
     def test_04_clear_cache_none_drops_all(
@@ -506,10 +511,11 @@ class TestCache:
         load_project_memory(cwd_a)
         load_project_memory(cwd_b)
         reads_after_first_pass = counter["calls"]
-        clear_cache()  # 全清
+        # 全清。
+        clear_cache()
         load_project_memory(cwd_a)
         load_project_memory(cwd_b)
-        # 两次都重读 —— 读数至少翻倍（且严格大于 first pass）
+        # 两次都重读 —— 读数至少翻倍，且严格大于 first pass。
         assert counter["calls"] > reads_after_first_pass
 
     def test_05_clear_cache_absent_cwd_is_noop(
@@ -518,7 +524,7 @@ class TestCache:
         _patch_home(monkeypatch, tmp_path / "home")
         (tmp_path / "home").mkdir()
 
-        # 从未加载过的 cwd 调用 clear_cache 应不报错
+        # 对从未加载过的 cwd 调用 clear_cache 应不报错。
         clear_cache(tmp_path / "never-loaded")
 
     def test_06_two_cwds_cached_independently(
@@ -539,16 +545,19 @@ class TestCache:
         reads_after_a1 = counter["calls"]
         load_project_memory(cwd_b)
         reads_after_b1 = counter["calls"]
-        assert reads_after_b1 > reads_after_a1  # b 是新 cwd，必然读盘
+        # cwd_b 是新 cwd，必然读盘。
+        assert reads_after_b1 > reads_after_a1
 
-        load_project_memory(cwd_a)  # 命中 a 缓存
+        # 命中 cwd_a 缓存。
+        load_project_memory(cwd_a)
         assert counter["calls"] == reads_after_b1
-        load_project_memory(cwd_b)  # 命中 b 缓存
+        # 命中 cwd_b 缓存。
+        load_project_memory(cwd_b)
         assert counter["calls"] == reads_after_b1
 
 
 class TestReadWithImports:
-    """`read_with_imports` 作为公共 API —— 被 Context 复用。"""
+    """`read_with_imports` 作为公共 API 被 Context 复用。"""
 
     def test_missing_file_returns_none(self, tmp_path: Path) -> None:
         assert read_with_imports(tmp_path / "nope.md") is None

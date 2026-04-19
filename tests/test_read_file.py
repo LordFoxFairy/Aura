@@ -1,4 +1,4 @@
-"""Tests for aura.tools.read_file — read_file singleton."""
+"""Tests for aura.tools.read_file."""
 
 from __future__ import annotations
 
@@ -8,10 +8,6 @@ import pytest
 
 from aura.tools.base import ToolError
 from aura.tools.read_file import read_file
-
-# ---------------------------------------------------------------------------
-# Happy path
-# ---------------------------------------------------------------------------
 
 
 async def test_read_file_utf8_success(tmp_path: Path) -> None:
@@ -35,11 +31,6 @@ async def test_read_file_single_line_no_newline(tmp_path: Path) -> None:
     assert out["lines"] == 1
 
 
-# ---------------------------------------------------------------------------
-# Error paths
-# ---------------------------------------------------------------------------
-
-
 async def test_read_file_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ToolError, match="not found"):
         await read_file.ainvoke({"path": str(tmp_path / "nope.txt")})
@@ -57,11 +48,6 @@ async def test_read_file_invalid_utf8(tmp_path: Path) -> None:
     f.write_bytes(b"\xff\xfe\x00\x00")
     with pytest.raises(ToolError, match="UTF-8"):
         await read_file.ainvoke({"path": str(f)})
-
-
-# ---------------------------------------------------------------------------
-# Metadata
-# ---------------------------------------------------------------------------
 
 
 def test_read_file_is_read_only() -> None:

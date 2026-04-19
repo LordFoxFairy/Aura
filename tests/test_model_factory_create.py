@@ -13,10 +13,6 @@ from aura.core.llm import (
     ModelFactory,
 )
 
-# ---------------------------------------------------------------------------
-# Stub classes — record kwargs, don't hit the network
-# ---------------------------------------------------------------------------
-
 
 class _StubOpenAI:
     def __init__(self, **kwargs: Any) -> None:
@@ -34,13 +30,7 @@ class _StubOllama:
 
 
 def _stub_kwargs(model: Any) -> dict[str, Any]:
-    """Extract recorded kwargs from a stub model instance."""
     return model.kwargs  # type: ignore[no-any-return]
-
-
-# ---------------------------------------------------------------------------
-# Happy-path tests
-# ---------------------------------------------------------------------------
 
 
 def test_create_openai_happy_path_uses_default_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -87,7 +77,6 @@ def test_create_openai_plaintext_api_key_wins(monkeypatch: pytest.MonkeyPatch) -
     from aura.core import llm
 
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
-    # No env var set — plaintext key on provider should be used
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     provider = ProviderConfig(name="openai", protocol="openai", api_key="plaintext-key")
@@ -160,11 +149,6 @@ def test_create_ollama_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     assert kw["base_url"] == "http://remote:11434"
     assert "api_key" not in kw
     assert kw["model"] == "llama3"
-
-
-# ---------------------------------------------------------------------------
-# Error-path tests
-# ---------------------------------------------------------------------------
 
 
 def test_create_missing_default_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:

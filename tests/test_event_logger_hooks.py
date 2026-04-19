@@ -211,7 +211,6 @@ async def test_post_tool_records_error_without_output(_journal_to_tmp: Path) -> 
 async def test_post_tool_serializes_datetime_via_default_str(
     _journal_to_tmp: Path,
 ) -> None:
-    # Phase B review fix: non-JSON-native output must not raise here.
     import datetime as dt
 
     chain = make_event_logger_hooks()

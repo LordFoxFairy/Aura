@@ -9,10 +9,6 @@ from pydantic import ValidationError
 
 from aura.config.schema import AuraConfig, AuraConfigError
 
-# ---------------------------------------------------------------------------
-# 1. Defaults
-# ---------------------------------------------------------------------------
-
 
 def test_defaults() -> None:
     cfg = AuraConfig()
@@ -31,19 +27,9 @@ def test_defaults() -> None:
     assert cfg.storage.path == "~/.aura/sessions.db"
 
 
-# ---------------------------------------------------------------------------
-# 2. Unknown top-level key raises ValidationError
-# ---------------------------------------------------------------------------
-
-
 def test_unknown_top_level_raises() -> None:
     with pytest.raises(ValidationError):
         AuraConfig.model_validate({"bogus": {}})
-
-
-# ---------------------------------------------------------------------------
-# 3. Unknown key on a provider raises ValidationError
-# ---------------------------------------------------------------------------
 
 
 def test_unknown_key_on_provider_raises() -> None:
@@ -56,11 +42,6 @@ def test_unknown_key_on_provider_raises() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# 4. Unknown key on tools raises ValidationError
-# ---------------------------------------------------------------------------
-
-
 def test_unknown_key_on_tools_raises() -> None:
     with pytest.raises(ValidationError):
         AuraConfig.model_validate(
@@ -70,11 +51,6 @@ def test_unknown_key_on_tools_raises() -> None:
                 "router": {"default": "x:m"},
             }
         )
-
-
-# ---------------------------------------------------------------------------
-# 5. Duplicate provider names raise ValueError
-# ---------------------------------------------------------------------------
 
 
 def test_duplicate_provider_names_raises() -> None:
@@ -90,11 +66,6 @@ def test_duplicate_provider_names_raises() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# 6. router missing 'default' raises
-# ---------------------------------------------------------------------------
-
-
 def test_router_missing_default_raises() -> None:
     with pytest.raises(ValidationError, match="default"):
         AuraConfig.model_validate(
@@ -103,11 +74,6 @@ def test_router_missing_default_raises() -> None:
                 "providers": [{"name": "x", "protocol": "openai"}],
             }
         )
-
-
-# ---------------------------------------------------------------------------
-# 7. router references unknown provider raises
-# ---------------------------------------------------------------------------
 
 
 def test_router_unknown_provider_raises() -> None:
@@ -120,11 +86,6 @@ def test_router_unknown_provider_raises() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# 8. router value missing colon raises
-# ---------------------------------------------------------------------------
-
-
 def test_router_value_missing_colon_raises() -> None:
     with pytest.raises(ValidationError):
         AuraConfig.model_validate(
@@ -133,11 +94,6 @@ def test_router_value_missing_colon_raises() -> None:
                 "providers": [{"name": "x", "protocol": "openai"}],
             }
         )
-
-
-# ---------------------------------------------------------------------------
-# 9. Invalid protocol raises
-# ---------------------------------------------------------------------------
 
 
 def test_invalid_protocol_raises() -> None:
@@ -150,22 +106,12 @@ def test_invalid_protocol_raises() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# 10. resolved_storage_path() expands ~ using $HOME
-# ---------------------------------------------------------------------------
-
-
 def test_resolved_storage_path_expands_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     cfg = AuraConfig.model_validate({"storage": {"path": "~/aura.db"}})
     assert cfg.resolved_storage_path() == tmp_path / "aura.db"
-
-
-# ---------------------------------------------------------------------------
-# 11. Full nested dict happy path with 2 providers
-# ---------------------------------------------------------------------------
 
 
 def test_full_nested_dict_happy_path() -> None:
@@ -190,11 +136,6 @@ def test_full_nested_dict_happy_path() -> None:
     assert cfg.ui.theme == "default"
 
 
-# ---------------------------------------------------------------------------
-# 12. Model name with colon preserved in router (split on first colon only)
-# ---------------------------------------------------------------------------
-
-
 def test_model_name_with_colon_preserved_in_router() -> None:
     cfg = AuraConfig.model_validate(
         {
@@ -205,21 +146,11 @@ def test_model_name_with_colon_preserved_in_router() -> None:
     assert cfg.router["default"] == "p:claude-3.5-haiku:20241022"
 
 
-# ---------------------------------------------------------------------------
-# 13. AuraConfigError shape
-# ---------------------------------------------------------------------------
-
-
 def test_aura_config_error_shape() -> None:
     err = AuraConfigError(source="user_config", detail="boom")
     assert err.source == "user_config"
     assert err.detail == "boom"
     assert str(err) == "user_config: boom"
-
-
-# ---------------------------------------------------------------------------
-# 14. ProviderConfig.params field
-# ---------------------------------------------------------------------------
 
 
 def test_provider_config_params_default_empty() -> None:
@@ -254,11 +185,6 @@ def test_provider_config_unknown_top_level_still_raises() -> None:
             }],
             "router": {"default": "x:gpt-4o-mini"},
         })
-
-
-# ---------------------------------------------------------------------------
-# 15. LogConfig
-# ---------------------------------------------------------------------------
 
 
 def test_log_config_defaults() -> None:

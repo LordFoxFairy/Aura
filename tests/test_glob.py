@@ -1,4 +1,4 @@
-"""Tests for aura.tools.glob — glob singleton."""
+"""Tests for aura.tools.glob."""
 
 from __future__ import annotations
 

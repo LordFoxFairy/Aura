@@ -12,10 +12,6 @@ from aura.tools.todo_write import (
     make_todo_write_tool,
 )
 
-# ---------------------------------------------------------------------------
-# AC 1: single pending todo → state mutated, message returned
-# ---------------------------------------------------------------------------
-
 
 async def test_single_pending_todo_sets_state_and_returns_message() -> None:
     state = LoopState()
@@ -29,22 +25,12 @@ async def test_single_pending_todo_sets_state_and_returns_message() -> None:
     assert out == {"message": "Todos updated."}
 
 
-# ---------------------------------------------------------------------------
-# AC 2: empty list → state cleared to []
-# ---------------------------------------------------------------------------
-
-
 async def test_empty_list_sets_empty_state() -> None:
     state = LoopState()
     tool = make_todo_write_tool(state)
     out = await tool.ainvoke({"todos": []})
     assert state.custom["todos"] == []
     assert out == {"message": "Todos updated."}
-
-
-# ---------------------------------------------------------------------------
-# AC 3: all completed → state auto-cleared to []
-# ---------------------------------------------------------------------------
 
 
 async def test_all_completed_auto_clears() -> None:
@@ -61,11 +47,6 @@ async def test_all_completed_auto_clears() -> None:
     assert state.custom["todos"] == []
 
 
-# ---------------------------------------------------------------------------
-# AC 4: bad status enum → ValidationError
-# ---------------------------------------------------------------------------
-
-
 def test_bad_status_enum_raises() -> None:
     with pytest.raises(ValidationError):
         TodoWriteParams.model_validate(
@@ -73,21 +54,11 @@ def test_bad_status_enum_raises() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# AC 5: missing activeForm → ValidationError
-# ---------------------------------------------------------------------------
-
-
 def test_missing_activeform_raises() -> None:
     with pytest.raises(ValidationError):
         TodoWriteParams.model_validate(
             {"todos": [{"content": "a", "status": "pending"}]}
         )
-
-
-# ---------------------------------------------------------------------------
-# AC 6: empty content or empty activeForm → ValidationError
-# ---------------------------------------------------------------------------
 
 
 def test_empty_content_raises() -> None:
@@ -102,11 +73,6 @@ def test_empty_activeform_raises() -> None:
         TodoItem.model_validate(
             {"content": "a", "status": "pending", "activeForm": ""}
         )
-
-
-# ---------------------------------------------------------------------------
-# AC 7: full-replace semantic across two calls
-# ---------------------------------------------------------------------------
 
 
 async def test_second_call_replaces_first() -> None:
@@ -129,11 +95,6 @@ async def test_second_call_replaces_first() -> None:
     ]
 
 
-# ---------------------------------------------------------------------------
-# AC 8: two factory instances → independent state mutation
-# ---------------------------------------------------------------------------
-
-
 async def test_two_factories_are_independent() -> None:
     state1 = LoopState()
     state2 = LoopState()
@@ -153,11 +114,6 @@ async def test_two_factories_are_independent() -> None:
     ]
 
 
-# ---------------------------------------------------------------------------
-# AC 9: tool metadata + name
-# ---------------------------------------------------------------------------
-
-
 def test_tool_metadata_and_name() -> None:
     state = LoopState()
     tool = make_todo_write_tool(state)
@@ -166,5 +122,3 @@ def test_tool_metadata_and_name() -> None:
     assert meta.get("is_read_only") is False
     assert meta.get("is_destructive") is False
     assert meta.get("is_concurrency_safe") is False
-
-

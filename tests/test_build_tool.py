@@ -1,4 +1,4 @@
-"""Tests for aura.tools.base.build_tool — factory that returns BaseTool."""
+"""Tests for aura.tools.base.build_tool."""
 
 from __future__ import annotations
 
@@ -10,10 +10,6 @@ from pydantic import BaseModel
 
 from aura.tools.base import ToolError, build_tool
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 class _MinParams(BaseModel):
     value: str
@@ -21,11 +17,6 @@ class _MinParams(BaseModel):
 
 def _fixed_run(value: str) -> dict[str, Any]:
     return {"fixed": True, "value": value}
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 def test_build_tool_fail_closed_defaults() -> None:

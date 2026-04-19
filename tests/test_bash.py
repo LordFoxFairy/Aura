@@ -1,4 +1,4 @@
-"""Tests for aura.tools.bash — bash singleton."""
+"""Tests for aura.tools.bash."""
 
 from __future__ import annotations
 
@@ -7,10 +7,6 @@ from pydantic import ValidationError
 
 from aura.tools.base import ToolError
 from aura.tools.bash import BashParams, bash
-
-# ---------------------------------------------------------------------------
-# Happy path
-# ---------------------------------------------------------------------------
 
 
 async def test_bash_success_echo() -> None:
@@ -36,19 +32,9 @@ async def test_bash_pipe_works() -> None:
     assert "HELLO" in out["stdout"]
 
 
-# ---------------------------------------------------------------------------
-# Timeout
-# ---------------------------------------------------------------------------
-
-
 async def test_bash_timeout() -> None:
     with pytest.raises(ToolError, match="timeout"):
         await bash.ainvoke({"command": "sleep 5", "timeout": 1})
-
-
-# ---------------------------------------------------------------------------
-# Capability flags
-# ---------------------------------------------------------------------------
 
 
 def test_bash_capability_flags() -> None:
@@ -60,11 +46,6 @@ def test_bash_capability_flags() -> None:
 
 def test_bash_no_check_permissions_method() -> None:
     assert not hasattr(bash, "check_permissions")
-
-
-# ---------------------------------------------------------------------------
-# Param validation
-# ---------------------------------------------------------------------------
 
 
 def test_bash_timeout_validation_rejects_too_large() -> None:

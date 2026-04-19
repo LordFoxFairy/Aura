@@ -200,7 +200,6 @@ async def test_hooks_all_fire_in_order_for_tool_turn() -> None:
 
 @pytest.mark.asyncio
 async def test_hooks_see_monotonic_turn_count() -> None:
-    """Pre_model hooks see turn_count incrementing across turns."""
     observed: list[int] = []
 
     async def record(

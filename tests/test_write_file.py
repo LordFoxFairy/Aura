@@ -1,4 +1,4 @@
-"""Tests for aura.tools.write_file — write_file singleton."""
+"""Tests for aura.tools.write_file."""
 
 from __future__ import annotations
 
@@ -8,10 +8,6 @@ import pytest
 
 from aura.tools.base import ToolError
 from aura.tools.write_file import write_file
-
-# ---------------------------------------------------------------------------
-# Happy path
-# ---------------------------------------------------------------------------
 
 
 async def test_write_file_creates_new_file(tmp_path: Path) -> None:
@@ -47,11 +43,6 @@ async def test_write_file_empty_content(tmp_path: Path) -> None:
     assert target.stat().st_size == 0
 
 
-# ---------------------------------------------------------------------------
-# Error paths
-# ---------------------------------------------------------------------------
-
-
 async def test_write_file_missing_parent_dir_fails(tmp_path: Path) -> None:
     target = tmp_path / "nonexistent_dir" / "file.txt"
     with pytest.raises(ToolError, match="parent directory"):
@@ -70,11 +61,6 @@ async def test_write_file_does_not_auto_create_parent(tmp_path: Path) -> None:
 async def test_write_file_path_is_directory_fails(tmp_path: Path) -> None:
     with pytest.raises(ToolError, match="directory"):
         await write_file.ainvoke({"path": str(tmp_path), "content": "data"})
-
-
-# ---------------------------------------------------------------------------
-# Capability flags
-# ---------------------------------------------------------------------------
 
 
 def test_write_file_capability_flags() -> None:

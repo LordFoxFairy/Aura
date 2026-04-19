@@ -141,10 +141,9 @@ async def test_run_turn_tool_call_output_serialized_as_json() -> None:
 
 @pytest.mark.asyncio
 async def test_parallel_safe_tools_run_concurrently(tmp_path: Path) -> None:
-    """Two is_concurrency_safe tools in one AIMessage run via asyncio.gather.
-    We verify parallelism by timing: each tool sleeps 0.2s; serial would take
-    0.4s, parallel should finish in <0.35s.
-    """
+    # Each tool sleeps 0.2s; serial execution would take ~0.4s, parallel
+    # should finish in <0.35s. Timing is the only observable signal of
+    # asyncio.gather dispatch for concurrency-safe tools.
     class _P(BaseModel):
         pass
 

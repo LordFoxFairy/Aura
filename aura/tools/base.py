@@ -17,7 +17,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
 
-@dataclass
+@dataclass(frozen=True)
 class ToolResult:
     ok: bool
     output: Any = None

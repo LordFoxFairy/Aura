@@ -11,7 +11,6 @@ from rich.markdown import Markdown
 from aura.core.events import (
     AgentEvent,
     AssistantDelta,
-    Final,
     ToolCallCompleted,
     ToolCallStarted,
 )
@@ -36,8 +35,7 @@ class Renderer:
             else:
                 self._console.print("[green]✓[/green]")
             return
-        if isinstance(event, Final):
-            return
+        # Final: 内容已由前置 AssistantDelta 渲染；renderer 不再处理。
 
     def finish(self) -> None:
         self._console.print()

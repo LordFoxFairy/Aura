@@ -29,7 +29,12 @@ from aura.tools.base import ToolError, ToolResult
 
 
 def _serialize(result: ToolResult) -> str:
-    return json.dumps(result.output) if result.ok else (result.error or "tool failed")
+    # default=str + ensure_ascii=False：非 JSON-native 值（datetime/Path/bytes）
+    # 降级为 str 而非抛异常。_append_tool_message 在 try/except 外层，这里抛出
+    # 会漏 ToolMessage，破坏 invariant 1（tool_call.id ↔ ToolMessage 对齐）。
+    if result.ok:
+        return json.dumps(result.output, default=str, ensure_ascii=False)
+    return result.error or "tool failed"
 
 
 @dataclass(frozen=True)
@@ -55,8 +60,8 @@ class AgentLoop:
         self._state = state or LoopState()
         self._system_prompt = system_prompt
         # bind_tools 只在构造时调一次：schema 在 registry 固定后不变，多 turn 共享同一 bound model。
-        # BaseTool 列表直接传给 bind_tools —— LangChain 各 provider 内部翻译成 native 工具格式。
-        self._bound = model.bind_tools(registry.tools()) if registry else model
+        # 空 registry 跳过 bind_tools —— 某些 provider 对 tools=[] 行为不一致，直接不绑更稳。
+        self._bound = model.bind_tools(registry.tools()) if len(registry) > 0 else model
 
     @property
     def state(self) -> LoopState:
@@ -218,6 +223,7 @@ class AgentLoop:
             result = ToolResult(ok=False, error=str(exc))
         except Exception as exc:  # noqa: BLE001
             # 任意异常兜底：保证结果总能写回 history，避免 tool_call id 漏匹配。
+            # CancelledError 继承 BaseException（非 Exception），不会被这里吞掉。
             result = ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
         return await self._hooks.run_post_tool(
             tool=step.tool, args=step.args, result=result, state=self._state

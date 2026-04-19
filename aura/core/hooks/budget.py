@@ -54,7 +54,7 @@ def make_size_budget_hook(
 
         effective_max = (tool.metadata or {}).get("max_result_size_chars") or max_chars
 
-        serialized = json.dumps(result.output)
+        serialized = json.dumps(result.output, default=str, ensure_ascii=False)
         if len(serialized) <= effective_max:
             return result
 

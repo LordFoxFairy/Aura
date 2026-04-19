@@ -173,7 +173,7 @@ def build_agent(
         config=config,
         model=model,
         storage=storage,
-        hooks=default_hooks().merge(hooks) if hooks is not None else default_hooks(),
+        hooks=default_hooks().merge(hooks or HookChain()),
         available_tools=available_tools,
         session_id=session_id,
     )

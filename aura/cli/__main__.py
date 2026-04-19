@@ -119,6 +119,12 @@ def main() -> int:
 
     try:
         asyncio.run(run_repl_async(agent, console=console, verbose=args.verbose))
+    except KeyboardInterrupt:
+        # asyncio.run 拦截第一次 SIGINT 做 task.cancel()，第二次才穿透到这里。
+        # 兜底成清洁退出，避免用户看到 Python traceback。
+        console.print()
+        journal.write("shutdown_sigint")
+        return 130
     finally:
         agent.close()
         journal.write("shutdown")

@@ -51,7 +51,7 @@ def _fail_startup(console: Console, exc: BaseException) -> int:
     # AuraError carries a user-facing source/detail message; anything else is
     # reported as "unexpected" so we never surface a raw stacktrace to the user.
     from aura.core import journal
-    from aura.core.errors import AuraError
+    from aura.errors import AuraError
 
     if isinstance(exc, AuraError):
         journal.write("startup_failed", reason=type(exc).__name__, detail=str(exc))

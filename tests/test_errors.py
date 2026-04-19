@@ -1,15 +1,15 @@
-"""Tests for aura.core.errors.AuraError hierarchy."""
+"""Tests for aura.errors.AuraError hierarchy."""
 
 from __future__ import annotations
 
 from aura.config.schema import AuraConfigError
-from aura.core.errors import AuraError
 from aura.core.hooks.budget import MaxTurnsExceeded
 from aura.core.llm import (
     MissingCredentialError,
     MissingProviderDependencyError,
     UnknownModelSpecError,
 )
+from aura.errors import AuraError
 
 
 def test_aura_error_is_exception() -> None:

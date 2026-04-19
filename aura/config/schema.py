@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from aura.errors import AuraError
+
 
 class ProviderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -91,16 +93,6 @@ class AuraConfig(BaseModel):
 
     def resolved_storage_path(self) -> Path:
         return Path(self.storage.path).expanduser()
-
-
-class AuraError(Exception):
-    """Base class for expected, user-facing Aura errors.
-
-    Callers that want to uniformly handle "something Aura itself knows how to
-    report" should `except AuraError`. Stdlib / third-party exceptions such as
-    `asyncio.CancelledError` or pydantic `ValidationError` are intentionally
-    not caught here — those need their own handlers.
-    """
 
 
 class AuraConfigError(AuraError):

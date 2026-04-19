@@ -1,7 +1,6 @@
 """Core agent loop, state, registry, hooks, and built-in hook factories."""
 
 from aura.core.agent import Agent, build_agent
-from aura.core.errors import AuraError
 from aura.core.events import (
     AgentEvent,
     AssistantDelta,
@@ -34,6 +33,7 @@ from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
+from aura.errors import AuraError
 
 __all__ = [
     "Agent",

@@ -10,9 +10,9 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
-from aura.core.errors import AuraError
 from aura.core.hooks import HookChain, PostModelHook, PostToolHook, PreModelHook
 from aura.core.state import LoopState
+from aura.errors import AuraError
 from aura.tools.base import ToolResult
 
 

@@ -19,23 +19,7 @@ from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
 from aura.core.system_prompt import build_system_prompt
-from aura.tools.bash import bash
-from aura.tools.edit_file import edit_file
-from aura.tools.glob import glob
-from aura.tools.grep import grep
-from aura.tools.read_file import read_file
-from aura.tools.web_fetch import web_fetch
-from aura.tools.write_file import write_file
-
-_BUILTIN_TOOLS: dict[str, BaseTool] = {
-    "bash": bash,
-    "edit_file": edit_file,
-    "glob": glob,
-    "grep": grep,
-    "read_file": read_file,
-    "web_fetch": web_fetch,
-    "write_file": write_file,
-}
+from aura.tools import BUILTIN_TOOLS
 
 _DEFAULT_SESSION = "default"
 
@@ -57,7 +41,7 @@ class Agent:
         self._hooks = hooks or HookChain()
         self._state = LoopState()
         self._available_tools = (
-            dict(available_tools) if available_tools is not None else dict(_BUILTIN_TOOLS)
+            dict(available_tools) if available_tools is not None else dict(BUILTIN_TOOLS)
         )
         self._session_id = session_id
         self._registry = self._build_registry()

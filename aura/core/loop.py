@@ -18,7 +18,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.tools import BaseTool
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from aura.core.events import AgentEvent, AssistantDelta, Final, ToolCallCompleted, ToolCallStarted
 from aura.core.hooks import HookChain
@@ -122,44 +122,22 @@ class AgentLoop:
             ],
         )
 
-        batches = ToolRegistry.partition_batches(steps)
-        for batch in batches:
-            if len(batch) == 1:
-                async for event in self._run_batch_serial(batch[0], history):
-                    yield event
-            else:
-                async for event in self._run_batch_parallel(batch, history):
-                    yield event
+        for batch in ToolRegistry.partition_batches(steps):
+            async for event in self._run_batch(batch, history):
+                yield event
 
-    async def _run_batch_serial(
-        self, step: ToolStep, history: list[BaseMessage],
-    ) -> AsyncIterator[AgentEvent]:
-        tc = step.tool_call
-        yield ToolCallStarted(name=tc["name"], input=dict(tc["args"]))
-        journal.write(
-            "tool_execute_begin", tool=tc["name"], tool_call_id=tc["id"],
-        )
-        result = await self._execute_step(step)
-        journal.write(
-            "tool_execute_end",
-            tool=tc["name"], tool_call_id=tc["id"],
-            ok=result.ok, error=result.error,
-        )
-        self._append_tool_message(history, tc, result)
-        yield ToolCallCompleted(
-            name=tc["name"], output=result.output, error=result.error,
-        )
-
-    async def _run_batch_parallel(
+    async def _run_batch(
         self, batch: list[ToolStep], history: list[BaseMessage],
     ) -> AsyncIterator[AgentEvent]:
+        # size=1 也走统一路径 —— 唯一区别是 gather 一个 coroutine，journal 多几行。
+        # 保序约定：所有 Started 在执行前 yield（并发 tool call 同时宣告）；
+        # Completed 按 tool_call 顺序 yield（invariant 1：tool_call.id ↔ ToolMessage 严格对齐）。
         journal.write(
             "tool_batch_begin",
             turn=self._state.turn_count,
             size=len(batch),
             tools=[s.tool_call.get("name") for s in batch],
         )
-        # 所有 ToolCallStarted 在 gather 之前 yield：用户侧看到并行 tool call 同时宣告。
         for step in batch:
             tc = step.tool_call
             yield ToolCallStarted(name=tc["name"], input=dict(tc["args"]))
@@ -167,11 +145,8 @@ class AgentLoop:
                 "tool_execute_begin", tool=tc["name"], tool_call_id=tc["id"],
             )
 
-        results = await asyncio.gather(
-            *(self._execute_step(s) for s in batch),
-        )
+        results = await asyncio.gather(*(self._execute_step(s) for s in batch))
 
-        # invariant 1：zip strict=True 保证 ToolMessage.append 顺序严格等于 tool_call 顺序。
         for step, result in zip(batch, results, strict=True):
             tc = step.tool_call
             journal.write(
@@ -210,19 +185,19 @@ class AgentLoop:
                 ))
                 continue
 
-            # 早校验：用 tool.args_schema 在派发前把 pydantic 错误转成 decision 短路，
-            # 避免 ainvoke 抛 ValidationError 打断 batch。
+            # 早校验：在派发前把 pydantic 错误转成 decision 短路 —— pre_tool hook
+            # 不该看到 invalid args（否则 permission/budget 基于错误假设做决策）。
             raw_args = dict(tc["args"])
             schema = tool.args_schema
-            try:
-                if isinstance(schema, type) and hasattr(schema, "model_validate"):
+            if isinstance(schema, type) and issubclass(schema, BaseModel):
+                try:
                     schema.model_validate(raw_args)
-            except ValidationError as exc:
-                steps.append(ToolStep(
-                    tool_call=tc, tool=tool, args=None,
-                    decision=ToolResult(ok=False, error=f"invalid args: {exc}"),
-                ))
-                continue
+                except ValidationError as exc:
+                    steps.append(ToolStep(
+                        tool_call=tc, tool=tool, args=None,
+                        decision=ToolResult(ok=False, error=f"invalid args: {exc}"),
+                    ))
+                    continue
 
             decision = await self._hooks.run_pre_tool(
                 tool=tool, args=raw_args, state=self._state

@@ -8,7 +8,7 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.loop import ToolStep
+from aura.core.loop import ToolStep, partition_batches
 from aura.core.registry import ToolRegistry
 from aura.tools.base import ToolResult, build_tool
 from aura.tools.read_file import read_file
@@ -94,7 +94,7 @@ def test_registry_tools_returns_list_in_order() -> None:
 
 
 async def test_partition_empty_steps_returns_empty() -> None:
-    assert ToolRegistry.partition_batches([]) == []
+    assert partition_batches([]) == []
 
 
 async def test_partition_all_safe_returns_single_batch() -> None:
@@ -115,7 +115,7 @@ async def test_partition_all_safe_returns_single_batch() -> None:
         )
         for i in range(3)
     ]
-    batches = ToolRegistry.partition_batches(steps)
+    batches = partition_batches(steps)
     assert len(batches) == 1
     assert len(batches[0]) == 3
 
@@ -150,7 +150,7 @@ async def test_partition_interleaved_unsafe_breaks_batches() -> None:
         _step(unsafe_tool, "u", 4),
         _step(safe_tool, "s", 5),
     ]
-    batches = ToolRegistry.partition_batches(steps)
+    batches = partition_batches(steps)
     sizes = [len(b) for b in batches]
     assert sizes == [2, 1, 1, 1, 1]
 
@@ -182,6 +182,6 @@ async def test_partition_short_circuited_step_goes_solo() -> None:
             tool=safe, args={}, decision=None,
         ),
     ]
-    batches = ToolRegistry.partition_batches(steps)
+    batches = partition_batches(steps)
     sizes = [len(b) for b in batches]
     assert sizes == [1, 1, 1]

@@ -13,7 +13,7 @@ from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core.events import AgentEvent, Final
 from aura.core.hooks import HookChain
 from aura.core.hooks.budget import MaxTurnsExceeded, default_hooks
-from aura.core.llm import ModelFactory
+from aura.core import llm
 from aura.core.loop import AgentLoop
 from aura.core.memory import project_memory, rules
 from aura.core.memory.context import Context
@@ -107,8 +107,8 @@ class Agent:
 
     def switch_model(self, spec: str) -> None:
         journal.write("model_switch_attempt", spec=spec)
-        provider, model_name = ModelFactory.resolve(spec, cfg=self._config)
-        self._model, _protocol = ModelFactory.create(provider, model_name)
+        provider, model_name = llm.resolve(spec, cfg=self._config)
+        self._model = llm.create(provider, model_name)
         self._loop = self._build_loop()
         journal.write(
             "model_switched",
@@ -190,8 +190,8 @@ def build_agent(
     session_id: str = _DEFAULT_SESSION,
 ) -> Agent:
     # 生产便利工厂：自动解析 model + storage；Agent 构造器保持 DI 注入以便测试替换。
-    provider, model_name = ModelFactory.resolve(config.router["default"], cfg=config)
-    model, _protocol = ModelFactory.create(provider, model_name)
+    provider, model_name = llm.resolve(config.router["default"], cfg=config)
+    model = llm.create(provider, model_name)
     storage = SessionStorage(config.resolved_storage_path())
     return Agent(
         config=config,

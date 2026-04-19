@@ -32,7 +32,6 @@ def test_aura_core_exports() -> None:
         Final,
         HookChain,
         LoopState,
-        ModelFactory,
         PostModelHook,
         PostToolHook,
         PreModelHook,

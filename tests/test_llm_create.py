@@ -1,4 +1,4 @@
-"""Tests for ModelFactory.create — lazy SDK loading + secret resolution."""
+"""Tests for aura.core.llm.create — lazy SDK loading + secret resolution."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from aura.config.schema import AuraConfigError, ProviderConfig
 from aura.core.llm import (
     MissingCredentialError,
     MissingProviderDependencyError,
-    ModelFactory,
+    create,
 )
 
 
@@ -41,9 +41,8 @@ def test_create_openai_happy_path_uses_default_env_var(monkeypatch: pytest.Monke
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     provider = ProviderConfig(name="openai", protocol="openai")
-    model, protocol = ModelFactory.create(provider, "gpt-4o-mini")
+    model = create(provider, "gpt-4o-mini")
 
-    assert protocol == "openai"
     assert isinstance(model, _StubOpenAI)
     kw = _stub_kwargs(model)
     assert kw["model"] == "gpt-4o-mini"
@@ -64,9 +63,8 @@ def test_create_openai_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
         base_url="https://openrouter.ai/api/v1",
         api_key_env="OPENROUTER_API_KEY",
     )
-    model, protocol = ModelFactory.create(provider, "mistral-7b")
+    model = create(provider, "mistral-7b")
 
-    assert protocol == "openai"
     kw = _stub_kwargs(model)
     assert kw["base_url"] == "https://openrouter.ai/api/v1"
     assert kw["api_key"] == "or-key"
@@ -80,10 +78,9 @@ def test_create_openai_plaintext_api_key_wins(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     provider = ProviderConfig(name="openai", protocol="openai", api_key="plaintext-key")
-    model, protocol = ModelFactory.create(provider, "gpt-4o-mini")
+    model = create(provider, "gpt-4o-mini")
 
     assert _stub_kwargs(model)["api_key"] == "plaintext-key"
-    assert protocol == "openai"
 
 
 def test_create_openai_api_key_env_preferred_over_default(
@@ -96,7 +93,7 @@ def test_create_openai_api_key_env_preferred_over_default(
     monkeypatch.setenv("OPENAI_API_KEY", "default")
 
     provider = ProviderConfig(name="openai", protocol="openai", api_key_env="CUSTOM_KEY")
-    model, protocol = ModelFactory.create(provider, "gpt-4o-mini")
+    model = create(provider, "gpt-4o-mini")
 
     assert _stub_kwargs(model)["api_key"] == "custom"
 
@@ -109,9 +106,8 @@ def test_create_anthropic_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-key")
 
     provider = ProviderConfig(name="anthropic", protocol="anthropic")
-    model, protocol = ModelFactory.create(provider, "claude-3-5-sonnet-20241022")
+    model = create(provider, "claude-3-5-sonnet-20241022")
 
-    assert protocol == "anthropic"
     assert isinstance(model, _StubAnthropic)
     kw = _stub_kwargs(model)
     assert kw["model"] == "claude-3-5-sonnet-20241022"
@@ -124,9 +120,8 @@ def test_create_ollama_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOllama)
 
     provider = ProviderConfig(name="ollama", protocol="ollama")
-    model, protocol = ModelFactory.create(provider, "llama3")
+    model = create(provider, "llama3")
 
-    assert protocol == "ollama"
     assert isinstance(model, _StubOllama)
     kw = _stub_kwargs(model)
     assert kw["model"] == "llama3"
@@ -143,7 +138,7 @@ def test_create_ollama_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
         protocol="ollama",
         base_url="http://remote:11434",
     )
-    model, protocol = ModelFactory.create(provider, "llama3")
+    model = create(provider, "llama3")
 
     kw = _stub_kwargs(model)
     assert kw["base_url"] == "http://remote:11434"
@@ -159,7 +154,7 @@ def test_create_missing_default_env_raises(monkeypatch: pytest.MonkeyPatch) -> N
 
     provider = ProviderConfig(name="openai", protocol="openai")
     with pytest.raises(MissingCredentialError) as exc_info:
-        ModelFactory.create(provider, "gpt-4o-mini")
+        create(provider, "gpt-4o-mini")
 
     assert "OPENAI_API_KEY" in exc_info.value.detail
 
@@ -172,7 +167,7 @@ def test_create_missing_api_key_env_var_raises(monkeypatch: pytest.MonkeyPatch) 
 
     provider = ProviderConfig(name="openai", protocol="openai", api_key_env="CUSTOM_KEY")
     with pytest.raises(MissingCredentialError) as exc_info:
-        ModelFactory.create(provider, "gpt-4o-mini")
+        create(provider, "gpt-4o-mini")
 
     assert "CUSTOM_KEY" in exc_info.value.detail
 
@@ -191,7 +186,7 @@ def test_create_missing_sdk_raises_install_hint(monkeypatch: pytest.MonkeyPatch)
 
     provider = ProviderConfig(name="openai", protocol="openai")
     with pytest.raises(MissingProviderDependencyError) as exc_info:
-        ModelFactory.create(provider, "gpt-4o-mini")
+        create(provider, "gpt-4o-mini")
 
     assert "pip install" in exc_info.value.detail
     assert "aura[openai]" in exc_info.value.detail
@@ -212,7 +207,7 @@ def test_create_empty_plaintext_api_key_falls_back_to_env(monkeypatch: pytest.Mo
     monkeypatch.setenv("CUSTOM_KEY", "from-env")
 
     provider = ProviderConfig(name="x", protocol="openai", api_key="", api_key_env="CUSTOM_KEY")
-    model, _ = ModelFactory.create(provider, "gpt-4o-mini")
+    model = create(provider, "gpt-4o-mini")
 
     assert isinstance(model, _StubOpenAI)
     assert model.kwargs["api_key"] == "from-env"  # not ""
@@ -228,7 +223,7 @@ def test_create_empty_plaintext_api_key_with_no_fallback_raises(
 
     provider = ProviderConfig(name="x", protocol="openai", api_key="")
     with pytest.raises(MissingCredentialError) as exc_info:
-        ModelFactory.create(provider, "gpt-4o-mini")
+        create(provider, "gpt-4o-mini")
     assert "OPENAI_API_KEY" in exc_info.value.detail
 
 
@@ -246,7 +241,7 @@ def test_create_forwards_provider_params_to_constructor(
         protocol="openai",
         params={"temperature": 0.3, "max_tokens": 4096, "timeout": 30},
     )
-    model, _ = ModelFactory.create(provider, "gpt-4o-mini")
+    model = create(provider, "gpt-4o-mini")
 
     kw = _stub_kwargs(model)
     assert kw["temperature"] == 0.3
@@ -272,7 +267,7 @@ def test_create_resolved_fields_win_over_params(
         params={"model": "wrong-name", "base_url": "bad"},
         base_url="https://good.example",
     )
-    model, _ = ModelFactory.create(provider, "gpt-4o-mini")
+    model = create(provider, "gpt-4o-mini")
 
     kw = _stub_kwargs(model)
     assert kw["model"] == "gpt-4o-mini"

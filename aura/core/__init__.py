@@ -27,7 +27,6 @@ from aura.core.hooks.permission import PermissionAsker, PermissionSession, make_
 from aura.core.llm import (
     MissingCredentialError,
     MissingProviderDependencyError,
-    ModelFactory,
     UnknownModelSpecError,
 )
 from aura.core.loop import AgentLoop, ToolStep
@@ -48,7 +47,6 @@ __all__ = [
     "MaxTurnsExceeded",
     "MissingCredentialError",
     "MissingProviderDependencyError",
-    "ModelFactory",
     "PermissionAsker",
     "PermissionSession",
     "PostModelHook",

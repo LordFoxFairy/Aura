@@ -1,4 +1,4 @@
-"""ModelFactory — resolves model specs to (ProviderConfig, model_name) and creates LLM instances."""
+"""Model spec resolution + lazy SDK-backed chat model construction."""
 
 from __future__ import annotations
 
@@ -90,85 +90,73 @@ def _resolve_api_key(provider: ProviderConfig) -> str | None:
     return key
 
 
-# ---------------------------------------------------------------------------
-# ModelFactory
-# ---------------------------------------------------------------------------
+def resolve(spec: str, *, cfg: AuraConfig) -> tuple[ProviderConfig, str]:
+    """Resolve *spec* to (ProviderConfig, model_name).
 
+    Resolution rules:
+    1. If *spec* is a router alias, substitute once.
+    2. Split on the first ':'. Left = provider name, right = model name.
+    3. Unknown alias with no colon → UnknownModelSpecError.
+    4. Unknown provider name → UnknownModelSpecError.
+    """
+    resolved = cfg.router.get(spec, spec)
 
-class ModelFactory:
-    """Namespace class for model resolution utilities."""
+    provider_name, sep, model_name = resolved.partition(":")
 
-    @staticmethod
-    def resolve(spec: str, *, cfg: AuraConfig) -> tuple[ProviderConfig, str]:
-        """Resolve *spec* to (ProviderConfig, model_name).
-
-        Resolution rules:
-        1. If *spec* is a router alias, substitute once.
-        2. Split on the first ':'. Left = provider name, right = model name.
-        3. Unknown alias with no colon → UnknownModelSpecError.
-        4. Unknown provider name → UnknownModelSpecError.
-        """
-        resolved = cfg.router.get(spec, spec)
-
-        provider_name, sep, model_name = resolved.partition(":")
-
-        if not sep:
-            journal.write("model_resolve_failed", spec=spec, reason="no_colon")
-            raise UnknownModelSpecError(
-                "model spec",
-                f"{spec!r} is not a router alias and not in 'provider:model' form",
-            )
-
-        for provider in cfg.providers:
-            if provider.name == provider_name:
-                journal.write(
-                    "model_resolved",
-                    spec=spec,
-                    provider=provider_name,
-                    model=model_name,
-                )
-                return (provider, model_name)
-
-        journal.write(
-            "model_resolve_failed",
-            spec=spec,
-            reason="unknown_provider",
-            provider_name=provider_name,
-        )
+    if not sep:
+        journal.write("model_resolve_failed", spec=spec, reason="no_colon")
         raise UnknownModelSpecError(
             "model spec",
-            f"unknown provider {provider_name!r} in spec {spec!r}; "
-            f"known providers: {[p.name for p in cfg.providers]}",
+            f"{spec!r} is not a router alias and not in 'provider:model' form",
         )
 
-    @staticmethod
-    def create(provider: ProviderConfig, model_name: str) -> tuple[BaseChatModel, str]:
-        """Instantiate a LangChain chat model for *provider* + *model_name*.
+    for provider in cfg.providers:
+        if provider.name == provider_name:
+            journal.write(
+                "model_resolved",
+                spec=spec,
+                provider=provider_name,
+                model=model_name,
+            )
+            return (provider, model_name)
 
-        Returns (model, protocol). Protocol is needed by the loop's Ollama branch.
-        """
-        api_key = _resolve_api_key(provider)
+    journal.write(
+        "model_resolve_failed",
+        spec=spec,
+        reason="unknown_provider",
+        provider_name=provider_name,
+    )
+    raise UnknownModelSpecError(
+        "model spec",
+        f"unknown provider {provider_name!r} in spec {spec!r}; "
+        f"known providers: {[p.name for p in cfg.providers]}",
+    )
 
-        kwargs: dict[str, Any] = {**provider.params, "model": model_name}
-        if provider.base_url is not None:
-            kwargs["base_url"] = provider.base_url
-        if api_key is not None:
-            kwargs["api_key"] = api_key
 
-        journal.write(
-            "model_create_attempt",
-            provider=provider.name,
-            protocol=provider.protocol,
-            model=model_name,
-            has_base_url=provider.base_url is not None,
-        )
+def create(provider: ProviderConfig, model_name: str) -> BaseChatModel:
+    """Instantiate a LangChain chat model for *provider* + *model_name*."""
+    api_key = _resolve_api_key(provider)
 
-        cls = _load_class(provider.protocol)
-        model = cls(**kwargs)
+    kwargs: dict[str, Any] = {**provider.params, "model": model_name}
+    if provider.base_url is not None:
+        kwargs["base_url"] = provider.base_url
+    if api_key is not None:
+        kwargs["api_key"] = api_key
 
-        journal.write(
-            "model_created",
-            provider=provider.name,
-            protocol=provider.protocol,
-        )
-        return model, provider.protocol
+    journal.write(
+        "model_create_attempt",
+        provider=provider.name,
+        protocol=provider.protocol,
+        model=model_name,
+        has_base_url=provider.base_url is not None,
+    )
+
+    cls = _load_class(provider.protocol)
+    model = cls(**kwargs)
+
+    journal.write(
+        "model_created",
+        provider=provider.name,
+        protocol=provider.protocol,
+    )
+    return model

@@ -1,11 +1,11 @@
-"""Tests for ModelFactory.resolve — router alias and direct provider:model specs."""
+"""Tests for aura.core.llm.resolve — router alias and direct provider:model specs."""
 
 from __future__ import annotations
 
 import pytest
 
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core.llm import ModelFactory, UnknownModelSpecError
+from aura.core.llm import UnknownModelSpecError, resolve
 
 
 def _cfg(providers: list[dict[str, str]], router: dict[str, str]) -> AuraConfig:
@@ -22,7 +22,7 @@ def test_resolve_router_alias_default() -> None:
         providers=[_OPENAI_PROVIDER],
         router={"default": "openai:gpt-4o-mini"},
     )
-    provider, model_name = ModelFactory.resolve("default", cfg=cfg)
+    provider, model_name = resolve("default", cfg=cfg)
     assert model_name == "gpt-4o-mini"
     assert provider.name == "openai"
     assert provider.protocol == "openai"
@@ -36,7 +36,7 @@ def test_resolve_router_alias_custom() -> None:
             "opus": "openrouter:anthropic/claude-opus-4",
         },
     )
-    provider, model_name = ModelFactory.resolve("opus", cfg=cfg)
+    provider, model_name = resolve("opus", cfg=cfg)
     assert provider.name == "openrouter"
     assert model_name == "anthropic/claude-opus-4"
 
@@ -46,7 +46,7 @@ def test_resolve_direct_provider_colon_model() -> None:
         providers=[_OPENAI_PROVIDER],
         router={"default": "openai:gpt-4o-mini"},
     )
-    provider, model_name = ModelFactory.resolve("openai:gpt-4o", cfg=cfg)
+    provider, model_name = resolve("openai:gpt-4o", cfg=cfg)
     assert provider.name == "openai"
     assert model_name == "gpt-4o"
 
@@ -56,7 +56,7 @@ def test_resolve_preserves_colons_in_model_name() -> None:
         providers=[_ANTHROPIC_PROVIDER, _OPENAI_PROVIDER],
         router={"default": "openai:gpt-4o-mini"},
     )
-    provider, model_name = ModelFactory.resolve(
+    provider, model_name = resolve(
         "anthropic-direct:claude-3.5-haiku:20241022", cfg=cfg
     )
     assert provider.name == "anthropic-direct"
@@ -69,7 +69,7 @@ def test_resolve_unknown_alias_no_colon_raises() -> None:
         router={"default": "openai:gpt-4o-mini"},
     )
     with pytest.raises(UnknownModelSpecError) as exc_info:
-        ModelFactory.resolve("bogus", cfg=cfg)
+        resolve("bogus", cfg=cfg)
     assert "bogus" in str(exc_info.value)
 
 
@@ -79,7 +79,7 @@ def test_resolve_unknown_provider_direct_raises() -> None:
         router={"default": "openai:gpt-4o-mini"},
     )
     with pytest.raises(UnknownModelSpecError) as exc_info:
-        ModelFactory.resolve("ghost:m", cfg=cfg)
+        resolve("ghost:m", cfg=cfg)
     assert "ghost" in str(exc_info.value)
 
 
@@ -93,6 +93,6 @@ def test_resolve_empty_model_name_after_colon() -> None:
         providers=[_OPENAI_PROVIDER],
         router={"default": "openai:gpt-4o-mini"},
     )
-    provider, model_name = ModelFactory.resolve("openai:", cfg=cfg)
+    provider, model_name = resolve("openai:", cfg=cfg)
     assert provider.name == "openai"
     assert model_name == ""

@@ -147,7 +147,7 @@ async def test_switch_model_via_router_alias(
     model_b = FakeChatModel(turns=[FakeTurn(AIMessage(content="second"))])
 
     from aura.core import llm
-    monkeypatch.setattr(llm.ModelFactory, "create", lambda provider, name: (model_b, "openai"))
+    monkeypatch.setattr(llm, "create", lambda provider, name: model_b)
 
     agent.switch_model("opus")
     await _collect(agent, "turn2")
@@ -178,7 +178,7 @@ async def test_switch_model_via_direct_spec(
     model_b = FakeChatModel(turns=[FakeTurn(AIMessage(content="second"))])
 
     from aura.core import llm
-    monkeypatch.setattr(llm.ModelFactory, "create", lambda provider, name: (model_b, "openai"))
+    monkeypatch.setattr(llm, "create", lambda provider, name: model_b)
 
     agent.switch_model("openai:gpt-4o")
     await _collect(agent, "turn2")
@@ -247,7 +247,7 @@ async def test_build_agent_factory_uses_modelfactory(
     fake_model = FakeChatModel(turns=[FakeTurn(AIMessage(content="factory-output"))])
 
     from aura.core import llm
-    monkeypatch.setattr(llm.ModelFactory, "create", lambda provider, name: (fake_model, "openai"))
+    monkeypatch.setattr(llm, "create", lambda provider, name: fake_model)
 
     agent = build_agent(config)
     assert isinstance(agent, Agent)
@@ -398,8 +398,8 @@ def test_build_agent_forwards_available_tools(
 
     fake_model = FakeChatModel(turns=[])
     monkeypatch.setattr(
-        llm.ModelFactory, "create",
-        lambda provider, name: (fake_model, provider.protocol),
+        llm, "create",
+        lambda provider, name: fake_model,
     )
 
     def _call() -> dict[str, Any]:
@@ -556,8 +556,8 @@ def test_build_agent_uses_default_hooks_when_none_supplied(
 
     fake = FakeChatModel(turns=[])
     monkeypatch.setattr(
-        llm.ModelFactory, "create",
-        lambda provider, name: (fake, provider.protocol),
+        llm, "create",
+        lambda provider, name: fake,
     )
 
     cfg = AuraConfig.model_validate({

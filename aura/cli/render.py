@@ -27,7 +27,7 @@ class Renderer:
             return
         if isinstance(event, ToolCallStarted):
             self._console.print(
-                f"[dim]◆ {event.name}({_short(event.input)})[/dim]",
+                f"[dim]◆ {event.name}({compact_args(event.input)})[/dim]",
             )
             return
         if isinstance(event, ToolCallCompleted):
@@ -43,7 +43,8 @@ class Renderer:
         self._console.print()
 
 
-def _short(args: dict[str, Any], *, max_len: int = 80) -> str:
+def compact_args(args: dict[str, Any], *, max_len: int = 80) -> str:
+    """Compact JSON preview of a params dict, truncated with ellipsis."""
     rendered = json.dumps(args, ensure_ascii=False, separators=(",", ":"))
     if len(rendered) <= max_len:
         return rendered

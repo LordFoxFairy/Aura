@@ -3,26 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import json
-from typing import Any
 
 from pydantic import BaseModel
 
+from aura.cli.render import compact_args
 from aura.core.hooks.permission import PermissionAsker, PermissionSession
 from aura.core.persistence import journal
 from aura.tools.base import AuraTool
 
 
-def _short(args: dict[str, Any], *, max_len: int = 80) -> str:
-    rendered = json.dumps(args, ensure_ascii=False, separators=(",", ":"))
-    if len(rendered) <= max_len:
-        return rendered
-    return rendered[:max_len] + "\u2026"
-
-
 def make_cli_asker(session: PermissionSession) -> PermissionAsker:
     async def _ask(tool: AuraTool, params: BaseModel) -> bool:
-        args_preview = _short(params.model_dump())
+        args_preview = compact_args(params.model_dump())
         journal.write(
             "permission_asked",
             tool=tool.name,

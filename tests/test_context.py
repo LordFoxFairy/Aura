@@ -363,3 +363,193 @@ def test_nested_fragment_is_frozen_dataclass(tmp_path: Path) -> None:
     frag = NestedFragment(source=tmp_path / "x.md", content="X")
     with pytest.raises(FrozenInstanceError):
         frag.content = "Y"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# <todos> emission (Phase C-2 Task 2) — AC 9, 10, 11, 12, 16, 17
+# ---------------------------------------------------------------------------
+
+
+def test_ac09_empty_todos_list_emits_no_todos_message(tmp_path: Path) -> None:
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        todos_provider=lambda: [],
+    )
+    out = ctx.build([])
+    assert all("<todos>" not in str(m.content) for m in out)
+
+
+def test_ac10_non_empty_todos_emits_single_todos_humanmessage_after_rules(
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "p"
+    (cwd / "src").mkdir(parents=True)
+    p_py = cwd / "src" / "x.py"
+    p_py.write_text("")
+    rule = _rule(
+        tmp_path / "rules" / "py.md",
+        cwd.resolve(),
+        ("**/*.py",),
+        "PY-RULE",
+    )
+    todos = [
+        {"content": "a", "status": "pending", "activeForm": "Doing a"},
+    ]
+    ctx = Context(
+        cwd=cwd,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(unconditional=[], conditional=[rule]),
+        todos_provider=lambda: todos,
+    )
+    ctx.on_tool_touched_path(p_py)
+    history: list[BaseMessage] = [HumanMessage("u1"), AIMessage("a1")]
+    out = ctx.build(history)
+
+    # Find the todos message — exactly one.
+    todos_idxs = [
+        i for i, m in enumerate(out) if str(m.content).startswith("<todos>\n")
+    ]
+    assert len(todos_idxs) == 1
+    todos_idx = todos_idxs[0]
+    todos_msg = out[todos_idx]
+    assert isinstance(todos_msg, HumanMessage)
+    assert str(todos_msg.content).startswith("<todos>\n")
+    assert str(todos_msg.content).endswith("\n</todos>")
+
+    # Sits after every <rule> message and before history.
+    rule_idxs = [i for i, m in enumerate(out) if "<rule " in str(m.content)]
+    assert rule_idxs  # sanity
+    assert todos_idx > max(rule_idxs)
+    # History tail starts right after todos.
+    assert out[todos_idx + 1] is history[0]
+    assert out[todos_idx + 2] is history[1]
+
+
+def test_ac11_todos_body_contains_item_fields(tmp_path: Path) -> None:
+    todos = [
+        {"content": "parse config", "status": "pending", "activeForm": "Parsing config"},
+        {
+            "content": "write tests",
+            "status": "in_progress",
+            "activeForm": "Writing tests",
+        },
+        {"content": "scaffold module", "status": "completed", "activeForm": "Scaffolding"},
+    ]
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        todos_provider=lambda: todos,
+    )
+    out = ctx.build([])
+    todos_msg = next(m for m in out if str(m.content).startswith("<todos>\n"))
+    body = str(todos_msg.content)
+    # Each item's content + status shows up; activeForm shows for non-completed.
+    assert "parse config" in body
+    assert "pending" in body
+    assert "Parsing config" in body
+    assert "write tests" in body
+    assert "in_progress" in body
+    assert "Writing tests" in body
+    assert "scaffold module" in body
+    assert "completed" in body
+
+
+def test_ac12_no_todos_provider_means_no_todos_message(tmp_path: Path) -> None:
+    # Omit kwarg entirely.
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    out = ctx.build([])
+    assert all("<todos>" not in str(m.content) for m in out)
+
+    # Explicit None.
+    ctx_none = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        todos_provider=None,
+    )
+    out_none = ctx_none.build([])
+    assert all("<todos>" not in str(m.content) for m in out_none)
+
+
+def test_ac16_full_build_ordering_primary_nested_rules_todos_history(
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "p"
+    a = cwd / "a"
+    b = a / "b"
+    b.mkdir(parents=True)
+    (a / "AURA.md").write_text("A-MEMO")
+    (b / "AURA.md").write_text("B-MEMO")
+
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+    ra = _rule(rules_dir / "a.md", cwd.resolve(), ("**/*.py",), "RA")
+    rb = _rule(rules_dir / "b.md", cwd.resolve(), ("**/*.py",), "RB")
+    rc = _rule(rules_dir / "c.md", cwd.resolve(), ("**/*.py",), "RC")
+
+    touched = b / "x.py"
+    touched.write_text("")
+
+    todos = [{"content": "t1", "status": "pending", "activeForm": "Doing t1"}]
+
+    ctx = Context(
+        cwd=cwd,
+        system_prompt="SYS",
+        primary_memory="PRIMARY",
+        rules=RulesBundle(unconditional=[], conditional=[ra, rb, rc]),
+        todos_provider=lambda: todos,
+    )
+    ctx.on_tool_touched_path(touched)
+    history: list[BaseMessage] = [
+        HumanMessage("u1"),
+        AIMessage("a1"),
+        HumanMessage("u2"),
+        AIMessage("a2"),
+    ]
+    out = ctx.build(history)
+
+    # 1 system + 1 project-memory + 2 nested + 3 rules + 1 todos + 4 history = 12.
+    assert len(out) == 12
+    assert isinstance(out[0], SystemMessage)
+    assert "<project-memory>" in str(out[1].content)
+    assert "A-MEMO" in str(out[2].content)
+    assert "B-MEMO" in str(out[3].content)
+    assert "RA" in str(out[4].content)
+    assert "RB" in str(out[5].content)
+    assert "RC" in str(out[6].content)
+    assert str(out[7].content).startswith("<todos>\n")
+    assert str(out[7].content).endswith("\n</todos>")
+    assert "t1" in str(out[7].content)
+    assert out[8] is history[0]
+    assert out[9] is history[1]
+    assert out[10] is history[2]
+    assert out[11] is history[3]
+
+
+def test_ac17_auto_clear_roundtrip_provider_returning_empty_list(
+    tmp_path: Path,
+) -> None:
+    # Simulate the post-auto-clear state: provider snapshots state.custom["todos"]
+    # which has been reset to [] by the tool.
+    store: dict[str, list[dict[str, str]]] = {"todos": []}
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        todos_provider=lambda: store["todos"],
+    )
+    out = ctx.build([])
+    assert all("<todos>" not in str(m.content) for m in out)

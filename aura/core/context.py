@@ -4,18 +4,29 @@
 mutability ladder 的 append-only 状态：progressive 子目录 AURA.md 与
 conditional rules 一旦加入便不再移除（`/clear` 与 future `/compact` 通过
 **新建 Context 实例** 实现清空 —— 见 B9）。
+
+**Mutability invariant** (Phase C-2 update):
+- Progressive fields (`_loaded_nested_paths`, `_nested_fragments`,
+  `_matched_rule_paths`, `_matched_rules`) remain **append-only within a
+  session**.
+- Provider-sourced sections (e.g. `<todos>`) are **snapshotted per build** —
+  mutability lives in `LoopState` (the source of the provider's data), not in
+  Context itself. Context stays a pure function of its inputs.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from aura.core import project_memory
 from aura.core.rules import Rule, RulesBundle
 from aura.core.rules import match as match_rules
+from aura.tools.todo_write import render_todos
 
 _AURA_MD = "AURA.md"
 _AURA_DIR = ".aura"
@@ -38,6 +49,7 @@ class Context:
         system_prompt: str,
         primary_memory: str,
         rules: RulesBundle,
+        todos_provider: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> None:
         self._cwd = cwd.resolve()
         self._system_prompt = system_prompt
@@ -47,6 +59,8 @@ class Context:
         self._nested_fragments: list[NestedFragment] = []
         self._matched_rule_paths: set[Path] = set()
         self._matched_rules: list[Rule] = []
+        # Provider snapshot each build (mutability lives in LoopState, not here).
+        self._todos_provider = todos_provider
 
     # ------------------------------------------------------------------
     # Progressive state mutation (append-only within a session)
@@ -127,6 +141,14 @@ class Context:
                     "</rule>"
                 )
             )
+
+        # Provider-sourced todos snapshot (B5/B6): emit one HumanMessage between
+        # <rule>s and history when the provider yields a non-empty list.
+        if self._todos_provider is not None:
+            todos = self._todos_provider()
+            if todos:
+                body = render_todos(todos)
+                messages.append(HumanMessage(f"<todos>\n{body}\n</todos>"))
 
         messages.extend(history)
         return messages

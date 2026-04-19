@@ -1,12 +1,14 @@
-"""Tests for aura.core.project_memory.load_project_memory (Task 1+2)."""
+"""Tests for aura.core.project_memory.load_project_memory (Task 1+2+3)."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
-from aura.core.project_memory import load_project_memory
+from aura.core.project_memory import clear_cache, load_project_memory
 
 
 def _patch_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
@@ -404,3 +406,138 @@ class TestAtImports:
         result = load_project_memory(cwd)
         assert "@./child.md" not in result
         assert result == "pre\nCHILD\npost"
+
+
+class TestCache:
+    """Covers B2 final paragraph: memoize + force_reload + clear_cache."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self) -> Iterator[None]:
+        # 每个 test 之前后都清空模块级缓存，避免跨 test 串味
+        clear_cache()
+        yield
+        clear_cache()
+
+    @staticmethod
+    def _install_open_counter(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+        # Path.open 同时为 read_bytes / read_text 底层调用；计数它即与具体读方式解耦
+        counter = {"calls": 0}
+        original_open = cast(Any, Path.open)
+
+        def counting_open(self: Path, *args: Any, **kwargs: Any) -> Any:
+            counter["calls"] += 1
+            return original_open(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", counting_open)
+        return counter
+
+    def test_01_same_cwd_cached_single_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("HELLO")
+
+        counter = self._install_open_counter(monkeypatch)
+        first = load_project_memory(cwd)
+        reads_after_first = counter["calls"]
+        assert reads_after_first > 0  # 第一次必然有磁盘读
+        second = load_project_memory(cwd)
+        assert second == first
+        # 第二次命中缓存 —— 没有新增读
+        assert counter["calls"] == reads_after_first
+
+    def test_02_force_reload_bypasses_cache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("HELLO")
+
+        counter = self._install_open_counter(monkeypatch)
+        load_project_memory(cwd)
+        reads_after_first = counter["calls"]
+        assert reads_after_first > 0
+        load_project_memory(cwd, force_reload=True)
+        assert counter["calls"] > reads_after_first
+
+    def test_03_clear_cache_single_cwd_reloads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("HELLO")
+
+        counter = self._install_open_counter(monkeypatch)
+        load_project_memory(cwd)
+        reads_after_first = counter["calls"]
+        clear_cache(cwd)
+        load_project_memory(cwd)
+        # clear 之后再读应再次触发磁盘 I/O
+        assert counter["calls"] > reads_after_first
+
+    def test_04_clear_cache_none_drops_all(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd_a = tmp_path / "a"
+        cwd_b = tmp_path / "b"
+        cwd_a.mkdir()
+        cwd_b.mkdir()
+        (cwd_a / "AURA.md").write_text("A")
+        (cwd_b / "AURA.md").write_text("B")
+
+        counter = self._install_open_counter(monkeypatch)
+        load_project_memory(cwd_a)
+        load_project_memory(cwd_b)
+        reads_after_first_pass = counter["calls"]
+        clear_cache()  # 全清
+        load_project_memory(cwd_a)
+        load_project_memory(cwd_b)
+        # 两次都重读 —— 读数至少翻倍（且严格大于 first pass）
+        assert counter["calls"] > reads_after_first_pass
+
+    def test_05_clear_cache_absent_cwd_is_noop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        # 从未加载过的 cwd 调用 clear_cache 应不报错
+        clear_cache(tmp_path / "never-loaded")
+
+    def test_06_two_cwds_cached_independently(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd_a = tmp_path / "a"
+        cwd_b = tmp_path / "b"
+        cwd_a.mkdir()
+        cwd_b.mkdir()
+        (cwd_a / "AURA.md").write_text("A")
+        (cwd_b / "AURA.md").write_text("B")
+
+        counter = self._install_open_counter(monkeypatch)
+        load_project_memory(cwd_a)
+        reads_after_a1 = counter["calls"]
+        load_project_memory(cwd_b)
+        reads_after_b1 = counter["calls"]
+        assert reads_after_b1 > reads_after_a1  # b 是新 cwd，必然读盘
+
+        load_project_memory(cwd_a)  # 命中 a 缓存
+        assert counter["calls"] == reads_after_b1
+        load_project_memory(cwd_b)  # 命中 b 缓存
+        assert counter["calls"] == reads_after_b1

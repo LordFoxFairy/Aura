@@ -2,7 +2,7 @@
 
 Task 1 范围：纯发现层（3-层 walk-up）。
 Task 2 范围：在 load 时展开 `@imports`（深度 5、环检测、围栏感知）。
-memoize + clear_cache 于 Task 3 接入。
+Task 3 范围：按 resolved cwd memoize + `clear_cache`。
 """
 
 from __future__ import annotations
@@ -15,16 +15,21 @@ _AURA_LOCAL_MD = "AURA.local.md"
 
 _MAX_IMPORT_DEPTH = 5
 
+# Aura 单 event-loop 运行，无并发写入；因此缓存无需加锁。
+_primary_cache: dict[Path, str] = {}
+
 
 def load_project_memory(cwd: Path, *, force_reload: bool = False) -> str:
     """按 User / Project(outer→inner) / Local(outer→inner) 顺序拼接项目记忆。
 
     文件间与层间统一以单空行分隔；缺失 / 目录占位 / 权限拒绝 —— 一律静默跳过。
     读到的文件同时展开 `@imports`（B4）。
-    `force_reload` 在 Task 3 才起作用，这里保留签名避免后续改动。
+    以 resolved cwd 为 key 进入 `_primary_cache`；`force_reload=True` 旁路缓存并覆盖。
     """
-    del force_reload  # Task 3 wire-in
     resolved = cwd.resolve()
+    if not force_reload and resolved in _primary_cache:
+        return _primary_cache[resolved]
+
     ancestors = _ancestors_outer_to_inner(resolved)
 
     fragments: list[str] = []
@@ -46,7 +51,17 @@ def load_project_memory(cwd: Path, *, force_reload: bool = False) -> str:
         if local is not None:
             fragments.append(local)
 
-    return "\n\n".join(fragments)
+    result = "\n\n".join(fragments)
+    _primary_cache[resolved] = result
+    return result
+
+
+def clear_cache(cwd: Path | None = None) -> None:
+    """清 `_primary_cache`：无参清空全部；有参清指定 resolved cwd（不存在则静默）。"""
+    if cwd is None:
+        _primary_cache.clear()
+        return
+    _primary_cache.pop(cwd.resolve(), None)
 
 
 def _ancestors_outer_to_inner(resolved_cwd: Path) -> list[Path]:

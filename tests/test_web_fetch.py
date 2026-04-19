@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from aura.tools.base import ToolError
+from aura.schemas.tool import ToolError
 from aura.tools.web_fetch import WebFetchParams, _fetch
 
 _wf_mod = importlib.import_module("aura.tools.web_fetch")

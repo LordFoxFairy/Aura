@@ -8,8 +8,8 @@ from typing import Any, Protocol
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
-from aura.core.state import LoopState
-from aura.tools.base import ToolResult
+from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
 
 
 class PreModelHook(Protocol):

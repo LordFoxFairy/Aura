@@ -7,7 +7,7 @@ import io
 from rich.console import Console
 
 from aura.cli.render import Renderer
-from aura.core.events import (
+from aura.schemas.events import (
     AssistantDelta,
     Final,
     ToolCallCompleted,

@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage
 
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
-from aura.core.state import LoopState
+from aura.schemas.state import LoopState
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 
 

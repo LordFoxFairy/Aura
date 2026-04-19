@@ -13,8 +13,9 @@ from pydantic import BaseModel
 from aura.core import journal as journal_module
 from aura.core.hooks import HookChain
 from aura.core.hooks.logging import make_event_logger_hooks, wrap_with_event_logger
-from aura.core.state import LoopState
-from aura.tools.base import ToolResult, build_tool
+from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
+from aura.tools.base import build_tool
 
 
 @pytest.fixture(autouse=True)

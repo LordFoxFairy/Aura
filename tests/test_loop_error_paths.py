@@ -9,11 +9,12 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.events import AgentEvent, Final, ToolCallCompleted
 from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
-from aura.tools.base import ToolResult, build_tool
+from aura.schemas.events import AgentEvent, Final, ToolCallCompleted
+from aura.schemas.tool import ToolResult
+from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 
 

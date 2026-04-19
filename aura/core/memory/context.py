@@ -26,7 +26,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from aura.core.memory import project_memory
 from aura.core.memory.rules import Rule, RulesBundle
 from aura.core.memory.rules import match as match_rules
-from aura.core.todos import TodoItem, render_todos_body
+from aura.schemas.todos import TodoItem
 
 _AURA_MD = "AURA.md"
 _AURA_DIR = ".aura"
@@ -147,7 +147,7 @@ class Context:
         if self._todos_provider is not None:
             todos = self._todos_provider()
             if todos:
-                body = render_todos_body(todos)
+                body = _render_todos_body(todos)
                 messages.append(HumanMessage(f"<todos>\n{body}\n</todos>"))
 
         messages.extend(history)
@@ -176,6 +176,22 @@ def _is_under(path: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _render_todos_body(todos: list[TodoItem]) -> str:
+    """Render todos for the ``<todos>`` HumanMessage body.
+
+    Format is intentional but informal — the model re-reads its own output
+    across turns. Completed items get only their content; active items also
+    show the present-continuous form so the model can see "what now".
+    """
+    lines: list[str] = []
+    for t in todos:
+        if t.status == "completed":
+            lines.append(f"- [completed] {t.content}")
+        else:
+            lines.append(f"- [{t.status}] {t.content} (active: {t.active_form})")
+    return "\n".join(lines)
 
 
 def _intermediate_dirs(start: Path, cwd: Path) -> list[Path]:

@@ -11,7 +11,6 @@ from langchain_core.tools import BaseTool
 
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core import llm
-from aura.core.events import AgentEvent, Final
 from aura.core.hooks import HookChain
 from aura.core.hooks.budget import MaxTurnsExceeded, default_hooks
 from aura.core.loop import AgentLoop
@@ -21,7 +20,8 @@ from aura.core.memory.system_prompt import build_system_prompt
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
-from aura.core.state import LoopState
+from aura.schemas.events import AgentEvent, Final
+from aura.schemas.state import LoopState
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 
 _DEFAULT_SESSION = "default"

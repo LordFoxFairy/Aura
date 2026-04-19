@@ -8,7 +8,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from aura.tools.base import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, tool_metadata
 
 _DEFAULT_TIMEOUT = 30
 

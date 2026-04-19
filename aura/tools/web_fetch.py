@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from aura.tools.base import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, tool_metadata
 
 _DEFAULT_TIMEOUT = 30
 _MAX_BYTES = 1024 * 1024

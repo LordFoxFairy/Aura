@@ -14,8 +14,9 @@ from langchain_core.messages import (
 )
 
 from aura.core.memory.context import Context, NestedFragment
+from aura.core.memory.context import _render_todos_body as render_todos_body
 from aura.core.memory.rules import Rule, RulesBundle
-from aura.core.todos import TodoItem, render_todos_body
+from aura.schemas.todos import TodoItem
 
 
 def _rule(source: Path, base_dir: Path, globs: tuple[str, ...], body: str) -> Rule:

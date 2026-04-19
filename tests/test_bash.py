@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from aura.tools.base import ToolError
+from aura.schemas.tool import ToolError
 from aura.tools.bash import BashParams, bash
 
 

@@ -10,8 +10,8 @@ from langchain_core.tools import BaseTool
 
 from aura.core.hooks import HookChain
 from aura.core.persistence import journal
-from aura.core.state import LoopState
-from aura.tools.base import ToolResult
+from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
 
 
 def make_event_logger_hooks() -> HookChain:

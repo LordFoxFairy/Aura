@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from aura.core.state import LoopState
-from aura.core.todos import TodoItem
+from aura.schemas.state import LoopState
+from aura.schemas.todos import TodoItem
 from aura.tools.todo_write import TodoWrite, TodoWriteParams
 
 

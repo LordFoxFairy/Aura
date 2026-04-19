@@ -8,7 +8,8 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.tools.base import ToolError, build_tool
+from aura.schemas.tool import ToolError
+from aura.tools.base import build_tool
 
 
 class _MinParams(BaseModel):

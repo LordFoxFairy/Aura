@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from aura.tools.base import ToolError
+from aura.schemas.tool import ToolError
 from aura.tools.edit_file import edit_file
 
 

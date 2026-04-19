@@ -15,7 +15,8 @@ from aura.core.loop import AgentLoop
 from aura.core.memory.context import Context
 from aura.core.memory.rules import Rule, RulesBundle
 from aura.core.registry import ToolRegistry
-from aura.tools.base import ToolResult, build_tool
+from aura.schemas.tool import ToolResult
+from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 
 

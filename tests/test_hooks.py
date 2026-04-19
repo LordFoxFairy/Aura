@@ -10,8 +10,9 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.core.hooks import HookChain
-from aura.core.state import LoopState
-from aura.tools.base import ToolResult, build_tool
+from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
+from aura.tools.base import build_tool
 
 
 class _P(BaseModel):

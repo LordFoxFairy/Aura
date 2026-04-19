@@ -20,13 +20,19 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
 
-from aura.core.events import AgentEvent, AssistantDelta, Final, ToolCallCompleted, ToolCallStarted
 from aura.core.hooks import HookChain
 from aura.core.memory.context import Context
 from aura.core.persistence import journal
 from aura.core.registry import ToolRegistry
-from aura.core.state import LoopState
-from aura.tools.base import ToolError, ToolResult
+from aura.schemas.events import (
+    AgentEvent,
+    AssistantDelta,
+    Final,
+    ToolCallCompleted,
+    ToolCallStarted,
+)
+from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolError, ToolResult
 
 # 成功调用后需把路径反馈给 Context progressive 状态的工具 → 其 path 参数名。
 # bash（shell 语义不固定）和 web_fetch（URL 而非文件系统）刻意排除。

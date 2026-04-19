@@ -11,9 +11,9 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
-from aura.core.state import LoopState
-from aura.core.todos import TodoItem
-from aura.tools.base import tool_metadata
+from aura.schemas.state import LoopState
+from aura.schemas.todos import TodoItem
+from aura.schemas.tool import tool_metadata
 
 
 class TodoWriteParams(BaseModel):

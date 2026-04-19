@@ -15,7 +15,8 @@ with ``self._state`` and overlay it into the same dict.
 
 from langchain_core.tools import BaseTool
 
-from aura.tools.base import ToolError, ToolResult, build_tool, tool_metadata
+from aura.schemas.tool import ToolError, ToolResult, tool_metadata
+from aura.tools.base import build_tool
 from aura.tools.bash import Bash, bash
 from aura.tools.edit_file import EditFile, edit_file
 from aura.tools.glob import Glob, glob

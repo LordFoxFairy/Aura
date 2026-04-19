@@ -8,7 +8,8 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.tools.base import ToolError, ToolResult, build_tool
+from aura.schemas.tool import ToolError, ToolResult
+from aura.tools.base import build_tool
 
 
 def test_tool_result_required_ok() -> None:

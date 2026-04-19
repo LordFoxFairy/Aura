@@ -4,7 +4,13 @@ import dataclasses
 
 import pytest
 
-from aura.core.events import AgentEvent, AssistantDelta, Final, ToolCallCompleted, ToolCallStarted
+from aura.schemas.events import (
+    AgentEvent,
+    AssistantDelta,
+    Final,
+    ToolCallCompleted,
+    ToolCallStarted,
+)
 
 
 class TestAssistantDelta:

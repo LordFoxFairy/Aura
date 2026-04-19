@@ -8,7 +8,7 @@ from typing import Any
 from rich.console import Console
 from rich.markdown import Markdown
 
-from aura.core.events import (
+from aura.schemas.events import (
     AgentEvent,
     AssistantDelta,
     ToolCallCompleted,

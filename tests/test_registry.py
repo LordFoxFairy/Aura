@@ -10,7 +10,8 @@ from pydantic import BaseModel
 
 from aura.core.loop import ToolStep, partition_batches
 from aura.core.registry import ToolRegistry
-from aura.tools.base import ToolResult, build_tool
+from aura.schemas.tool import ToolResult
+from aura.tools.base import build_tool
 from aura.tools.read_file import read_file
 
 

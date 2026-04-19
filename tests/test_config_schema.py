@@ -213,3 +213,24 @@ def test_log_config_unknown_key_raises() -> None:
             "router": {"default": "x:m"},
             "log": {"enabled": True, "bogus": 1},
         })
+
+
+def test_permissions_config_surfaced_on_aura_config() -> None:
+    from aura.core.permissions.store import PermissionsConfig
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "x", "protocol": "openai"}],
+        "router": {"default": "x:m"},
+        "permissions": {"mode": "bypass", "allow": ["bash"]},
+    })
+    assert isinstance(cfg.permissions, PermissionsConfig)
+    assert cfg.permissions.mode == "bypass"
+    assert cfg.permissions.allow == ["bash"]
+
+
+def test_permissions_absent_yields_none() -> None:
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "x", "protocol": "openai"}],
+        "router": {"default": "x:m"},
+    })
+    assert cfg.permissions is None

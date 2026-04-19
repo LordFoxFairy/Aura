@@ -6,6 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from langchain_core.language_models import BaseChatModel
@@ -13,19 +14,29 @@ from langchain_core.messages import (
     AIMessage,
     BaseMessage,
     HumanMessage,
-    SystemMessage,
     ToolCall,
     ToolMessage,
 )
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
 
+from aura.core.context import Context
 from aura.core.events import AgentEvent, AssistantDelta, Final, ToolCallCompleted, ToolCallStarted
 from aura.core.hooks import HookChain
 from aura.core.persistence import journal
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
 from aura.tools.base import ToolError, ToolResult
+
+# B7: path-aware tools whose successful invocation should feed Context progressive state.
+# bash (shell is unbounded) and web_fetch (URL, not filesystem) intentionally excluded.
+PATH_TRIGGER_TOOLS: dict[str, str] = {
+    "read_file": "path",
+    "write_file": "path",
+    "edit_file": "path",
+    "grep": "path",
+    "glob": "path",
+}
 
 
 def _serialize(result: ToolResult) -> str:
@@ -51,14 +62,14 @@ class AgentLoop:
         *,
         model: BaseChatModel,
         registry: ToolRegistry,
+        context: Context,
         hooks: HookChain | None = None,
         state: LoopState | None = None,
-        system_prompt: str | None = None,
     ) -> None:
         self._registry = registry
         self._hooks = hooks or HookChain()
         self._state = state or LoopState()
-        self._system_prompt = system_prompt
+        self._context = context
         # bind_tools 只在构造时调一次：schema 在 registry 固定后不变，多 turn 共享同一 bound model。
         # 空 registry 跳过 bind_tools —— 某些 provider 对 tools=[] 行为不一致，直接不绑更稳。
         self._bound = model.bind_tools(registry.tools()) if len(registry) > 0 else model
@@ -96,13 +107,9 @@ class AgentLoop:
         # turn_count 先于 pre_model hook 递增，hook 看到的是"即将开始的第 N 轮"。
         self._state.turn_count += 1
         await self._hooks.run_pre_model(history=history, state=self._state)
-        # SystemMessage 不持久化到 history —— 每次调 model 前临时插入，
-        # 保证总是拿到最新环境（日期/cwd/tools）。
-        messages = (
-            [SystemMessage(content=self._system_prompt), *history]
-            if self._system_prompt
-            else history
-        )
+        # Context.build 是整个代码库中唯一组装发给模型 message list 的地方
+        # （mutability ladder 的单一 construction site，见 spec B8）。
+        messages = self._context.build(history)
         ai = await self._bound.ainvoke(messages)
         history.append(ai)
         await self._hooks.run_post_model(
@@ -218,6 +225,7 @@ class AgentLoop:
         try:
             output = await step.tool.ainvoke(step.args)
             result = ToolResult(ok=True, output=output)
+            self._maybe_trigger_path(step)
         except ToolError as exc:
             # 工具作者主动抛的用户态错误，消息原样给模型看。
             result = ToolResult(ok=False, error=str(exc))
@@ -228,3 +236,19 @@ class AgentLoop:
         return await self._hooks.run_post_tool(
             tool=step.tool, args=step.args, result=result, state=self._state
         )
+
+    def _maybe_trigger_path(self, step: ToolStep) -> None:
+        """B7: feed successful path-aware tool calls into Context progressive state."""
+        assert step.tool is not None
+        assert step.args is not None
+        arg_name = PATH_TRIGGER_TOOLS.get(step.tool.name)
+        if arg_name is None:
+            return
+        raw = step.args.get(arg_name)
+        if not isinstance(raw, str) or not raw:
+            return
+        try:
+            resolved = Path(raw).resolve()
+        except OSError:
+            return
+        self._context.on_tool_touched_path(resolved)

@@ -14,7 +14,7 @@ from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
 from aura.tools.base import ToolResult, build_tool
-from tests.conftest import FakeChatModel, FakeTurn
+from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 
 
 class _EchoParams(BaseModel):
@@ -57,7 +57,10 @@ async def test_unknown_tool_name_emits_error_tool_message_and_continues() -> Non
         FakeTurn(message=AIMessage(content="recovered")),
     ])
     registry = ToolRegistry([_echo_tool])
-    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(),
+        hooks=HookChain(),
+    )
 
     history: list[BaseMessage] = []
     events: list[AgentEvent] = []
@@ -89,7 +92,10 @@ async def test_invalid_args_emit_error_tool_message_and_continues() -> None:
         FakeTurn(message=AIMessage(content="recovered")),
     ])
     registry = ToolRegistry([_echo_tool])
-    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(),
+        hooks=HookChain(),
+    )
 
     history: list[BaseMessage] = []
     events: list[AgentEvent] = []
@@ -112,7 +118,10 @@ async def test_invoke_exception_emits_error_tool_message_with_exception_info() -
         FakeTurn(message=AIMessage(content="noted")),
     ])
     registry = ToolRegistry([_exploding_tool])
-    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(),
+        hooks=HookChain(),
+    )
 
     history: list[BaseMessage] = []
     events: list[AgentEvent] = []
@@ -146,7 +155,8 @@ async def test_post_tool_sees_exception_result() -> None:
         FakeTurn(message=AIMessage(content="noted")),
     ])
     loop = AgentLoop(
-        model=model, registry=ToolRegistry([_exploding_tool]), hooks=hooks,
+        model=model, registry=ToolRegistry([_exploding_tool]),
+        context=make_minimal_context(), hooks=hooks,
     )
 
     async for _ in loop.run_turn(user_prompt="go", history=[]):
@@ -176,7 +186,8 @@ async def test_pre_tool_not_fired_for_unknown_tool() -> None:
         FakeTurn(message=AIMessage(content="done")),
     ])
     loop = AgentLoop(
-        model=model, registry=ToolRegistry([_echo_tool]), hooks=hooks,
+        model=model, registry=ToolRegistry([_echo_tool]),
+        context=make_minimal_context(), hooks=hooks,
     )
 
     async for _ in loop.run_turn(user_prompt="go", history=[]):
@@ -196,7 +207,8 @@ async def test_mixed_tool_calls_each_produce_own_tool_message() -> None:
         FakeTurn(message=AIMessage(content="done")),
     ])
     loop = AgentLoop(
-        model=model, registry=ToolRegistry([_echo_tool]), hooks=HookChain(),
+        model=model, registry=ToolRegistry([_echo_tool]),
+        context=make_minimal_context(), hooks=HookChain(),
     )
 
     history: list[BaseMessage] = []

@@ -18,7 +18,7 @@ from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
 from aura.tools.base import ToolResult, build_tool
-from tests.conftest import FakeChatModel, FakeTurn
+from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 
 
 class _EchoParams(BaseModel):
@@ -67,7 +67,9 @@ async def test_pre_model_fires_before_each_ainvoke() -> None:
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     registry = ToolRegistry([_echo_tool])
     hooks = HookChain(pre_model=[count])
-    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(), hooks=hooks,
+    )
 
     async for _ in loop.run_turn(user_prompt="go", history=[]):
         pass
@@ -87,7 +89,9 @@ async def test_post_model_fires_after_each_ainvoke_with_ai_message() -> None:
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     registry = ToolRegistry([_echo_tool])
     hooks = HookChain(post_model=[capture])
-    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(), hooks=hooks,
+    )
 
     async for _ in loop.run_turn(user_prompt="go", history=[]):
         pass
@@ -110,7 +114,9 @@ async def test_pre_tool_fires_before_invoke_and_can_deny() -> None:
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     registry = ToolRegistry([_echo_tool])
     hooks = HookChain(pre_tool=[deny])
-    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(), hooks=hooks,
+    )
 
     events: list[AgentEvent] = []
     async for ev in loop.run_turn(user_prompt="go", history=[]):
@@ -133,7 +139,9 @@ async def test_post_tool_fires_after_invoke_and_can_rewrite_output() -> None:
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     registry = ToolRegistry([_echo_tool])
     hooks = HookChain(post_tool=[truncate])
-    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(), hooks=hooks,
+    )
 
     history: list[BaseMessage] = []
     async for _ in loop.run_turn(user_prompt="go", history=history):
@@ -180,7 +188,9 @@ async def test_hooks_all_fire_in_order_for_tool_turn() -> None:
         pre_tool=[pre_tool],
         post_tool=[post_tool],
     )
-    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(), hooks=hooks,
+    )
 
     async for _ in loop.run_turn(user_prompt="go", history=[]):
         pass
@@ -206,7 +216,9 @@ async def test_hooks_see_monotonic_turn_count() -> None:
         FakeTurn(message=AIMessage(content="done")),
     ])
     registry = ToolRegistry([_echo_tool])
-    loop = AgentLoop(model=model, registry=registry, hooks=hooks)
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(), hooks=hooks,
+    )
 
     history: list[BaseMessage] = []
     async for _ in loop.run_turn(user_prompt="go", history=history):
@@ -242,6 +254,7 @@ async def test_budget_hook_truncates_large_tool_output(tmp_path: Path) -> None:
     loop = AgentLoop(
         model=model,
         registry=ToolRegistry([big_tool]),
+        context=make_minimal_context(),
         hooks=hooks,
     )
 

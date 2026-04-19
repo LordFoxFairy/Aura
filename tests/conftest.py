@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,6 +15,25 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 from pydantic import ConfigDict
+
+from aura.core.context import Context
+from aura.core.rules import RulesBundle
+
+
+def make_minimal_context(
+    *,
+    cwd: Path | None = None,
+    system_prompt: str = "",
+    primary_memory: str = "",
+    rules: RulesBundle | None = None,
+) -> Context:
+    """Minimal Context for loop tests — empty defaults so build(history) == [Sys, *history]."""
+    return Context(
+        cwd=cwd or Path("/tmp"),
+        system_prompt=system_prompt,
+        primary_memory=primary_memory,
+        rules=rules or RulesBundle(),
+    )
 
 
 @pytest.fixture(autouse=True)

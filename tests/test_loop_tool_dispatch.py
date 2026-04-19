@@ -21,7 +21,7 @@ from aura.core.loop import AgentLoop
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
 from aura.tools.base import build_tool
-from tests.conftest import FakeChatModel, FakeTurn
+from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 
 
 class _EchoParams(BaseModel):
@@ -59,7 +59,10 @@ async def test_run_turn_single_tool_call_roundtrip() -> None:
     history: list[BaseMessage] = []
 
     events: list[AgentEvent] = []
-    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(),
+        hooks=HookChain(),
+    )
     async for ev in loop.run_turn(user_prompt="call echo", history=history):
         events.append(ev)
 
@@ -84,7 +87,10 @@ async def test_run_turn_two_ainvoke_calls_made() -> None:
     model, registry = _make_model_and_registry()
     history: list[BaseMessage] = []
 
-    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(),
+        hooks=HookChain(),
+    )
     async for _ in loop.run_turn(user_prompt="call echo", history=history):
         pass
 
@@ -97,7 +103,10 @@ async def test_run_turn_tool_call_event_contents() -> None:
     history: list[BaseMessage] = []
 
     events: list[AgentEvent] = []
-    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(),
+        hooks=HookChain(),
+    )
     async for ev in loop.run_turn(user_prompt="call echo", history=history):
         events.append(ev)
 
@@ -117,7 +126,10 @@ async def test_run_turn_tool_call_output_serialized_as_json() -> None:
     model, registry = _make_model_and_registry()
     history: list[BaseMessage] = []
 
-    loop = AgentLoop(model=model, registry=registry, hooks=HookChain())
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(),
+        hooks=HookChain(),
+    )
     async for _ in loop.run_turn(user_prompt="call echo", history=history):
         pass
 

@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.config.schema import AuraConfig, AuraConfigError
+from aura.core import project_memory, rules
 from aura.core.agent import Agent, build_agent
 from aura.core.events import Final
 from aura.core.hooks import HookChain
@@ -573,4 +574,113 @@ def test_build_agent_uses_default_hooks_when_none_supplied(
     assert len(agent._hooks.pre_model) >= 1
     assert len(agent._hooks.post_model) >= 1
     assert len(agent._hooks.post_tool) >= 1
+    agent.close()
+
+
+# ---------------------------------------------------------------------------
+# Task 7 — Agent + Context wire-in integration (spec B1/B6-B9)
+# ---------------------------------------------------------------------------
+
+
+def _chdir(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
+    """同时 chdir + monkeypatch Path.home，避免用户真实 HOME 干扰加载。"""
+    monkeypatch.chdir(path)
+    fake_home = path / "_fake_home"
+    fake_home.mkdir(exist_ok=True)
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    project_memory.clear_cache()
+    rules.clear_cache()
+
+
+@pytest.mark.asyncio
+async def test_agent_loads_primary_memory_from_cwd_AURA_md(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _chdir(monkeypatch, tmp_path)
+    (tmp_path / "AURA.md").write_text("MEMO", encoding="utf-8")
+
+    agent = _agent(tmp_path, turns=[])
+    assert "MEMO" in agent._primary_memory
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_loads_conditional_rules_from_aura_rules_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _chdir(monkeypatch, tmp_path)
+    rules_dir = tmp_path / ".aura" / "rules"
+    rules_dir.mkdir(parents=True)
+    rule_path = rules_dir / "r.md"
+    rule_path.write_text(
+        "---\npaths: \"**/*.py\"\n---\nRULE-BODY\n", encoding="utf-8",
+    )
+
+    agent = _agent(tmp_path, turns=[])
+    sources = [r.source_path for r in agent._rules.conditional]
+    assert rule_path.resolve() in sources
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_reuses_cache_on_repeat_construction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _chdir(monkeypatch, tmp_path)
+    (tmp_path / "AURA.md").write_text("V1", encoding="utf-8")
+
+    # 第一次构造 populates caches.
+    _agent(tmp_path, turns=[]).close()
+
+    # 改盘上文件；第二次构造若读盘则能看见 V2，若命中缓存则仍是 V1。
+    (tmp_path / "AURA.md").write_text("V2", encoding="utf-8")
+
+    agent2 = _agent(tmp_path, turns=[])
+    assert "V1" in agent2._primary_memory
+    assert "V2" not in agent2._primary_memory
+    agent2.close()
+
+
+@pytest.mark.asyncio
+async def test_clear_session_refreshes_primary_memory_from_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _chdir(monkeypatch, tmp_path)
+    (tmp_path / "AURA.md").write_text("V1", encoding="utf-8")
+
+    agent = _agent(tmp_path, turns=[FakeTurn(AIMessage(content="ok"))])
+    assert "V1" in agent._primary_memory
+
+    (tmp_path / "AURA.md").write_text("V2-FRESH", encoding="utf-8")
+    agent.clear_session()
+
+    assert "V2-FRESH" in agent._primary_memory
+    assert "V1" not in agent._primary_memory
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_storage_does_not_persist_context_memory_human_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _chdir(monkeypatch, tmp_path)
+    (tmp_path / "AURA.md").write_text("eager primary", encoding="utf-8")
+
+    storage = _storage(tmp_path)
+    model = FakeChatModel(turns=[FakeTurn(AIMessage(content="hi"))])
+    agent = Agent(config=_minimal_config(), model=model, storage=storage)
+
+    async for _ in agent.astream("go"):
+        pass
+
+    saved = storage.load("default")
+    # 仅有 user prompt + assistant reply — 不包含 <project-memory> / <nested-memory> / <rule> tag。
+    for msg in saved:
+        content = str(msg.content)
+        assert "<project-memory>" not in content
+        assert "<nested-memory" not in content
+        assert "<rule" not in content
+    assert any(isinstance(m, HumanMessage) and m.content == "go" for m in saved)
+    assert any(isinstance(m, AIMessage) and m.content == "hi" for m in saved)
+    assert not any(isinstance(m, ToolMessage) for m in saved)
     agent.close()

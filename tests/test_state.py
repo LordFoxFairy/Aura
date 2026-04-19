@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
-from tests.conftest import FakeChatModel, FakeTurn
+from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 
 
 def test_loop_state_defaults() -> None:
@@ -32,7 +32,7 @@ def test_loop_state_custom_dict_isolated_per_instance() -> None:
 
 def test_agent_loop_exposes_state_via_property() -> None:
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="hi"))])
-    loop = AgentLoop(model=model, registry=ToolRegistry(()))
+    loop = AgentLoop(model=model, registry=ToolRegistry(()), context=make_minimal_context())
     assert loop.state is loop.state
     assert isinstance(loop.state, LoopState)
 

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from aura.config.schema import AuraConfig, AuraConfigError
+from aura.core import project_memory, rules
+from aura.core.context import Context
 from aura.core.events import AgentEvent, Final
 from aura.core.hooks import HookChain
 from aura.core.hooks.budget import MaxTurnsExceeded, default_hooks
@@ -45,7 +48,11 @@ class Agent:
         )
         self._session_id = session_id
         self._registry = self._build_registry()
+        self._cwd = Path.cwd()
         self._system_prompt = build_system_prompt()
+        self._primary_memory = project_memory.load_project_memory(self._cwd)
+        self._rules = rules.load_rules(self._cwd)
+        self._context = self._build_context()
         self._loop = self._build_loop()
 
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
@@ -97,6 +104,14 @@ class Agent:
     def clear_session(self) -> None:
         self._storage.clear(self._session_id)
         self._state.reset()
+        # B9: /clear 同时 invalidate memory/rules caches + 重建 Context
+        # （progressive 状态随新实例自然清空）。
+        project_memory.clear_cache(self._cwd)
+        rules.clear_cache(self._cwd)
+        self._primary_memory = project_memory.load_project_memory(self._cwd)
+        self._rules = rules.load_rules(self._cwd)
+        self._context = self._build_context()
+        self._loop = self._build_loop()
         journal.write("session_cleared", session=self._session_id)
 
     @property
@@ -126,9 +141,17 @@ class Agent:
         return AgentLoop(
             model=self._model,
             registry=self._registry,
+            context=self._context,
             hooks=self._hooks,
             state=self._state,
+        )
+
+    def _build_context(self) -> Context:
+        return Context(
+            cwd=self._cwd,
             system_prompt=self._system_prompt,
+            primary_memory=self._primary_memory,
+            rules=self._rules,
         )
 
     def _build_registry(self) -> ToolRegistry:

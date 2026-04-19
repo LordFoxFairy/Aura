@@ -129,3 +129,77 @@ def test_load_ruleset_invalid_rule_string_raises_aura_config_error(
     with pytest.raises(AuraConfigError) as exc_info:
         load_ruleset(tmp_path)
     assert "bash(unclosed" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# settings.local.json — machine-local overrides (gitignored by convention)
+# ---------------------------------------------------------------------------
+
+
+def _write_settings(tmp_path: Path, name: str, perms: dict) -> Path:
+    p = tmp_path / ".aura" / name
+    p.parent.mkdir(exist_ok=True)
+    p.write_text(json.dumps({"permissions": perms}))
+    return p
+
+
+def test_load_local_alone_returns_local_rules(tmp_path: Path) -> None:
+    # settings.json absent, settings.local.json present.
+    _write_settings(tmp_path, "settings.local.json", {"allow": ["bash"]})
+    cfg = load(tmp_path)
+    assert cfg.allow == ["bash"]
+
+
+def test_load_concatenates_project_and_local_allow_lists(tmp_path: Path) -> None:
+    _write_settings(tmp_path, "settings.json", {"allow": ["read_file(/shared)"]})
+    _write_settings(tmp_path, "settings.local.json", {"allow": ["bash(ssh prod)"]})
+    cfg = load(tmp_path)
+    # Project rules come first (team's canonical ones), local appended.
+    assert cfg.allow == ["read_file(/shared)", "bash(ssh prod)"]
+
+
+def test_load_local_mode_overrides_project_mode(tmp_path: Path) -> None:
+    _write_settings(tmp_path, "settings.json", {"mode": "default"})
+    _write_settings(tmp_path, "settings.local.json", {"mode": "bypass"})
+    cfg = load(tmp_path)
+    assert cfg.mode == "bypass"
+
+
+def test_load_project_mode_kept_when_local_omits_mode(tmp_path: Path) -> None:
+    _write_settings(tmp_path, "settings.json", {"mode": "bypass"})
+    _write_settings(tmp_path, "settings.local.json", {"allow": ["bash"]})
+    cfg = load(tmp_path)
+    assert cfg.mode == "bypass"
+
+
+def test_load_local_unknown_key_raises_with_local_path(tmp_path: Path) -> None:
+    _write_settings(tmp_path, "settings.local.json", {"nope": 1})
+    with pytest.raises(AuraConfigError) as exc:
+        load(tmp_path)
+    # The error must name settings.local.json so the user knows which file
+    # has the typo, not just "settings.json".
+    assert "settings.local.json" in str(exc.value)
+
+
+def test_load_concatenates_safety_exempt_lists(tmp_path: Path) -> None:
+    _write_settings(tmp_path, "settings.json", {"safety_exempt": ["shared/"]})
+    _write_settings(tmp_path, "settings.local.json", {"safety_exempt": ["local/"]})
+    cfg = load(tmp_path)
+    assert cfg.safety_exempt == ["shared/", "local/"]
+
+
+def test_load_ruleset_merges_project_and_local_rules(tmp_path: Path) -> None:
+    _write_settings(tmp_path, "settings.json", {"allow": ["read_file(/shared)"]})
+    _write_settings(tmp_path, "settings.local.json", {"allow": ["bash(npm test)"]})
+    rs = load_ruleset(tmp_path)
+    assert len(rs.rules) == 2
+    assert rs.rules[0].tool == "read_file"
+    assert rs.rules[1].tool == "bash"
+
+
+def test_save_rule_writes_to_project_not_local_by_default(tmp_path: Path) -> None:
+    # save_rule is the default "remember for this project" path — it must
+    # never silently pollute settings.local.json.
+    save_rule(tmp_path, Rule(tool="bash", content="npm test"))
+    assert (tmp_path / ".aura" / "settings.json").exists()
+    assert not (tmp_path / ".aura" / "settings.local.json").exists()

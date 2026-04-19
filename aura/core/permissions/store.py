@@ -1,8 +1,23 @@
-"""Permission persistence — ``./.aura/settings.json`` load/save.
+"""Permission persistence — ``./.aura/settings{,.local}.json`` load/save.
 
 Spec: ``docs/specs/2026-04-19-aura-permission.md`` §7.
 
-On-disk schema (validated by ``PermissionsConfig``)::
+Two-file layout (both optional, either may be absent):
+
+- ``.aura/settings.json``      — shared / committed-to-VCS project rules.
+  The team's canonical "this project allows bash(npm test)" decisions.
+- ``.aura/settings.local.json`` — machine-local overrides; should be
+  gitignored. Your personal "always allow ssh prod" decisions that
+  shouldn't leak to teammates.
+
+Merge semantics (``load``):
+
+- ``allow`` / ``safety_exempt`` — concatenated, project first, local
+  appended. Both contribute rules (order is informational; first-match
+  semantics in RuleSet fire on either).
+- ``mode`` — local overrides project when local sets it explicitly.
+
+On-disk schema (per file, validated by ``PermissionsConfig``)::
 
     {
       "permissions": {
@@ -12,10 +27,15 @@ On-disk schema (validated by ``PermissionsConfig``)::
       }
     }
 
-Unknown keys under ``permissions`` raise ``AuraConfigError`` on load — silent
-typos in a security-relevant config are not acceptable. Top-level unrelated
-sections (e.g. future ``ui``) are passed through on write untouched; the
-permissions store owns only its own key.
+Unknown keys under ``permissions`` raise ``AuraConfigError`` naming the
+offending file — silent typos in a security-relevant config are not
+acceptable. Top-level unrelated sections (e.g. future ``ui``) are passed
+through on write untouched; the permissions store owns only its own key.
+
+``save_rule`` always writes to ``settings.json`` (project-scoped persist).
+Machine-local rules are set by manually editing ``settings.local.json`` —
+there is no CLI path that writes to it, by design (the common case is
+team-shared, so the default should shoulder the common case).
 """
 
 from __future__ import annotations
@@ -49,8 +69,16 @@ class PermissionStoreError(AuraError):
         self.detail = detail
 
 
+_SETTINGS = "settings.json"
+_SETTINGS_LOCAL = "settings.local.json"
+
+
 def _settings_path(project_root: Path) -> Path:
-    return project_root / ".aura" / "settings.json"
+    return project_root / ".aura" / _SETTINGS
+
+
+def _settings_local_path(project_root: Path) -> Path:
+    return project_root / ".aura" / _SETTINGS_LOCAL
 
 
 def _read_top_level(settings: Path) -> dict[str, Any]:
@@ -73,16 +101,59 @@ def _read_top_level(settings: Path) -> dict[str, Any]:
     return raw
 
 
-def load(project_root: Path) -> PermissionsConfig:
-    settings = _settings_path(project_root)
+def _load_permissions_raw(settings: Path) -> dict[str, Any]:
+    """Return the raw ``permissions`` dict from one settings file (or {} if
+    file absent, no "permissions" key, or the key's value is not a dict —
+    malformed non-dict values here raise ``AuraConfigError``).
+
+    Running validation later per-file (in ``load``) gives clearer error
+    messages that name the file that actually contains the typo.
+    """
     top = _read_top_level(settings)
-    perms_raw = top.get("permissions")
-    if perms_raw is None:
-        return PermissionsConfig()
+    if "permissions" not in top:
+        return {}
+    perms = top["permissions"]
+    if not isinstance(perms, dict):
+        raise AuraConfigError(
+            source=str(settings),
+            detail="'permissions' must be an object",
+        )
+    return perms
+
+
+def _validate(raw: dict[str, Any], source: Path) -> PermissionsConfig:
     try:
-        return PermissionsConfig.model_validate(perms_raw)
+        return PermissionsConfig.model_validate(raw)
     except ValidationError as exc:
-        raise AuraConfigError(source=str(settings), detail=str(exc)) from exc
+        raise AuraConfigError(source=str(source), detail=str(exc)) from exc
+
+
+def load(project_root: Path) -> PermissionsConfig:
+    """Load merged project + local permissions. See module docstring."""
+    project_path = _settings_path(project_root)
+    local_path = _settings_local_path(project_root)
+
+    project_raw = _load_permissions_raw(project_path)
+    local_raw = _load_permissions_raw(local_path)
+
+    # Validate each file independently so error messages point at the
+    # file that actually has the typo.
+    _validate(project_raw, project_path)
+    _validate(local_raw, local_path)
+
+    # Merge:
+    #   mode — local wins if it sets it; explicit "default" in local is
+    #          still a wins-value (the user can downgrade project bypass
+    #          on their own machine).
+    #   allow / safety_exempt — concat, project first.
+    mode = local_raw.get("mode") or project_raw.get("mode") or "default"
+    allow = list(project_raw.get("allow") or []) + list(local_raw.get("allow") or [])
+    safety_exempt = (
+        list(project_raw.get("safety_exempt") or [])
+        + list(local_raw.get("safety_exempt") or [])
+    )
+
+    return PermissionsConfig(mode=mode, allow=allow, safety_exempt=safety_exempt)
 
 
 def load_ruleset(project_root: Path) -> RuleSet:
@@ -100,6 +171,12 @@ def load_ruleset(project_root: Path) -> RuleSet:
 
 
 def save_rule(project_root: Path, rule: Rule) -> None:
+    """Persist ``rule`` to ``settings.json`` (project-scoped).
+
+    Never writes to ``settings.local.json`` — the default CLI flow
+    assumes shared persistence. Users who want machine-local rules edit
+    that file manually.
+    """
     settings = _settings_path(project_root)
     settings.parent.mkdir(parents=True, exist_ok=True)
 

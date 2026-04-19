@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from aura.tools.base import ToolError, build_tool
+from aura.tools.base import ToolError, tool_metadata
 
 _DEFAULT_TIMEOUT = 30
 _MAX_BYTES = 1024 * 1024
@@ -88,15 +88,19 @@ def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
     return output
 
 
-web_fetch: BaseTool = build_tool(
-    name="web_fetch",
-    description=(
+class WebFetch(BaseTool):
+    name: str = "web_fetch"
+    description: str = (
         "Fetch an HTTP(S) URL via GET. Returns text content (UTF-8 with "
         "replacement). Max 1 MB, truncates if larger. No auth / cookies."
-    ),
-    args_schema=WebFetchParams,
-    func=_fetch,
-    is_read_only=True,
-    is_concurrency_safe=True,
-    max_result_size_chars=60_000,
-)
+    )
+    args_schema: type[BaseModel] = WebFetchParams
+    metadata: dict[str, Any] | None = tool_metadata(
+        is_read_only=True, is_concurrency_safe=True, max_result_size_chars=60_000,
+    )
+
+    def _run(self, url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
+        return _fetch(url=url, timeout=timeout)
+
+
+web_fetch: BaseTool = WebFetch()

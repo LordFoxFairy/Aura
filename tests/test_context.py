@@ -13,8 +13,9 @@ from langchain_core.messages import (
     SystemMessage,
 )
 
-from aura.core.memory.context import Context, NestedFragment, _render_todos_body
+from aura.core.memory.context import Context, NestedFragment
 from aura.core.memory.rules import Rule, RulesBundle
+from aura.core.todos import TodoItem, render_todos_body
 
 
 def _rule(source: Path, base_dir: Path, globs: tuple[str, ...], body: str) -> Rule:
@@ -368,7 +369,7 @@ def test_ac10_non_empty_todos_emits_single_todos_humanmessage_after_rules(
         "PY-RULE",
     )
     todos = [
-        {"content": "a", "status": "pending", "activeForm": "Doing a"},
+        TodoItem(content="a", status="pending", active_form="Doing a"),
     ]
     ctx = Context(
         cwd=cwd,
@@ -402,13 +403,15 @@ def test_ac10_non_empty_todos_emits_single_todos_humanmessage_after_rules(
 
 def test_ac11_todos_body_contains_item_fields(tmp_path: Path) -> None:
     todos = [
-        {"content": "parse config", "status": "pending", "activeForm": "Parsing config"},
-        {
-            "content": "write tests",
-            "status": "in_progress",
-            "activeForm": "Writing tests",
-        },
-        {"content": "scaffold module", "status": "completed", "activeForm": "Scaffolding"},
+        TodoItem(content="parse config", status="pending", active_form="Parsing config"),
+        TodoItem(
+            content="write tests",
+            status="in_progress",
+            active_form="Writing tests",
+        ),
+        TodoItem(
+            content="scaffold module", status="completed", active_form="Scaffolding"
+        ),
     ]
     ctx = Context(
         cwd=tmp_path,
@@ -473,7 +476,7 @@ def test_ac16_full_build_ordering_primary_nested_rules_todos_history(
     touched = b / "x.py"
     touched.write_text("")
 
-    todos = [{"content": "t1", "status": "pending", "activeForm": "Doing t1"}]
+    todos = [TodoItem(content="t1", status="pending", active_form="Doing t1")]
 
     ctx = Context(
         cwd=cwd,
@@ -514,7 +517,7 @@ def test_ac17_auto_clear_roundtrip_provider_returning_empty_list(
 ) -> None:
     # Simulates post-auto-clear state: the provider snapshots state.custom["todos"]
     # after the tool has reset it to [].
-    store: dict[str, list[dict[str, str]]] = {"todos": []}
+    store: dict[str, list[TodoItem]] = {"todos": []}
     ctx = Context(
         cwd=tmp_path,
         system_prompt="SYS",
@@ -531,8 +534,8 @@ def test_ac17_auto_clear_roundtrip_provider_returning_empty_list(
 
 
 def test_render_todos_body_non_completed_includes_active_form() -> None:
-    body = _render_todos_body(
-        [{"content": "a", "status": "pending", "activeForm": "Doing a"}]
+    body = render_todos_body(
+        [TodoItem(content="a", status="pending", active_form="Doing a")]
     )
     assert "a" in body
     assert "pending" in body
@@ -540,18 +543,18 @@ def test_render_todos_body_non_completed_includes_active_form() -> None:
 
 
 def test_render_todos_body_completed_omits_active_form() -> None:
-    body = _render_todos_body(
-        [{"content": "done-task", "status": "completed", "activeForm": "Did it"}]
+    body = render_todos_body(
+        [TodoItem(content="done-task", status="completed", active_form="Did it")]
     )
     assert "done-task" in body
     assert "completed" in body
 
 
 def test_render_todos_body_multi_line_no_trailing_newline() -> None:
-    body = _render_todos_body(
+    body = render_todos_body(
         [
-            {"content": "a", "status": "pending", "activeForm": "Doing a"},
-            {"content": "b", "status": "completed", "activeForm": "Did b"},
+            TodoItem(content="a", status="pending", active_form="Doing a"),
+            TodoItem(content="b", status="completed", active_form="Did b"),
         ]
     )
     assert body.count("\n") == 1

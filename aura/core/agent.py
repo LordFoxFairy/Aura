@@ -22,8 +22,7 @@ from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
-from aura.tools import BUILTIN_TOOLS
-from aura.tools.todo_write import make_todo_write_tool
+from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 
 _DEFAULT_SESSION = "default"
 
@@ -44,15 +43,15 @@ class Agent:
         self._storage = storage
         self._hooks = hooks or HookChain()
         self._state = LoopState()
+        # Stateless built-ins come from shared singletons; stateful ones are
+        # instantiated per-Agent so each gets its own `LoopState` reference.
         self._available_tools = (
             dict(available_tools) if available_tools is not None else dict(BUILTIN_TOOLS)
         )
-        # Stateful tools (factory-bound to `self._state`) must be merged in
-        # BEFORE `_build_registry` resolves `config.tools.enabled`.
-        self._available_tools["todo_write"] = make_todo_write_tool(self._state)
+        for name, cls in BUILTIN_STATEFUL_TOOLS.items():
+            self._available_tools[name] = cls(state=self._state)
         self._session_id = session_id
-        # Inline registry construction: config.tools.enabled → lookup → ToolRegistry.
-        # 只在 __init__ 被构造一次；无需抽方法。
+        # config.tools.enabled → lookup → ToolRegistry. Built once per Agent.
         tools: list[BaseTool] = []
         for name in self._config.tools.enabled:
             tool = self._available_tools.get(name)

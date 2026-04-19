@@ -1,50 +1,45 @@
-"""todo_write tool — factory-bound per Agent, mutates ``LoopState.custom['todos']``.
+"""todo_write — replace the session's todo list.
 
-Auto-clears the list when every item is ``completed``. Rendering lives in the
-Context layer to keep the core → tools dependency direction one-way.
+Schema (``TodoItem``) and ``<todos>`` rendering live in ``aura.core.todos``;
+this file is just the write path: pydantic-validated input → ``LoopState``.
 """
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from aura.core.state import LoopState
-from aura.tools.base import build_tool
-
-
-class TodoItem(BaseModel):
-    content: str = Field(..., min_length=1, description="Imperative form of the task")
-    status: Literal["pending", "in_progress", "completed"]
-    activeForm: str = Field(
-        ..., min_length=1, description="Present continuous form shown during execution"
-    )
+from aura.core.todos import TodoItem
+from aura.tools.base import tool_metadata
 
 
 class TodoWriteParams(BaseModel):
     todos: list[TodoItem] = Field(
-        ..., description="Complete new list; replaces prior state"
+        ..., description="Complete new list; replaces prior state."
     )
 
 
-def make_todo_write_tool(state: LoopState) -> BaseTool:
-    def _run(todos: list[TodoItem]) -> dict[str, Any]:
-        if todos and all(t.status == "completed" for t in todos):
-            state.custom["todos"] = []
-        else:
-            state.custom["todos"] = [t.model_dump() for t in todos]
+class TodoWrite(BaseTool):
+    # LoopState is a stdlib @dataclass, not a pydantic model; this lets pydantic
+    # accept it as a field type without trying to validate its internals.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    name: str = "todo_write"
+    description: str = (
+        "Update the todo list for the current session. Use this proactively to "
+        "track multi-step work — write a list upfront and update it as you "
+        "complete items. Keep exactly one item in_progress when actively "
+        "working; mark completed the moment an item is done."
+    )
+    args_schema: type[BaseModel] = TodoWriteParams
+    metadata: dict[str, Any] | None = tool_metadata(
+        is_concurrency_safe=False,  # mutates shared LoopState — cannot parallelize
+    )
+    state: LoopState
+
+    def _run(self, todos: list[TodoItem]) -> dict[str, Any]:
+        self.state.custom["todos"] = list(todos)
         return {"message": "Todos updated."}
-
-    return build_tool(
-        name="todo_write",
-        description=(
-            "Update the todo list for the current session. Use this proactively to "
-            "track multi-step work — write a todo list upfront and update it as you "
-            "complete items. Keep exactly one item in_progress when actively working; "
-            "mark completed the moment an item is done."
-        ),
-        args_schema=TodoWriteParams,
-        func=_run,
-    )

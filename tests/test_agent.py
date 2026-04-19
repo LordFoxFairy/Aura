@@ -727,7 +727,7 @@ async def test_todo_write_tool_call_injects_todos_on_next_turn(tmp_path: Path) -
                 "args": {"todos": [{
                     "content": "SMOKE",
                     "status": "pending",
-                    "activeForm": "Running SMOKE",
+                    "active_form": "Running SMOKE",
                 }]},
             }],
         )),
@@ -766,7 +766,7 @@ async def test_clear_session_wipes_todos(tmp_path: Path) -> None:
                 "args": {"todos": [{
                     "content": "SMOKE",
                     "status": "pending",
-                    "activeForm": "Running SMOKE",
+                    "active_form": "Running SMOKE",
                 }]},
             }],
         )),

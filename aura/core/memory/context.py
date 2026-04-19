@@ -20,13 +20,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from aura.core.memory import project_memory
 from aura.core.memory.rules import Rule, RulesBundle
 from aura.core.memory.rules import match as match_rules
+from aura.core.todos import TodoItem, render_todos_body
 
 _AURA_MD = "AURA.md"
 _AURA_DIR = ".aura"
@@ -49,7 +49,7 @@ class Context:
         system_prompt: str,
         primary_memory: str,
         rules: RulesBundle,
-        todos_provider: Callable[[], list[dict[str, Any]]] | None = None,
+        todos_provider: Callable[[], list[TodoItem]] | None = None,
     ) -> None:
         self._cwd = cwd.resolve()
         self._system_prompt = system_prompt
@@ -147,7 +147,7 @@ class Context:
         if self._todos_provider is not None:
             todos = self._todos_provider()
             if todos:
-                body = _render_todos_body(todos)
+                body = render_todos_body(todos)
                 messages.append(HumanMessage(f"<todos>\n{body}\n</todos>"))
 
         messages.extend(history)
@@ -176,23 +176,6 @@ def _is_under(path: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
-
-
-def _render_todos_body(todos: list[dict[str, Any]]) -> str:
-    """渲染 todos 列表为 `<todos>` HumanMessage 的 body。
-
-    格式有意保留调整空间：只保证 `content` / `status` / `activeForm` 三个字段
-    以可读形式出现，不承诺具体行格式。
-    """
-    lines: list[str] = []
-    for t in todos:
-        if t["status"] == "completed":
-            lines.append(f"- [completed] {t['content']}")
-        else:
-            lines.append(
-                f"- [{t['status']}] {t['content']} (active: {t['activeForm']})"
-            )
-    return "\n".join(lines)
 
 
 def _intermediate_dirs(start: Path, cwd: Path) -> list[Path]:

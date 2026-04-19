@@ -14,7 +14,7 @@ from typing import Any, TypeVar
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from aura.schemas.tool import tool_metadata
+from aura.schemas.tool import ToolArgsPreview, ToolRuleMatcher, tool_metadata
 
 _TParams = TypeVar("_TParams", bound=BaseModel)
 
@@ -30,6 +30,8 @@ def build_tool(
     is_destructive: bool = False,
     is_concurrency_safe: bool = False,
     max_result_size_chars: int | None = None,
+    rule_matcher: ToolRuleMatcher | None = None,
+    args_preview: ToolArgsPreview | None = None,
 ) -> BaseTool:
     return StructuredTool.from_function(
         func=func,
@@ -42,5 +44,7 @@ def build_tool(
             is_destructive=is_destructive,
             is_concurrency_safe=is_concurrency_safe,
             max_result_size_chars=max_result_size_chars,
+            rule_matcher=rule_matcher,
+            args_preview=args_preview,
         ),
     )

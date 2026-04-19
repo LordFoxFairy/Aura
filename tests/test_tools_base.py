@@ -72,3 +72,70 @@ async def test_build_tool_ainvoke_propagates_tool_error() -> None:
     )
     with pytest.raises(ToolError, match="kaboom"):
         await tool.ainvoke({})
+
+
+# ---------------------------------------------------------------------------
+# Phase D additions: rule_matcher + args_preview metadata slots
+# ---------------------------------------------------------------------------
+
+
+def _noop() -> dict[str, Any]:
+    return {}
+
+
+def test_tool_metadata_defaults_rule_matcher_and_args_preview_to_none() -> None:
+    from aura.schemas.tool import tool_metadata
+    meta = tool_metadata()
+    assert meta["rule_matcher"] is None
+    assert meta["args_preview"] is None
+
+
+def test_tool_metadata_accepts_rule_matcher_callable() -> None:
+    from aura.schemas.tool import tool_metadata
+
+    def matcher(args: dict[str, Any], content: str) -> bool:
+        return args.get("cmd") == content
+
+    meta = tool_metadata(rule_matcher=matcher)
+    assert meta["rule_matcher"] is matcher
+
+
+def test_tool_metadata_accepts_args_preview_callable() -> None:
+    from aura.schemas.tool import tool_metadata
+
+    def preview(args: dict[str, Any]) -> str:
+        return f"cmd: {args.get('command', '')}"
+
+    meta = tool_metadata(args_preview=preview)
+    assert meta["args_preview"] is preview
+
+
+def test_build_tool_stores_rule_matcher_in_metadata() -> None:
+    def matcher(args: dict[str, Any], content: str) -> bool:
+        return True
+
+    tool = build_tool(
+        name="x", description="x", args_schema=_Empty, func=_noop,
+        rule_matcher=matcher,
+    )
+    assert (tool.metadata or {}).get("rule_matcher") is matcher
+
+
+def test_build_tool_stores_args_preview_in_metadata() -> None:
+    def preview(args: dict[str, Any]) -> str:
+        return "x"
+
+    tool = build_tool(
+        name="x", description="x", args_schema=_Empty, func=_noop,
+        args_preview=preview,
+    )
+    assert (tool.metadata or {}).get("args_preview") is preview
+
+
+def test_build_tool_without_new_kwargs_has_none_slots() -> None:
+    tool = build_tool(
+        name="x", description="x", args_schema=_Empty, func=_noop,
+    )
+    meta = tool.metadata or {}
+    assert meta.get("rule_matcher") is None
+    assert meta.get("args_preview") is None

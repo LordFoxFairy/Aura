@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from aura.core.permissions.matchers import path_prefix_on
 from aura.schemas.tool import ToolError, tool_metadata
 
 
@@ -16,12 +17,18 @@ class WriteFileParams(BaseModel):
     content: str = Field(description="UTF-8 text content to write. Overwrites any existing file.")
 
 
+def _preview(args: dict[str, Any]) -> str:
+    return f"path: {args.get('path', '')}  ({len(args.get('content', ''))} chars)"
+
+
 class WriteFile(BaseTool):
     name: str = "write_file"
     description: str = "Create or overwrite a UTF-8 text file. Parent directory must exist."
     args_schema: type[BaseModel] = WriteFileParams
     metadata: dict[str, Any] | None = tool_metadata(
         is_destructive=True,
+        rule_matcher=path_prefix_on("path"),
+        args_preview=_preview,
     )
 
     def _run(self, path: str, content: str) -> dict[str, Any]:

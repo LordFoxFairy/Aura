@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from aura.core.permissions.matchers import exact_match_on
 from aura.schemas.tool import ToolError, tool_metadata
 
 
@@ -27,6 +28,10 @@ class GlobParams(BaseModel):
     )
 
 
+def _preview(args: dict[str, Any]) -> str:
+    return f"pattern: {args.get('pattern', '')}  @ {args.get('path', '.')}"
+
+
 class Glob(BaseTool):
     name: str = "glob"
     description: str = (
@@ -36,6 +41,8 @@ class Glob(BaseTool):
     args_schema: type[BaseModel] = GlobParams
     metadata: dict[str, Any] | None = tool_metadata(
         is_read_only=True, is_concurrency_safe=True, max_result_size_chars=40_000,
+        rule_matcher=exact_match_on("pattern"),
+        args_preview=_preview,
     )
 
     def _run(self, pattern: str, path: str = ".", max_results: int = 500) -> dict[str, Any]:

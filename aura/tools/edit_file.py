@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from aura.core.permissions.matchers import path_prefix_on
 from aura.schemas.tool import ToolError, tool_metadata
 
 
@@ -29,6 +30,12 @@ class EditFileParams(BaseModel):
     )
 
 
+def _preview(args: dict[str, Any]) -> str:
+    new_lines = len(args.get("new_str", "").splitlines())
+    old_lines = len(args.get("old_str", "").splitlines())
+    return f"path: {args.get('path', '')}  +{new_lines}/-{old_lines} lines"
+
+
 class EditFile(BaseTool):
     name: str = "edit_file"
     description: str = (
@@ -37,7 +44,11 @@ class EditFile(BaseTool):
         "ambiguous matches."
     )
     args_schema: type[BaseModel] = EditFileParams
-    metadata: dict[str, Any] | None = tool_metadata(is_destructive=True)
+    metadata: dict[str, Any] | None = tool_metadata(
+        is_destructive=True,
+        rule_matcher=path_prefix_on("path"),
+        args_preview=_preview,
+    )
 
     def _run(
         self, path: str, old_str: str, new_str: str, replace_all: bool = False,

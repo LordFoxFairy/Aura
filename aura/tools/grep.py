@@ -10,6 +10,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from aura.core.permissions.matchers import exact_match_on
 from aura.schemas.tool import ToolError, tool_metadata
 
 
@@ -31,6 +32,10 @@ class GrepParams(BaseModel):
     )
 
 
+def _preview(args: dict[str, Any]) -> str:
+    return f"pattern: {args.get('pattern', '')}  @ {args.get('path', '.')}"
+
+
 class Grep(BaseTool):
     name: str = "grep"
     description: str = (
@@ -42,6 +47,8 @@ class Grep(BaseTool):
         is_read_only=True,
         is_concurrency_safe=True,
         max_result_size_chars=80_000,
+        rule_matcher=exact_match_on("pattern"),
+        args_preview=_preview,
     )
 
     def _run(

@@ -55,3 +55,16 @@ def test_read_file_is_read_only() -> None:
     assert meta.get("is_read_only") is True
     assert meta.get("is_destructive") is False
     assert meta.get("is_concurrency_safe") is True
+
+
+def test_read_file_metadata_includes_matcher_and_preview() -> None:
+    meta = read_file.metadata or {}
+    matcher = meta.get("rule_matcher")
+    assert callable(matcher)
+    # Path-prefix matcher: /tmp covers /tmp/foo but not /tmpfoo.
+    assert matcher({"path": "/tmp/foo"}, "/tmp") is True
+    assert matcher({"path": "/tmpfoo"}, "/tmp") is False
+
+    preview = meta.get("args_preview")
+    assert callable(preview)
+    assert preview({"path": "/tmp/a"}) == "path: /tmp/a"

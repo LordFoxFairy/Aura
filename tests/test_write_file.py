@@ -72,3 +72,13 @@ def test_write_file_capability_flags() -> None:
 
 def test_write_file_no_check_permissions_method() -> None:
     assert not hasattr(write_file, "check_permissions")
+
+
+def test_write_file_metadata_includes_matcher_and_preview() -> None:
+    from aura.tools.write_file import write_file
+
+    meta = write_file.metadata or {}
+    assert meta.get("rule_matcher") is not None
+    preview = meta.get("args_preview")
+    assert callable(preview)
+    assert preview({"path": "x.md", "content": "hello"}) == "path: x.md  (5 chars)"

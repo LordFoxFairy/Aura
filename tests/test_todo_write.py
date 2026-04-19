@@ -131,3 +131,15 @@ def test_tool_metadata_and_name() -> None:
     assert meta.get("is_read_only") is False
     assert meta.get("is_destructive") is False
     assert meta.get("is_concurrency_safe") is False
+
+
+def test_todo_write_metadata_includes_matcher_and_preview() -> None:
+    from aura.tools.todo_write import TodoWrite
+
+    state = LoopState()
+    tool = TodoWrite(state=state)
+    meta = tool.metadata or {}
+    assert meta.get("rule_matcher") is None
+    preview = meta.get("args_preview")
+    assert callable(preview)
+    assert preview({"todos": []}) == "todos: 0 items"

@@ -60,3 +60,16 @@ def test_bash_timeout_validation_rejects_zero() -> None:
 
 def test_bash_default_timeout() -> None:
     assert BashParams(command="x").timeout == 30
+
+
+def test_bash_metadata_includes_matcher_and_preview() -> None:
+    meta = bash.metadata or {}
+    matcher = meta.get("rule_matcher")
+    assert callable(matcher)
+    # Matcher is exact-match on command.
+    assert matcher({"command": "npm test"}, "npm test") is True
+    assert matcher({"command": "rm -rf /"}, "npm test") is False
+
+    preview = meta.get("args_preview")
+    assert callable(preview)
+    assert preview({"command": "ls"}) == "command: ls"

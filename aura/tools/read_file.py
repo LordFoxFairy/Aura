@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from aura.core.permissions.matchers import path_prefix_on
 from aura.schemas.tool import ToolError, tool_metadata
 
 _MAX_BYTES = 1024 * 1024
@@ -17,12 +18,18 @@ class ReadFileParams(BaseModel):
     path: str = Field(description="Absolute or relative file path to read.")
 
 
+def _preview(args: dict[str, Any]) -> str:
+    return f"path: {args.get('path', '')}"
+
+
 class ReadFile(BaseTool):
     name: str = "read_file"
     description: str = "Read a UTF-8 text file (up to 1 MB)."
     args_schema: type[BaseModel] = ReadFileParams
     metadata: dict[str, Any] | None = tool_metadata(
         is_read_only=True, is_concurrency_safe=True,
+        rule_matcher=path_prefix_on("path"),
+        args_preview=_preview,
     )
 
     def _run(self, path: str) -> dict[str, Any]:

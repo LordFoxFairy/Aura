@@ -144,3 +144,13 @@ def test_web_fetch_timeout_bounds() -> None:
         WebFetchParams(url="https://example.com", timeout=121)
     with pytest.raises(ValidationError):
         WebFetchParams(url="https://example.com", timeout=0)
+
+
+def test_web_fetch_metadata_includes_matcher_and_preview() -> None:
+    from aura.tools.web_fetch import web_fetch
+
+    meta = web_fetch.metadata or {}
+    assert meta.get("rule_matcher") is not None
+    preview = meta.get("args_preview")
+    assert callable(preview)
+    assert preview({"url": "https://x.com"}) == "url: https://x.com"

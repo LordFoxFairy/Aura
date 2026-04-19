@@ -69,3 +69,13 @@ def test_grep_capability_flags() -> None:
     assert meta.get("is_read_only") is True
     assert meta.get("is_concurrency_safe") is True
     assert meta.get("is_destructive") is False
+
+
+def test_grep_metadata_includes_matcher_and_preview() -> None:
+    from aura.tools.grep import grep
+
+    meta = grep.metadata or {}
+    assert meta.get("rule_matcher") is not None
+    preview = meta.get("args_preview")
+    assert callable(preview)
+    assert preview({"pattern": "foo", "path": "src"}) == "pattern: foo  @ src"

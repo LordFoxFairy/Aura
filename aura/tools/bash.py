@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from aura.core.permissions.matchers import exact_match_on
 from aura.schemas.tool import ToolError, tool_metadata
 
 _DEFAULT_TIMEOUT = 30
@@ -23,12 +24,18 @@ class BashParams(BaseModel):
     )
 
 
+def _preview(args: dict[str, Any]) -> str:
+    return f"command: {args.get('command', '')}"
+
+
 class Bash(BaseTool):
     name: str = "bash"
     description: str = "Run a shell command with a timeout. Returns stdout, stderr, and exit_code."
     args_schema: type[BaseModel] = BashParams
     metadata: dict[str, Any] | None = tool_metadata(
         is_destructive=True,
+        rule_matcher=exact_match_on("command"),
+        args_preview=_preview,
     )
 
     def _run(self, command: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:

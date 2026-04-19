@@ -73,3 +73,16 @@ def test_edit_file_capability_flags() -> None:
     meta = edit_file.metadata or {}
     assert meta.get("is_destructive") is True
     assert meta.get("is_read_only") is False
+
+
+def test_edit_file_metadata_includes_matcher_and_preview() -> None:
+    from aura.tools.edit_file import edit_file
+
+    meta = edit_file.metadata or {}
+    assert meta.get("rule_matcher") is not None
+    preview = meta.get("args_preview")
+    assert callable(preview)
+    assert (
+        preview({"path": "f.py", "old_str": "a\nb", "new_str": "a\nb\nc"})
+        == "path: f.py  +3/-2 lines"
+    )

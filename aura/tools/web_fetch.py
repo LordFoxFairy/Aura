@@ -12,6 +12,7 @@ from urllib.request import Request, urlopen
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from aura.core.permissions.matchers import exact_match_on
 from aura.schemas.tool import ToolError, tool_metadata
 
 _DEFAULT_TIMEOUT = 30
@@ -88,6 +89,10 @@ def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
     return output
 
 
+def _preview(args: dict[str, Any]) -> str:
+    return f"url: {args.get('url', '')}"
+
+
 class WebFetch(BaseTool):
     name: str = "web_fetch"
     description: str = (
@@ -97,6 +102,8 @@ class WebFetch(BaseTool):
     args_schema: type[BaseModel] = WebFetchParams
     metadata: dict[str, Any] | None = tool_metadata(
         is_read_only=True, is_concurrency_safe=True, max_result_size_chars=60_000,
+        rule_matcher=exact_match_on("url"),
+        args_preview=_preview,
     )
 
     def _run(self, url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:

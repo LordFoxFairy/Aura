@@ -22,6 +22,10 @@ class TodoWriteParams(BaseModel):
     )
 
 
+def _preview(args: dict[str, Any]) -> str:
+    return f"todos: {len(args.get('todos', []))} items"
+
+
 class TodoWrite(BaseTool):
     # LoopState is a stdlib @dataclass, not a pydantic model; this lets pydantic
     # accept it as a field type without trying to validate its internals.
@@ -37,6 +41,7 @@ class TodoWrite(BaseTool):
     args_schema: type[BaseModel] = TodoWriteParams
     metadata: dict[str, Any] | None = tool_metadata(
         is_concurrency_safe=False,  # mutates shared LoopState — cannot parallelize
+        args_preview=_preview,
     )
     state: LoopState
 

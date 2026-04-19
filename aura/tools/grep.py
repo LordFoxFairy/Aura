@@ -28,9 +28,7 @@ class GrepParams(BaseModel):
     max_results: int = Field(default=100, ge=1, le=10_000, description="Maximum matches to return.")
 
 
-def _search(params: BaseModel) -> ToolResult:
-    assert isinstance(params, GrepParams)
-
+def _search(params: GrepParams) -> ToolResult:
     try:
         compiled = re.compile(params.pattern)
     except re.error as exc:

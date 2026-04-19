@@ -14,8 +14,7 @@ class WriteFileParams(BaseModel):
     content: str = Field(description="UTF-8 text content to write. Overwrites any existing file.")
 
 
-def _write(params: BaseModel) -> ToolResult:
-    assert isinstance(params, WriteFileParams)
+def _write(params: WriteFileParams) -> ToolResult:
     p = Path(params.path)
     if not p.parent.exists():
         return ToolResult(ok=False, error=f"parent directory does not exist: {p.parent}")

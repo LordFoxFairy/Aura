@@ -21,8 +21,7 @@ class BashParams(BaseModel):
     )
 
 
-def _run(params: BaseModel) -> ToolResult:
-    assert isinstance(params, BashParams)
+def _run(params: BashParams) -> ToolResult:
     try:
         completed = subprocess.run(
             params.command,

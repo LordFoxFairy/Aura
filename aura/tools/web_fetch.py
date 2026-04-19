@@ -22,8 +22,7 @@ class WebFetchParams(BaseModel):
     )
 
 
-def _fetch(params: BaseModel) -> ToolResult:
-    assert isinstance(params, WebFetchParams)
+def _fetch(params: WebFetchParams) -> ToolResult:
     if not (params.url.startswith("http://") or params.url.startswith("https://")):
         return ToolResult(ok=False, error=f"not an http(s) URL: {params.url}")
 

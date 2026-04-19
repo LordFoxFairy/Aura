@@ -15,8 +15,7 @@ class ReadFileParams(BaseModel):
     path: str = Field(description="Absolute or relative file path to read.")
 
 
-def _read(params: BaseModel) -> ToolResult:
-    assert isinstance(params, ReadFileParams)
+def _read(params: ReadFileParams) -> ToolResult:
     p = Path(params.path)
     if not p.exists():
         return ToolResult(ok=False, error=f"not found: {params.path}")

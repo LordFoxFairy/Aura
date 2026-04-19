@@ -39,7 +39,7 @@ def make_event_logger_hooks() -> HookChain:
             content_chars=len(content),
             content_preview=_trim(content, 500),
             tool_calls=len(ai_message.tool_calls or []),
-            usage=dict(usage) if usage else {},
+            usage=dict(usage),
             total_tokens=state.total_tokens_used,
         )
 

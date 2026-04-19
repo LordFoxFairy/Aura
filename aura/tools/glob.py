@@ -25,8 +25,7 @@ class GlobParams(BaseModel):
     )
 
 
-def _glob(params: BaseModel) -> ToolResult:
-    assert isinstance(params, GlobParams)
+def _glob(params: GlobParams) -> ToolResult:
     root = Path(params.path).expanduser().resolve()
     if not root.exists():
         return ToolResult(ok=False, error=f"not found: {root}")

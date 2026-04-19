@@ -27,8 +27,7 @@ class EditFileParams(BaseModel):
     )
 
 
-def _edit(params: BaseModel) -> ToolResult:
-    assert isinstance(params, EditFileParams)
+def _edit(params: EditFileParams) -> ToolResult:
     p = Path(params.path).expanduser()
     if not p.exists():
         return ToolResult(ok=False, error=f"not found: {params.path}")

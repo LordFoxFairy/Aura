@@ -6,9 +6,11 @@ import asyncio
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, overload
+from typing import Any, TypeVar, overload
 
 from pydantic import BaseModel
+
+_TParams = TypeVar("_TParams", bound=BaseModel)
 
 
 @dataclass
@@ -41,8 +43,8 @@ def build_tool(
     *,
     name: str,
     description: str,
-    input_model: type[BaseModel],
-    call: Callable[[BaseModel], ToolResult],
+    input_model: type[_TParams],
+    call: Callable[[_TParams], ToolResult],
     is_read_only: bool = False,
     is_destructive: bool = False,
     is_concurrency_safe: bool = False,
@@ -55,8 +57,8 @@ def build_tool(
     *,
     name: str,
     description: str,
-    input_model: type[BaseModel],
-    call: Callable[[BaseModel], Awaitable[ToolResult]],
+    input_model: type[_TParams],
+    call: Callable[[_TParams], Awaitable[ToolResult]],
     is_read_only: bool = False,
     is_destructive: bool = False,
     is_concurrency_safe: bool = False,

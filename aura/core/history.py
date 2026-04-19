@@ -40,7 +40,7 @@ def tool_schema_for(tool: AuraTool) -> dict[str, Any]:
     LangChain's equivalent helper is
     ``langchain_core.utils.function_calling.convert_to_openai_tool``. We build
     the dict by hand because it needs ``tool.name`` and ``tool.description``
-    (which live on the ``AuraTool`` Protocol, not on the pydantic
+    (which live on the ``AuraTool`` frozen dataclass, not on the pydantic
     ``input_model``); the helper can't read either from our object shape.
     """
     return {

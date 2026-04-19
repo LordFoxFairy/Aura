@@ -16,6 +16,8 @@ dependencies = [
     "prompt-toolkit >= 3.0",
     "rich >= 13.7",
     "pydantic >= 2.6",
+    "pathspec >= 0.12",
+    "pyyaml >= 6.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +35,7 @@ dev = [
     "pytest-cov",
     "ruff >= 0.4",
     "mypy >= 1.10",
+    "types-PyYAML >= 6.0",
 ]
 
 [project.scripts]

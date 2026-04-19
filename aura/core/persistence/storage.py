@@ -11,9 +11,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, messages_from_dict, messages_to_dict
 
-from aura.core.history import deserialize_messages, serialize_messages
 from aura.core.persistence import journal
 
 _SCHEMA_SQL = """
@@ -59,7 +58,7 @@ class SessionStorage:
         cur.execute("BEGIN")
         try:
             cur.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-            payloads = serialize_messages(messages)
+            payloads = messages_to_dict(messages)
             rows: list[tuple[str, int, str]] = [
                 (session_id, i, json.dumps(payload)) for i, payload in enumerate(payloads)
             ]
@@ -81,7 +80,7 @@ class SessionStorage:
             (session_id,),
         )
         dicts = [json.loads(row[0]) for row in cur.fetchall()]
-        messages = deserialize_messages(dicts)
+        messages = messages_from_dict(dicts)
         journal.write(
             "storage_load", session=session_id, count=len(messages),
         )

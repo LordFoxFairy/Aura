@@ -165,9 +165,6 @@ def _intermediate_dirs(start: Path, cwd: Path) -> list[Path]:
     current = start
     while current != cwd:
         chain.append(current)
-        parent = current.parent
-        if parent == current:  # 防御：正常情况下不应到达
-            break
-        current = parent
+        current = current.parent
     chain.reverse()
     return chain

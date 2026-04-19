@@ -23,6 +23,3 @@ class ToolRegistry(dict[str, BaseTool]):
 
     def tools(self) -> list[BaseTool]:
         return list(self.values())
-
-    def names(self) -> list[str]:
-        return list(self.keys())

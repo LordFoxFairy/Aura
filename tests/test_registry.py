@@ -48,15 +48,14 @@ _tool_b: BaseTool = build_tool(
 
 def test_registry_empty_is_empty() -> None:
     reg = ToolRegistry(())
-    assert reg.names() == []
     assert len(reg) == 0
 
 
 def test_registry_accepts_tools() -> None:
     reg = ToolRegistry([_tool_a, _tool_b])
     assert len(reg) == 2
-    assert "tool_a" in reg.names()
-    assert "tool_b" in reg.names()
+    assert "tool_a" in reg
+    assert "tool_b" in reg
 
 
 def test_registry_duplicate_name_raises() -> None:

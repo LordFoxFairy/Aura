@@ -23,10 +23,6 @@ def reset() -> None:
     _path = None
 
 
-def is_configured() -> bool:
-    return _path is not None
-
-
 def write(event: str, /, **fields: Any) -> None:
     if _path is None:
         return

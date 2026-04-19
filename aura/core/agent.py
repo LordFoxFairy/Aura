@@ -136,11 +136,6 @@ class Agent:
         return self._state
 
     @property
-    def config(self) -> AuraConfig:
-        """只读视图；CLI 层用来查 router / providers，避免摸 `_config`。"""
-        return self._config
-
-    @property
     def current_model(self) -> str:
         """当前 default 对应的 'provider:model' 字符串。"""
         return self._config.router.get("default", "")

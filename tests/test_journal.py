@@ -19,14 +19,13 @@ def _reset() -> Any:
 
 
 def test_default_is_disabled() -> None:
-    assert journal_module.is_configured() is False
+    # Before configure(), write() is a silent no-op — should not raise.
     journal_module.write("anything", a=1)
 
 
 def test_configure_enables_writes(tmp_path: Path) -> None:
     log = tmp_path / "events.jsonl"
     journal_module.configure(log)
-    assert journal_module.is_configured() is True
     journal_module.write("first", foo=1)
     journal_module.write("second", bar="x")
     lines = log.read_text(encoding="utf-8").strip().split("\n")
@@ -42,7 +41,6 @@ def test_reset_disables_writes(tmp_path: Path) -> None:
     journal_module.configure(log)
     journal_module.write("pre_reset")
     journal_module.reset()
-    assert journal_module.is_configured() is False
     journal_module.write("post_reset")
     lines = log.read_text(encoding="utf-8").strip().split("\n")
     assert len(lines) == 1

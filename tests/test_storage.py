@@ -129,38 +129,3 @@ def test_save_empty_list(tmp_path: Path) -> None:
     assert result == []
 
 
-def test_list_sessions_empty_returns_empty(tmp_path: Path) -> None:
-    storage = SessionStorage(tmp_path / "db.sqlite")
-    try:
-        assert storage.list_sessions() == []
-    finally:
-        storage.close()
-
-
-def test_list_sessions_returns_distinct_ids_ordered(tmp_path: Path) -> None:
-    storage = SessionStorage(tmp_path / "db.sqlite")
-    try:
-        storage.save("beta", [HumanMessage(content="b")])
-        storage.save("alpha", [HumanMessage(content="a")])
-        storage.save("gamma", [HumanMessage(content="g")])
-        assert storage.list_sessions() == ["alpha", "beta", "gamma"]
-    finally:
-        storage.close()
-
-
-def test_exists_false_for_unknown_session(tmp_path: Path) -> None:
-    storage = SessionStorage(tmp_path / "db.sqlite")
-    try:
-        assert storage.exists("ghost") is False
-    finally:
-        storage.close()
-
-
-def test_exists_true_after_save(tmp_path: Path) -> None:
-    storage = SessionStorage(tmp_path / "db.sqlite")
-    try:
-        storage.save("alpha", [HumanMessage(content="a")])
-        assert storage.exists("alpha") is True
-        assert storage.exists("beta") is False
-    finally:
-        storage.close()

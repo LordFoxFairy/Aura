@@ -1,4 +1,4 @@
-"""Tests for aura.core.project_memory.load_project_memory (Task 1: discovery only)."""
+"""Tests for aura.core.project_memory.load_project_memory (Task 1+2)."""
 
 from __future__ import annotations
 
@@ -173,3 +173,234 @@ def test_symlinked_cwd_walks_resolved_ancestors(
     # 通过符号链接进入 —— resolve 后应看到 real_outer 和 real_inner 层级
     result = load_project_memory(link)
     assert result == "real-outer\n\nreal-inner"
+
+
+class TestAtImports:
+    """Covers B4: `@imports` expansion at load time (depth 5, cycle, fence, etc.)."""
+
+    def test_01_relative_dot_slash_child(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("before\n@./child.md\nafter")
+        (cwd / "child.md").write_text("CHILD-CONTENT")
+
+        result = load_project_memory(cwd)
+        assert result == "before\nCHILD-CONTENT\nafter"
+
+    def test_02_tilde_home_import(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        home.mkdir()
+        (home / "global.md").write_text("GLOBAL")
+        _patch_home(monkeypatch, home)
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("@~/global.md")
+
+        assert load_project_memory(cwd) == "GLOBAL"
+
+    def test_03_absolute_path_import(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        target = tmp_path / "abs.md"
+        target.write_text("ABSOLUTE")
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text(f"@{target}")
+
+        assert load_project_memory(cwd) == "ABSOLUTE"
+
+    def test_04_depth_5_chain_all_expand(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        # a(=AURA.md) → b → c → d → e; e has plain content.
+        (cwd / "AURA.md").write_text("A\n@./b.md")
+        (cwd / "b.md").write_text("B\n@./c.md")
+        (cwd / "c.md").write_text("C\n@./d.md")
+        (cwd / "d.md").write_text("D\n@./e.md")
+        (cwd / "e.md").write_text("E")
+
+        assert load_project_memory(cwd) == "A\nB\nC\nD\nE"
+
+    def test_05_depth_6_last_link_dropped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        # a → b → c → d → e → f; f should NOT be expanded (line removed from e).
+        (cwd / "AURA.md").write_text("A\n@./b.md")
+        (cwd / "b.md").write_text("B\n@./c.md")
+        (cwd / "c.md").write_text("C\n@./d.md")
+        (cwd / "d.md").write_text("D\n@./e.md")
+        (cwd / "e.md").write_text("E-pre\n@./f.md\nE-post")
+        (cwd / "f.md").write_text("F")
+
+        result = load_project_memory(cwd)
+        # e's @./f.md line is dropped; E-pre + E-post remain; F never appears.
+        assert "F" not in result
+        assert "E-pre" in result and "E-post" in result
+        assert "@./f.md" not in result
+        assert result == "A\nB\nC\nD\nE-pre\nE-post"
+
+    def test_06_cycle_inner_dropped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("A-pre\n@./b.md\nA-post")
+        (cwd / "b.md").write_text("B-pre\n@./AURA.md\nB-post")
+
+        result = load_project_memory(cwd)
+        assert result == "A-pre\nB-pre\nB-post\nA-post"
+
+    def test_07_missing_target_line_removed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("before\n@./missing.md\nafter")
+
+        assert load_project_memory(cwd) == "before\nafter"
+
+    def test_08_directory_target_line_removed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "subdir").mkdir()
+        (cwd / "AURA.md").write_text("before\n@./subdir\nafter")
+
+        assert load_project_memory(cwd) == "before\nafter"
+
+    def test_09_backtick_fence_preserves_literal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "child.md").write_text("EXPANDED")
+        (cwd / "AURA.md").write_text("```\n@./child.md\n```")
+
+        result = load_project_memory(cwd)
+        assert result == "```\n@./child.md\n```"
+        assert "EXPANDED" not in result
+
+    def test_10_tilde_fence_still_expands(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "child.md").write_text("EXPANDED")
+        (cwd / "AURA.md").write_text("~~~\n@./child.md\n~~~")
+
+        result = load_project_memory(cwd)
+        assert "EXPANDED" in result
+        assert "@./child.md" not in result
+
+    def test_11_leading_whitespace_not_import(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "child.md").write_text("EXPANDED")
+        (cwd / "AURA.md").write_text("before\n  @./child.md\nafter")
+
+        result = load_project_memory(cwd)
+        assert result == "before\n  @./child.md\nafter"
+        assert "EXPANDED" not in result
+
+    def test_12_crlf_line_endings_expand(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "child.md").write_text("CHILD")
+        (cwd / "AURA.md").write_bytes(b"before\r\n@./child.md\r\nafter")
+
+        result = load_project_memory(cwd)
+        assert "CHILD" in result
+        assert "@./child.md" not in result
+
+    def test_13_user_layer_relative_to_home_aura(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        (home / ".aura").mkdir(parents=True)
+        (home / ".aura" / "AURA.md").write_text("U\n@./piece.md")
+        (home / ".aura" / "piece.md").write_text("PIECE")
+        _patch_home(monkeypatch, home)
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+
+        assert load_project_memory(cwd) == "U\nPIECE"
+
+    def test_14_relative_to_importing_file_not_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        outer = tmp_path / "outer"
+        inner = outer / "inner"
+        inner.mkdir(parents=True)
+        (outer / "AURA.md").write_text("@./child.md")
+        (outer / "child.md").write_text("OUTER-CHILD")
+
+        # cwd = inner；但 outer/AURA.md 中 @./child.md 解析相对于 outer/，而非 cwd。
+        result = load_project_memory(inner)
+        assert "OUTER-CHILD" in result
+
+    def test_15_outer_import_line_leaves_no_residue(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "child.md").write_text("CHILD")
+        (cwd / "AURA.md").write_text("pre\n@./child.md\npost")
+
+        result = load_project_memory(cwd)
+        assert "@./child.md" not in result
+        assert result == "pre\nCHILD\npost"

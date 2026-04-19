@@ -1,4 +1,4 @@
-"""Aura CLI — REPL, slash commands, rendering, permission asker."""
+"""CLI surface: REPL loop, slash commands, event renderer, and permission asker."""
 
 from aura.cli.commands import CommandResult, dispatch
 from aura.cli.permission import make_cli_asker

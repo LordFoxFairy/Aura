@@ -44,12 +44,12 @@ class ToolRegistry:
 
     @staticmethod
     def partition_batches(steps: list[ToolStep]) -> list[list[ToolStep]]:
-        """将 steps 按并发安全性分批，对齐 claude-code runTools 模式。
+        """将 steps 按并发安全性分批（保序，不重排）。
 
-        三条规则（保序不重排）：
-        1. 连续的 is_concurrency_safe 且 decision=None 的 step 合并成一个并行 batch。
+        1. 连续的 is_concurrency_safe 且 decision=None 的 step 合并成一个并行 batch，
+           批内用 gather 一次并发执行并保序拿回结果。
         2. 非 safe 或已被 pre_tool 短路（decision 非 None）的 step 单独成 batch。
-        3. 维持原 tool_call 顺序 — 并发只发生在 batch 内，不跨 batch。
+        3. 维持原 tool_call 顺序 —— 并发只发生在 batch 内，不跨 batch。
         """
         batches: list[list[ToolStep]] = []
         current: list[ToolStep] = []

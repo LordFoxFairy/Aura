@@ -1,4 +1,4 @@
-"""aura CLI entry — argparse + build_agent + run_repl."""
+"""CLI entry point: parse args, load config, build the agent, and run the REPL."""
 
 from __future__ import annotations
 
@@ -48,8 +48,8 @@ def _warn_plaintext_api_keys(config: AuraConfig, console: Console) -> None:
 
 
 def _fail_startup(console: Console, exc: BaseException) -> int:
-    # AuraError 打印类型名 + 消息（已经带 source/detail 格式）；其他 Exception
-    # 统一归类为 "unexpected"，避免把 stacktrace 丢给用户。
+    # AuraError carries a user-facing source/detail message; anything else is
+    # reported as "unexpected" so we never surface a raw stacktrace to the user.
     from aura.core import journal
     from aura.core.errors import AuraError
 
@@ -122,8 +122,9 @@ def main() -> int:
     try:
         asyncio.run(run_repl_async(agent, console=console, verbose=args.verbose))
     except KeyboardInterrupt:
-        # asyncio.run 拦截第一次 SIGINT 做 task.cancel()，第二次才穿透到这里。
-        # 兜底成清洁退出，避免用户看到 Python traceback。
+        # asyncio.run swallows the first SIGINT (to cancel the running task);
+        # only a second Ctrl+C propagates here. Convert it to a clean exit so
+        # the user never sees a Python traceback.
         console.print()
         journal.write("shutdown_sigint")
         return 130

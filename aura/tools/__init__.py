@@ -1,12 +1,4 @@
-"""Tool infrastructure (ToolResult + build_tool) and built-in tools.
-
-Tools are LangChain ``BaseTool`` instances; use ``build_tool`` or
-``langchain_core.tools.StructuredTool`` directly.
-
-``BUILTIN_TOOLS`` is the name → tool map that the Agent facade resolves
-``config.tools.enabled`` against. Keep extension points tool-package-local
-so ``aura/core/agent.py`` stays about orchestration, not tool inventory.
-"""
+"""Built-in tools and the name → tool registry resolved by Agent config."""
 
 from langchain_core.tools import BaseTool
 

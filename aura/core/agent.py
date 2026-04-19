@@ -60,9 +60,10 @@ class Agent:
         self._loop = self._build_loop()
 
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
-        # Invariant 2（§4.2）的事务性在此层实现：history 仅当 turn 正常完成才 save。
-        # CancelledError → yield Final + re-raise → 跳过 else 分支 → 下次从 pre-turn 状态恢复。
-        # MaxTurnsExceeded → yield Final + return → 同样跳过 save，history 保持上次持久化状态。
+        # 事务性：history 只在 turn 正常完成才 save（else 分支）。
+        #   CancelledError → yield Final + re-raise → 跳过 else → 下次从 pre-turn 状态恢复
+        #   MaxTurnsExceeded → yield Final + return → 同样跳过 save
+        # 保证：存储里永远不会出现半截 turn（AI tool_call 缺对应 tool result 等）。
         journal.write(
             "astream_begin",
             session=self._session_id,
@@ -108,8 +109,9 @@ class Agent:
     def clear_session(self) -> None:
         self._storage.clear(self._session_id)
         self._state.reset()
-        # B9: /clear 同时 invalidate memory/rules caches + 重建 Context
-        # （progressive 状态随新实例自然清空）。
+        # /clear 语义：同时 invalidate memory/rules caches + 重建 Context。
+        # progressive 状态（nested fragments / matched rules）随新实例自然清空 ——
+        # 不做原地 reset，避免遗漏字段。
         project_memory.clear_cache(self._cwd)
         rules.clear_cache(self._cwd)
         self._primary_memory = project_memory.load_project_memory(self._cwd)

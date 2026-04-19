@@ -28,8 +28,8 @@ from aura.core.registry import ToolRegistry
 from aura.core.state import LoopState
 from aura.tools.base import ToolError, ToolResult
 
-# B7: path-aware tools whose successful invocation should feed Context progressive state.
-# bash (shell is unbounded) and web_fetch (URL, not filesystem) intentionally excluded.
+# 成功调用后需把路径反馈给 Context progressive 状态的工具 → 其 path 参数名。
+# bash（shell 语义不固定）和 web_fetch（URL 而非文件系统）刻意排除。
 PATH_TRIGGER_TOOLS: dict[str, str] = {
     "read_file": "path",
     "write_file": "path",
@@ -40,9 +40,10 @@ PATH_TRIGGER_TOOLS: dict[str, str] = {
 
 
 def _serialize(result: ToolResult) -> str:
-    # default=str + ensure_ascii=False：非 JSON-native 值（datetime/Path/bytes）
-    # 降级为 str 而非抛异常。_append_tool_message 在 try/except 外层，这里抛出
-    # 会漏 ToolMessage，破坏 invariant 1（tool_call.id ↔ ToolMessage 对齐）。
+    # `default=str` + `ensure_ascii=False`：遇到非 JSON-native 值
+    # （datetime / Path / bytes）降级为字符串而非抛异常。
+    # 这里抛出会越过 `_append_tool_message` 的 try/except 外层，导致那一条
+    # ToolMessage 漏 append —— 破坏 tool_call.id 与 ToolMessage 的严格对齐。
     if result.ok:
         return json.dumps(result.output, default=str, ensure_ascii=False)
     return result.error or "tool failed"
@@ -107,8 +108,8 @@ class AgentLoop:
         # turn_count 先于 pre_model hook 递增，hook 看到的是"即将开始的第 N 轮"。
         self._state.turn_count += 1
         await self._hooks.run_pre_model(history=history, state=self._state)
-        # Context.build 是整个代码库中唯一组装发给模型 message list 的地方
-        # （mutability ladder 的单一 construction site，见 spec B8）。
+        # Context.build 是整个代码库中唯一组装 messages 的构造点 ——
+        # 不要在别处拼 SystemMessage/HumanMessage 传给模型。
         messages = self._context.build(history)
         ai = await self._bound.ainvoke(messages)
         history.append(ai)
@@ -141,9 +142,11 @@ class AgentLoop:
     async def _run_batch(
         self, batch: list[ToolStep], history: list[BaseMessage],
     ) -> AsyncIterator[AgentEvent]:
-        # size=1 也走统一路径 —— 唯一区别是 gather 一个 coroutine，journal 多几行。
-        # 保序约定：所有 Started 在执行前 yield（并发 tool call 同时宣告）；
-        # Completed 按 tool_call 顺序 yield（invariant 1：tool_call.id ↔ ToolMessage 严格对齐）。
+        # size=1 也走统一 gather 路径 —— 单工具开销只多几行 journal，换来
+        # 批量分发逻辑的单一实现。
+        # 保序：所有 Started 在 gather 之前 yield（并发 tool call 同时宣告开始），
+        # Completed 按 tool_call 顺序依次 yield —— 保证 tool_call.id 与
+        # ToolMessage 的严格一一对齐，provider API 才能正确串联。
         journal.write(
             "tool_batch_begin",
             turn=self._state.turn_count,
@@ -238,10 +241,10 @@ class AgentLoop:
         )
 
     def _maybe_trigger_path(self, step: ToolStep) -> None:
-        """B7: feed successful path-aware tool calls into Context progressive state.
+        """成功的 path-aware tool 调用后，把路径反馈给 Context 的 progressive 状态。
 
-        调用点在 `_execute_step` 成功分支（decision 为 None + ainvoke 未抛），
-        故 step.tool 与 step.args 此处必非 None（由 _plan_tool_calls 保证）。
+        仅在 `_execute_step` 的成功分支（decision 为 None + ainvoke 未抛）被调用，
+        因此 `step.tool` 与 `step.args` 必非 None —— 由 `_plan_tool_calls` 保证。
         """
         arg_name = PATH_TRIGGER_TOOLS.get(step.tool.name)  # type: ignore[union-attr]
         if arg_name is None:

@@ -1,4 +1,4 @@
-"""Claude-Code-style thinking spinner with random verb, elapsed seconds, and stall coloring."""
+"""Thinking spinner: animated glyph, random verb, elapsed seconds, stall coloring."""
 
 from __future__ import annotations
 

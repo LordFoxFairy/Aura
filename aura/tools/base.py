@@ -1,10 +1,7 @@
-"""Tool contract for the Aura agent loop.
+"""Tool contract — ``ToolResult`` / ``ToolError`` and the ``build_tool`` factory.
 
-Tools are LangChain ``StructuredTool`` instances built via :func:`build_tool`.
-Project-specific flags (``is_read_only`` / ``is_destructive`` /
-``is_concurrency_safe`` / ``max_result_size_chars``) live in ``tool.metadata``
-so that ``bind_tools([t1, t2])`` accepts them natively; read them inline with
-``(tool.metadata or {}).get("is_destructive", False)``.
+Project-specific flags live in ``tool.metadata`` so ``bind_tools`` accepts
+the tool natively; read via ``(tool.metadata or {}).get(...)``.
 """
 
 from __future__ import annotations

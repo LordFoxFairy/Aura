@@ -1,8 +1,9 @@
 """Persistent session storage backed by stdlib sqlite3.
 
-Schema (§4.5): single ``messages`` table with UNIQUE(session_id, turn_index).
-``turn_index`` is the message ordinal within the session (0-based).
-``save`` performs a full replacement: DELETE then INSERT.
+Schema: one ``messages`` table with UNIQUE(session_id, turn_index), where
+``turn_index`` is the 0-based message ordinal within a session. ``save``
+performs a full replacement (DELETE + INSERT) so a torn write can't
+leave a half-persisted turn on disk.
 """
 
 from __future__ import annotations

@@ -1,17 +1,18 @@
-"""4-layer message assembly + session-wide progressive state (B3 + B8 + B9)。
+"""发给模型的 message list 组装 —— 整个代码库里唯一的构造点。
 
-`Context` 是整个代码库中唯一组装发给模型的 message list 的地方。它持有
-mutability ladder 的 append-only 状态：progressive 子目录 AURA.md 与
-conditional rules 一旦加入便不再移除（`/clear` 与 future `/compact` 通过
-**新建 Context 实例** 实现清空 —— 见 B9）。
+上下文按可变性分四层：
+  L1  SystemMessage                  —— 冻结
+  L2  <project-memory>               —— eager primary + unconditional rules
+  L2b <nested-memory> / <rule>       —— progressive 触发加载，session 内 append-only
+  L3  *history                       —— 按 turn 增长
 
-**Mutability invariant** (Phase C-2 update):
-- Progressive fields (`_loaded_nested_paths`, `_nested_fragments`,
-  `_matched_rule_paths`, `_matched_rules`) remain **append-only within a
-  session**.
-- Provider-sourced sections (e.g. `<todos>`) are **snapshotted per build** —
-  mutability lives in `LoopState` (the source of the provider's data), not in
-  Context itself. Context stays a pure function of its inputs.
+**不变量**：`Context` 自身 progressive 字段
+（`_loaded_nested_paths` / `_nested_fragments` / `_matched_rule_paths` /
+`_matched_rules`）一旦写入永不移除；`/clear` 与 `/compact` 通过**构造新
+Context 实例**实现清空，不原地 reset。
+
+Provider 注入的 section（如 `<todos>`）不计入上述不变量 —— 它们每次 build
+从外部 state 读快照，可变性生活在 `LoopState` 侧，Context 仍是纯函数。
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ class NestedFragment:
 
 
 class Context:
-    """Message-assembly site + progressive state (B3 + B8 + B9)。"""
+    """Message-assembly site + session-wide progressive state."""
 
     def __init__(
         self,
@@ -111,7 +112,7 @@ class Context:
                 )
 
     # ------------------------------------------------------------------
-    # Message assembly (B8)
+    # Message assembly
     # ------------------------------------------------------------------
 
     def build(self, history: list[BaseMessage]) -> list[BaseMessage]:
@@ -141,8 +142,8 @@ class Context:
                 )
             )
 
-        # Provider-sourced todos snapshot (B5/B6): emit one HumanMessage between
-        # <rule>s and history when the provider yields a non-empty list.
+        # todos 由 provider 按需读取 LoopState 快照；非空才发一条 HumanMessage，
+        # 位置固定在 <rule> 段之后、history 之前。
         if self._todos_provider is not None:
             todos = self._todos_provider()
             if todos:
@@ -178,8 +179,10 @@ def _is_under(path: Path, parent: Path) -> bool:
 
 
 def _render_todos_body(todos: list[dict[str, Any]]) -> str:
-    """渲染 todos 列表为 `<todos>` HumanMessage 的 body。格式稳定但不 spec-lock：
-    测试只断言 content/status/activeForm 三个子串的存在，不锁具体行格式。
+    """渲染 todos 列表为 `<todos>` HumanMessage 的 body。
+
+    格式有意保留调整空间：只保证 `content` / `status` / `activeForm` 三个字段
+    以可读形式出现，不承诺具体行格式。
     """
     lines: list[str] = []
     for t in todos:

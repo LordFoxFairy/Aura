@@ -27,13 +27,9 @@ class WebFetchParams(BaseModel):
 
 
 def _reject_private_host(host: str) -> None:
-    """SSRF 防御：阻止解析到私网/回环/link-local/multicast/metadata IP 的 host。
-
-    claude-code WebFetchTool 同思路 —— 即使 DNS 指向 169.254.169.254
-    （云厂商 metadata）或 127.0.0.1，也一律拒。
-    """
+    """SSRF 防御：拒绝解析到私网 / 回环 / link-local / multicast / metadata IP 的 host。"""
     try:
-        # getaddrinfo 覆盖 IPv4 + IPv6；任一结果是私网就拒。
+        # getaddrinfo 覆盖 IPv4 + IPv6；任一结果落在私网就拒。
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror as exc:
         raise ToolError(f"dns resolve failed for {host!r}: {exc}") from exc

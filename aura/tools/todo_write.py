@@ -1,6 +1,7 @@
-"""todo_write tool — stateful, factory-bound per Agent instance.
+"""todo_write tool — factory-bound per Agent, mutates ``LoopState.custom['todos']``.
 
-Mutates LoopState.custom["todos"]. Auto-clears when every item is completed.
+Auto-clears the list when every item is ``completed``. Rendering lives in the
+Context layer to keep the core → tools dependency direction one-way.
 """
 
 from __future__ import annotations
@@ -12,10 +13,6 @@ from pydantic import BaseModel, Field
 
 from aura.core.state import LoopState
 from aura.tools.base import build_tool
-
-# NOTE: 渲染格式由 aura/core/context.py 的 _render_todos_body 负责。
-# 这里只定义 tool 契约与 state 写入；"如何把 todos 变成 HumanMessage"
-# 是 Context 层的职责，避免 core → tools 方向反转。
 
 _DESCRIPTION = (
     "Update the todo list for the current session. Use this proactively to "

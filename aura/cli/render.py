@@ -35,7 +35,8 @@ class Renderer:
             else:
                 self._console.print("[green]✓[/green]")
             return
-        # Final: 内容已由前置 AssistantDelta 渲染；renderer 不再处理。
+        # Final events carry no new text: the body was already streamed via
+        # AssistantDelta, so the renderer intentionally drops them.
 
     def finish(self) -> None:
         self._console.print()

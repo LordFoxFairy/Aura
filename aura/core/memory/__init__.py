@@ -1,8 +1,7 @@
-"""Memory subsystem — eager walk-up + progressive walk-down + rules + @imports.
+"""Memory 子系统 —— eager walk-up + progressive walk-down + rules + `@imports`。
 
-See `aura/core/memory/context.py` for the Mutability Ladder that governs
-message assembly; the other modules are its inputs (primary memory,
-rules, system prompt).
+`context.py` 是唯一的 message 组装点；其余模块（primary memory、rules、
+system prompt）都是它的纯输入。
 """
 
 from aura.core.memory.context import Context, NestedFragment

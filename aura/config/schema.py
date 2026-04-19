@@ -69,17 +69,14 @@ class AuraConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_cross_refs(self) -> AuraConfig:
-        # 1) Unique provider names
         names = [p.name for p in self.providers]
         dupes = {n for n in names if names.count(n) > 1}
         if dupes:
             raise ValueError(f"duplicate provider names: {sorted(dupes)}")
 
-        # 2) router must have 'default'
         if "default" not in self.router:
             raise ValueError("router must contain a 'default' entry")
 
-        # 3) Every router value must resolve: split on first ':', left must be a known provider name
         known = set(names)
         for alias, target in self.router.items():
             if ":" not in target:
@@ -97,12 +94,12 @@ class AuraConfig(BaseModel):
 
 
 class AuraError(Exception):
-    """所有 Aura-specific 异常的根基类。
+    """Base class for expected, user-facing Aura errors.
 
-    约定：任何代码想对"Aura 出了点意料之内的问题"做统一处理（CLI 顶层
-    error panel、embedder 的 catch-around-astream），都应 `except AuraError`。
-    stdlib / 第三方异常（例如 asyncio.CancelledError、ValidationError）不被
-    它捕获 —— 那些需要各自的 handler。
+    Callers that want to uniformly handle "something Aura itself knows how to
+    report" should `except AuraError`. Stdlib / third-party exceptions such as
+    `asyncio.CancelledError` or pydantic `ValidationError` are intentionally
+    not caught here — those need their own handlers.
     """
 
 

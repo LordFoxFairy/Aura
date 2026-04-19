@@ -102,7 +102,7 @@ class ModelFactory:
     def resolve(spec: str, *, cfg: AuraConfig) -> tuple[ProviderConfig, str]:
         """Resolve *spec* to (ProviderConfig, model_name).
 
-        Resolution rules (spec §4.6):
+        Resolution rules:
         1. If *spec* is a router alias, substitute once.
         2. Split on the first ':'. Left = provider name, right = model name.
         3. Unknown alias with no colon → UnknownModelSpecError.

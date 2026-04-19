@@ -1,14 +1,12 @@
-"""`.aura/rules/*.md` 发现 / frontmatter 解析 / glob 匹配（B5 + B6）。
+"""`.aura/rules/*.md` 的发现、frontmatter 解析与 glob 匹配。
 
-- `load_rules(cwd, *, force_reload)`：扫描 user 层 (`~/.aura/rules/**/*.md`)
-  与 project 层 (`<cwd>/.aura/rules/**/*.md`，不向祖先目录 walk-up)，按 YAML
-  frontmatter 的 `paths:` 字段把规则分入 `bundle.unconditional`（eager）
-  与 `bundle.conditional`（progressive）。
-- `clear_cache(cwd)`：None 清空全部；指定 cwd 清除对应条目（不存在则静默）。
-- `match(bundle, path)`：对 `bundle.conditional` 里的每条规则，用
-  `pathspec.gitignore` 逐条尝试匹配；去重并按 `source_path` 排序返回。
-- 错误策略（B10）：缺文件 / 目录占位 / 权限拒绝 / 非 UTF-8 / YAML 解析失败 /
-  glob 编译失败 —— 一律静默跳过。
+两层扫描：user (`~/.aura/rules/**/*.md`) 与 project (`<cwd>/.aura/rules/**/*.md`，
+仅 cwd 自身，不向祖先 walk-up)。按 YAML frontmatter 的 `paths` 字段把结果切成
+`unconditional`（无 `paths`，随 primary memory eager 注入）与 `conditional`
+（有 `paths`，由 `match()` 在 tool 触达路径时按需挑选）。
+
+坏掉的单条规则（非 UTF-8 / YAML 错误 / glob 编译失败 / 权限拒绝）一律静默跳过，
+避免一条规则把整个 session 的 memory 层打挂。
 """
 
 from __future__ import annotations
@@ -41,7 +39,7 @@ class Rule:
 
 @dataclass
 class RulesBundle:
-    """一次 load 的结果；两个桶分别对应 Layer 2 / 2b。"""
+    """一次 load 的结果：eager 桶随 primary memory 注入，conditional 桶按 path 触发。"""
 
     unconditional: list[Rule] = field(default_factory=list)
     conditional: list[Rule] = field(default_factory=list)
@@ -67,11 +65,11 @@ def load_rules(cwd: Path, *, force_reload: bool = False) -> RulesBundle:
 
     bundle = RulesBundle()
 
-    # User layer: ~/.aura/rules/**/*.md, base_dir = ~
     home = Path.home()
     _scan_layer(home / _AURA_DIR / _RULES_DIR, base_dir=home, bundle=bundle)
 
-    # Project layer: <cwd>/.aura/rules/**/*.md, base_dir = cwd (NOT walked-up)
+    # project 层仅看 cwd 自身的 `.aura/rules/`，不向祖先 walk-up：规则是 "项目级"
+    # 而非 "路径级" 的配置，walk-up 会让祖先项目的规则泄漏进子项目。
     _scan_layer(
         resolved_cwd / _AURA_DIR / _RULES_DIR, base_dir=resolved_cwd, bundle=bundle
     )
@@ -152,7 +150,7 @@ def _build_rule(md_path: Path, *, base_dir: Path) -> Rule | None:
     frontmatter_text, body = _split_frontmatter(raw)
 
     if frontmatter_text is None:
-        # 无 frontmatter → unconditional（B5: "same priority as CLAUDE.md"）
+        # 无 frontmatter → unconditional（与 AURA.md 同级 eager 注入）
         globs: tuple[str, ...] = ()
     else:
         try:

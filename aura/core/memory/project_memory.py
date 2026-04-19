@@ -1,8 +1,7 @@
-"""项目记忆三层加载器 —— User / Project / Local 按规范组装。
+"""项目记忆加载器。
 
-Task 1 范围：纯发现层（3-层 walk-up）。
-Task 2 范围：在 load 时展开 `@imports`（深度 5、环检测、围栏感知）。
-Task 3 范围：按 resolved cwd memoize + `clear_cache`。
+三层 walk-up 发现（User / Project / Local），`@imports` 预展开（深度上限
+5、环检测、代码围栏感知），按 resolved cwd memoize，session 内可 clear。
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ def load_project_memory(cwd: Path, *, force_reload: bool = False) -> str:
     """按 User / Project(outer→inner) / Local(outer→inner) 顺序拼接项目记忆。
 
     文件间与层间统一以单空行分隔；缺失 / 目录占位 / 权限拒绝 —— 一律静默跳过。
-    读到的文件同时展开 `@imports`（B4）。
+    读到的文件同时展开 `@imports`。
     以 resolved cwd 为 key 进入 `_primary_cache`；`force_reload=True` 旁路缓存并覆盖。
     """
     resolved = cwd.resolve()
@@ -83,7 +82,7 @@ def _read_raw(path: Path) -> str | None:
 def read_with_imports(path: Path) -> str | None:
     """读单个文件并展开 `@imports`；缺失 / 目录 / 权限拒绝 → None。
 
-    作为 project_memory 的公共 API，被 Context (B3 progressive 加载) 复用。
+    公共 API：供 Context 的子目录按需加载路径复用同一套 `@imports` 解析。
     """
     raw = _read_raw(path)
     if raw is None:
@@ -146,7 +145,8 @@ def _expand(text: str, source: Path, *, visited: frozenset[Path], depth: int) ->
 def _parse_import(stripped_line: str) -> str | None:
     """若一行形如 `^@<path>$`（rstrip 后），返回路径串；否则 None。
 
-    `stripped_line` 由调用方 `rstrip()` 得到；前导空白不算 import（spec rule 11）。
+    `stripped_line` 由调用方 `rstrip()` 得到；前导空白不识别为 import —— 与代码
+    围栏检测对齐，避免缩进内的 `@` 被误吃。
     """
     if len(stripped_line) < 2 or not stripped_line.startswith("@"):
         return None
@@ -154,9 +154,10 @@ def _parse_import(stripped_line: str) -> str | None:
 
 
 def _resolve_import(raw: str, base_dir: Path) -> Path | None:
-    """按 B4 规则把 `@<raw>` 解析为 resolved Path，若为目录/不存在则返回 None。"""
+    """把 `@<raw>` 解析为 resolved Path；若目标为目录/不存在则返回 None。"""
     if raw.startswith("~/"):
-        # 走 Path.home()，便于测试 monkeypatch；spec B4 允许 `@~/path`
+        # 走 Path.home() 而非 os.path.expanduser —— 后者读 $HOME env，
+        # 测试无法通过 monkeypatch Path.home 覆盖。
         candidate = Path.home() / raw[2:]
     elif raw == "~":
         candidate = Path.home()

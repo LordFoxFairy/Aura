@@ -1,4 +1,4 @@
-"""Aura — a general-purpose Python agent with an explicit async loop."""
+"""Aura: a general-purpose Python agent with an explicit async loop."""
 
 from aura.config.loader import load_config
 from aura.config.schema import AuraConfig, AuraConfigError

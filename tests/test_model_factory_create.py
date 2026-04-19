@@ -47,7 +47,7 @@ def test_create_openai_happy_path_uses_default_env_var(monkeypatch: pytest.Monke
     from aura.core import llm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     provider = ProviderConfig(name="openai", protocol="openai")
@@ -65,7 +65,7 @@ def test_create_openai_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     from aura.core import llm
 
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.setenv("OPENROUTER_API_KEY", "or-key")
 
     provider = ProviderConfig(
@@ -86,7 +86,7 @@ def test_create_openai_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_create_openai_plaintext_api_key_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     from aura.core import llm
 
-    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     # No env var set — plaintext key on provider should be used
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -102,7 +102,7 @@ def test_create_openai_api_key_env_preferred_over_default(
 ) -> None:
     from aura.core import llm
 
-    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.setenv("CUSTOM_KEY", "custom")
     monkeypatch.setenv("OPENAI_API_KEY", "default")
 
@@ -116,7 +116,7 @@ def test_create_anthropic_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     from aura.core import llm
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr(llm, "_load_anthropic_class", lambda: _StubAnthropic)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubAnthropic)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-key")
 
     provider = ProviderConfig(name="anthropic", protocol="anthropic")
@@ -132,7 +132,7 @@ def test_create_anthropic_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_create_ollama_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     from aura.core import llm
 
-    monkeypatch.setattr(llm, "_load_ollama_class", lambda: _StubOllama)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOllama)
 
     provider = ProviderConfig(name="ollama", protocol="ollama")
     model, protocol = ModelFactory.create(provider, "llama3")
@@ -147,7 +147,7 @@ def test_create_ollama_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_create_ollama_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
     from aura.core import llm
 
-    monkeypatch.setattr(llm, "_load_ollama_class", lambda: _StubOllama)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOllama)
 
     provider = ProviderConfig(
         name="ollama-remote",
@@ -170,7 +170,7 @@ def test_create_ollama_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_create_missing_default_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     from aura.core import llm
 
-    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     provider = ProviderConfig(name="openai", protocol="openai")
@@ -183,7 +183,7 @@ def test_create_missing_default_env_raises(monkeypatch: pytest.MonkeyPatch) -> N
 def test_create_missing_api_key_env_var_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     from aura.core import llm
 
-    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("CUSTOM_KEY", raising=False)
 
     provider = ProviderConfig(name="openai", protocol="openai", api_key_env="CUSTOM_KEY")
@@ -196,13 +196,13 @@ def test_create_missing_api_key_env_var_raises(monkeypatch: pytest.MonkeyPatch) 
 def test_create_missing_sdk_raises_install_hint(monkeypatch: pytest.MonkeyPatch) -> None:
     from aura.core import llm
 
-    def _boom() -> type:
+    def _boom(_protocol: str) -> type:
         raise MissingProviderDependencyError(
             source="provider sdk",
             detail="langchain_openai not installed. Run: pip install 'aura[openai]'",
         )
 
-    monkeypatch.setattr(llm, "_load_openai_class", _boom)
+    monkeypatch.setattr(llm, "_load_class", _boom)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     provider = ProviderConfig(name="openai", protocol="openai")
@@ -222,7 +222,7 @@ def test_create_empty_plaintext_api_key_falls_back_to_env(monkeypatch: pytest.Mo
     """An empty-string api_key must NOT be forwarded — treat as missing."""
     from aura.core import llm
 
-    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("CUSTOM_KEY", raising=False)
     monkeypatch.setenv("CUSTOM_KEY", "from-env")
@@ -239,7 +239,7 @@ def test_create_empty_plaintext_api_key_with_no_fallback_raises(
 ) -> None:
     from aura.core import llm
 
-    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     provider = ProviderConfig(name="x", protocol="openai", api_key="")
@@ -253,7 +253,7 @@ def test_create_forwards_provider_params_to_constructor(
 ) -> None:
     from aura.core import llm
 
-    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "k")
 
@@ -278,7 +278,7 @@ def test_create_resolved_fields_win_over_params(
     """If a user puts 'model' in params, the resolved model_name still wins."""
     from aura.core import llm
 
-    monkeypatch.setattr(llm, "_load_openai_class", lambda: _StubOpenAI)
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "k")
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 from typing import Any
 
@@ -23,50 +24,25 @@ class MissingCredentialError(AuraConfigError):
     """Raised when no API key is found for a protocol that requires one."""
 
 
-# ---------------------------------------------------------------------------
-# Lazy import helpers — zero import cost when protocol not used
-# ---------------------------------------------------------------------------
-
-
-def _load_openai_class() -> type[BaseChatModel]:
-    try:
-        from langchain_openai import ChatOpenAI
-    except ModuleNotFoundError as exc:
-        raise MissingProviderDependencyError(
-            source="provider sdk",
-            detail="langchain_openai not installed. Run: pip install 'aura[openai]'",
-        ) from exc
-    return ChatOpenAI
-
-def _load_anthropic_class() -> type[BaseChatModel]:
-    try:
-        from langchain_anthropic import ChatAnthropic
-    except ModuleNotFoundError as exc:
-        raise MissingProviderDependencyError(
-            source="provider sdk",
-            detail="langchain_anthropic not installed. Run: pip install 'aura[anthropic]'",
-        ) from exc
-    return ChatAnthropic
-
-def _load_ollama_class() -> type[BaseChatModel]:
-    try:
-        from langchain_ollama import ChatOllama
-    except ModuleNotFoundError as exc:
-        raise MissingProviderDependencyError(
-            source="provider sdk",
-            detail="langchain_ollama not installed. Run: pip install 'aura[ollama]'",
-        ) from exc
-    return ChatOllama
-
-# ---------------------------------------------------------------------------
-# Secret resolution
-# ---------------------------------------------------------------------------
-
-_DEFAULT_KEY_ENV: dict[str, str | None] = {
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "ollama": None,
+# 协议 → (PyPI/SDK 模块名, 导出类名, 默认 API key 环境变量)。
+# 加新 provider：这一张表 + ProviderConfig.protocol Literal 两处。
+_PROTOCOLS: dict[str, tuple[str, str, str | None]] = {
+    "openai": ("langchain_openai", "ChatOpenAI", "OPENAI_API_KEY"),
+    "anthropic": ("langchain_anthropic", "ChatAnthropic", "ANTHROPIC_API_KEY"),
+    "ollama": ("langchain_ollama", "ChatOllama", None),
 }
+
+
+def _load_class(protocol: str) -> type[BaseChatModel]:
+    module_name, class_name, _ = _PROTOCOLS[protocol]
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        raise MissingProviderDependencyError(
+            source="provider sdk",
+            detail=f"{module_name} not installed. Run: pip install 'aura[{protocol}]'",
+        ) from exc
+    return getattr(module, class_name)  # type: ignore[no-any-return]
 
 
 def _resolve_api_key(provider: ProviderConfig) -> str | None:
@@ -93,7 +69,7 @@ def _resolve_api_key(provider: ProviderConfig) -> str | None:
             )
         return key
 
-    default_env = _DEFAULT_KEY_ENV[provider.protocol]
+    default_env = _PROTOCOLS[provider.protocol][2]
     if default_env is None:
         return None  # ollama doesn't need a key
 
@@ -187,20 +163,8 @@ class ModelFactory:
             has_base_url=provider.base_url is not None,
         )
 
-        if provider.protocol == "openai":
-            cls = _load_openai_class()
-            model = cls(**kwargs)
-        elif provider.protocol == "anthropic":
-            cls = _load_anthropic_class()
-            model = cls(**kwargs)
-        elif provider.protocol == "ollama":
-            cls = _load_ollama_class()
-            model = cls(**kwargs)
-        else:
-            # unreachable — pydantic Literal validation in ProviderConfig
-            raise UnknownModelSpecError(
-                source="provider", detail=f"unknown protocol: {provider.protocol}"
-            )
+        cls = _load_class(provider.protocol)
+        model = cls(**kwargs)
 
         journal.write(
             "model_created",

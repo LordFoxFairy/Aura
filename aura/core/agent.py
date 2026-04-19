@@ -45,7 +45,7 @@ class Agent:
         )
         self._session_id = session_id
         self._registry = self._build_registry()
-        self._system_prompt = build_system_prompt(registry=self._registry)
+        self._system_prompt = build_system_prompt()
         self._loop = self._build_loop()
 
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:

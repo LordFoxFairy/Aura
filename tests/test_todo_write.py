@@ -1,0 +1,202 @@
+"""Tests for aura.tools.todo_write — stateful factory-bound tool."""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from aura.core.state import LoopState
+from aura.tools.todo_write import (
+    TodoItem,
+    TodoWriteParams,
+    make_todo_write_tool,
+    render_todos,
+)
+
+# ---------------------------------------------------------------------------
+# AC 1: single pending todo → state mutated, message returned
+# ---------------------------------------------------------------------------
+
+
+async def test_single_pending_todo_sets_state_and_returns_message() -> None:
+    state = LoopState()
+    tool = make_todo_write_tool(state)
+    out = await tool.ainvoke(
+        {"todos": [{"content": "a", "status": "pending", "activeForm": "Doing a"}]}
+    )
+    assert state.custom["todos"] == [
+        {"content": "a", "status": "pending", "activeForm": "Doing a"}
+    ]
+    assert out == {"message": "Todos updated."}
+
+
+# ---------------------------------------------------------------------------
+# AC 2: empty list → state cleared to []
+# ---------------------------------------------------------------------------
+
+
+async def test_empty_list_sets_empty_state() -> None:
+    state = LoopState()
+    tool = make_todo_write_tool(state)
+    out = await tool.ainvoke({"todos": []})
+    assert state.custom["todos"] == []
+    assert out == {"message": "Todos updated."}
+
+
+# ---------------------------------------------------------------------------
+# AC 3: all completed → state auto-cleared to []
+# ---------------------------------------------------------------------------
+
+
+async def test_all_completed_auto_clears() -> None:
+    state = LoopState()
+    tool = make_todo_write_tool(state)
+    await tool.ainvoke(
+        {
+            "todos": [
+                {"content": "a", "status": "completed", "activeForm": "Doing a"},
+                {"content": "b", "status": "completed", "activeForm": "Doing b"},
+            ]
+        }
+    )
+    assert state.custom["todos"] == []
+
+
+# ---------------------------------------------------------------------------
+# AC 4: bad status enum → ValidationError
+# ---------------------------------------------------------------------------
+
+
+def test_bad_status_enum_raises() -> None:
+    with pytest.raises(ValidationError):
+        TodoWriteParams.model_validate(
+            {"todos": [{"content": "a", "status": "done", "activeForm": "Doing a"}]}
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC 5: missing activeForm → ValidationError
+# ---------------------------------------------------------------------------
+
+
+def test_missing_activeform_raises() -> None:
+    with pytest.raises(ValidationError):
+        TodoWriteParams.model_validate(
+            {"todos": [{"content": "a", "status": "pending"}]}
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC 6: empty content or empty activeForm → ValidationError
+# ---------------------------------------------------------------------------
+
+
+def test_empty_content_raises() -> None:
+    with pytest.raises(ValidationError):
+        TodoItem.model_validate(
+            {"content": "", "status": "pending", "activeForm": "Doing a"}
+        )
+
+
+def test_empty_activeform_raises() -> None:
+    with pytest.raises(ValidationError):
+        TodoItem.model_validate(
+            {"content": "a", "status": "pending", "activeForm": ""}
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC 7: full-replace semantic across two calls
+# ---------------------------------------------------------------------------
+
+
+async def test_second_call_replaces_first() -> None:
+    state = LoopState()
+    tool = make_todo_write_tool(state)
+    await tool.ainvoke(
+        {"todos": [{"content": "a", "status": "pending", "activeForm": "Doing a"}]}
+    )
+    await tool.ainvoke(
+        {
+            "todos": [
+                {"content": "b", "status": "in_progress", "activeForm": "Doing b"},
+                {"content": "c", "status": "pending", "activeForm": "Doing c"},
+            ]
+        }
+    )
+    assert state.custom["todos"] == [
+        {"content": "b", "status": "in_progress", "activeForm": "Doing b"},
+        {"content": "c", "status": "pending", "activeForm": "Doing c"},
+    ]
+
+
+# ---------------------------------------------------------------------------
+# AC 8: two factory instances → independent state mutation
+# ---------------------------------------------------------------------------
+
+
+async def test_two_factories_are_independent() -> None:
+    state1 = LoopState()
+    state2 = LoopState()
+    tool1 = make_todo_write_tool(state1)
+    tool2 = make_todo_write_tool(state2)
+    await tool1.ainvoke(
+        {"todos": [{"content": "a", "status": "pending", "activeForm": "Doing a"}]}
+    )
+    await tool2.ainvoke(
+        {"todos": [{"content": "b", "status": "pending", "activeForm": "Doing b"}]}
+    )
+    assert state1.custom["todos"] == [
+        {"content": "a", "status": "pending", "activeForm": "Doing a"}
+    ]
+    assert state2.custom["todos"] == [
+        {"content": "b", "status": "pending", "activeForm": "Doing b"}
+    ]
+
+
+# ---------------------------------------------------------------------------
+# AC 9: tool metadata + name
+# ---------------------------------------------------------------------------
+
+
+def test_tool_metadata_and_name() -> None:
+    state = LoopState()
+    tool = make_todo_write_tool(state)
+    assert tool.name == "todo_write"
+    meta = tool.metadata or {}
+    assert meta.get("is_read_only") is False
+    assert meta.get("is_destructive") is False
+    assert meta.get("is_concurrency_safe") is False
+
+
+# ---------------------------------------------------------------------------
+# render_todos helper
+# ---------------------------------------------------------------------------
+
+
+def test_render_todos_non_completed_includes_active_form() -> None:
+    body = render_todos(
+        [{"content": "a", "status": "pending", "activeForm": "Doing a"}]
+    )
+    assert "a" in body
+    assert "pending" in body
+    assert "Doing a" in body
+
+
+def test_render_todos_completed_omits_active_form() -> None:
+    body = render_todos(
+        [{"content": "done-task", "status": "completed", "activeForm": "Did it"}]
+    )
+    assert "done-task" in body
+    assert "completed" in body
+
+
+def test_render_todos_multi_line_no_trailing_newline() -> None:
+    body = render_todos(
+        [
+            {"content": "a", "status": "pending", "activeForm": "Doing a"},
+            {"content": "b", "status": "completed", "activeForm": "Did b"},
+        ]
+    )
+    assert body.count("\n") == 1
+    assert not body.endswith("\n")

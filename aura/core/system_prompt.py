@@ -78,10 +78,7 @@ def _find_and_load_aura_md(cwd: Path) -> str | None:
         except OSError:
             return None
         truncated = len(data) > _AURA_MD_MAX_BYTES
-        try:
-            text = data[:_AURA_MD_MAX_BYTES].decode("utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
-            return None
+        text = data[:_AURA_MD_MAX_BYTES].decode("utf-8", errors="replace")
         header = f"<project_memory source={candidate}>"
         footer = "</project_memory>"
         if truncated:

@@ -47,6 +47,21 @@ def _warn_plaintext_api_keys(config: AuraConfig, console: Console) -> None:
             )
 
 
+def _fail_startup(console: Console, exc: BaseException) -> int:
+    # AuraError 打印类型名 + 消息（已经带 source/detail 格式）；其他 Exception
+    # 统一归类为 "unexpected"，避免把 stacktrace 丢给用户。
+    from aura.core import journal
+    from aura.core.errors import AuraError
+
+    if isinstance(exc, AuraError):
+        journal.write("startup_failed", reason=type(exc).__name__, detail=str(exc))
+        console.print(f"[red]{type(exc).__name__}: {exc}[/red]")
+    else:
+        journal.write("startup_failed", reason="unexpected", detail=str(exc))
+        console.print(f"[red]startup error: {exc}[/red]")
+    return 2
+
+
 def main() -> int:
     _force_utf8_streams()
     parser = _make_parser()
@@ -61,7 +76,6 @@ def main() -> int:
     from aura.config.loader import load_config
     from aura.core import journal
     from aura.core.agent import build_agent
-    from aura.core.errors import AuraError
     from aura.core.hooks import HookChain
     from aura.core.hooks.logging import wrap_with_event_logger
     from aura.core.hooks.permission import PermissionSession, make_permission_hook
@@ -76,14 +90,8 @@ def main() -> int:
             providers=[p.name for p in config.providers],
             default_spec=config.router.get("default", ""),
         )
-    except AuraError as exc:
-        journal.write("startup_failed", reason=type(exc).__name__, detail=str(exc))
-        console.print(f"[red]{type(exc).__name__}: {exc}[/red]")
-        return 2
     except Exception as exc:  # noqa: BLE001
-        journal.write("startup_failed", reason="unexpected", detail=str(exc))
-        console.print(f"[red]startup error: {exc}[/red]")
-        return 2
+        return _fail_startup(console, exc)
 
     if args.log or config.log.enabled:
         log_path = Path(config.log.path).expanduser()
@@ -108,14 +116,8 @@ def main() -> int:
             hooks = wrap_with_event_logger(hooks)
         agent = build_agent(config, hooks=hooks)
         journal.write("agent_built")
-    except AuraError as exc:
-        journal.write("startup_failed", reason=type(exc).__name__, detail=str(exc))
-        console.print(f"[red]{type(exc).__name__}: {exc}[/red]")
-        return 2
     except Exception as exc:  # noqa: BLE001
-        journal.write("startup_failed", reason="unexpected", detail=str(exc))
-        console.print(f"[red]startup error: {exc}[/red]")
-        return 2
+        return _fail_startup(console, exc)
 
     try:
         asyncio.run(run_repl_async(agent, console=console, verbose=args.verbose))

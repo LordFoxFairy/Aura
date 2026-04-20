@@ -15,7 +15,11 @@ from aura.core.hooks.budget import (
     make_size_budget_hook,
     make_usage_tracking_hook,
 )
-from aura.core.hooks.permission import PermissionAsker, PermissionSession, make_permission_hook
+from aura.core.hooks.permission import (
+    AskerResponse,
+    PermissionAsker,
+    make_permission_hook,
+)
 from aura.core.llm import (
     MissingCredentialError,
     MissingProviderDependencyError,
@@ -39,6 +43,7 @@ __all__ = [
     "Agent",
     "AgentEvent",
     "AgentLoop",
+    "AskerResponse",
     "AssistantDelta",
     "AuraError",
     "Final",
@@ -48,7 +53,6 @@ __all__ = [
     "MissingCredentialError",
     "MissingProviderDependencyError",
     "PermissionAsker",
-    "PermissionSession",
     "PostModelHook",
     "PostToolHook",
     "PreModelHook",

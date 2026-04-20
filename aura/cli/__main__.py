@@ -78,7 +78,8 @@ def main() -> int:
     from aura.core.agent import build_agent
     from aura.core.hooks import HookChain
     from aura.core.hooks.logging import wrap_with_event_logger
-    from aura.core.hooks.permission import PermissionSession, make_permission_hook
+    from aura.core.hooks.permission import make_permission_hook
+    from aura.core.permissions.session import SessionRuleSet
 
     console = Console()
 
@@ -107,10 +108,16 @@ def main() -> int:
 
     try:
         _warn_plaintext_api_keys(config, console)
-        session = PermissionSession()
-        asker = make_cli_asker(session)
+        session = SessionRuleSet()
+        asker = make_cli_asker()
         hooks = HookChain(
-            pre_tool=[make_permission_hook(asker=asker, session=session)],
+            pre_tool=[
+                make_permission_hook(
+                    asker=asker,
+                    session=session,
+                    project_root=Path.cwd(),
+                ),
+            ],
         )
         if args.log or config.log.enabled:
             hooks = wrap_with_event_logger(hooks)

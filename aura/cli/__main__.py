@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from rich.console import Console
 
     from aura.config.schema import AuraConfig
+    from aura.core.permissions.mode import Mode
 
 
 def _force_utf8_streams() -> None:
@@ -35,7 +36,22 @@ def _make_parser() -> argparse.ArgumentParser:
         "--log", action="store_true",
         help="write event log to ~/.aura/logs/events.jsonl",
     )
+    parser.add_argument(
+        "--bypass-permissions",
+        action="store_true",
+        help="Disable permission prompts — every tool call allowed without asking. "
+             "Dangerous; prefer per-rule allows in .aura/settings.json.",
+    )
     return parser
+
+
+def _resolve_mode(args: argparse.Namespace, config: AuraConfig) -> Mode:
+    # CLI flag wins over config; config.permissions.mode wins over built-in default.
+    if args.bypass_permissions:
+        return "bypass"
+    if config.permissions is not None and config.permissions.mode:
+        return config.permissions.mode
+    return "default"
 
 
 def _warn_plaintext_api_keys(config: AuraConfig, console: Console) -> None:
@@ -71,14 +87,16 @@ def main() -> int:
 
     from rich.console import Console
 
-    from aura.cli.permission import make_cli_asker
+    from aura.cli.permission import make_cli_asker, print_bypass_banner
     from aura.cli.repl import run_repl_async
     from aura.config.loader import load_config
+    from aura.config.schema import AuraConfigError
     from aura.core import journal
     from aura.core.agent import build_agent
     from aura.core.hooks import HookChain
     from aura.core.hooks.logging import wrap_with_event_logger
     from aura.core.hooks.permission import make_permission_hook
+    from aura.core.permissions import store
     from aura.core.permissions.session import SessionRuleSet
 
     console = Console()
@@ -108,6 +126,15 @@ def main() -> int:
 
     try:
         _warn_plaintext_api_keys(config, console)
+        project_root = Path.cwd()
+        try:
+            ruleset = store.load_ruleset(project_root)
+        except AuraConfigError as exc:
+            return _fail_startup(console, exc)
+        mode = _resolve_mode(args, config)
+        if mode == "bypass":
+            print_bypass_banner(console)
+            journal.write("permission_bypass_active")
         session = SessionRuleSet()
         asker = make_cli_asker()
         hooks = HookChain(
@@ -115,13 +142,15 @@ def main() -> int:
                 make_permission_hook(
                     asker=asker,
                     session=session,
-                    project_root=Path.cwd(),
+                    rules=ruleset,
+                    project_root=project_root,
+                    mode=mode,
                 ),
             ],
         )
         if args.log or config.log.enabled:
             hooks = wrap_with_event_logger(hooks)
-        agent = build_agent(config, hooks=hooks)
+        agent = build_agent(config, hooks=hooks, session_rules=session)
         journal.write("agent_built")
     except Exception as exc:  # noqa: BLE001
         return _fail_startup(console, exc)

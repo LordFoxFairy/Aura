@@ -57,3 +57,50 @@ def test_plaintext_api_key_emits_warning(tmp_path: Path) -> None:
     assert "Warning" in out
     assert "'test'" in out
     assert "plaintext" in out
+
+
+def _ns(**kw: object) -> object:
+    import argparse
+
+    return argparse.Namespace(**kw)
+
+
+def test_resolve_mode_defaults_to_default() -> None:
+    from aura.cli.__main__ import _resolve_mode
+    from aura.config.schema import AuraConfig
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+    })
+    args = _ns(bypass_permissions=False)
+    assert _resolve_mode(args, cfg) == "default"  # type: ignore[arg-type]
+
+
+def test_resolve_mode_reads_config_permissions_mode() -> None:
+    from aura.cli.__main__ import _resolve_mode
+    from aura.config.schema import AuraConfig
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+        "permissions": {"mode": "bypass"},
+    })
+    args = _ns(bypass_permissions=False)
+    assert _resolve_mode(args, cfg) == "bypass"  # type: ignore[arg-type]
+
+
+def test_resolve_mode_cli_flag_wins_over_config_default() -> None:
+    from aura.cli.__main__ import _resolve_mode
+    from aura.config.schema import AuraConfig
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+        "permissions": {"mode": "default"},
+    })
+    args = _ns(bypass_permissions=True)
+    assert _resolve_mode(args, cfg) == "bypass"  # type: ignore[arg-type]

@@ -80,3 +80,30 @@ def test_session_ruleset_rules_returns_immutable_tuple_snapshot() -> None:
     s.add(Rule(tool="read_file", content=None))
     assert len(snapshot) == 1
     assert len(s.rules()) == 2
+
+
+def test_session_ruleset_clear_drops_all_rules() -> None:
+    s = SessionRuleSet()
+    rule = Rule(tool="bash", content="npm test")
+    s.add(rule)
+    assert s.matches("bash", {"command": "npm test"}, _fake_tool(
+        "bash", rule_matcher=lambda args, content: args.get("command") == content,
+    )) is rule
+    s.clear()
+    assert s.matches("bash", {"command": "npm test"}, _fake_tool(
+        "bash", rule_matcher=lambda args, content: args.get("command") == content,
+    )) is None
+
+
+def test_session_ruleset_clear_leaves_rules_empty_tuple() -> None:
+    s = SessionRuleSet()
+    s.add(Rule(tool="bash", content=None))
+    s.add(Rule(tool="read_file", content=None))
+    s.clear()
+    assert s.rules() == ()
+
+
+def test_session_ruleset_clear_on_empty_is_noop() -> None:
+    s = SessionRuleSet()
+    s.clear()  # must not raise
+    assert s.rules() == ()

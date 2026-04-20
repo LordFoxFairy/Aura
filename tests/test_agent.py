@@ -755,6 +755,66 @@ async def test_todo_write_tool_call_injects_todos_on_next_turn(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_clear_session_drops_session_rules_when_supplied(tmp_path: Path) -> None:
+    from aura.core.permissions.rule import Rule
+    from aura.core.permissions.session import SessionRuleSet
+
+    session_rules = SessionRuleSet()
+    session_rules.add(Rule(tool="bash", content="ls"))
+    session_rules.add(Rule(tool="read_file", content=None))
+    assert len(session_rules.rules()) == 2
+
+    cfg = _minimal_config(enabled=[])
+    model = FakeChatModel(turns=[])
+    agent = Agent(
+        config=cfg, model=model, storage=_storage(tmp_path),
+        session_rules=session_rules,
+    )
+
+    agent.clear_session()
+    assert session_rules.rules() == ()
+    agent.close()
+
+
+def test_clear_session_is_noop_when_session_rules_not_supplied(tmp_path: Path) -> None:
+    # Default path: session_rules kwarg omitted → clear_session must not raise.
+    cfg = _minimal_config(enabled=[])
+    model = FakeChatModel(turns=[])
+    agent = Agent(config=cfg, model=model, storage=_storage(tmp_path))
+    agent.clear_session()  # no session_rules to touch; must be a clean no-op
+    agent.close()
+
+
+def test_build_agent_threads_session_rules_into_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from aura.core import llm
+    from aura.core.agent import build_agent
+    from aura.core.permissions.rule import Rule
+    from aura.core.permissions.session import SessionRuleSet
+
+    fake = FakeChatModel(turns=[])
+    monkeypatch.setattr(llm, "create", lambda provider, name: fake)
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+        "storage": {"path": str(tmp_path / "db")},
+    })
+
+    session_rules = SessionRuleSet()
+    session_rules.add(Rule(tool="bash", content=None))
+
+    agent = build_agent(cfg, session_rules=session_rules)
+    assert agent._session_rules is session_rules
+
+    agent.clear_session()
+    assert session_rules.rules() == ()
+    agent.close()
+
+
+@pytest.mark.asyncio
 async def test_clear_session_wipes_todos(tmp_path: Path) -> None:
     cfg = _minimal_config(enabled=["todo_write"])
     model = _CapturingFakeChatModel(turns=[

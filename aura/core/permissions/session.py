@@ -61,3 +61,7 @@ class SessionRuleSet:
 
     def rules(self) -> tuple[Rule, ...]:
         return tuple(self._rules)
+
+    def clear(self) -> None:
+        """Drop all session-scope rules. Used by Agent.clear_session."""
+        self._rules.clear()

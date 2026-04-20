@@ -17,6 +17,7 @@ from aura.core.loop import AgentLoop
 from aura.core.memory import project_memory, rules
 from aura.core.memory.context import Context
 from aura.core.memory.system_prompt import build_system_prompt
+from aura.core.permissions.session import SessionRuleSet
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
@@ -37,12 +38,17 @@ class Agent:
         hooks: HookChain | None = None,
         available_tools: dict[str, BaseTool] | None = None,
         session_id: str = _DEFAULT_SESSION,
+        session_rules: SessionRuleSet | None = None,
     ) -> None:
+        # ``session_rules``: CLI hands in the same SessionRuleSet that was used
+        # to build the permission hook; Agent.clear_session drops its runtime
+        # rules alongside history and state so /clear is coherent.
         self._config = config
         self._model = model
         self._storage = storage
         self._hooks = hooks or HookChain()
         self._state = LoopState()
+        self._session_rules = session_rules
         # Stateless built-ins come from shared singletons; stateful ones are
         # instantiated per-Agent so each gets its own `LoopState` reference.
         self._available_tools = (
@@ -119,6 +125,8 @@ class Agent:
     def clear_session(self) -> None:
         self._storage.clear(self._session_id)
         self._state.reset()
+        if self._session_rules is not None:
+            self._session_rules.clear()
         # /clear 语义：同时 invalidate memory/rules caches + 重建 Context。
         # progressive 状态（nested fragments / matched rules）随新实例自然清空 ——
         # 不做原地 reset，避免遗漏字段。
@@ -187,6 +195,7 @@ def build_agent(
     hooks: HookChain | None = None,
     available_tools: dict[str, BaseTool] | None = None,
     session_id: str = _DEFAULT_SESSION,
+    session_rules: SessionRuleSet | None = None,
 ) -> Agent:
     # 生产便利工厂：自动解析 model + storage；Agent 构造器保持 DI 注入以便测试替换。
     provider, model_name = llm.resolve(config.router["default"], cfg=config)
@@ -199,4 +208,5 @@ def build_agent(
         hooks=default_hooks().merge(hooks or HookChain()),
         available_tools=available_tools,
         session_id=session_id,
+        session_rules=session_rules,
     )

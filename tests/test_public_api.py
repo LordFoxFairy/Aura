@@ -89,3 +89,28 @@ def test_aura_config_exports() -> None:
     assert AuraConfig.__name__ == "AuraConfig"
     assert LogConfig.__name__ == "LogConfig"
     assert callable(load_config)
+
+
+def test_aura_schemas_exports() -> None:
+    """Schemas package is the neutral leaf; its surface is stable and imported
+    by both core and tools. Lock the current set."""
+    from aura.schemas import (  # noqa: F401
+        AgentEvent,
+        AssistantDelta,
+        Final,
+        LoopState,
+        PermissionAudit,
+        PermissionsConfig,
+        TodoItem,
+        TodoStatus,
+        ToolCallCompleted,
+        ToolCallStarted,
+        ToolError,
+        ToolResult,
+        tool_metadata,
+    )
+
+    assert callable(tool_metadata)
+    assert TodoItem.__name__ == "TodoItem"
+    assert LoopState.__name__ == "LoopState"
+    assert PermissionsConfig.__name__ == "PermissionsConfig"

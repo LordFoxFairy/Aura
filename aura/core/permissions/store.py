@@ -141,14 +141,20 @@ def load(project_root: Path) -> PermissionsConfig:
     #          still a wins-value (the user can downgrade project bypass
     #          on their own machine).
     #   allow / safety_exempt — concat, project first.
-    mode = local_raw.get("mode") or project_raw.get("mode") or "default"
-    allow = list(project_raw.get("allow") or []) + list(local_raw.get("allow") or [])
-    safety_exempt = (
-        list(project_raw.get("safety_exempt") or [])
-        + list(local_raw.get("safety_exempt") or [])
-    )
-
-    return PermissionsConfig(mode=mode, allow=allow, safety_exempt=safety_exempt)
+    # Route the merged dict through model_validate so pydantic narrows
+    # ``mode`` from Any to the Literal it declares — mypy-clean without a cast.
+    merged: dict[str, Any] = {
+        "mode": local_raw.get("mode") or project_raw.get("mode") or "default",
+        "allow": (
+            list(project_raw.get("allow") or [])
+            + list(local_raw.get("allow") or [])
+        ),
+        "safety_exempt": (
+            list(project_raw.get("safety_exempt") or [])
+            + list(local_raw.get("safety_exempt") or [])
+        ),
+    }
+    return PermissionsConfig.model_validate(merged)
 
 
 def load_ruleset(project_root: Path) -> RuleSet:

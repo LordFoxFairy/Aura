@@ -11,12 +11,12 @@ from aura.config.schema import AuraConfigError
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet
 from aura.core.permissions.store import (
-    PermissionsConfig,
     PermissionStoreError,
     load,
     load_ruleset,
     save_rule,
 )
+from aura.schemas.permissions import PermissionsConfig
 
 
 def test_load_on_nonexistent_file_returns_defaults(tmp_path: Path) -> None:
@@ -136,7 +136,7 @@ def test_load_ruleset_invalid_rule_string_raises_aura_config_error(
 # ---------------------------------------------------------------------------
 
 
-def _write_settings(tmp_path: Path, name: str, perms: dict) -> Path:
+def _write_settings(tmp_path: Path, name: str, perms: dict[str, object]) -> Path:
     p = tmp_path / ".aura" / name
     p.parent.mkdir(exist_ok=True)
     p.write_text(json.dumps({"permissions": perms}))

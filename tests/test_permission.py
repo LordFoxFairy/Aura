@@ -83,9 +83,12 @@ def journal_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
     def _capture(event: str, /, **fields: Any) -> None:
         events.append((event, fields))
 
-    import aura.core.hooks.permission as permission_module
+    # Patch the journal module itself — the hook imports journal as a module
+    # alias and the mypy-recognized attribute path is ``journal.write`` on the
+    # module, not ``permission_module.journal.write``.
+    from aura.core.persistence import journal as journal_mod
 
-    monkeypatch.setattr(permission_module.journal, "write", _capture)
+    monkeypatch.setattr(journal_mod, "write", _capture)
     return events
 
 

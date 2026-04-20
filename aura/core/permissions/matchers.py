@@ -17,6 +17,15 @@ Both factories return callables matching the ``ToolRuleMatcher`` protocol
 (``(args: dict, content: str) -> bool``). They defensively return False on
 missing keys or non-string values rather than raising — matchers run inside
 the permission gate and must never crash the agent.
+
+**Convention: ``.key`` attribute.** Each returned callable carries the arg
+key it inspects on a ``.key`` attribute. This is the single source of truth
+for "which arg does this matcher key off" — the CLI uses it to derive a
+precise ``rule_hint`` for option 2 ("Yes, always allow ``bash(npm test)``")
+without duplicating the key into a parallel metadata slot. External
+(non-``matchers``-module) matchers are free to omit ``.key``; callers must
+use ``getattr(matcher, "key", None)`` and treat ``None`` as "no precise
+rule available, fall back to tool-wide".
 """
 
 from __future__ import annotations
@@ -33,6 +42,7 @@ def exact_match_on(key: str) -> ToolRuleMatcher:
         value = args.get(key)
         return isinstance(value, str) and value == content
 
+    _matches.key = key  # type: ignore[attr-defined]
     return _matches
 
 
@@ -55,4 +65,5 @@ def path_prefix_on(key: str) -> ToolRuleMatcher:
         except ValueError:
             return False
 
+    _matches.key = key  # type: ignore[attr-defined]
     return _matches

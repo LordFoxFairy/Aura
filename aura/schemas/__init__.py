@@ -16,6 +16,7 @@ from aura.schemas.events import (
     AgentEvent,
     AssistantDelta,
     Final,
+    PermissionAudit,
     ToolCallCompleted,
     ToolCallStarted,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "AssistantDelta",
     "Final",
     "LoopState",
+    "PermissionAudit",
     "PermissionsConfig",
     "TodoItem",
     "TodoStatus",

@@ -14,8 +14,14 @@ from pydantic import BaseModel
 from aura.core.hooks import HookChain
 from aura.core.hooks.budget import make_size_budget_hook
 from aura.core.loop import AgentLoop
+from aura.core.permissions.decision import Decision
 from aura.core.registry import ToolRegistry
-from aura.schemas.events import AgentEvent, ToolCallCompleted
+from aura.schemas.events import (
+    AgentEvent,
+    PermissionAudit,
+    ToolCallCompleted,
+    ToolCallStarted,
+)
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
@@ -225,6 +231,136 @@ async def test_hooks_see_monotonic_turn_count() -> None:
         pass
 
     assert observed == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_auto_allow_decision_emits_permission_audit_between_started_and_completed() -> None:
+    """A pre_tool hook that stashes ``_aura_pending_decision`` with a
+    read_only reason → loop emits PermissionAudit right after ToolCallStarted.
+
+    Proves the plumbing: hook → state.custom → loop reads/pops → emits
+    PermissionAudit → sequence is Started → Audit → Completed.
+    """
+    async def stashing_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> ToolResult | None:
+        state.custom["_aura_pending_decision"] = Decision(
+            allow=True, reason="read_only",
+        )
+        return None
+
+    model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
+    hooks = HookChain(pre_tool=[stashing_hook])
+    loop = AgentLoop(
+        model=model,
+        registry=ToolRegistry([_echo_tool]),
+        context=make_minimal_context(),
+        hooks=hooks,
+    )
+
+    events: list[AgentEvent] = []
+    async for ev in loop.run_turn(user_prompt="go", history=[]):
+        events.append(ev)
+
+    tool_events = [
+        e for e in events
+        if isinstance(e, (ToolCallStarted, PermissionAudit, ToolCallCompleted))
+    ]
+    assert len(tool_events) == 3
+    assert isinstance(tool_events[0], ToolCallStarted)
+    assert isinstance(tool_events[1], PermissionAudit)
+    assert isinstance(tool_events[2], ToolCallCompleted)
+    assert tool_events[1].tool == "echo"
+    assert tool_events[1].text == "auto-allowed: read_only"
+
+
+@pytest.mark.asyncio
+async def test_absent_permission_hook_emits_no_permission_audit() -> None:
+    """Loop without any permission hook → no Decision stashed → no audit event."""
+    model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
+    loop = AgentLoop(
+        model=model,
+        registry=ToolRegistry([_echo_tool]),
+        context=make_minimal_context(),
+    )
+
+    events: list[AgentEvent] = []
+    async for ev in loop.run_turn(user_prompt="go", history=[]):
+        events.append(ev)
+
+    assert not any(isinstance(e, PermissionAudit) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_user_accept_decision_does_not_emit_permission_audit() -> None:
+    """Prompt-driven allows (user_accept / user_always / user_deny) skip the
+    audit line — the prompt itself was the audit."""
+    async def stashing_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> ToolResult | None:
+        state.custom["_aura_pending_decision"] = Decision(
+            allow=True, reason="user_accept",
+        )
+        return None
+
+    model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
+    hooks = HookChain(pre_tool=[stashing_hook])
+    loop = AgentLoop(
+        model=model,
+        registry=ToolRegistry([_echo_tool]),
+        context=make_minimal_context(),
+        hooks=hooks,
+    )
+
+    events: list[AgentEvent] = []
+    async for ev in loop.run_turn(user_prompt="go", history=[]):
+        events.append(ev)
+
+    assert not any(isinstance(e, PermissionAudit) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_decision_stash_popped_between_calls_no_leak() -> None:
+    """After the loop reads a Decision on call #1, state.custom must not
+    still hold it when call #2 begins. Proves the pop-on-read invariant —
+    audits can't leak between tool calls."""
+    seen_states: list[dict[str, Any]] = []
+
+    async def stash_once(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> ToolResult | None:
+        # Snapshot state.custom BEFORE stashing — on call #2 the previous
+        # decision must already be gone (loop popped after call #1).
+        seen_states.append(dict(state.custom))
+        state.custom["_aura_pending_decision"] = Decision(
+            allow=True, reason="read_only",
+        )
+        return None
+
+    # Two tool calls in one turn → loop processes them in sequence through
+    # _plan_tool_calls; the pop must happen between them.
+    two_tools_turn = FakeTurn(message=AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "echo", "args": {"msg": "a"}, "id": "tc_1"},
+            {"name": "echo", "args": {"msg": "b"}, "id": "tc_2"},
+        ],
+    ))
+    model = FakeChatModel(turns=[two_tools_turn, _final_turn()])
+    hooks = HookChain(pre_tool=[stash_once])
+    loop = AgentLoop(
+        model=model,
+        registry=ToolRegistry([_echo_tool]),
+        context=make_minimal_context(),
+        hooks=hooks,
+    )
+    async for _ in loop.run_turn(user_prompt="go", history=[]):
+        pass
+
+    assert len(seen_states) == 2
+    # Both snapshots (before stashing) must be clean of our key.
+    for snap in seen_states:
+        assert "_aura_pending_decision" not in snap
 
 
 @pytest.mark.asyncio

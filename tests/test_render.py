@@ -10,6 +10,7 @@ from aura.cli.render import Renderer
 from aura.schemas.events import (
     AssistantDelta,
     Final,
+    PermissionAudit,
     ToolCallCompleted,
     ToolCallStarted,
 )
@@ -97,3 +98,32 @@ def test_renderer_handles_multi_event_sequence() -> None:
     assert "◆" in out
     assert "✓" in out
     assert "done" in out
+
+
+def test_permission_audit_renders_with_indent_and_text() -> None:
+    r, buf = _capture()
+    r.on_event(PermissionAudit(tool="read_file", text="auto-allowed: read_only"))
+    out = buf.getvalue()
+    assert "auto-allowed: read_only" in out
+    # 4-space indent per spec §8.4
+    assert out.startswith("    ")
+
+
+def test_permission_audit_rule_allow_text_flows_through() -> None:
+    r, buf = _capture()
+    r.on_event(PermissionAudit(tool="bash", text="auto-allowed: rule `bash(npm test)`"))
+    out = buf.getvalue()
+    assert "bash(npm test)" in out
+    assert "auto-allowed: rule" in out
+
+
+def test_permission_audit_appears_between_started_and_completed() -> None:
+    r, buf = _capture()
+    r.on_event(ToolCallStarted(name="read_file", input={"path": "/tmp/x"}))
+    r.on_event(PermissionAudit(tool="read_file", text="auto-allowed: read_only"))
+    r.on_event(ToolCallCompleted(name="read_file", output={"content": "x"}))
+    out = buf.getvalue()
+    started_pos = out.index("◆")
+    audit_pos = out.index("auto-allowed")
+    completed_pos = out.index("✓")
+    assert started_pos < audit_pos < completed_pos

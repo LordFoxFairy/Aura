@@ -69,3 +69,36 @@ def test_path_prefix_returns_false_on_missing_key() -> None:
 def test_path_prefix_returns_false_on_non_string_value() -> None:
     m = path_prefix_on("path")
     assert m({"path": 123}, "/tmp") is False
+
+
+# ---------------------------------------------------------------------------
+# .key attribute — convention documented in module docstring. Lets CLI/rule
+# derivation know which arg this matcher keys off without a parallel metadata
+# slot. Absence on custom matchers (non-matchers-module) must degrade gracefully.
+# ---------------------------------------------------------------------------
+
+
+def test_exact_match_exposes_key_attribute() -> None:
+    m = exact_match_on("command")
+    assert getattr(m, "key", None) == "command"
+
+
+def test_path_prefix_exposes_key_attribute() -> None:
+    m = path_prefix_on("path")
+    assert getattr(m, "key", None) == "path"
+
+
+def test_custom_matcher_without_key_attribute_reads_as_none() -> None:
+    # A hand-rolled matcher (not from matchers module) has no .key. The
+    # fallback getattr(_, "key", None) returns None — callers treat that as
+    # "no precise rule available".
+    def custom(args: dict[str, object], content: str) -> bool:
+        return True
+
+    assert getattr(custom, "key", None) is None
+
+
+def test_key_attribute_matches_constructor_arg_verbatim() -> None:
+    # Any string key round-trips: the attribute is not normalized.
+    m = exact_match_on("weirdly_named_arg_42")
+    assert m.key == "weirdly_named_arg_42"  # type: ignore[attr-defined]

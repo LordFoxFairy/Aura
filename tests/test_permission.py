@@ -439,6 +439,52 @@ async def test_asker_basexception_propagates_does_not_deny(
     assert not any(e[0] == "permission_decision" for e in journal_events)
 
 
+async def test_hook_stashes_decision_on_state_custom() -> None:
+    """The hook writes Decision to state.custom["_aura_pending_decision"].
+
+    Transient slot the loop pops immediately after run_pre_tool. Verifying
+    here ensures the stashing invariant holds at the hook boundary even
+    without the loop running.
+    """
+    from aura.core.permissions.decision import Decision
+
+    hook = make_permission_hook(
+        asker=_SpyAsker(),
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=Path("/tmp"),
+    )
+    state = LoopState()
+    await hook(tool=_tool(is_read_only=True), args={}, state=state)
+    stashed = state.custom.get("_aura_pending_decision")
+    assert isinstance(stashed, Decision)
+    assert stashed.reason == "read_only"
+    assert stashed.allow is True
+
+
+async def test_hook_stash_is_overwritten_across_calls() -> None:
+    """Single-slot stash is overwritten each call — the loop pops it between
+    calls, but if the loop didn't pop (hypothetical misuse), a subsequent
+    call still overwrites rather than stacking."""
+    spy = _SpyAsker(response=AskerResponse(choice="accept"))
+    hook = make_permission_hook(
+        asker=spy,
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=Path("/tmp"),
+    )
+    state = LoopState()
+    # First call: read-only.
+    await hook(tool=_tool(is_read_only=True), args={}, state=state)
+    first = state.custom["_aura_pending_decision"]
+    assert first.reason == "read_only"
+    # Second call without popping: the slot is overwritten, not appended.
+    await hook(tool=_tool(), args={}, state=state)
+    second = state.custom["_aura_pending_decision"]
+    assert second.reason == "user_accept"
+    assert second is not first
+
+
 async def test_every_terminal_decision_emits_permission_decision(
     journal_events: list[tuple[str, dict[str, Any]]],
 ) -> None:

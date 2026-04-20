@@ -11,6 +11,7 @@ from rich.markdown import Markdown
 from aura.schemas.events import (
     AgentEvent,
     AssistantDelta,
+    PermissionAudit,
     ToolCallCompleted,
     ToolCallStarted,
 )
@@ -28,6 +29,11 @@ class Renderer:
             self._console.print(
                 f"[dim]◆ {event.name}({compact_args(event.input)})[/dim]",
             )
+            return
+        if isinstance(event, PermissionAudit):
+            # Spec §8.4: dim one-liner, 4-space indent, directly after the
+            # started line. Escape any rich markup accidentally in text.
+            self._console.print(f"    [dim]{event.text}[/dim]")
             return
         if isinstance(event, ToolCallCompleted):
             if event.error:

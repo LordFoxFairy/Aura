@@ -8,6 +8,7 @@ from aura.schemas.events import (
     AgentEvent,
     AssistantDelta,
     Final,
+    PermissionAudit,
     ToolCallCompleted,
     ToolCallStarted,
 )
@@ -160,6 +161,35 @@ class TestFinal:
         assert isinstance(ev, (AssistantDelta, ToolCallStarted, ToolCallCompleted, Final))
 
 
+class TestPermissionAudit:
+    def test_construct_positional(self) -> None:
+        ev = PermissionAudit("bash", "auto-allowed: read_only")
+        assert ev.tool == "bash"
+        assert ev.text == "auto-allowed: read_only"
+
+    def test_construct_keyword(self) -> None:
+        ev = PermissionAudit(tool="bash", text="auto-allowed: read_only")
+        assert ev.tool == "bash"
+        assert ev.text == "auto-allowed: read_only"
+
+    def test_equality(self) -> None:
+        ev1 = PermissionAudit("bash", "auto-allowed: read_only")
+        ev2 = PermissionAudit("bash", "auto-allowed: read_only")
+        assert ev1 == ev2
+
+    def test_frozen_raises_on_mutation(self) -> None:
+        ev = PermissionAudit("bash", "auto-allowed: read_only")
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            ev.text = "other"  # type: ignore[misc]
+
+    def test_is_in_agent_event_union(self) -> None:
+        ev: AgentEvent = PermissionAudit("bash", "auto-allowed: read_only")
+        assert isinstance(
+            ev,
+            (AssistantDelta, ToolCallStarted, ToolCallCompleted, Final, PermissionAudit),
+        )
+
+
 class TestAgentEventUnion:
     def test_agent_event_is_union_of_all_types(self) -> None:
         events: list[AgentEvent] = [
@@ -167,9 +197,19 @@ class TestAgentEventUnion:
             ToolCallStarted("bash", {"cmd": "ls"}),
             ToolCallCompleted("bash", "exit 0"),
             Final("done"),
+            PermissionAudit("bash", "auto-allowed: read_only"),
         ]
-        assert len(events) == 4
+        assert len(events) == 5
         assert all(
-            isinstance(e, (AssistantDelta, ToolCallStarted, ToolCallCompleted, Final))
+            isinstance(
+                e,
+                (
+                    AssistantDelta,
+                    ToolCallStarted,
+                    ToolCallCompleted,
+                    Final,
+                    PermissionAudit,
+                ),
+            )
             for e in events
         )

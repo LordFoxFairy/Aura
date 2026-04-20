@@ -184,6 +184,11 @@ def make_permission_hook(
             rule=decision.rule.to_string() if decision.rule is not None else None,
             mode=mode,
         )
+        # Transient per-call stash: loop._plan_tool_calls reads this back
+        # IMMEDIATELY after run_pre_tool returns (same tool call, same
+        # event-loop turn, no await in between) and pops it. Single-slot
+        # by design — tool plans are built sequentially so there's no race.
+        state.custom["_aura_pending_decision"] = decision
         if decision.allow:
             return None
         return ToolResult(ok=False, error=_deny_message(decision))

@@ -22,17 +22,26 @@ from pydantic import BaseModel, ValidationError
 
 from aura.core.hooks import HookChain
 from aura.core.memory.context import Context
+from aura.core.permissions.decision import Decision
 from aura.core.persistence import journal
 from aura.core.registry import ToolRegistry
 from aura.schemas.events import (
     AgentEvent,
     AssistantDelta,
     Final,
+    PermissionAudit,
     ToolCallCompleted,
     ToolCallStarted,
 )
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError, ToolResult
+
+# Reasons for which a permission prompt was NOT shown — the renderer surfaces
+# an "auto-allowed: <reason>" dim line after ToolCallStarted. User-prompted
+# allows/denies skip the audit (the prompt itself was the audit).
+_AUTO_ALLOW_REASONS: frozenset[str] = frozenset(
+    {"read_only", "rule_allow", "mode_bypass"},
+)
 
 # 成功调用后需把路径反馈给 Context progressive 状态的工具 → 其 path 参数名。
 # bash（shell 语义不固定）和 web_fetch（URL 而非文件系统）刻意排除。
@@ -61,6 +70,11 @@ class ToolStep:
     tool: BaseTool | None
     args: dict[str, object] | None
     decision: ToolResult | None
+    # Permission decision (auto-allow reason) captured from the permission
+    # hook via state.custom["_aura_pending_decision"]. Only populated when a
+    # permission hook is installed AND the hook ran to a Decision; None
+    # otherwise. Used to emit PermissionAudit after ToolCallStarted.
+    permission_decision: Decision | None = None
 
 
 def partition_batches(steps: list[ToolStep]) -> list[list[ToolStep]]:
@@ -191,6 +205,11 @@ class AgentLoop:
         for step in batch:
             tc = step.tool_call
             yield ToolCallStarted(name=tc["name"], input=dict(tc["args"]))
+            # Auto-allow audit line (spec §8.4): dim "auto-allowed: <reason>"
+            # after Started for the three reasons where no prompt was shown.
+            pd = step.permission_decision
+            if pd is not None and pd.reason in _AUTO_ALLOW_REASONS:
+                yield PermissionAudit(tool=tc["name"], text=pd.audit_line())
             journal.write(
                 "tool_execute_begin", tool=tc["name"], tool_call_id=tc["id"],
             )
@@ -249,7 +268,15 @@ class AgentLoop:
             decision = await self._hooks.run_pre_tool(
                 tool=tool, args=raw_args, state=self._state
             )
-            steps.append(ToolStep(tool_call=tc, tool=tool, args=raw_args, decision=decision))
+            # Read+pop the transient permission decision IMMEDIATELY after the
+            # hook returns — same event-loop turn, no await in between, so the
+            # slot can't leak to the next tool call. Absent permission hook =>
+            # slot never set => pop returns None.
+            perm_decision = self._state.custom.pop("_aura_pending_decision", None)
+            steps.append(ToolStep(
+                tool_call=tc, tool=tool, args=raw_args, decision=decision,
+                permission_decision=perm_decision,
+            ))
         return steps
 
     async def _execute_step(self, step: ToolStep) -> ToolResult:

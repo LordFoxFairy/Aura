@@ -100,8 +100,18 @@ class WebFetch(BaseTool):
         "replacement). Max 1 MB, truncates if larger. No auth / cookies."
     )
     args_schema: type[BaseModel] = WebFetchParams
+    # NOT ``is_read_only``. ``is_read_only`` in the permission gate means
+    # "safe to auto-approve, no prompt". Web fetch reaches external servers
+    # — the URL alone, the user's IP, and any query-string tokens leave the
+    # machine. Under prompt injection, the LLM could exfil data to an
+    # attacker-controlled host. Our SSRF guard (``_reject_private_host``)
+    # blocks internal-network scanning but NOT exfil. So: prompt by default.
+    # Users who want automation either pre-allow specific URLs in
+    # ``.aura/settings.json`` (``web_fetch(https://docs.python.org/...)``) or
+    # run with ``--bypass-permissions``.
     metadata: dict[str, Any] | None = tool_metadata(
-        is_read_only=True, is_concurrency_safe=True, max_result_size_chars=60_000,
+        is_concurrency_safe=True,
+        max_result_size_chars=60_000,
         rule_matcher=exact_match_on("url"),
         args_preview=_preview,
     )

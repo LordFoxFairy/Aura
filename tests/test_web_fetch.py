@@ -132,7 +132,10 @@ def test_web_fetch_capability_flags() -> None:
     from aura.tools.web_fetch import web_fetch
 
     meta = web_fetch.metadata or {}
-    assert meta.get("is_read_only") is True
+    # Deliberately NOT is_read_only — auto-approving network reach would
+    # let a prompt-injected LLM exfiltrate via URL. See the class comment
+    # in aura/tools/web_fetch.py.
+    assert meta.get("is_read_only") is False
     assert meta.get("is_destructive") is False
     assert meta.get("is_concurrency_safe") is True
 

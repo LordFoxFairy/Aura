@@ -258,6 +258,7 @@ def test_save_rule_scope_invalid_raises(tmp_path: Path) -> None:
 
 
 def test_ensure_local_creates_file_with_template(tmp_path: Path) -> None:
+    (tmp_path / ".aura").mkdir()  # user has opted into aura in this dir
     path, created = ensure_local_settings(tmp_path)
     assert created is True
     assert path == tmp_path / ".aura" / "settings.local.json"
@@ -278,15 +279,27 @@ def test_ensure_local_is_noop_when_file_exists(tmp_path: Path) -> None:
     assert json.loads(path.read_text()) == existing
 
 
-def test_ensure_local_creates_parent_dir(tmp_path: Path) -> None:
-    # Fresh tmp dir; no .aura/ yet. ensure_local must mkdir.
+def test_ensure_local_noop_when_aura_dir_absent(tmp_path: Path) -> None:
+    # Fresh tmp dir; no .aura/ → user hasn't opted in here.
+    # ensure_local must NOT create the dir or the file — that would
+    # pollute any directory where the user happens to run ``aura``.
     assert not (tmp_path / ".aura").exists()
     _, created = ensure_local_settings(tmp_path)
+    assert created is False
+    assert not (tmp_path / ".aura").exists()
+
+
+def test_ensure_local_creates_file_when_aura_dir_exists(tmp_path: Path) -> None:
+    # User has set up aura in this dir (has .aura/, maybe config.json).
+    # ensure_local writes the template alongside.
+    (tmp_path / ".aura").mkdir()
+    path, created = ensure_local_settings(tmp_path)
     assert created is True
-    assert (tmp_path / ".aura").is_dir()
+    assert path.exists()
 
 
 def test_ensure_local_output_roundtrips_through_load(tmp_path: Path) -> None:
+    (tmp_path / ".aura").mkdir()
     ensure_local_settings(tmp_path)
     cfg = load(tmp_path)
     # Template's empty allow list means no rules — load should see defaults.

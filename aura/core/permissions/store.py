@@ -228,8 +228,14 @@ def ensure_local_settings(project_root: Path) -> tuple[Path, bool]:
     """Create ``./.aura/settings.local.json`` with an empty template if absent.
 
     Returns ``(path, created)``: ``created=True`` iff we just wrote the file.
+
+    Only fires when ``./.aura/`` already exists — i.e. the user has opted
+    into aura in this directory (has a ``config.json`` or has been editing
+    aura files here before). Running ``aura`` in a random dir where no
+    ``.aura/`` exists is a no-op: we don't create clutter unprompted.
+
     Called at CLI startup so the machine-local override file is discoverable
-    — the user can open it and see the empty allow list, edit manually, and
+    — the user can open it, see the empty allow list, edit manually, and
     expect it to be honoured on the next run.
 
     Content of a freshly-created file:
@@ -240,13 +246,15 @@ def ensure_local_settings(project_root: Path) -> tuple[Path, bool]:
           }
         }
 
-    Never overwrites — existing content (even empty ``{}``) short-circuits
-    to ``created=False``. ``.gitignore`` already excludes the file.
+    Never overwrites — existing content (even ``{}``) short-circuits to
+    ``created=False``. ``.gitignore`` already excludes the file.
     """
     settings = _settings_local_path(project_root)
     if settings.exists():
         return settings, False
-    settings.parent.mkdir(parents=True, exist_ok=True)
+    if not settings.parent.exists():
+        # No .aura/ dir = user hasn't set up aura here. Don't pollute.
+        return settings, False
     template: dict[str, Any] = {"permissions": {"allow": []}}
     settings.write_text(json.dumps(template, indent=2) + "\n")
     return settings, True

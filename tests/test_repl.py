@@ -90,6 +90,24 @@ async def test_eof_exits_cleanly(tmp_path: Path) -> None:
     agent.close()
 
 
+async def test_empty_input_does_not_reach_agent(tmp_path: Path) -> None:
+    # Providers 400 on empty user turns — REPL must never round-trip
+    # them to the model. Whitespace-only lines are reprompted silently.
+    # Scripted inputs: empty string, whitespace, then an exit.
+    agent = _agent(tmp_path, turns=[FakeTurn(message=AIMessage(content="should not fire"))])
+    console, buf = _capture_console()
+
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["", "   ", "\t\n", "/exit"]),
+        console=console,
+    )
+    # Agent's single queued turn was never consumed — the empty inputs
+    # skipped the astream path entirely.
+    assert "should not fire" not in buf.getvalue()
+    agent.close()
+
+
 async def test_verbose_prints_turn_summary(tmp_path: Path) -> None:
     agent = _agent(
         tmp_path,

@@ -47,6 +47,12 @@ async def run_repl_async(
             _console.print()
             return
 
+        # Empty / whitespace-only input: reprompt silently. Sending an empty
+        # HumanMessage to the model always 400s (providers reject empty user
+        # turns), so it's a pure UX nuisance to round-trip it.
+        if not line.strip():
+            continue
+
         journal.write("user_input", line=line[:500])
 
         result = dispatch(line, agent)

@@ -127,6 +127,12 @@ def main() -> int:
     try:
         _warn_plaintext_api_keys(config, console)
         project_root = Path.cwd()
+        local_path, created = store.ensure_local_settings(project_root)
+        if created:
+            console.print(
+                f"[dim]created {local_path} — machine-local permission "
+                "overrides go here (gitignored)[/dim]"
+            )
         try:
             ruleset = store.load_ruleset(project_root)
         except AuraConfigError as exc:

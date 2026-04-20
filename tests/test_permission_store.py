@@ -12,6 +12,7 @@ from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet
 from aura.core.permissions.store import (
     PermissionStoreError,
+    ensure_local_settings,
     load,
     load_ruleset,
     save_rule,
@@ -249,3 +250,45 @@ def test_save_rule_local_scope_atomic_write_failure_raises(
 def test_save_rule_scope_invalid_raises(tmp_path: Path) -> None:
     with pytest.raises((TypeError, ValueError)):
         save_rule(tmp_path, Rule(tool="bash", content=None), scope="bogus")  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# ensure_local_settings — startup init of the machine-local override file
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_local_creates_file_with_template(tmp_path: Path) -> None:
+    path, created = ensure_local_settings(tmp_path)
+    assert created is True
+    assert path == tmp_path / ".aura" / "settings.local.json"
+    assert path.exists()
+    data = json.loads(path.read_text())
+    assert data == {"permissions": {"allow": []}}
+
+
+def test_ensure_local_is_noop_when_file_exists(tmp_path: Path) -> None:
+    path = tmp_path / ".aura" / "settings.local.json"
+    path.parent.mkdir()
+    existing = {"permissions": {"allow": ["bash(existing)"]}}
+    path.write_text(json.dumps(existing))
+    returned, created = ensure_local_settings(tmp_path)
+    assert returned == path
+    assert created is False
+    # Content must be untouched, not reset to the empty template.
+    assert json.loads(path.read_text()) == existing
+
+
+def test_ensure_local_creates_parent_dir(tmp_path: Path) -> None:
+    # Fresh tmp dir; no .aura/ yet. ensure_local must mkdir.
+    assert not (tmp_path / ".aura").exists()
+    _, created = ensure_local_settings(tmp_path)
+    assert created is True
+    assert (tmp_path / ".aura").is_dir()
+
+
+def test_ensure_local_output_roundtrips_through_load(tmp_path: Path) -> None:
+    ensure_local_settings(tmp_path)
+    cfg = load(tmp_path)
+    # Template's empty allow list means no rules — load should see defaults.
+    assert cfg.allow == []
+    assert cfg.mode == "default"

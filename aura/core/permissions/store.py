@@ -222,3 +222,31 @@ def save_rule(
             f"scope must be 'project' or 'local', got {scope!r}",
         )
     _write_rule_to_file(settings, rule)
+
+
+def ensure_local_settings(project_root: Path) -> tuple[Path, bool]:
+    """Create ``./.aura/settings.local.json`` with an empty template if absent.
+
+    Returns ``(path, created)``: ``created=True`` iff we just wrote the file.
+    Called at CLI startup so the machine-local override file is discoverable
+    — the user can open it and see the empty allow list, edit manually, and
+    expect it to be honoured on the next run.
+
+    Content of a freshly-created file:
+
+        {
+          "permissions": {
+            "allow": []
+          }
+        }
+
+    Never overwrites — existing content (even empty ``{}``) short-circuits
+    to ``created=False``. ``.gitignore`` already excludes the file.
+    """
+    settings = _settings_local_path(project_root)
+    if settings.exists():
+        return settings, False
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    template: dict[str, Any] = {"permissions": {"allow": []}}
+    settings.write_text(json.dumps(template, indent=2) + "\n")
+    return settings, True

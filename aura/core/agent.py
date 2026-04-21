@@ -13,6 +13,7 @@ from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core import llm
 from aura.core.hooks import HookChain
 from aura.core.hooks.budget import MaxTurnsExceeded, default_hooks
+from aura.core.hooks.must_read_first import make_must_read_first_hook
 from aura.core.loop import AgentLoop
 from aura.core.memory import project_memory, rules
 from aura.core.memory.context import Context
@@ -101,6 +102,13 @@ class Agent:
         self._primary_memory = project_memory.load_project_memory(self._cwd)
         self._rules = rules.load_rules(self._cwd)
         self._context = self._build_context()
+        # Tool-intrinsic invariant (matches claude-code FileEditTool): edit_file
+        # rejects before any user-supplied gate would run. Appended AFTER the
+        # caller's hooks so permission (CLI-installed) runs first — if the user
+        # denies the tool, we don't also yell about the missing read. Tracked as
+        # a field so clear_session can swap it when Context is rebuilt.
+        self._must_read_first_hook = make_must_read_first_hook(self._context)
+        self._hooks.pre_tool.append(self._must_read_first_hook)
         self._loop = self._build_loop()
 
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
@@ -163,6 +171,11 @@ class Agent:
         self._primary_memory = project_memory.load_project_memory(self._cwd)
         self._rules = rules.load_rules(self._cwd)
         self._context = self._build_context()
+        # Swap the must-read-first hook so it closes over the NEW Context —
+        # the old one's _read_records is empty but tied to a dead instance.
+        self._hooks.pre_tool.remove(self._must_read_first_hook)
+        self._must_read_first_hook = make_must_read_first_hook(self._context)
+        self._hooks.pre_tool.append(self._must_read_first_hook)
         self._loop = self._build_loop()
         journal.write("session_cleared", session=self._session_id)
 

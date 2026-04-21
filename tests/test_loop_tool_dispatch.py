@@ -259,6 +259,47 @@ async def test_max_turns_none_disables_cap() -> None:
     assert finals[0].message == "done"
 
 
+@pytest.mark.asyncio
+async def test_read_file_success_records_to_context(tmp_path: Path) -> None:
+    # A successful read_file call must record the resolved path into
+    # Context._read_records so the must-read-first invariant can see it.
+    class _PathParams(BaseModel):
+        path: str
+
+    target = tmp_path / "f.txt"
+    target.write_text("hello\n", encoding="utf-8")
+
+    def _read(path: str) -> str:
+        return Path(path).read_text(encoding="utf-8")
+
+    read_tool = build_tool(
+        name="read_file",
+        description="read a file",
+        args_schema=_PathParams,
+        func=_read,
+        is_read_only=True,
+        is_concurrency_safe=True,
+    )
+
+    tool_calls = [{"name": "read_file", "args": {"path": str(target)}, "id": "tc_1"}]
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(content="", tool_calls=tool_calls)),
+        FakeTurn(message=AIMessage(content="done")),
+    ])
+    registry = ToolRegistry([read_tool])
+    ctx = make_minimal_context(cwd=tmp_path)
+
+    loop = AgentLoop(
+        model=model, registry=registry, context=ctx,
+        hooks=HookChain(),
+    )
+    history: list[BaseMessage] = []
+    async for _ in loop.run_turn(user_prompt="read", history=history):
+        pass
+
+    assert ctx.read_status(target) == "fresh"
+
+
 def test_max_turns_default_is_50() -> None:
     # Aura policy: when claude-code leaves max_turns to the caller, we ship
     # a sane default. 50 is deep enough for real multi-turn work, low enough

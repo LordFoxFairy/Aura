@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
@@ -37,6 +38,12 @@ _AURA_LOCAL_MD = "AURA.local.md"
 class NestedFragment:
     source: Path
     content: str
+
+
+@dataclass(frozen=True)
+class _ReadRecord:
+    mtime: float
+    size: int
 
 
 class Context:
@@ -59,6 +66,13 @@ class Context:
         self._nested_fragments: list[NestedFragment] = []
         self._matched_rule_paths: set[Path] = set()
         self._matched_rules: list[Rule] = []
+        # Must-read-first invariant (mirrors claude-code FileEditTool.ts:275–287):
+        # edit_file must see a prior successful read_file on the same resolved
+        # path AND the file must not have changed on disk since. Populated by
+        # AgentLoop after a successful read_file call; staleness compared via
+        # (mtime, size) — lighter than claude-code's content hash but
+        # equivalent in practice for real edits.
+        self._read_records: dict[Path, _ReadRecord] = {}
         # Provider snapshot each build (mutability lives in LoopState, not here).
         self._todos_provider = todos_provider
 
@@ -82,6 +96,56 @@ class Context:
                 continue
             self._matched_rule_paths.add(rule.source_path)
             self._matched_rules.append(rule)
+
+    def record_read(self, path: Path) -> None:
+        """Mark ``path`` as read in this session (must-read-first invariant).
+
+        Silent on resolve/stat failure — the read itself already succeeded,
+        so failing to record is non-fatal. The invariant fails closed on the
+        read_status side, so a missed record just forces a re-read. Path may
+        have disappeared in the race between ainvoke returning and the loop
+        calling record_read; benign.
+        """
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return
+        try:
+            st = resolved.stat()
+        except OSError:
+            return
+        self._read_records[resolved] = _ReadRecord(
+            mtime=st.st_mtime, size=st.st_size,
+        )
+
+    def read_status(
+        self, path: Path,
+    ) -> Literal["never_read", "stale", "fresh"]:
+        """Return the read-state of ``path`` relative to this session.
+
+        - ``"never_read"`` — no prior ``record_read`` (or path unresolvable).
+        - ``"stale"``     — recorded, but (mtime, size) changed since, or the
+          path has disappeared from disk (recorded-but-now-gone counts as
+          stale so the edit surfaces a "has changed" error).
+        - ``"fresh"``     — recorded and on-disk fingerprint still matches.
+
+        Fail-closed on resolve failure: returning ``"never_read"`` forces a
+        re-read, matching claude-code's FileEditTool guard behavior.
+        """
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return "never_read"
+        record = self._read_records.get(resolved)
+        if record is None:
+            return "never_read"
+        try:
+            st = resolved.stat()
+        except OSError:
+            return "stale"
+        if (st.st_mtime, st.st_size) != (record.mtime, record.size):
+            return "stale"
+        return "fresh"
 
     def _load_nested_for(self, resolved_path: Path) -> None:
         """从 `resolved_path.parent` 走到（但不含）`self._cwd`，逐层加载候选文件。"""

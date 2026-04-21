@@ -345,3 +345,7 @@ class AgentLoop:
         except OSError:
             return
         self._context.on_tool_touched_path(resolved)
+        # Must-read-first invariant: record successful read_file targets so
+        # edit_file (via make_must_read_first_hook) can verify a prior read.
+        if step.tool.name == "read_file":  # type: ignore[union-attr]
+            self._context.record_read(resolved)

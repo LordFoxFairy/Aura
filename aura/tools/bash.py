@@ -1,8 +1,18 @@
-"""bash tool — run a shell command with a timeout."""
+"""bash tool — run a shell command with a timeout.
+
+Native async implementation: uses ``asyncio.create_subprocess_shell`` so the
+subprocess is owned by the event loop. On timeout *or* cancellation, the child
+is taken down via a SIGTERM→SIGKILL ladder; cancellation is re-raised to
+preserve structured-concurrency semantics.
+
+Targets macOS + Linux. Windows is not supported (POSIX signal ladder).
+"""
 
 from __future__ import annotations
 
-import subprocess
+import asyncio
+import contextlib
+from asyncio.subprocess import Process
 from typing import Any
 
 from langchain_core.tools import BaseTool
@@ -13,6 +23,8 @@ from aura.schemas.tool import ToolError, tool_metadata
 
 _DEFAULT_TIMEOUT = 30
 _MAX_OUTPUT_BYTES = 30_000
+_SHUTDOWN_GRACE = 0.5
+_REAP_TIMEOUT = 2.0
 
 
 class BashParams(BaseModel):
@@ -42,6 +54,69 @@ def _cap_stream(data: str) -> tuple[str, bool]:
     return marker + tail, True
 
 
+async def _shutdown(proc: Process, grace: float = _SHUTDOWN_GRACE) -> None:
+    """Terminate then kill. Used on timeout and on cancel.
+
+    SIGTERM first, wait up to ``grace`` seconds; if still alive, SIGKILL and
+    briefly reap. Exceptions from terminate/kill are swallowed — we're in a
+    cleanup path and must not raise over the original timeout/cancel.
+    """
+    if proc.returncode is not None:
+        return
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        return
+    except Exception:  # pragma: no cover - defensive; platform-level oddity
+        pass
+    with contextlib.suppress(TimeoutError, Exception):
+        await asyncio.wait_for(proc.wait(), timeout=grace)
+        if proc.returncode is not None:
+            return
+    if proc.returncode is not None:
+        return
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        return
+    except Exception:  # pragma: no cover - defensive
+        pass
+    with contextlib.suppress(TimeoutError, Exception):
+        await asyncio.wait_for(proc.wait(), timeout=_REAP_TIMEOUT)
+
+
+async def _drain_pipes(proc: Process) -> None:
+    """Drain stdout/stderr to EOF and close the subprocess transport on the
+    current loop. Without this, GC may finalize the transport after the loop
+    has shut down (in pytest, across tests), producing
+    'Event loop is closed' unraisable warnings.
+    """
+
+    async def _read_eof(stream: asyncio.StreamReader | None) -> None:
+        if stream is None:
+            return
+        with contextlib.suppress(Exception):  # pragma: no cover - defensive
+            await stream.read()
+
+    with contextlib.suppress(TimeoutError, Exception):
+        await asyncio.wait_for(
+            asyncio.gather(
+                _read_eof(proc.stdout),
+                _read_eof(proc.stderr),
+                return_exceptions=True,
+            ),
+            timeout=_REAP_TIMEOUT,
+        )
+
+    # Best-effort: close the private transport now, while the loop is alive.
+    # asyncio.Process exposes no public transport-close API; this mirrors
+    # what CPython's __del__ would do — only now rather than later.
+    transport = getattr(proc, "_transport", None)
+    if transport is not None:
+        with contextlib.suppress(Exception):  # pragma: no cover - defensive
+            transport.close()
+
+
 class Bash(BaseTool):
     name: str = "bash"
     description: str = (
@@ -57,23 +132,48 @@ class Bash(BaseTool):
     )
 
     def _run(self, command: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
+        # Bash is async-only: cancellation must be able to kill the child
+        # process, which requires the event loop to own it. Sync callers are
+        # steered to ``ainvoke`` by raising here.
+        raise NotImplementedError("bash is async-only; use `await bash.ainvoke(...)`")
+
+    async def _arun(
+        self, command: str, timeout: int = _DEFAULT_TIMEOUT
+    ) -> dict[str, Any]:
         try:
-            completed = subprocess.run(
+            proc = await asyncio.create_subprocess_shell(
                 command,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        except subprocess.TimeoutExpired as exc:
+        except OSError as exc:
+            raise ToolError(f"failed to spawn subprocess: {exc}") from exc
+
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+        except TimeoutError as exc:
+            await _shutdown(proc)
+            await _drain_pipes(proc)
             raise ToolError(f"timeout after {timeout}s: {exc}") from exc
-        stdout, stdout_truncated = _cap_stream(completed.stdout)
-        stderr, stderr_truncated = _cap_stream(completed.stderr)
+        except asyncio.CancelledError:
+            await _shutdown(proc)
+            await _drain_pipes(proc)
+            raise
+        except BaseException:
+            await _shutdown(proc)
+            await _drain_pipes(proc)
+            raise
+
+        stdout_text = stdout_b.decode("utf-8", errors="replace")
+        stderr_text = stderr_b.decode("utf-8", errors="replace")
+        stdout, stdout_truncated = _cap_stream(stdout_text)
+        stderr, stderr_truncated = _cap_stream(stderr_text)
         return {
             "stdout": stdout,
             "stderr": stderr,
-            "exit_code": completed.returncode,
+            "exit_code": proc.returncode,
             "truncated": stdout_truncated or stderr_truncated,
         }
 

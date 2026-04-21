@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from aura.schemas.state import LoopState
 from aura.schemas.todos import TodoItem
@@ -20,6 +20,20 @@ class TodoWriteParams(BaseModel):
     todos: list[TodoItem] = Field(
         ..., description="Complete new list; replaces prior state."
     )
+
+    @model_validator(mode="after")
+    def _ensure_single_in_progress(self) -> TodoWriteParams:
+        # Matches claude-code TodoWrite policy: at most one item may be
+        # ``in_progress`` at a time. Multiple simultaneously-active items is
+        # the scope-creep signal the tool exists to discourage. Zero is fine
+        # — valid for "all pending" initial plans and "all completed" final
+        # states.
+        n = sum(1 for t in self.todos if t.status == "in_progress")
+        if n > 1:
+            raise ValueError(
+                f"only one item may have status='in_progress' at a time; found {n}"
+            )
+        return self
 
 
 def _preview(args: dict[str, Any]) -> str:

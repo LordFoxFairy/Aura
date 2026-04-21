@@ -136,21 +136,28 @@ def _install_always(
 
     On project-scope save failure: journal, degrade to session scope. The
     user's consent stands — disk failure doesn't revoke it.
+
+    Explicit ``match`` exhausts every ``AskerResponse.scope`` literal so
+    that adding a new scope value to the Literal (e.g. ``"user"``) forces
+    an editor/mypy failure here rather than silently dropping the rule
+    into session.
     """
     assert response.rule is not None  # invariant enforced by AskerResponse
-    if response.scope == "project":
-        try:
-            save_rule(project_root, response.rule, scope="project")
-            return
-        except PermissionStoreError as exc:
-            journal.write(
-                "permission_save_failed",
-                tool=tool_name,
-                rule=response.rule.to_string(),
-                detail=str(exc),
-            )
-            # Fall through to session-scope degradation.
-    session.add(response.rule)
+    match response.scope:
+        case "project":
+            try:
+                save_rule(project_root, response.rule, scope="project")
+            except PermissionStoreError as exc:
+                journal.write(
+                    "permission_save_failed",
+                    tool=tool_name,
+                    rule=response.rule.to_string(),
+                    detail=str(exc),
+                )
+                # Consent stands; disk failure doesn't revoke it.
+                session.add(response.rule)
+        case "session":
+            session.add(response.rule)
 
 
 def make_permission_hook(

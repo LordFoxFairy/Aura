@@ -187,12 +187,21 @@ def _write_rule_to_file(settings: Path, rule: Rule) -> None:
     top["permissions"] = perms
 
     tmp = settings.with_suffix(settings.suffix + ".tmp")
-    tmp.write_text(json.dumps(top, indent=2))
+    # Wrap BOTH the write and the replace. ``tmp.write_text`` can also fail
+    # (disk full mid-write, permissions), and a raw OSError would propagate
+    # up through the hook layer and crash the agent loop. Callers catch
+    # ``PermissionStoreError`` specifically.
     try:
+        tmp.write_text(json.dumps(top, indent=2))
         tmp.replace(settings)
     except OSError as exc:
-        # Leave the .tmp for the caller/user to inspect; atomic rename
-        # either fully succeeded or did not happen at all.
+        # Clean up the dangling tmp if the write half-succeeded but the
+        # replace failed — stale .tmp files accumulate across retries
+        # otherwise. ``missing_ok=True`` covers the case where the write
+        # itself failed and no tmp exists.
+        import contextlib
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
         raise PermissionStoreError(source=str(settings), detail=str(exc)) from exc
 
 

@@ -38,6 +38,8 @@ from typing import Any
 
 import pathspec
 
+from aura.core.persistence import journal
+
 # Writes list — "do not clobber this".
 # ``**/.git/**`` (not ``.git/**``) because pathspec's gitignore treats a
 # leading ``**/`` as "match at any depth", which is what "any .git/
@@ -140,7 +142,18 @@ def is_protected(
         if any(exempt_spec.match_file(t) for t in candidates):
             return False
         return any(protected_spec.match_file(t) for t in candidates)
-    except Exception:  # noqa: BLE001 — safety must never crash the agent
+    except Exception as exc:  # noqa: BLE001 — safety must never crash the agent
+        # Silent-return-False is the right DEFAULT for defense-in-depth
+        # (a broken policy shouldn't crash the loop), but swallowing
+        # programmer errors silently means "silently unsafe". Journal so
+        # the regression is observable in logs even when the user doesn't
+        # see an exception.
+        journal.write(
+            "safety_check_error",
+            path=str(path) if path is not None else None,
+            is_write=is_write,
+            detail=f"{type(exc).__name__}: {exc}",
+        )
         return False
 
 

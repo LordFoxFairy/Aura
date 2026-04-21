@@ -127,3 +127,27 @@ def test_permission_audit_appears_between_started_and_completed() -> None:
     audit_pos = out.index("auto-allowed")
     completed_pos = out.index("✓")
     assert started_pos < audit_pos < completed_pos
+
+
+def test_renderer_escapes_bracket_markup_in_tool_input() -> None:
+    # LLM-chosen input might contain ``[...]`` which rich would otherwise
+    # parse as inline markup. Renderer must escape before wrapping.
+    r, buf = _capture()
+    r.on_event(ToolCallStarted(name="bash", input={"command": "echo [red]HI[/red]"}))
+    out = buf.getvalue()
+    # Literal ``[red]`` must appear in output as text (escaped).
+    assert "[red]" in out
+
+
+def test_renderer_escapes_bracket_markup_in_completion_error() -> None:
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="x", output=None, error="oops [bold]trap"))
+    out = buf.getvalue()
+    assert "[bold]" in out
+
+
+def test_renderer_escapes_bracket_markup_in_audit_text() -> None:
+    r, buf = _capture()
+    r.on_event(PermissionAudit(tool="x", text="auto-allowed: rule `x([weird])`"))
+    out = buf.getvalue()
+    assert "[weird]" in out

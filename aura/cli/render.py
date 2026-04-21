@@ -7,6 +7,7 @@ from typing import Any
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.markup import escape as rich_escape
 
 from aura.schemas.events import (
     AgentEvent,
@@ -26,18 +27,21 @@ class Renderer:
             self._console.print(Markdown(event.text))
             return
         if isinstance(event, ToolCallStarted):
-            self._console.print(
-                f"[dim]◆ {event.name}({compact_args(event.input)})[/dim]",
-            )
+            # Escape variable content — tool input / name may contain ``[...]``
+            # which rich would otherwise interpret as inline markup.
+            name = rich_escape(event.name)
+            args = rich_escape(compact_args(event.input))
+            self._console.print(f"[dim]◆ {name}({args})[/dim]")
             return
         if isinstance(event, PermissionAudit):
             # Spec §8.4: dim one-liner, 4-space indent, directly after the
-            # started line. Escape any rich markup accidentally in text.
-            self._console.print(f"    [dim]{event.text}[/dim]")
+            # started line. Audit text carries rule strings that may contain
+            # literal ``[...]`` — escape before wrapping in [dim].
+            self._console.print(f"    [dim]{rich_escape(event.text)}[/dim]")
             return
         if isinstance(event, ToolCallCompleted):
             if event.error:
-                self._console.print(f"[red]✗ {event.error}[/red]")
+                self._console.print(f"[red]✗ {rich_escape(event.error)}[/red]")
             else:
                 self._console.print("[green]✓[/green]")
             return

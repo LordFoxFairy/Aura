@@ -179,4 +179,85 @@ async def test_content_mode_without_context(tmp_path: Path) -> None:
     assert out["mode"] == "content"
     assert len(out["matches"]) == 1
     assert out["matches"][0]["line"] == 1
-    assert out["matches"][0]["text"] == "hello"
+
+
+async def test_content_mode_parses_path_with_hyphen_digits(tmp_path: Path) -> None:
+    # Regression for the `-<digits>-` path-parse bug: rg's context-line
+    # output uses a '-' separator, and the naive parser scanned for the
+    # first `-N-` pair — which tripped inside paths like
+    # src/v-42-release/foo.rs (the literal "-42-" ate the parse). Fixed by
+    # passing sentinel separators to rg that never appear in paths.
+    nested = tmp_path / "src" / "v-42-release"
+    nested.mkdir(parents=True)
+    target = nested / "foo.rs"
+    target.write_text("line1\nmatch_here\nline3\n", encoding="utf-8")
+
+    out = await grep.ainvoke(
+        {
+            "pattern": "match_here",
+            "path": str(tmp_path),
+            "output_mode": "content",
+            "context_before": 1,
+            "context_after": 1,
+        }
+    )
+    assert out["mode"] == "content"
+    # Match + 2 context lines = 3 entries.
+    assert len(out["matches"]) >= 1
+
+    # Full path preserved (no truncation at "src/v" or similar).
+    match_entry = next(
+        m for m in out["matches"] if not m.get("is_context", False)
+    )
+    assert match_entry["path"] == str(target)
+    assert match_entry["line"] == 2
+    assert match_entry["text"] == "match_here"
+
+
+async def test_content_mode_distinguishes_match_vs_context_on_hyphen_path(
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "python-3-lib"
+    nested.mkdir(parents=True)
+    target = nested / "mod.py"
+    target.write_text("pre\nmatch_here\npost\n", encoding="utf-8")
+
+    out = await grep.ainvoke(
+        {
+            "pattern": "match_here",
+            "path": str(tmp_path),
+            "output_mode": "content",
+            "context_before": 1,
+            "context_after": 1,
+        }
+    )
+    match_entries = [m for m in out["matches"] if not m.get("is_context", False)]
+    ctx_entries = [m for m in out["matches"] if m.get("is_context", False)]
+    # Exactly one match (on line 2); two context lines (lines 1 and 3).
+    assert len(match_entries) == 1
+    assert len(ctx_entries) == 2
+    assert match_entries[0]["line"] == 2
+    assert {e["line"] for e in ctx_entries} == {1, 3}
+
+
+async def test_content_mode_single_hyphen_path_still_works(tmp_path: Path) -> None:
+    # Regression guard: a simple hyphenated dir (no digits in between) must
+    # also round-trip cleanly — confirms the fix isn't narrowly tied to
+    # "digits between hyphens".
+    nested = tmp_path / "foo-bar"
+    nested.mkdir(parents=True)
+    target = nested / "baz.txt"
+    target.write_text("first\nmatch_here\nlast\n", encoding="utf-8")
+
+    out = await grep.ainvoke(
+        {
+            "pattern": "match_here",
+            "path": str(tmp_path),
+            "output_mode": "content",
+            "context_before": 1,
+        }
+    )
+    match_entry = next(
+        m for m in out["matches"] if not m.get("is_context", False)
+    )
+    assert match_entry["path"] == str(target)

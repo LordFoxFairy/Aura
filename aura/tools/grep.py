@@ -72,6 +72,19 @@ def _preview(args: dict[str, Any]) -> str:
     return f"pattern: {args.get('pattern', '')}  @ {args.get('path', '.')}"
 
 
+# Sentinel separators for content-mode output. rg's default separators
+# (``:`` for matches, ``-`` for context) are ambiguous inside paths that
+# legitimately contain them (e.g. ``src/v-42-release/foo.rs`` — a path
+# whose ``-42-`` chews through the naïve ``-<digits>-`` heuristic). Using
+# characters that cannot appear in POSIX file paths nor in rg's other
+# output fields gives an unambiguous parse. ``\x1f`` (ASCII unit
+# separator) for match lines; ``\x02`` for context lines — both are
+# POSIX-safe argv (not NUL) and not part of Python's ``str.splitlines``
+# terminator set (so we avoid the ``\x1e`` record-separator trap).
+_MATCH_SEP = "\x1f"
+_CTX_SEP = "\x02"
+
+
 def _build_argv(p: GrepParams) -> list[str]:
     argv: list[str] = ["rg", "--line-number"]
     if p.case_insensitive:
@@ -79,6 +92,10 @@ def _build_argv(p: GrepParams) -> list[str]:
     if p.multiline:
         argv += ["-U", "--multiline-dotall"]
     if p.output_mode == "content":
+        argv += [
+            f"--field-match-separator={_MATCH_SEP}",
+            f"--field-context-separator={_CTX_SEP}",
+        ]
         if p.context_after > 0:
             argv += ["-A", str(p.context_after)]
         if p.context_before > 0:
@@ -96,10 +113,13 @@ def _build_argv(p: GrepParams) -> list[str]:
 
 
 def _parse_content_line(line: str, has_context: bool) -> dict[str, Any] | None:
-    # rg --line-number emits `path:lineno:text` for matches and, under
-    # -A/-B, `path-lineno-text` for context lines. Path may contain '-',
-    # so scan for the first `-<digits>-` separator.
-    mparts = line.split(":", 2)
+    """Parse one rg --line-number content-mode output line.
+
+    Match lines use ``_MATCH_SEP`` (unit separator); context lines use
+    ``_CTX_SEP`` (STX). Split with maxsplit=2 so the ``text`` field may
+    itself contain the separator byte without corrupting the parse.
+    """
+    mparts = line.split(_MATCH_SEP, 2)
     if len(mparts) == 3 and mparts[1].isdigit():
         return {
             "path": mparts[0],
@@ -107,23 +127,14 @@ def _parse_content_line(line: str, has_context: bool) -> dict[str, Any] | None:
             "text": mparts[2],
         }
     if has_context:
-        i = 0
-        while True:
-            j = line.find("-", i)
-            if j == -1:
-                break
-            k = line.find("-", j + 1)
-            if k == -1:
-                break
-            mid = line[j + 1 : k]
-            if mid.isdigit():
-                return {
-                    "path": line[:j],
-                    "line": int(mid),
-                    "text": line[k + 1 :],
-                    "is_context": True,
-                }
-            i = j + 1
+        cparts = line.split(_CTX_SEP, 2)
+        if len(cparts) == 3 and cparts[1].isdigit():
+            return {
+                "path": cparts[0],
+                "line": int(cparts[1]),
+                "text": cparts[2],
+                "is_context": True,
+            }
     return None
 
 

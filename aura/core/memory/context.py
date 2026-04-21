@@ -44,6 +44,7 @@ class NestedFragment:
 class _ReadRecord:
     mtime: float
     size: int
+    partial: bool = False
 
 
 class Context:
@@ -97,8 +98,13 @@ class Context:
             self._matched_rule_paths.add(rule.source_path)
             self._matched_rules.append(rule)
 
-    def record_read(self, path: Path) -> None:
+    def record_read(self, path: Path, *, partial: bool = False) -> None:
         """Mark ``path`` as read in this session (must-read-first invariant).
+
+        ``partial`` — True when the read only returned a slice of the file
+        (offset>0 or limit truncated); drives the ``"partial"`` branch of
+        ``read_status``. A subsequent full read overwrites the record, so
+        partial → fresh recovery is just "read again without offset/limit".
 
         Silent on resolve/stat failure — the read itself already succeeded,
         so failing to record is non-fatal. The invariant fails closed on the
@@ -115,19 +121,21 @@ class Context:
         except OSError:
             return
         self._read_records[resolved] = _ReadRecord(
-            mtime=st.st_mtime, size=st.st_size,
+            mtime=st.st_mtime, size=st.st_size, partial=partial,
         )
 
     def read_status(
         self, path: Path,
-    ) -> Literal["never_read", "stale", "fresh"]:
+    ) -> Literal["never_read", "stale", "partial", "fresh"]:
         """Return the read-state of ``path`` relative to this session.
 
         - ``"never_read"`` — no prior ``record_read`` (or path unresolvable).
         - ``"stale"``     — recorded, but (mtime, size) changed since, or the
           path has disappeared from disk (recorded-but-now-gone counts as
           stale so the edit surfaces a "has changed" error).
-        - ``"fresh"``     — recorded and on-disk fingerprint still matches.
+        - ``"partial"``   — recorded, fingerprint still matches, but the
+          recorded read only saw a slice (offset>0 or truncated limit).
+        - ``"fresh"``     — recorded, fingerprint matches, full read.
 
         Fail-closed on resolve failure: returning ``"never_read"`` forces a
         re-read, matching claude-code's FileEditTool guard behavior.
@@ -145,6 +153,8 @@ class Context:
             return "stale"
         if (st.st_mtime, st.st_size) != (record.mtime, record.size):
             return "stale"
+        if record.partial:
+            return "partial"
         return "fresh"
 
     def _load_nested_for(self, resolved_path: Path) -> None:

@@ -1,4 +1,11 @@
-"""read_file tool — UTF-8 read with 1MB cap."""
+"""read_file tool — UTF-8 read with 1 MB cap + offset/limit slicing.
+
+Mirrors claude-code FileReadTool: `offset` (0-indexed line start in Aura —
+claude-code uses 1-indexed; we normalize to 0 for parity with Python slice
+semantics) and `limit` (max lines). `partial` in the return dict flips true
+when the caller saw less than the full file; the must-read-first invariant
+uses it to reject edit_file after a sliced read.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +23,16 @@ _MAX_BYTES = 1024 * 1024
 
 class ReadFileParams(BaseModel):
     path: str = Field(description="Absolute or relative file path to read.")
+    offset: int = Field(
+        default=0,
+        ge=0,
+        description="0-indexed line offset; lines before this are skipped.",
+    )
+    limit: int | None = Field(
+        default=None,
+        ge=1,
+        description="Max lines to return; None reads to end (subject to MB cap).",
+    )
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -24,7 +41,7 @@ def _preview(args: dict[str, Any]) -> str:
 
 class ReadFile(BaseTool):
     name: str = "read_file"
-    description: str = "Read a UTF-8 text file (up to 1 MB)."
+    description: str = "Read a UTF-8 text file (up to 1 MB) with optional offset/limit."
     args_schema: type[BaseModel] = ReadFileParams
     metadata: dict[str, Any] | None = tool_metadata(
         is_read_only=True, is_concurrency_safe=True,
@@ -32,7 +49,9 @@ class ReadFile(BaseTool):
         args_preview=_preview,
     )
 
-    def _run(self, path: str) -> dict[str, Any]:
+    def _run(
+        self, path: str, offset: int = 0, limit: int | None = None,
+    ) -> dict[str, Any]:
         p = Path(path)
         if not p.exists():
             raise ToolError(f"not found: {path}")
@@ -43,7 +62,39 @@ class ReadFile(BaseTool):
             content = p.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:
             raise ToolError(f"not UTF-8: {exc}") from exc
-        return {"content": content, "lines": len(content.splitlines())}
+
+        # splitlines(keepends=True) preserves line terminators so re-joining
+        # gives byte-identical slice output for the lines we return.
+        all_lines = content.splitlines(keepends=True)
+        total_lines = len(all_lines)
+
+        if offset >= total_lines:
+            # Over-shoot: be honest about it — partial=True so the caller
+            # knows they didn't see the end of the file.
+            return {
+                "content": "",
+                "lines": 0,
+                "total_lines": total_lines,
+                "offset": offset,
+                "limit": limit,
+                "partial": True,
+            }
+
+        end = offset + limit if limit is not None else None
+        sliced = all_lines[offset:end]
+        joined = "".join(sliced)
+
+        partial = offset > 0 or (
+            limit is not None and offset + limit < total_lines
+        )
+        return {
+            "content": joined,
+            "lines": len(sliced),
+            "total_lines": total_lines,
+            "offset": offset,
+            "limit": limit,
+            "partial": partial,
+        }
 
 
 read_file: BaseTool = ReadFile()

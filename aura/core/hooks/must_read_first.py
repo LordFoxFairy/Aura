@@ -78,6 +78,11 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
                 f"file has changed since last read. re-read before editing. "
                 f"(path={resolved})"
             )
+        elif status == "partial":
+            error = (
+                f"file was only partially read. read_file({resolved}) fully "
+                f"(offset=0, limit=None) before edit."
+            )
         else:  # "never_read"
             error = (
                 f"file has not been read yet. read_file({resolved}) before "

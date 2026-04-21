@@ -443,3 +443,64 @@ async def test_hook_still_blocks_edit_with_old_str_on_never_read_file(
     assert result.ok is False
     assert result.error is not None
     assert "has not been read" in result.error
+
+
+@pytest.mark.asyncio
+async def test_partial_read_blocks_edit_with_partial_reason(
+    tmp_path: Path,
+) -> None:
+    # A partial read (offset>0 or limit truncated below total_lines) must
+    # block edit_file — the model hasn't seen the whole file, so any edit
+    # is based on an incomplete view.
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        ctx = _ctx(tmp_path)
+        target = tmp_path / "f.txt"
+        target.write_text("a\nb\nc\n")
+        ctx.record_read(target, partial=True)
+
+        assert ctx.read_status(target) == "partial"
+
+        hook = make_must_read_first_hook(ctx)
+        result = await hook(
+            tool=_edit_tool(),
+            args={"path": str(target), "old_str": "a", "new_str": "A"},
+            state=LoopState(),
+        )
+        assert isinstance(result, ToolResult)
+        assert result.ok is False
+        assert result.error is not None
+        assert "partially read" in result.error
+
+        events = [json.loads(line) for line in log.read_text().splitlines()]
+        blocked = [e for e in events if e["event"] == "must_read_first_blocked"]
+        assert len(blocked) == 1
+        assert blocked[0]["reason"] == "partial"
+    finally:
+        journal_module.reset()
+
+
+@pytest.mark.asyncio
+async def test_full_read_after_partial_read_recovers_fresh(
+    tmp_path: Path,
+) -> None:
+    # A subsequent FULL read (partial=False) must overwrite the partial
+    # record, flipping status back to "fresh" and unblocking edits.
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "f.txt"
+    target.write_text("a\nb\nc\n")
+    ctx.record_read(target, partial=True)
+    assert ctx.read_status(target) == "partial"
+
+    ctx.record_read(target, partial=False)
+    assert ctx.read_status(target) == "fresh"
+
+    hook = make_must_read_first_hook(ctx)
+    result = await hook(
+        tool=_edit_tool(),
+        args={"path": str(target), "old_str": "a", "new_str": "A"},
+        state=LoopState(),
+    )
+    assert result is None

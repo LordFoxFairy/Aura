@@ -316,7 +316,7 @@ class AgentLoop:
         try:
             output = await step.tool.ainvoke(step.args)
             result = ToolResult(ok=True, output=output)
-            self._maybe_trigger_path(step)
+            self._maybe_trigger_path(step, result)
         except ToolError as exc:
             # 工具作者主动抛的用户态错误，消息原样给模型看。
             result = ToolResult(ok=False, error=str(exc))
@@ -328,11 +328,14 @@ class AgentLoop:
             tool=step.tool, args=step.args, result=result, state=self._state
         )
 
-    def _maybe_trigger_path(self, step: ToolStep) -> None:
+    def _maybe_trigger_path(self, step: ToolStep, result: ToolResult) -> None:
         """成功的 path-aware tool 调用后，把路径反馈给 Context 的 progressive 状态。
 
         仅在 `_execute_step` 的成功分支（decision 为 None + ainvoke 未抛）被调用，
         因此 `step.tool` 与 `step.args` 必非 None —— 由 `_plan_tool_calls` 保证。
+
+        `result.output` 传进来是为了拿到 read_file 返回的 `partial` 标志 ——
+        必须用工具返回值而非 args（`limit >= total_lines` 也可能是 full read）。
         """
         arg_name = PATH_TRIGGER_TOOLS.get(step.tool.name)  # type: ignore[union-attr]
         if arg_name is None:
@@ -347,5 +350,10 @@ class AgentLoop:
         self._context.on_tool_touched_path(resolved)
         # Must-read-first invariant: record successful read_file targets so
         # edit_file (via make_must_read_first_hook) can verify a prior read.
+        # `partial` fallbacks to False for robustness — a custom read_file
+        # tool without the key is treated as a full read.
         if step.tool.name == "read_file":  # type: ignore[union-attr]
-            self._context.record_read(resolved)
+            partial = False
+            if isinstance(result.output, dict):
+                partial = bool(result.output.get("partial", False))
+            self._context.record_read(resolved, partial=partial)

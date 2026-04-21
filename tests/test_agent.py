@@ -904,6 +904,100 @@ def test_ask_user_question_in_default_allow_rules() -> None:
 
 
 @pytest.mark.asyncio
+async def test_bash_safety_hook_blocks_zmodload_even_with_permission_allow(
+    tmp_path: Path,
+) -> None:
+    """Safety is a HARD FLOOR — a permission hook that would allow bash
+    must not override the safety short-circuit. The bash_safety hook is
+    inserted at pre_tool[0] so it runs FIRST, before any user-supplied
+    permission hook."""
+    from langchain_core.messages import ToolMessage
+
+    # Permission-ish hook that would happily allow any tool call.
+    async def _allow_all(
+        *, tool: BaseTool, args: dict[str, Any], state: Any, **_: Any,
+    ) -> Any:
+        return None  # pass-through → allow
+
+    hooks = HookChain(pre_tool=[_allow_all])
+
+    cfg = _minimal_config(enabled=["bash"])
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(
+            content="",
+            tool_calls=[{
+                "id": "tc_1",
+                "name": "bash",
+                "args": {"command": "zmodload zsh/system"},
+            }],
+        )),
+        FakeTurn(message=AIMessage(content="done")),
+    ])
+    agent = Agent(
+        config=cfg, model=model, storage=_storage(tmp_path), hooks=hooks,
+    )
+
+    events: list[Any] = []
+    async for e in agent.astream("try exploit"):
+        events.append(e)
+
+    # History must record the tool_call message AND a ToolMessage with an
+    # error string coming from the bash_safety hook — NOT a successful ls.
+    history = agent._storage.load("default")
+    tool_msgs = [m for m in history if isinstance(m, ToolMessage)]
+    assert tool_msgs, "expected a ToolMessage for the blocked call"
+    blob = " ".join(str(m.content) for m in tool_msgs)
+    assert "bash safety blocked" in blob
+    assert "zsh_dangerous_command" in blob
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_bash_safety_hook_installed_at_position_zero(tmp_path: Path) -> None:
+    """Safety must precede any caller-supplied pre_tool hook."""
+    async def _noop(
+        *, tool: BaseTool, args: dict[str, Any], state: Any, **_: Any,
+    ) -> Any:
+        return None
+
+    hooks = HookChain(pre_tool=[_noop])
+    cfg = _minimal_config(enabled=[])
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+        hooks=hooks,
+    )
+    # The safety hook closure is stored on the agent for clear_session swap.
+    assert agent._hooks.pre_tool[0] is agent._bash_safety_hook
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_bash_safety_hook_survives_clear_session_at_position_zero(
+    tmp_path: Path,
+) -> None:
+    async def _noop(
+        *, tool: BaseTool, args: dict[str, Any], state: Any, **_: Any,
+    ) -> Any:
+        return None
+
+    hooks = HookChain(pre_tool=[_noop])
+    cfg = _minimal_config(enabled=[])
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+        hooks=hooks,
+    )
+    agent.clear_session()
+    assert agent._hooks.pre_tool[0] is agent._bash_safety_hook
+    # And the noop / must_read_first hooks still live somewhere in the chain.
+    assert _noop in agent._hooks.pre_tool
+    agent.close()
+
+
+@pytest.mark.asyncio
 async def test_clear_session_wipes_todos(tmp_path: Path) -> None:
     cfg = _minimal_config(enabled=["todo_write"])
     model = _CapturingFakeChatModel(turns=[

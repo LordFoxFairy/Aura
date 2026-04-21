@@ -12,6 +12,7 @@ from langchain_core.tools import BaseTool
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core import llm
 from aura.core.hooks import HookChain
+from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.hooks.budget import MaxTurnsExceeded, default_hooks
 from aura.core.hooks.must_read_first import make_must_read_first_hook
 from aura.core.loop import AgentLoop
@@ -102,6 +103,14 @@ class Agent:
         self._primary_memory = project_memory.load_project_memory(self._cwd)
         self._rules = rules.load_rules(self._cwd)
         self._context = self._build_context()
+        # Hard-floor bash safety — Tier A shell attacks (zsh builtins, CR
+        # parser differential, malformed+separator, cd+git compound). Inserted
+        # at pre_tool[0] so it precedes any caller-supplied permission hook —
+        # safety is a separate axis from permission and CANNOT be overridden
+        # by rules or ``--bypass-permissions``. Stateless; tracked as a field
+        # so clear_session can re-insert it at position 0 idempotently.
+        self._bash_safety_hook = make_bash_safety_hook()
+        self._hooks.pre_tool.insert(0, self._bash_safety_hook)
         # Tool-intrinsic invariant (matches claude-code FileEditTool): edit_file
         # rejects before any user-supplied gate would run. Appended AFTER the
         # caller's hooks so permission (CLI-installed) runs first — if the user
@@ -176,6 +185,12 @@ class Agent:
         self._hooks.pre_tool.remove(self._must_read_first_hook)
         self._must_read_first_hook = make_must_read_first_hook(self._context)
         self._hooks.pre_tool.append(self._must_read_first_hook)
+        # Re-anchor bash safety at pre_tool[0]. The hook is stateless so we
+        # could skip this, but the swap keeps the invariant "safety is first"
+        # independent of any future list mutations in clear_session.
+        self._hooks.pre_tool.remove(self._bash_safety_hook)
+        self._bash_safety_hook = make_bash_safety_hook()
+        self._hooks.pre_tool.insert(0, self._bash_safety_hook)
         self._loop = self._build_loop()
         journal.write("session_cleared", session=self._session_id)
 

@@ -171,7 +171,10 @@ def main() -> int:
         return _fail_startup(console, exc)
 
     try:
-        asyncio.run(run_repl_async(agent, console=console, verbose=args.verbose))
+        asyncio.run(run_repl_async(
+            agent, console=console, verbose=args.verbose,
+            bypass=(mode == "bypass"),
+        ))
     except KeyboardInterrupt:
         # asyncio.run swallows the first SIGINT (to cancel the running task);
         # only a second Ctrl+C propagates here. Convert it to a clean exit so

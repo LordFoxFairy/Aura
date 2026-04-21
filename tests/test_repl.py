@@ -145,3 +145,40 @@ async def test_non_verbose_does_not_print_summary(tmp_path: Path) -> None:
     out = buf.getvalue()
     assert "turn 1" not in out
     agent.close()
+
+
+async def test_bypass_mode_prompt_carries_bypass_marker(tmp_path: Path) -> None:
+    # Instead of testing that the banner scrolls off (out of REPL scope),
+    # prove the bypass prompt string contains the visible marker so users
+    # see it every line.
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+
+    # Custom input_fn that captures the prompt string seen by the REPL.
+    seen_prompts: list[str] = []
+
+    async def _capture_prompt(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        raise EOFError  # exit immediately after first prompt
+
+    await run_repl_async(
+        agent, input_fn=_capture_prompt, console=console, bypass=True,
+    )
+    assert seen_prompts
+    assert "bypass" in seen_prompts[0]
+    agent.close()
+
+
+async def test_non_bypass_mode_uses_plain_prompt(tmp_path: Path) -> None:
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+    seen_prompts: list[str] = []
+
+    async def _capture_prompt(prompt: str) -> str:
+        seen_prompts.append(prompt)
+        raise EOFError
+
+    await run_repl_async(agent, input_fn=_capture_prompt, console=console)
+    assert seen_prompts
+    assert "bypass" not in seen_prompts[0]
+    agent.close()

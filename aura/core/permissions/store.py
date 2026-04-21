@@ -255,6 +255,21 @@ def ensure_local_settings(project_root: Path) -> tuple[Path, bool]:
     if not settings.parent.exists():
         # No .aura/ dir = user hasn't set up aura here. Don't pollute.
         return settings, False
-    template: dict[str, Any] = {"permissions": {"allow": []}}
+    # The ``//`` key is a conventional JSON "comment" — harmless because our
+    # top-level reader only consults ``permissions``, and ``save_rule``
+    # preserves unrelated top-level keys on writes, so this hint survives
+    # round-trips. Gives the user something to read when they open the file
+    # for the first time.
+    template: dict[str, Any] = {
+        "//": (
+            "Machine-local permission overrides. Add rule strings to "
+            "permissions.allow to auto-approve tool calls without a "
+            "prompt. Examples: \"bash(npm test)\", \"read_file(/tmp)\", "
+            "\"grep\". Full spec: docs/specs/2026-04-19-aura-permission.md."
+        ),
+        "permissions": {
+            "allow": [],
+        },
+    }
     settings.write_text(json.dumps(template, indent=2) + "\n")
     return settings, True

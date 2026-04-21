@@ -31,6 +31,7 @@ async def run_repl_async(
     input_fn: InputFn | None = None,
     console: Console | None = None,
     verbose: bool = False,
+    bypass: bool = False,
 ) -> None:
     journal.write("repl_started")
     _input = input_fn if input_fn is not None else _default_input
@@ -39,9 +40,16 @@ async def run_repl_async(
 
     _print_welcome(agent, _console)
 
+    # In bypass mode the startup banner scrolls off after a few turns;
+    # encode bypass into the prompt string so every line reminds the user
+    # they're in "allow-everything" mode. ANSI red around the marker —
+    # works in any terminal that supports colour; plain terminals just see
+    # the escapes as text (ugly but not dangerous).
+    prompt_str = "\x1b[31maura[!bypass]>\x1b[0m " if bypass else "aura> "
+
     while True:
         try:
-            line = await _input("aura> ")
+            line = await _input(prompt_str)
         except (EOFError, KeyboardInterrupt):
             journal.write("repl_exit", reason="eof_or_ctrlc")
             _console.print()

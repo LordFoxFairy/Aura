@@ -264,7 +264,27 @@ def test_ensure_local_creates_file_with_template(tmp_path: Path) -> None:
     assert path == tmp_path / ".aura" / "settings.local.json"
     assert path.exists()
     data = json.loads(path.read_text())
-    assert data == {"permissions": {"allow": []}}
+    assert data["permissions"] == {"allow": []}
+    # The `"//"` key is a conventional JSON comment: it documents the
+    # file for a user opening it cold. It's a top-level sibling of
+    # "permissions", which ``load`` tolerates (it only reads the
+    # "permissions" key) and ``save_rule`` preserves (unrelated top-level
+    # keys round-trip).
+    assert "//" in data
+    assert "bash(" in data["//"]  # Content includes an example rule
+
+
+def test_ensure_local_template_roundtrips_through_save_rule(tmp_path: Path) -> None:
+    # The "//" comment key must NOT be clobbered when save_rule later
+    # appends a rule — save_rule preserves unrelated top-level keys, and
+    # this is a test for that specific round-trip.
+    from aura.core.permissions.store import save_rule
+    (tmp_path / ".aura").mkdir()
+    ensure_local_settings(tmp_path)
+    save_rule(tmp_path, Rule(tool="bash", content="npm test"), scope="local")
+    reloaded = json.loads((tmp_path / ".aura" / "settings.local.json").read_text())
+    assert "//" in reloaded
+    assert "bash(npm test)" in reloaded["permissions"]["allow"]
 
 
 def test_ensure_local_is_noop_when_file_exists(tmp_path: Path) -> None:

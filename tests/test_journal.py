@@ -100,10 +100,13 @@ def test_configure_does_not_raise_on_unwritable_parent(
     journal_module.write("post_failed_configure")
     assert not unreachable.exists()
 
-    # Stderr carries a one-line warning so the user knows audit is off
-    # rather than silently losing events.
+    # Stderr carries a specific one-line warning so the user knows audit
+    # is off rather than silently losing events. Match the canonical phrase
+    # rather than loose substrings — a future refactor that changes the
+    # message shape (e.g. "failed to log" → different user experience)
+    # should force this test to update deliberately.
     captured = capsys.readouterr()
-    assert "audit" in captured.err.lower() or "log" in captured.err.lower()
+    assert "audit log disabled" in captured.err
 
 
 def test_configure_failure_does_not_poison_later_configure(

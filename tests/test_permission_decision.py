@@ -52,6 +52,33 @@ def test_rule_allow_with_rule_roundtrips() -> None:
     assert d.rule is rule
 
 
+def test_target_rejected_when_reason_is_not_safety_blocked() -> None:
+    # Invariant: target is only meaningful for safety_blocked. Any other
+    # reason carrying a target means the audit record would misrepresent
+    # what was evaluated — reject at construction so the bug never
+    # reaches events.jsonl.
+    with pytest.raises(ValueError, match="target"):
+        Decision(
+            allow=True, reason="rule_allow",
+            rule=Rule(tool="read_file", content=None), target="/x",
+        )
+    with pytest.raises(ValueError, match="target"):
+        Decision(allow=False, reason="user_deny", target="/x")
+
+
+def test_safety_blocked_accepts_target() -> None:
+    d = Decision(allow=False, reason="safety_blocked", target="/secret")
+    assert d.target == "/secret"
+
+
+def test_safety_blocked_without_target_still_valid() -> None:
+    # Historical + defensive: a safety_blocked without target is permitted
+    # (e.g. tests that don't care about the path). Only the *inverse* — a
+    # target on a non-safety_blocked reason — is the invariant.
+    d = Decision(allow=False, reason="safety_blocked")
+    assert d.target is None
+
+
 # ---------------------------------------------------------------------------
 # audit_line — one-liner the renderer dims and appends to tool-call output
 # ---------------------------------------------------------------------------

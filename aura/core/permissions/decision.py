@@ -73,6 +73,11 @@ class Decision:
             raise ValueError(
                 f"reason {self.reason!r} requires a rule, got None"
             )
+        if self.target is not None and self.reason != "safety_blocked":
+            raise ValueError(
+                f"reason {self.reason!r} must not carry a target; "
+                "target is only meaningful for safety_blocked"
+            )
 
     def audit_line(self) -> str:
         """One-line summary for the renderer + journal.

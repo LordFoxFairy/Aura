@@ -167,9 +167,6 @@ async def test_other_tools_pass_through_unaffected(tmp_path: Path) -> None:
     r1 = await hook(
         tool=_bash_tool(), args={"command": "ls"}, state=LoopState(),
     )
-    r2 = await hook(
-        tool=_write_tool(), args={"path": str(target)}, state=LoopState(),
-    )
     r3 = await hook(
         tool=_grep_tool(),
         args={"pattern": "x", "path": str(target)},
@@ -179,7 +176,6 @@ async def test_other_tools_pass_through_unaffected(tmp_path: Path) -> None:
         tool=_read_tool(), args={"path": str(target)}, state=LoopState(),
     )
     assert r1 is None
-    assert r2 is None
     assert r3 is None
     assert r4 is None
 
@@ -504,3 +500,157 @@ async def test_full_read_after_partial_read_recovers_fresh(
         state=LoopState(),
     )
     assert result is None
+
+
+# write_file — file-unchanged guard mirroring claude-code's FileWriteTool.
+# Only applies when the target already exists on disk; pure creation is free.
+
+
+@pytest.mark.asyncio
+async def test_write_file_to_new_path_passes_through_hook(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    ghost = tmp_path / "brand_new.txt"  # does NOT exist
+
+    result = await hook(
+        tool=_write_tool(),
+        args={"path": str(ghost)},
+        state=LoopState(),
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_write_file_overwrite_rejected_without_prior_read(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    target = tmp_path / "f.txt"
+    target.write_text("hello\n")
+
+    result = await hook(
+        tool=_write_tool(),
+        args={"path": str(target)},
+        state=LoopState(),
+    )
+    assert isinstance(result, ToolResult)
+    assert result.ok is False
+    assert result.error is not None
+    assert "has not been read" in result.error
+    assert "overwriting" in result.error
+
+
+@pytest.mark.asyncio
+async def test_write_file_overwrite_allowed_after_record_read(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "f.txt"
+    target.write_text("hello\n")
+    ctx.record_read(target)
+
+    hook = make_must_read_first_hook(ctx)
+    result = await hook(
+        tool=_write_tool(),
+        args={"path": str(target)},
+        state=LoopState(),
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_write_file_overwrite_rejected_when_stale(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "f.txt"
+    target.write_text("hello\n")
+    ctx.record_read(target)
+
+    target.write_text("hello world! longer now\n")
+    st = target.stat()
+    os.utime(target, (st.st_mtime + 10, st.st_mtime + 10))
+
+    hook = make_must_read_first_hook(ctx)
+    result = await hook(
+        tool=_write_tool(),
+        args={"path": str(target)},
+        state=LoopState(),
+    )
+    assert isinstance(result, ToolResult)
+    assert result.ok is False
+    assert result.error is not None
+    assert "has changed since last read" in result.error
+
+
+@pytest.mark.asyncio
+async def test_write_file_overwrite_rejected_when_partial(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "f.txt"
+    target.write_text("a\nb\nc\n")
+    ctx.record_read(target, partial=True)
+
+    hook = make_must_read_first_hook(ctx)
+    result = await hook(
+        tool=_write_tool(),
+        args={"path": str(target)},
+        state=LoopState(),
+    )
+    assert isinstance(result, ToolResult)
+    assert result.ok is False
+    assert result.error is not None
+    assert "partially read" in result.error
+
+
+@pytest.mark.asyncio
+async def test_write_file_error_messages_say_overwriting_not_editing(
+    tmp_path: Path,
+) -> None:
+    # Regression guard: the per-tool error message must mention "overwriting",
+    # not the edit-flavored "before edit".
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    target = tmp_path / "f.txt"
+    target.write_text("hello\n")
+
+    result = await hook(
+        tool=_write_tool(),
+        args={"path": str(target)},
+        state=LoopState(),
+    )
+    assert isinstance(result, ToolResult)
+    assert result.error is not None
+    assert "overwriting" in result.error
+    assert "before edit" not in result.error
+
+
+@pytest.mark.asyncio
+async def test_journal_event_shows_write_file_as_tool(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        ctx = _ctx(tmp_path)
+        target = tmp_path / "f.txt"
+        target.write_text("hello\n")
+        hook = make_must_read_first_hook(ctx)
+        await hook(
+            tool=_write_tool(),
+            args={"path": str(target)},
+            state=LoopState(),
+        )
+        events = [json.loads(line) for line in log.read_text().splitlines()]
+        blocked = [e for e in events if e["event"] == "must_read_first_blocked"]
+        assert len(blocked) == 1
+        assert blocked[0]["tool"] == "write_file"
+        assert blocked[0]["path"] == str(target.resolve())
+        assert blocked[0]["reason"] == "never_read"
+    finally:
+        journal_module.reset()

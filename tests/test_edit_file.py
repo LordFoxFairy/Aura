@@ -182,3 +182,70 @@ async def test_error_message_truncates_long_missing_string(tmp_path: Path) -> No
     echoed = msg.split("missing:", 1)[1].strip()
     # echoed is a truncated repr; total payload length (pre-ellipsis) <= 120.
     assert len(echoed.rstrip("\u2026").rstrip()) <= 120
+
+
+# ---------------------------------------------------------------------------
+# Mixed CRLF + LF handling — prior behavior silently mutated unrelated lines
+# ---------------------------------------------------------------------------
+
+
+async def test_mixed_endings_file_does_not_mutate_unrelated_lines(
+    tmp_path: Path,
+) -> None:
+    # A file with BOTH \r\n and bare \n lines: any "normalize to LF for
+    # match, restore to CRLF on write" strategy silently converts the
+    # bare-LF lines to CRLF, which the user didn't ask for and breaks
+    # surgical edits. Correct behavior: detect mixed endings, skip
+    # normalization, match and write on raw content.
+    f = tmp_path / "mixed.txt"
+    raw = b"line one\r\nline two\nline three\r\nline four\n"
+    f.write_bytes(raw)
+
+    out = await edit_file.ainvoke(
+        {"path": str(f), "old_str": "line two", "new_str": "line TWO"}
+    )
+    assert out == {"replacements": 1}
+
+    written = f.read_bytes()
+    assert b"line TWO" in written
+    # Per-line endings preserved: 1 and 3 stay CRLF, 2 and 4 stay bare LF.
+    assert written == b"line one\r\nline TWO\nline three\r\nline four\n"
+
+
+async def test_mixed_endings_match_on_crlf_region_with_crlf_old_str(
+    tmp_path: Path,
+) -> None:
+    f = tmp_path / "mixed.txt"
+    f.write_bytes(b"line one\r\nline two\nline three\r\n")
+
+    out = await edit_file.ainvoke(
+        {"path": str(f), "old_str": "line one\r\n", "new_str": "LINE ONE\r\n"}
+    )
+    assert out == {"replacements": 1}
+    assert f.read_bytes() == b"LINE ONE\r\nline two\nline three\r\n"
+
+
+async def test_mixed_endings_match_on_lf_region_with_lf_old_str(
+    tmp_path: Path,
+) -> None:
+    f = tmp_path / "mixed.txt"
+    f.write_bytes(b"line one\r\nline two\nline three\r\n")
+
+    out = await edit_file.ainvoke(
+        {"path": str(f), "old_str": "line two\n", "new_str": "LINE TWO\n"}
+    )
+    assert out == {"replacements": 1}
+    assert f.read_bytes() == b"line one\r\nLINE TWO\nline three\r\n"
+
+
+async def test_mixed_endings_ambiguous_old_str_rejected_by_uniqueness(
+    tmp_path: Path,
+) -> None:
+    # Regression guard: uniqueness still fires on mixed files.
+    f = tmp_path / "mixed.txt"
+    f.write_bytes(b"line one\r\nline two\nline three\r\n")
+
+    with pytest.raises(ToolError, match="matches"):
+        await edit_file.ainvoke(
+            {"path": str(f), "old_str": "line", "new_str": "LINE"}
+        )

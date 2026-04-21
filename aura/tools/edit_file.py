@@ -83,20 +83,36 @@ class EditFile(BaseTool):
         except UnicodeDecodeError as exc:
             raise ToolError(f"not UTF-8: {exc}") from exc
 
-        # Detect original line-ending style BEFORE normalization.
-        if "\r\n" in raw:
-            original_newline = "\r\n"
-        elif "\r" in raw and "\n" not in raw:
-            original_newline = "\r"
-        else:
-            original_newline = "\n"
+        # Detect line-ending style. "Mixed" means the file has both CRLF
+        # AND bare-LF lines (not counting CRLF's trailing LF). If mixed,
+        # we MUST NOT normalize: the restore step (replace \n -> \r\n)
+        # would silently convert every bare-LF line to CRLF — surgical-
+        # edit promise violated. Instead, match + write on raw content.
+        crlf_count = raw.count("\r\n")
+        bare_lf_count = raw.count("\n") - crlf_count
+        has_bare_cr_only = "\r" in raw and "\n" not in raw
+        mixed_endings = crlf_count > 0 and bare_lf_count > 0
 
-        # Normalize read content to LF for matching (two passes handles
-        # CRLF -> LF, then any bare CR -> LF for old-Mac files).
-        content = raw.replace("\r\n", "\n").replace("\r", "\n")
-        # Defensive: LLM-supplied args may carry CRLF of their own.
-        old_str_n = old_str.replace("\r\n", "\n").replace("\r", "\n")
-        new_str_n = new_str.replace("\r\n", "\n").replace("\r", "\n")
+        if mixed_endings:
+            # No normalization. Match on raw; old_str/new_str must carry
+            # whatever endings the LLM actually wants to match/write.
+            content = raw
+            old_str_n = old_str
+            new_str_n = new_str
+            original_newline = "\n"  # unused on this branch; stub for type-check
+        else:
+            # Uniform file: detect the single style, normalize to LF for
+            # matching, restore on write.
+            if crlf_count > 0:
+                original_newline = "\r\n"
+            elif has_bare_cr_only:
+                original_newline = "\r"
+            else:
+                original_newline = "\n"
+            content = raw.replace("\r\n", "\n").replace("\r", "\n")
+            # Defensive: LLM-supplied args may carry CRLF of their own.
+            old_str_n = old_str.replace("\r\n", "\n").replace("\r", "\n")
+            new_str_n = new_str.replace("\r\n", "\n").replace("\r", "\n")
 
         occurrences = content.count(old_str_n)
         if occurrences == 0:
@@ -118,8 +134,9 @@ class EditFile(BaseTool):
             else content.replace(old_str_n, new_str_n, 1)
         )
 
-        # Restore original line-ending style on write.
-        if original_newline != "\n":
+        # Restore original line-ending style on write (uniform-file branch
+        # only — mixed_endings already writes raw bytes per-line).
+        if not mixed_endings and original_newline != "\n":
             new_content = new_content.replace("\n", original_newline)
         # Write as bytes to bypass universal-newline translation on write,
         # which would otherwise convert \n -> os.linesep on Windows.

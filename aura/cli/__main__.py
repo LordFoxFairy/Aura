@@ -98,6 +98,11 @@ def main() -> int:
     from aura.core.hooks.permission import make_permission_hook
     from aura.core.permissions import store
     from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
+    from aura.core.permissions.safety import (
+        DEFAULT_PROTECTED_READS,
+        DEFAULT_PROTECTED_WRITES,
+        SafetyPolicy,
+    )
     from aura.core.permissions.session import RuleSet, SessionRuleSet
 
     console = Console()
@@ -135,6 +140,11 @@ def main() -> int:
                 "overrides go here (gitignored)[/dim]"
             )
         try:
+            # Load the full PermissionsConfig (mode + allow + safety_exempt),
+            # not just the RuleSet — we need ``safety_exempt`` to compose a
+            # user-specific SafetyPolicy. Previously the CLI only called
+            # ``load_ruleset`` and dropped ``safety_exempt`` on the floor.
+            perm_cfg = store.load(project_root)
             disk_rules = store.load_ruleset(project_root)
         except AuraConfigError as exc:
             return _fail_startup(console, exc)
@@ -146,6 +156,14 @@ def main() -> int:
         # generic default tool-wide. Defaults act as the backstop when no
         # user rule matches.
         ruleset = RuleSet(rules=disk_rules.rules + DEFAULT_ALLOW_RULES)
+        # SafetyPolicy composed from defaults + user exempt list. Without
+        # this, ``permissions.safety_exempt`` in settings.json would be
+        # parsed and ignored.
+        safety_policy = SafetyPolicy(
+            protected_writes=DEFAULT_PROTECTED_WRITES,
+            protected_reads=DEFAULT_PROTECTED_READS,
+            exempt=tuple(perm_cfg.safety_exempt),
+        )
         mode = _resolve_mode(args, config)
         if mode == "bypass":
             print_bypass_banner(console)
@@ -160,6 +178,7 @@ def main() -> int:
                     rules=ruleset,
                     project_root=project_root,
                     mode=mode,
+                    safety=safety_policy,
                 ),
             ],
         )

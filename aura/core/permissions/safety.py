@@ -44,16 +44,22 @@ import pathspec
 # anywhere in the tree" means. Same convention for ``.aura/`` and
 # ``.ssh/``. Home-dir rc files use ``~``, expanded at compile time inside
 # ``is_protected``.
+# pathspec's ``**/X/**`` matches FILES INSIDE X/, not X itself (no trailing
+# content). A tool like ``grep(path="~/.ssh")`` or ``glob(path="/etc")``
+# passes the DIRECTORY path — not a file under it — so bare-dir patterns
+# are required alongside the ``/**`` forms. Without them a rule-allow
+# could reach the tool and leak directory contents. Each dir-valued entry
+# below appears in both bare and ``/**`` shapes.
 DEFAULT_PROTECTED_WRITES: tuple[str, ...] = (
-    "**/.git/**",
-    "**/.aura/**",
-    "**/.ssh/**",
+    "**/.git", "**/.git/**",
+    "**/.aura", "**/.aura/**",
+    "**/.ssh", "**/.ssh/**",
     "~/.bashrc",
     "~/.zshrc",
     "~/.profile",
     "~/.bash_profile",
     "~/.zprofile",
-    "/etc/**",
+    "/etc", "/etc/**",
 )
 
 # Reads list — "do not let the model see this".
@@ -61,13 +67,13 @@ DEFAULT_PROTECTED_WRITES: tuple[str, ...] = (
 # targets for an agent (git log, self-config), so they're absent here on
 # purpose. Only paths whose contents are secrets remain.
 DEFAULT_PROTECTED_READS: tuple[str, ...] = (
-    "**/.ssh/**",
+    "**/.ssh", "**/.ssh/**",
     "~/.bashrc",
     "~/.zshrc",
     "~/.profile",
     "~/.bash_profile",
     "~/.zprofile",
-    "/etc/**",
+    "/etc", "/etc/**",
 )
 
 

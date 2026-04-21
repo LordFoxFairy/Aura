@@ -169,6 +169,40 @@ def test_etc_blocks_both_reads_and_writes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Bare-directory protection — grep/glob scenario (reviewer-caught bug)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "dir_path",
+    [
+        "/home/alice/.ssh",
+        "/etc",
+    ],
+)
+def test_bare_dir_path_is_blocked_for_reads(dir_path: str) -> None:
+    # ``grep(path="~/.ssh")`` and ``glob(path="/etc")`` pass the DIRECTORY
+    # path — not a file under it — to the hook. Pattern ``**/.ssh/**`` does
+    # NOT match the bare dir; without a dedicated bare-dir pattern the tool
+    # would rule-allow and then walk the dir. Test that the bare-dir forms
+    # (``**/.ssh``, ``/etc``) are present and fire.
+    assert is_protected(dir_path, DEFAULT_SAFETY, is_write=False) is True
+
+
+@pytest.mark.parametrize(
+    "dir_path",
+    [
+        "/home/alice/.ssh",
+        "/home/alice/.git",
+        "/workspace/.aura",
+        "/etc",
+    ],
+)
+def test_bare_dir_path_is_blocked_for_writes(dir_path: str) -> None:
+    assert is_protected(dir_path, DEFAULT_SAFETY, is_write=True) is True
+
+
+# ---------------------------------------------------------------------------
 # Non-matching paths
 # ---------------------------------------------------------------------------
 

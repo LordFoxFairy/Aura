@@ -814,6 +814,95 @@ def test_build_agent_threads_session_rules_into_agent(
     agent.close()
 
 
+def test_ask_user_question_registered_even_without_asker_kwarg(tmp_path: Path) -> None:
+    """No CLI / no asker passed → tool is still registered so the LLM sees
+    it in the bound-tools list; the failure surfaces only if it's invoked."""
+    cfg = _minimal_config(enabled=["ask_user_question"])
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+    assert "ask_user_question" in agent._available_tools
+    assert "ask_user_question" in [t.name for t in agent._registry.tools()]
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_without_asker_raises_ToolError_on_invoke(
+    tmp_path: Path,
+) -> None:
+    from aura.schemas.tool import ToolError
+
+    cfg = _minimal_config(enabled=["ask_user_question"])
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+    tool = agent._available_tools["ask_user_question"]
+    with pytest.raises(ToolError, match="no CLI asker"):
+        await tool.ainvoke({"question": "hi?"})
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_with_injected_asker_delegates(tmp_path: Path) -> None:
+    captured: list[tuple[str, list[str] | None, str | None]] = []
+
+    async def _asker(
+        question: str, options: list[str] | None, default: str | None,
+    ) -> str:
+        captured.append((question, options, default))
+        return "stub answer"
+
+    cfg = _minimal_config(enabled=["ask_user_question"])
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+        question_asker=_asker,
+    )
+    tool = agent._available_tools["ask_user_question"]
+    out = await tool.ainvoke({"question": "ready?", "options": ["yes", "no"]})
+    assert out == {"answer": "stub answer"}
+    assert captured == [("ready?", ["yes", "no"], None)]
+    agent.close()
+
+
+def test_build_agent_threads_question_asker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from aura.core import llm
+    from aura.core.agent import build_agent
+
+    fake = FakeChatModel(turns=[])
+    monkeypatch.setattr(llm, "create", lambda provider, name: fake)
+
+    async def _asker(
+        question: str, options: list[str] | None, default: str | None,
+    ) -> str:
+        return "from-factory"
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["ask_user_question"]},
+        "storage": {"path": str(tmp_path / "db")},
+    })
+    agent = build_agent(cfg, question_asker=_asker)
+    assert "ask_user_question" in agent._available_tools
+    agent.close()
+
+
+def test_ask_user_question_in_default_allow_rules() -> None:
+    """Calling ``ask_user_question`` must not trigger a permission prompt —
+    defeats the point. Locked via DEFAULT_ALLOW_RULES."""
+    from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
+    names = {r.tool for r in DEFAULT_ALLOW_RULES}
+    assert "ask_user_question" in names
+
+
 @pytest.mark.asyncio
 async def test_clear_session_wipes_todos(tmp_path: Path) -> None:
     cfg = _minimal_config(enabled=["todo_write"])

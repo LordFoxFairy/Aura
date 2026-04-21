@@ -6,6 +6,8 @@ dependency (``asker`` here, ``state`` there), schema-validated args.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
@@ -16,9 +18,11 @@ from aura.tools.ask_user import (
 )
 
 
-def _stub_asker(return_value: str = "user answer") -> tuple[QuestionAsker, list[dict]]:
+def _stub_asker(
+    return_value: str = "user answer",
+) -> tuple[QuestionAsker, list[dict[str, Any]]]:
     """Return (asker, captured) where captured records each call's args."""
-    captured: list[dict] = []
+    captured: list[dict[str, Any]] = []
 
     async def _ask(question: str, options: list[str] | None, default: str | None) -> str:
         captured.append({"question": question, "options": options, "default": default})

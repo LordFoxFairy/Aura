@@ -100,6 +100,7 @@ def main() -> int:
 
     from aura.cli.permission import make_cli_asker, print_bypass_banner
     from aura.cli.repl import run_repl_async
+    from aura.cli.user_question import make_cli_user_asker
     from aura.config.loader import load_config
     from aura.config.schema import AuraConfigError
     from aura.core import journal
@@ -195,7 +196,12 @@ def main() -> int:
         )
         if args.log or config.log.enabled:
             hooks = wrap_with_event_logger(hooks)
-        agent = build_agent(config, hooks=hooks, session_rules=session)
+        agent = build_agent(
+            config,
+            hooks=hooks,
+            session_rules=session,
+            question_asker=make_cli_user_asker(),
+        )
         journal.write("agent_built")
     except Exception as exc:  # noqa: BLE001
         return _fail_startup(console, exc)

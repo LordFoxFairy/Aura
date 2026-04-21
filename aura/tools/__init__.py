@@ -16,6 +16,7 @@ with ``self._state`` and overlay it into the same dict.
 from langchain_core.tools import BaseTool
 
 from aura.schemas.tool import ToolError, ToolResult, tool_metadata
+from aura.tools.ask_user import AskUserQuestion
 from aura.tools.base import build_tool
 from aura.tools.bash import Bash, bash
 from aura.tools.edit_file import EditFile, edit_file
@@ -38,11 +39,13 @@ BUILTIN_TOOLS: dict[str, BaseTool] = {
 
 BUILTIN_STATEFUL_TOOLS: dict[str, type[BaseTool]] = {
     "todo_write": TodoWrite,
+    "ask_user_question": AskUserQuestion,
 }
 
 __all__ = [
     "BUILTIN_STATEFUL_TOOLS",
     "BUILTIN_TOOLS",
+    "AskUserQuestion",
     "Bash",
     "EditFile",
     "Glob",

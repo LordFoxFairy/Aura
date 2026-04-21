@@ -41,6 +41,10 @@ Pure local-filesystem reads whose blast radius is "you already have the
 bytes on disk": ``read_file``, ``grep``, ``glob``. Not ``web_fetch`` (leaks
 outbound), not ``bash`` (arbitrary code). The safety rail (§6) remains the
 backstop for sensitive paths regardless of whether a rule matched.
+
+Also here: ``ask_user_question``. It's the one tool whose side effect IS
+asking the user — gating it behind another "allow this?" prompt is nonsense.
+The tool's own UI is the permission moment.
 """
 
 from __future__ import annotations
@@ -51,6 +55,9 @@ DEFAULT_ALLOW_RULES: tuple[Rule, ...] = (
     Rule(tool="read_file", content=None),
     Rule(tool="grep", content=None),
     Rule(tool="glob", content=None),
+    # ask_user_question prompts the user directly; a permission prompt on top
+    # would double-ask. Auto-allow so the tool's dialog IS the moment of consent.
+    Rule(tool="ask_user_question", content=None),
 )
 
 __all__ = ["DEFAULT_ALLOW_RULES"]

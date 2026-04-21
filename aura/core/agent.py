@@ -23,9 +23,25 @@ from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
 from aura.schemas.events import AgentEvent, Final
 from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolError
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
+from aura.tools.ask_user import QuestionAsker
 
 _DEFAULT_SESSION = "default"
+
+
+async def _unavailable_question_asker(
+    question: str, options: list[str] | None, default: str | None,
+) -> str:
+    # Registered when no ``question_asker`` was injected (e.g. SDK caller
+    # drives astream without a REPL). The tool stays visible to the LLM —
+    # invoking it surfaces this error as a ToolError in the tool result,
+    # not a crash, so the model can pivot.
+    raise ToolError(
+        "ask_user_question is unavailable: no CLI asker was injected. "
+        "Run aura through the CLI, or pass question_asker=... to "
+        "build_agent(...) / Agent(...) when driving programmatically."
+    )
 
 
 class Agent:
@@ -39,6 +55,7 @@ class Agent:
         available_tools: dict[str, BaseTool] | None = None,
         session_id: str = _DEFAULT_SESSION,
         session_rules: SessionRuleSet | None = None,
+        question_asker: QuestionAsker | None = None,
     ) -> None:
         # ``session_rules``: CLI hands in the same SessionRuleSet that was used
         # to build the permission hook; Agent.clear_session drops its runtime
@@ -50,12 +67,23 @@ class Agent:
         self._state = LoopState()
         self._session_rules = session_rules
         # Stateless built-ins come from shared singletons; stateful ones are
-        # instantiated per-Agent so each gets its own `LoopState` reference.
+        # instantiated per-Agent so each gets its own dependency (LoopState
+        # for todo_write, QuestionAsker for ask_user_question).
         self._available_tools = (
             dict(available_tools) if available_tools is not None else dict(BUILTIN_TOOLS)
         )
         for name, cls in BUILTIN_STATEFUL_TOOLS.items():
-            self._available_tools[name] = cls(state=self._state)
+            # Explicit per-tool wiring. Ugly if/elif, but readable: each
+            # stateful tool gets the dependency it asked for. Revisit if a
+            # third stateful tool lands with a different dep shape.
+            if name == "todo_write":
+                self._available_tools[name] = cls(state=self._state)
+            elif name == "ask_user_question":
+                self._available_tools[name] = cls(
+                    asker=question_asker or _unavailable_question_asker,
+                )
+            else:  # pragma: no cover — guardrail for future additions
+                raise RuntimeError(f"unwired stateful tool: {name}")
         self._session_id = session_id
         # config.tools.enabled → lookup → ToolRegistry. Built once per Agent.
         tools: list[BaseTool] = []
@@ -196,6 +224,7 @@ def build_agent(
     available_tools: dict[str, BaseTool] | None = None,
     session_id: str = _DEFAULT_SESSION,
     session_rules: SessionRuleSet | None = None,
+    question_asker: QuestionAsker | None = None,
 ) -> Agent:
     # 生产便利工厂：自动解析 model + storage；Agent 构造器保持 DI 注入以便测试替换。
     provider, model_name = llm.resolve(config.router["default"], cfg=config)
@@ -209,4 +238,5 @@ def build_agent(
         available_tools=available_tools,
         session_id=session_id,
         session_rules=session_rules,
+        question_asker=question_asker,
     )

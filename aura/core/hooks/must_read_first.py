@@ -53,6 +53,12 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
             # Let the tool's own error path surface (e.g. "not found").
             return None
 
+        # Mirror claude-code: allow new-file creation via empty old_str
+        # without a prior read — there is nothing on disk to have read.
+        # Narrowly scoped: requires old_str == "" AND path does not exist.
+        if args.get("old_str") == "" and not resolved.exists():
+            return None
+
         status = context.read_status(resolved)
         if status == "fresh":
             return None

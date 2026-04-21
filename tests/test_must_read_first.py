@@ -408,3 +408,38 @@ def test_context_record_read_is_idempotent(tmp_path: Path) -> None:
 
     assert ctx.read_status(p) == "fresh"
     assert len(ctx._read_records) == 1
+
+
+@pytest.mark.asyncio
+async def test_hook_allows_new_file_creation_via_empty_old_str(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    ghost = tmp_path / "brand_new.txt"  # does NOT exist
+    result = await hook(
+        tool=_edit_tool(),
+        args={"path": str(ghost), "old_str": "", "new_str": "hello\n"},
+        state=LoopState(),
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_hook_still_blocks_edit_with_old_str_on_never_read_file(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    target = tmp_path / "f.txt"
+    target.write_text("hello\n")
+
+    result = await hook(
+        tool=_edit_tool(),
+        args={"path": str(target), "old_str": "hello", "new_str": "bye"},
+        state=LoopState(),
+    )
+    assert isinstance(result, ToolResult)
+    assert result.ok is False
+    assert result.error is not None
+    assert "has not been read" in result.error

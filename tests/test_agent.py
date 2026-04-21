@@ -473,29 +473,11 @@ def test_build_agent_forwards_available_tools(
     assert agent is not None
 
 
-@pytest.mark.asyncio
-async def test_astream_max_turns_yields_graceful_final(tmp_path: Path) -> None:
-    from aura.core.hooks import HookChain
-    from aura.core.hooks.budget import make_max_turns_hook
-    from aura.schemas.events import Final
-
-    cfg = _minimal_config(enabled=[])
-    model = FakeChatModel(turns=[
-        FakeTurn(message=AIMessage(content="hi")),
-    ])
-    hooks = HookChain(pre_model=[make_max_turns_hook(0)])
-    agent = Agent(
-        config=cfg, model=model, storage=_storage(tmp_path), hooks=hooks,
-    )
-
-    events: list[Any] = []
-    async for ev in agent.astream("go"):
-        events.append(ev)
-
-    finals = [e for e in events if isinstance(e, Final)]
-    assert len(finals) == 1
-    assert "max_turns" in finals[0].message
-    agent.close()
+# NOTE: test_astream_max_turns_yields_graceful_final was removed when the
+# pre_model max_turns hook was dropped. The equivalent loop-level enforcement
+# is covered by tests/test_loop_tool_dispatch.py::test_max_turns_caps_runaway_tool_loop
+# (and siblings) — a redundant agent-level replica would just re-test the same
+# Final(reason="max_turns") invariant through one more layer of indirection.
 
 
 @pytest.mark.asyncio
@@ -615,9 +597,12 @@ def test_build_agent_uses_default_hooks_when_none_supplied(
 
     agent = build_agent(cfg)
 
-    assert len(agent._hooks.pre_model) >= 1
+    # default_hooks wires post_model (usage tracking), post_tool (result-size
+    # budget), and Agent.__init__ adds pre_tool hooks (bash_safety,
+    # must_read_first). No pre_model hook since max_turns moved to the loop.
     assert len(agent._hooks.post_model) >= 1
     assert len(agent._hooks.post_tool) >= 1
+    assert len(agent._hooks.pre_tool) >= 2  # bash_safety + must_read_first
     agent.close()
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from aura.config.schema import AuraConfigError
-from aura.core.hooks.budget import MaxTurnsExceeded
 from aura.core.llm import (
     MissingCredentialError,
     MissingProviderDependencyError,
@@ -20,10 +19,6 @@ def test_aura_config_error_is_aura_error() -> None:
     assert issubclass(AuraConfigError, AuraError)
 
 
-def test_max_turns_exceeded_is_aura_error() -> None:
-    assert issubclass(MaxTurnsExceeded, AuraError)
-
-
 def test_llm_errors_are_aura_error_descendants() -> None:
     assert issubclass(UnknownModelSpecError, AuraError)
     assert issubclass(MissingProviderDependencyError, AuraError)
@@ -35,9 +30,6 @@ def test_catching_aura_error_catches_all_subclasses() -> None:
 
     with pytest.raises(AuraError):
         raise AuraConfigError(source="test", detail="boom")
-
-    with pytest.raises(AuraError):
-        raise MaxTurnsExceeded("max_turns=10 reached")
 
     with pytest.raises(AuraError):
         raise UnknownModelSpecError(source="spec", detail="bogus")

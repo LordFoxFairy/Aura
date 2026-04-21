@@ -353,6 +353,37 @@ async def test_loop_records_partial_flag_for_sliced_read(tmp_path: Path) -> None
     assert ctx.read_status(target) == "partial"
 
 
+@pytest.mark.asyncio
+async def test_default_budget_hooks_do_not_cap_before_loop_level() -> None:
+    # Regression: `default_hooks()` must NOT wire a pre_model max_turns cap.
+    # Enforcement lives on AgentLoop.max_turns; shipping a second cap in the
+    # hook chain would silently win at a lower turn count and make the loop
+    # cap dead code. With 30 scripted tool-call turns, loop.max_turns=None,
+    # and default_hooks(), we must complete all 30 turns and reach natural stop.
+    from aura.core.hooks.budget import default_hooks
+
+    turns = [_make_tool_call_turn(f"tc_{i}") for i in range(30)]
+    turns.append(FakeTurn(message=AIMessage(content="done")))
+    model = FakeChatModel(turns=turns)
+    registry = ToolRegistry([_echo_tool])
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(),
+        hooks=default_hooks(), max_turns=None,
+    )
+
+    history: list[BaseMessage] = []
+    events: list[AgentEvent] = []
+    async for ev in loop.run_turn(user_prompt="go", history=history):
+        events.append(ev)
+
+    completed = [e for e in events if isinstance(e, ToolCallCompleted)]
+    assert len(completed) == 30, f"default_hooks must not cap turns; got {len(completed)}"
+
+    finals = [e for e in events if isinstance(e, Final)]
+    assert len(finals) == 1
+    assert finals[0].reason == "natural"
+
+
 def test_max_turns_default_is_50() -> None:
     # Aura policy: when claude-code leaves max_turns to the caller, we ship
     # a sane default. 50 is deep enough for real multi-turn work, low enough

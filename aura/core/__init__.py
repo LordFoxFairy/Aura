@@ -9,9 +9,7 @@ from aura.core.hooks import (
     PreToolHook,
 )
 from aura.core.hooks.budget import (
-    MaxTurnsExceeded,
     default_hooks,
-    make_max_turns_hook,
     make_size_budget_hook,
     make_usage_tracking_hook,
 )
@@ -49,7 +47,6 @@ __all__ = [
     "Final",
     "HookChain",
     "LoopState",
-    "MaxTurnsExceeded",
     "MissingCredentialError",
     "MissingProviderDependencyError",
     "PermissionAsker",
@@ -66,7 +63,6 @@ __all__ = [
     "build_agent",
     "default_hooks",
     "journal",
-    "make_max_turns_hook",
     "make_permission_hook",
     "make_size_budget_hook",
     "make_usage_tracking_hook",

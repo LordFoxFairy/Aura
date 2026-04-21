@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
@@ -184,45 +183,14 @@ async def test_usage_tracking_hook_handles_missing_usage_metadata() -> None:
     assert state.total_tokens_used == 0
 
 
-async def test_max_turns_hook_allows_under_limit() -> None:
-    from aura.core.hooks.budget import make_max_turns_hook
-
-    hook = make_max_turns_hook(5)
-    state = LoopState()
-    state.turn_count = 4
-    await hook(history=[], state=state)
-
-
-async def test_max_turns_hook_raises_at_limit() -> None:
-    from aura.core.hooks.budget import MaxTurnsExceeded, make_max_turns_hook
-
-    hook = make_max_turns_hook(5)
-    state = LoopState()
-    state.turn_count = 5
-
-    with pytest.raises(MaxTurnsExceeded, match="max_turns=5"):
-        await hook(history=[], state=state)
-
-
 def test_default_hooks_returns_populated_chain() -> None:
     from aura.core.hooks import HookChain
     from aura.core.hooks.budget import default_hooks
 
     hooks = default_hooks()
     assert isinstance(hooks, HookChain)
-    assert len(hooks.pre_model) >= 1
+    # max_turns enforcement lives on AgentLoop, NOT in the hook chain —
+    # default_hooks ships only orthogonal post_model/post_tool budget concerns.
+    assert len(hooks.pre_model) == 0
     assert len(hooks.post_model) >= 1
     assert len(hooks.post_tool) >= 1
-
-
-def test_default_hooks_overrides_take_effect() -> None:
-    import asyncio
-
-    from aura.core.hooks.budget import MaxTurnsExceeded, default_hooks
-
-    hooks = default_hooks(max_turns=2)
-    state = LoopState()
-    state.turn_count = 2
-    hook = hooks.pre_model[0]
-    with pytest.raises(MaxTurnsExceeded, match="max_turns=2"):
-        asyncio.run(hook(history=[], state=state))

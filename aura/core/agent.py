@@ -13,7 +13,7 @@ from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core import llm
 from aura.core.hooks import HookChain
 from aura.core.hooks.bash_safety import make_bash_safety_hook
-from aura.core.hooks.budget import MaxTurnsExceeded, default_hooks
+from aura.core.hooks.budget import default_hooks
 from aura.core.hooks.must_read_first import make_must_read_first_hook
 from aura.core.loop import AgentLoop
 from aura.core.memory import project_memory, rules
@@ -123,7 +123,7 @@ class Agent:
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
         # 事务性：history 只在 turn 正常完成才 save（else 分支）。
         #   CancelledError → yield Final + re-raise → 跳过 else → 下次从 pre-turn 状态恢复
-        #   MaxTurnsExceeded → yield Final + return → 同样跳过 save
+        # max_turns 由 AgentLoop 直接 yield Final(reason="max_turns") 表示，走正常 save 路径。
         # 保证：存储里永远不会出现半截 turn（AI tool_call 缺对应 tool result 等）。
         journal.write(
             "astream_begin",
@@ -138,14 +138,6 @@ class Agent:
             journal.write("astream_cancelled", session=self._session_id)
             yield Final(message="(cancelled)")
             raise
-        except MaxTurnsExceeded as exc:
-            journal.write(
-                "astream_max_turns",
-                session=self._session_id,
-                detail=str(exc),
-            )
-            yield Final(message=f"({exc})")
-            return
         else:
             self._storage.save(self._session_id, history)
             journal.write(

@@ -163,27 +163,27 @@ class TestFinal:
 
 class TestPermissionAudit:
     def test_construct_positional(self) -> None:
-        ev = PermissionAudit("bash", "auto-allowed: read_only")
+        ev = PermissionAudit("bash", "auto-allowed: rule `bash`")
         assert ev.tool == "bash"
-        assert ev.text == "auto-allowed: read_only"
+        assert ev.text == "auto-allowed: rule `bash`"
 
     def test_construct_keyword(self) -> None:
-        ev = PermissionAudit(tool="bash", text="auto-allowed: read_only")
+        ev = PermissionAudit(tool="bash", text="auto-allowed: rule `bash`")
         assert ev.tool == "bash"
-        assert ev.text == "auto-allowed: read_only"
+        assert ev.text == "auto-allowed: rule `bash`"
 
     def test_equality(self) -> None:
-        ev1 = PermissionAudit("bash", "auto-allowed: read_only")
-        ev2 = PermissionAudit("bash", "auto-allowed: read_only")
+        ev1 = PermissionAudit("bash", "auto-allowed: rule `bash`")
+        ev2 = PermissionAudit("bash", "auto-allowed: rule `bash`")
         assert ev1 == ev2
 
     def test_frozen_raises_on_mutation(self) -> None:
-        ev = PermissionAudit("bash", "auto-allowed: read_only")
+        ev = PermissionAudit("bash", "auto-allowed: rule `bash`")
         with pytest.raises(dataclasses.FrozenInstanceError):
             ev.text = "other"  # type: ignore[misc]
 
     def test_is_in_agent_event_union(self) -> None:
-        ev: AgentEvent = PermissionAudit("bash", "auto-allowed: read_only")
+        ev: AgentEvent = PermissionAudit("bash", "auto-allowed: rule `bash`")
         assert isinstance(
             ev,
             (AssistantDelta, ToolCallStarted, ToolCallCompleted, Final, PermissionAudit),
@@ -197,7 +197,7 @@ class TestAgentEventUnion:
             ToolCallStarted("bash", {"cmd": "ls"}),
             ToolCallCompleted("bash", "exit 0"),
             Final("done"),
-            PermissionAudit("bash", "auto-allowed: read_only"),
+            PermissionAudit("bash", "auto-allowed: rule `bash`"),
         ]
         assert len(events) == 5
         assert all(

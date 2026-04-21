@@ -97,7 +97,8 @@ def main() -> int:
     from aura.core.hooks.logging import wrap_with_event_logger
     from aura.core.hooks.permission import make_permission_hook
     from aura.core.permissions import store
-    from aura.core.permissions.session import SessionRuleSet
+    from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
+    from aura.core.permissions.session import RuleSet, SessionRuleSet
 
     console = Console()
 
@@ -134,9 +135,13 @@ def main() -> int:
                 "overrides go here (gitignored)[/dim]"
             )
         try:
-            ruleset = store.load_ruleset(project_root)
+            disk_rules = store.load_ruleset(project_root)
         except AuraConfigError as exc:
             return _fail_startup(console, exc)
+        # Built-in defaults come first so ``read_file`` / ``grep`` / ``glob``
+        # auto-allow via rule match without the user having to type them;
+        # user rules from disk are appended. First-match semantics hold.
+        ruleset = RuleSet(rules=DEFAULT_ALLOW_RULES + disk_rules.rules)
         mode = _resolve_mode(args, config)
         if mode == "bypass":
             print_bypass_banner(console)

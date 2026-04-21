@@ -12,7 +12,12 @@ local to the loop and hook layer — read via ``(tool.metadata or {}).get(...)``
 
 Keys:
 
-- ``is_read_only``        — safe to auto-approve in permission gate
+- ``is_read_only``        — purely informational as of 2026-04-21 (Plan B
+                             refactor). Used by the CLI prompt tag
+                             ("read-only"). Permission decisions flow
+                             through rules (see
+                             ``aura.core.permissions.defaults.DEFAULT_ALLOW_RULES``)
+                             and the safety policy, NOT this flag.
 - ``is_destructive``      — permission gate + safety rail must fire
 - ``is_concurrency_safe`` — loop may batch with siblings under ``asyncio.gather``
 - ``max_result_size_chars`` — post-tool budget hook truncation threshold

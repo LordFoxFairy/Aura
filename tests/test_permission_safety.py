@@ -1,4 +1,9 @@
-"""Tests for aura.core.permissions.safety — SafetyPolicy + is_protected."""
+"""Tests for aura.core.permissions.safety — SafetyPolicy + is_protected.
+
+Post Plan B refactor (2026-04-21): safety is direction-aware. Two lists,
+one ``is_write`` kwarg. Writes block destructive tools; reads block any
+path-arg tool and use a narrower set of globs.
+"""
 
 from __future__ import annotations
 
@@ -9,21 +14,22 @@ from typing import cast
 import pytest
 
 from aura.core.permissions.safety import (
-    DEFAULT_PROTECTED,
+    DEFAULT_PROTECTED_READS,
+    DEFAULT_PROTECTED_WRITES,
     DEFAULT_SAFETY,
     SafetyPolicy,
     is_protected,
 )
 
 # ---------------------------------------------------------------------------
-# DEFAULT_PROTECTED + DEFAULT_SAFETY shape
+# DEFAULT_PROTECTED_* + DEFAULT_SAFETY shape
 # ---------------------------------------------------------------------------
 
 
-def test_default_protected_is_a_tuple_of_strings() -> None:
-    assert isinstance(DEFAULT_PROTECTED, tuple)
-    assert all(isinstance(p, str) for p in DEFAULT_PROTECTED)
-    # Spec §6 — all entries present (translated to pathspec-friendly globs).
+def test_default_protected_writes_is_a_tuple_of_strings() -> None:
+    assert isinstance(DEFAULT_PROTECTED_WRITES, tuple)
+    assert all(isinstance(p, str) for p in DEFAULT_PROTECTED_WRITES)
+    # Spec §6 writes list — all entries present.
     expected_entries = {
         "**/.git/**",
         "**/.aura/**",
@@ -35,22 +41,55 @@ def test_default_protected_is_a_tuple_of_strings() -> None:
         "~/.zprofile",
         "/etc/**",
     }
-    assert expected_entries <= set(DEFAULT_PROTECTED)
+    assert expected_entries <= set(DEFAULT_PROTECTED_WRITES)
 
 
-def test_default_safety_uses_default_protected_and_empty_exempt() -> None:
-    assert DEFAULT_SAFETY.protected == DEFAULT_PROTECTED
+def test_default_protected_reads_is_a_tuple_of_strings() -> None:
+    assert isinstance(DEFAULT_PROTECTED_READS, tuple)
+    assert all(isinstance(p, str) for p in DEFAULT_PROTECTED_READS)
+    # Spec §6 reads list — narrower than writes.
+    expected_entries = {
+        "**/.ssh/**",
+        "~/.bashrc",
+        "~/.zshrc",
+        "~/.profile",
+        "~/.bash_profile",
+        "~/.zprofile",
+        "/etc/**",
+    }
+    assert expected_entries <= set(DEFAULT_PROTECTED_READS)
+
+
+def test_reads_and_writes_are_independent_tuples() -> None:
+    # Independent identity (not the same object) so a future mutation to
+    # one can't silently alter the other.
+    assert DEFAULT_PROTECTED_READS is not DEFAULT_PROTECTED_WRITES
+    # And ``.git/`` / ``.aura/`` appear ONLY on writes — the whole point of
+    # the split.
+    assert "**/.git/**" in DEFAULT_PROTECTED_WRITES
+    assert "**/.git/**" not in DEFAULT_PROTECTED_READS
+    assert "**/.aura/**" in DEFAULT_PROTECTED_WRITES
+    assert "**/.aura/**" not in DEFAULT_PROTECTED_READS
+
+
+def test_default_safety_uses_default_lists_and_empty_exempt() -> None:
+    assert DEFAULT_SAFETY.protected_writes == DEFAULT_PROTECTED_WRITES
+    assert DEFAULT_SAFETY.protected_reads == DEFAULT_PROTECTED_READS
     assert DEFAULT_SAFETY.exempt == ()
 
 
 def test_safety_policy_is_frozen() -> None:
-    policy = SafetyPolicy(protected=("**/.git/**",), exempt=())
+    policy = SafetyPolicy(
+        protected_writes=("**/.git/**",),
+        protected_reads=(),
+        exempt=(),
+    )
     with pytest.raises((AttributeError, Exception)):
-        policy.protected = ("changed",)  # type: ignore[misc]
+        policy.protected_writes = ("changed",)  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
-# Default entries — each blocks
+# Writes — each default entry blocks when is_write=True
 # ---------------------------------------------------------------------------
 
 
@@ -65,15 +104,68 @@ def test_safety_policy_is_frozen() -> None:
         "/etc/nginx/nginx.conf",
     ],
 )
-def test_default_policy_blocks_protected_globs(path_str: str) -> None:
-    assert is_protected(path_str, DEFAULT_SAFETY) is True
+def test_default_policy_blocks_writes_to_protected_globs(path_str: str) -> None:
+    assert is_protected(path_str, DEFAULT_SAFETY, is_write=True) is True
 
 
-def test_default_policy_blocks_home_rc_files() -> None:
+def test_default_policy_blocks_writes_to_home_rc_files() -> None:
     home = Path.home()
     for rc in (".bashrc", ".zshrc", ".profile", ".bash_profile", ".zprofile"):
         target = home / rc
-        assert is_protected(target, DEFAULT_SAFETY) is True, target
+        assert is_protected(target, DEFAULT_SAFETY, is_write=True) is True, target
+
+
+# ---------------------------------------------------------------------------
+# Reads — narrower list; .git/ and .aura/ reads are LEGITIMATE
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "path_str",
+    [
+        "/home/alice/.ssh/id_rsa",
+        "/home/alice/.ssh/known_hosts",
+        "/etc/passwd",
+        "/etc/nginx/nginx.conf",
+    ],
+)
+def test_default_policy_blocks_reads_of_secret_paths(path_str: str) -> None:
+    assert is_protected(path_str, DEFAULT_SAFETY, is_write=False) is True
+
+
+def test_default_policy_blocks_reads_of_home_rc_files() -> None:
+    home = Path.home()
+    for rc in (".bashrc", ".zshrc", ".profile", ".bash_profile", ".zprofile"):
+        target = home / rc
+        assert is_protected(target, DEFAULT_SAFETY, is_write=False) is True, target
+
+
+@pytest.mark.parametrize(
+    "path_str",
+    [
+        "/some/project/.git/config",
+        "/deep/nested/tree/.git/refs/heads/main",
+        "/deep/nested/tree/.git/HEAD",
+        "/workspace/.aura/settings.json",
+        "/workspace/.aura/logs/events.jsonl",
+    ],
+)
+def test_reads_of_git_and_aura_are_allowed(path_str: str) -> None:
+    # Agent legitimately reads git metadata (git log) and aura config
+    # (self-introspection). Reads list MUST NOT block these.
+    assert is_protected(path_str, DEFAULT_SAFETY, is_write=False) is False
+
+
+def test_ssh_blocks_both_reads_and_writes() -> None:
+    target = "/home/alice/.ssh/id_rsa"
+    assert is_protected(target, DEFAULT_SAFETY, is_write=True) is True
+    assert is_protected(target, DEFAULT_SAFETY, is_write=False) is True
+
+
+def test_etc_blocks_both_reads_and_writes() -> None:
+    target = "/etc/shadow"
+    assert is_protected(target, DEFAULT_SAFETY, is_write=True) is True
+    assert is_protected(target, DEFAULT_SAFETY, is_write=False) is True
 
 
 # ---------------------------------------------------------------------------
@@ -81,40 +173,59 @@ def test_default_policy_blocks_home_rc_files() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unprotected_path_returns_false() -> None:
-    # An ordinary project file — nothing in DEFAULT_PROTECTED should match.
-    assert is_protected("/Users/alice/projects/hello/src/main.py", DEFAULT_SAFETY) is False
+def test_unprotected_path_returns_false_for_either_direction() -> None:
+    target = "/Users/alice/projects/hello/src/main.py"
+    assert is_protected(target, DEFAULT_SAFETY, is_write=True) is False
+    assert is_protected(target, DEFAULT_SAFETY, is_write=False) is False
 
 
 def test_path_that_contains_git_as_substring_but_not_component_is_not_blocked() -> None:
-    # "gitignore" contains "git" but isn't a .git/ dir.
-    assert is_protected("/repo/docs/gitignore-primer.md", DEFAULT_SAFETY) is False
+    target = "/repo/docs/gitignore-primer.md"
+    assert is_protected(target, DEFAULT_SAFETY, is_write=True) is False
+    assert is_protected(target, DEFAULT_SAFETY, is_write=False) is False
 
 
 # ---------------------------------------------------------------------------
-# Exempt overrides protected
+# Exempt overrides protected (both directions)
 # ---------------------------------------------------------------------------
 
 
-def test_exempt_entry_overrides_protected() -> None:
+def test_exempt_entry_overrides_write_protected() -> None:
     policy = SafetyPolicy(
-        protected=("**/.git/**",),
+        protected_writes=("**/.git/**",),
+        protected_reads=(),
         exempt=("**/.git/safe-config",),
     )
-    assert is_protected("/repo/.git/safe-config", policy) is False
-    # Other .git paths still blocked.
-    assert is_protected("/repo/.git/config", policy) is True
+    assert is_protected("/repo/.git/safe-config", policy, is_write=True) is False
+    assert is_protected("/repo/.git/config", policy, is_write=True) is True
+
+
+def test_exempt_entry_overrides_read_protected() -> None:
+    policy = SafetyPolicy(
+        protected_writes=(),
+        protected_reads=("**/.ssh/**",),
+        exempt=("**/.ssh/config-public",),
+    )
+    assert is_protected("/home/a/.ssh/config-public", policy, is_write=False) is False
+    assert is_protected("/home/a/.ssh/id_rsa", policy, is_write=False) is True
 
 
 def test_empty_exempt_does_not_override_anything() -> None:
-    policy = SafetyPolicy(protected=("**/.git/**",), exempt=())
-    assert is_protected("/repo/.git/config", policy) is True
+    policy = SafetyPolicy(
+        protected_writes=("**/.git/**",),
+        protected_reads=(),
+        exempt=(),
+    )
+    assert is_protected("/repo/.git/config", policy, is_write=True) is True
 
 
 def test_exempt_without_matching_protected_returns_false() -> None:
-    # If protected doesn't match, the result is False regardless of exempt.
-    policy = SafetyPolicy(protected=("**/.git/**",), exempt=("/tmp/*",))
-    assert is_protected("/tmp/hello.txt", policy) is False
+    policy = SafetyPolicy(
+        protected_writes=("**/.git/**",),
+        protected_reads=(),
+        exempt=("/tmp/*",),
+    )
+    assert is_protected("/tmp/hello.txt", policy, is_write=True) is False
 
 
 # ---------------------------------------------------------------------------
@@ -125,16 +236,13 @@ def test_exempt_without_matching_protected_returns_false() -> None:
 def test_relative_path_is_resolved_against_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Set cwd to a tmp dir, then pass a relative path that lands in .git/.
     monkeypatch.chdir(tmp_path)
     (tmp_path / "src" / ".git").mkdir(parents=True)
     (tmp_path / "src" / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
-    assert is_protected("./src/.git/HEAD", DEFAULT_SAFETY) is True
+    assert is_protected("./src/.git/HEAD", DEFAULT_SAFETY, is_write=True) is True
 
 
 def test_symlink_into_protected_dir_is_blocked(tmp_path: Path) -> None:
-    # Create a real .git/HEAD and a symlink to it outside .git/. is_protected
-    # should follow resolve() and see the link target lives under .git/.
     real_git = tmp_path / ".git"
     real_git.mkdir()
     real_head = real_git / "HEAD"
@@ -144,27 +252,23 @@ def test_symlink_into_protected_dir_is_blocked(tmp_path: Path) -> None:
         os.symlink(real_head, link)
     except (OSError, NotImplementedError):
         pytest.skip("symlinks unavailable on this platform/fs")
-    assert is_protected(link, DEFAULT_SAFETY) is True
+    assert is_protected(link, DEFAULT_SAFETY, is_write=True) is True
 
 
 def test_nonexistent_path_does_not_crash(tmp_path: Path) -> None:
-    # Path doesn't exist; resolve(strict=False) tolerates that and still
-    # normalizes the string. is_protected must return a bool, not raise.
     ghost = tmp_path / "does" / "not" / "exist" / ".git" / "HEAD"
-    assert is_protected(ghost, DEFAULT_SAFETY) is True
+    assert is_protected(ghost, DEFAULT_SAFETY, is_write=True) is True
 
 
 def test_home_rc_pattern_matches_expanded_tilde_target() -> None:
-    # DEFAULT_PROTECTED contains "~/.bashrc" — the policy must expand that
-    # pattern before matching so it matches an actual absolutized home path.
     target = Path.home() / ".bashrc"
-    assert is_protected(target, DEFAULT_SAFETY) is True
+    assert is_protected(target, DEFAULT_SAFETY, is_write=True) is True
+    assert is_protected(target, DEFAULT_SAFETY, is_write=False) is True
 
 
 def test_tilde_in_input_path_is_expanded() -> None:
-    # Even if the caller hands us a literal "~/.bashrc" string, it should
-    # match the expanded "~/.bashrc" pattern in DEFAULT_PROTECTED.
-    assert is_protected("~/.bashrc", DEFAULT_SAFETY) is True
+    assert is_protected("~/.bashrc", DEFAULT_SAFETY, is_write=True) is True
+    assert is_protected("~/.bashrc", DEFAULT_SAFETY, is_write=False) is True
 
 
 # ---------------------------------------------------------------------------
@@ -173,22 +277,26 @@ def test_tilde_in_input_path_is_expanded() -> None:
 
 
 def test_none_input_returns_false_without_crashing() -> None:
-    # Callers shouldn't pass None, but safety must never be the thing that
-    # crashes the agent.
-    assert is_protected(cast(Path, None), DEFAULT_SAFETY) is False
+    assert is_protected(cast(Path, None), DEFAULT_SAFETY, is_write=True) is False
+    assert is_protected(cast(Path, None), DEFAULT_SAFETY, is_write=False) is False
 
 
 def test_empty_string_input_returns_false_without_crashing() -> None:
-    assert is_protected("", DEFAULT_SAFETY) is False
+    assert is_protected("", DEFAULT_SAFETY, is_write=True) is False
+    assert is_protected("", DEFAULT_SAFETY, is_write=False) is False
 
 
 def test_garbage_object_returns_false_without_crashing() -> None:
-    # Non-Path, non-str input — defensive contract: return False, never raise.
-    assert is_protected(cast(Path, 12345), DEFAULT_SAFETY) is False
+    assert is_protected(cast(Path, 12345), DEFAULT_SAFETY, is_write=True) is False
+    assert is_protected(cast(Path, 12345), DEFAULT_SAFETY, is_write=False) is False
 
 
 def test_malformed_patterns_do_not_crash_is_protected() -> None:
-    # pathspec can raise on malformed patterns; is_protected must still be
-    # safe. Pick something pathspec accepts but use as a smoke test anyway.
-    policy = SafetyPolicy(protected=("**/.git/**",), exempt=())
-    assert isinstance(is_protected("/repo/.git/config", policy), bool)
+    policy = SafetyPolicy(
+        protected_writes=("**/.git/**",),
+        protected_reads=(),
+        exempt=(),
+    )
+    assert isinstance(
+        is_protected("/repo/.git/config", policy, is_write=True), bool,
+    )

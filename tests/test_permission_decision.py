@@ -9,9 +9,9 @@ from aura.core.permissions.rule import Rule
 
 
 def test_simple_allow_decision_has_no_rule() -> None:
-    d = Decision(allow=True, reason="read_only")
+    d = Decision(allow=True, reason="user_accept")
     assert d.allow is True
-    assert d.reason == "read_only"
+    assert d.reason == "user_accept"
     assert d.rule is None
 
 
@@ -35,18 +35,13 @@ def test_mode_bypass_reason_must_be_allow() -> None:
         Decision(allow=False, reason="mode_bypass")
 
 
-def test_read_only_reason_must_be_allow() -> None:
-    with pytest.raises(ValueError, match="allow"):
-        Decision(allow=False, reason="read_only")
-
-
 def test_user_deny_reason_must_be_deny() -> None:
     with pytest.raises(ValueError, match="allow"):
         Decision(allow=True, reason="user_deny")
 
 
 def test_decision_is_frozen() -> None:
-    d = Decision(allow=True, reason="read_only")
+    d = Decision(allow=True, reason="user_accept")
     with pytest.raises((AttributeError, TypeError)):
         d.allow = False  # type: ignore[misc]
 
@@ -60,10 +55,6 @@ def test_rule_allow_with_rule_roundtrips() -> None:
 # ---------------------------------------------------------------------------
 # audit_line — one-liner the renderer dims and appends to tool-call output
 # ---------------------------------------------------------------------------
-
-
-def test_audit_line_read_only() -> None:
-    assert Decision(allow=True, reason="read_only").audit_line() == "auto-allowed: read_only"
 
 
 def test_audit_line_rule_allow_embeds_rule() -> None:

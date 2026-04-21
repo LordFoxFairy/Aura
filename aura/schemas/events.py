@@ -41,8 +41,8 @@ class Final:
 class PermissionAudit:
     """Dim audit line shown after a ToolCallStarted for auto-allow decisions.
 
-    Only emitted for reasons where no prompt was shown (``read_only``,
-    ``rule_allow``, ``mode_bypass``). User-prompted decisions
+    Only emitted for reasons where no prompt was shown (``rule_allow``,
+    ``mode_bypass``). User-prompted decisions
     (``user_accept`` / ``user_always`` / ``user_deny``) need no audit line —
     the prompt itself was the audit.
     """

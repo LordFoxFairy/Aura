@@ -40,7 +40,7 @@ from aura.schemas.tool import ToolError, ToolResult
 # an "auto-allowed: <reason>" dim line after ToolCallStarted. User-prompted
 # allows/denies skip the audit (the prompt itself was the audit).
 _AUTO_ALLOW_REASONS: frozenset[str] = frozenset(
-    {"read_only", "rule_allow", "mode_bypass"},
+    {"rule_allow", "mode_bypass"},
 )
 
 # 成功调用后需把路径反馈给 Context progressive 状态的工具 → 其 path 参数名。

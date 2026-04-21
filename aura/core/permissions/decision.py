@@ -16,6 +16,13 @@ closed-set (``DecisionReason``) and governs two invariants enforced in
 
 ``audit_line()`` returns the short one-liner the CLI renderer dims and
 appends after the tool-call label — see §8.4 for the exact output examples.
+
+Historical note: the ``read_only`` reason existed prior to the Plan B
+refactor (2026-04-21) to mark auto-allows for tools declaring
+``is_read_only=True``. That branch was removed because it bypassed the
+safety list. Tools that used to be auto-allowed via ``read_only`` now
+flow through ``rule_allow`` against ``DEFAULT_ALLOW_RULES`` (see
+``aura/core/permissions/defaults.py``), which keeps safety in the path.
 """
 
 from __future__ import annotations
@@ -26,7 +33,6 @@ from typing import Literal
 from aura.core.permissions.rule import Rule
 
 DecisionReason = Literal[
-    "read_only",
     "rule_allow",
     "user_accept",
     "user_always",
@@ -36,7 +42,7 @@ DecisionReason = Literal[
 ]
 
 _ALLOW_REASONS: frozenset[str] = frozenset(
-    {"read_only", "rule_allow", "user_accept", "user_always", "mode_bypass"}
+    {"rule_allow", "user_accept", "user_always", "mode_bypass"}
 )
 _DENY_REASONS: frozenset[str] = frozenset({"user_deny", "safety_blocked"})
 _RULE_REQUIRED_REASONS: frozenset[str] = frozenset({"rule_allow", "user_always"})
@@ -69,8 +75,6 @@ class Decision:
         "allowed" marks active allows (user accepted, bypass mode, etc.).
         """
         match self.reason:
-            case "read_only":
-                return "auto-allowed: read_only"
             case "rule_allow":
                 assert self.rule is not None  # invariant
                 return f"auto-allowed: rule `{self.rule.to_string()}`"

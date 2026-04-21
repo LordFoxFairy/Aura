@@ -5,14 +5,18 @@ Spec: ``docs/specs/2026-04-19-aura-permission.md`` §5.
 Decision order (short-circuits at first match):
 
 1. ``mode == "bypass"`` → allow (loud journal).
-2. Safety — only for destructive tools operating on a single file via
-   ``args["path"]``. Convention: ``write_file`` / ``edit_file`` — tools
-   that map to one concrete filesystem target. Other destructive tools
-   (``bash``) have no arg-to-path mapping, so safety doesn't fire; the
+2. Safety — fires for any tool operating on a single file via
+   ``args["path"]``. The direction flag (``is_write`` ≙
+   ``metadata["is_destructive"]``) picks which protected list to consult:
+   the writes list for destructive tools, the (narrower) reads list for
+   everyone else. Tools without a path arg (``bash``) fall through; the
    user's rule grant is the backstop there.
-3. ``is_read_only`` → allow.
-4. Rule match — project rules first, session rules second.
-5. Ask — delegate to the CLI asker; install the returned rule if
+3. Rule match — project rules first, session rules second. The project
+   RuleSet carries built-in defaults from
+   ``aura.core.permissions.defaults.DEFAULT_ALLOW_RULES`` composed with
+   user rules at startup, so ``read_file`` / ``grep`` / ``glob`` hit
+   ``rule_allow`` without a prompt while still passing through safety.
+4. Ask — delegate to the CLI asker; install the returned rule if
    ``always``.
 
 Layer boundaries (enforced by construction, not convention):
@@ -98,25 +102,23 @@ def _deny_message(decision: Decision) -> str:
     """Model-facing error string for denied decisions. Concise + actionable."""
     match decision.reason:
         case "safety_blocked":
-            return "denied: write to protected path (safety policy)"
+            return "denied: protected path (safety policy)"
         case "user_deny":
             return "denied: user"
         case _:  # pragma: no cover — unreachable by construction
             return "denied"
 
 
-def _safety_target(tool: BaseTool, args: dict[str, Any]) -> str | None:
+def _safety_target(args: dict[str, Any]) -> str | None:
     """Return the filesystem target for safety checks, or None if not applicable.
 
-    Convention (spec §6, scoped to MVP): safety only fires on destructive
-    tools that operate on a single file via ``args["path"]``. This covers
-    ``write_file`` and ``edit_file``. Other destructive tools (``bash``)
+    Convention (spec §6, scoped to MVP): safety fires for any tool whose
+    args carry a non-empty ``path`` string. The *direction* — writes vs
+    reads — is picked by the caller from the tool's ``is_destructive``
+    metadata flag. Tools without a path arg (``bash``, ``web_fetch``)
     have no arg-to-path mapping, so they aren't safety-gated here — the
     user's rule grant for that tool is the backstop.
     """
-    metadata = tool.metadata or {}
-    if not metadata.get("is_destructive"):
-        return None
     path = args.get("path")
     if not isinstance(path, str) or not path:
         return None
@@ -212,23 +214,22 @@ async def _decide(
         journal.write("permission_bypass", tool=tool.name)
         return Decision(allow=True, reason="mode_bypass")
 
-    # 2. Safety — only for destructive tools with a resolvable path arg.
-    target = _safety_target(tool, args)
-    if target is not None and is_protected(target, safety):
-        return Decision(allow=False, reason="safety_blocked")
+    # 2. Safety — any tool with a resolvable path arg, write-or-read
+    # direction chosen by the tool's is_destructive flag.
+    target = _safety_target(args)
+    if target is not None:
+        is_write = bool((tool.metadata or {}).get("is_destructive", False))
+        if is_protected(target, safety, is_write=is_write):
+            return Decision(allow=False, reason="safety_blocked")
 
-    # 3. Read-only auto-allow.
-    if (tool.metadata or {}).get("is_read_only", False):
-        return Decision(allow=True, reason="read_only")
-
-    # 4. Rule match — project first, session second.
+    # 3. Rule match — project first (includes built-in defaults), session second.
     matched = rules.matches(tool.name, args, tool)
     if matched is None:
         matched = session.matches(tool.name, args, tool)
     if matched is not None:
         return Decision(allow=True, reason="rule_allow", rule=matched)
 
-    # 5. Ask.
+    # 4. Ask.
     rule_hint = Rule(tool=tool.name, content=None)
     try:
         response = await asker(tool=tool, args=args, rule_hint=rule_hint)

@@ -236,16 +236,18 @@ async def test_hooks_see_monotonic_turn_count() -> None:
 @pytest.mark.asyncio
 async def test_auto_allow_decision_emits_permission_audit_between_started_and_completed() -> None:
     """A pre_tool hook that stashes ``_aura_pending_decision`` with a
-    read_only reason → loop emits PermissionAudit right after ToolCallStarted.
+    rule_allow reason → loop emits PermissionAudit right after ToolCallStarted.
 
     Proves the plumbing: hook → state.custom → loop reads/pops → emits
     PermissionAudit → sequence is Started → Audit → Completed.
     """
+    from aura.core.permissions.rule import Rule
+
     async def stashing_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
     ) -> ToolResult | None:
         state.custom["_aura_pending_decision"] = Decision(
-            allow=True, reason="read_only",
+            allow=True, reason="rule_allow", rule=Rule(tool="echo", content=None),
         )
         return None
 
@@ -271,7 +273,7 @@ async def test_auto_allow_decision_emits_permission_audit_between_started_and_co
     assert isinstance(tool_events[1], PermissionAudit)
     assert isinstance(tool_events[2], ToolCallCompleted)
     assert tool_events[1].tool == "echo"
-    assert tool_events[1].text == "auto-allowed: read_only"
+    assert tool_events[1].text == "auto-allowed: rule `echo`"
 
 
 @pytest.mark.asyncio
@@ -326,6 +328,8 @@ async def test_decision_stash_popped_between_calls_no_leak() -> None:
     audits can't leak between tool calls."""
     seen_states: list[dict[str, Any]] = []
 
+    from aura.core.permissions.rule import Rule
+
     async def stash_once(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
     ) -> ToolResult | None:
@@ -333,7 +337,7 @@ async def test_decision_stash_popped_between_calls_no_leak() -> None:
         # decision must already be gone (loop popped after call #1).
         seen_states.append(dict(state.custom))
         state.custom["_aura_pending_decision"] = Decision(
-            allow=True, reason="read_only",
+            allow=True, reason="rule_allow", rule=Rule(tool="echo", content=None),
         )
         return None
 

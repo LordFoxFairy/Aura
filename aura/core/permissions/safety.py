@@ -1,17 +1,32 @@
-"""Safety policy — paths that must never be written to, regardless of rules.
+"""Safety policy — paths that bypass rules entirely.
 
-Spec §6. The default list targets "irreversible damage" (git metadata, ssh
-keys, shell rc files, /etc) not "please don't". Users can override with
-``permissions.safety_exempt`` in ``./.aura/settings.json``.
+Spec §6. Two lists, two directions:
 
-Glob syntax is gitignore-style via ``pathspec`` (already a project dep;
-see ``aura/core/memory/rules.py`` for another use). The spec §6 entry
-``.git/**`` is expressed here as ``**/.git/**`` so pathspec matches a
-``.git/`` directory at any depth in the tree, which is what "any .git/
-anywhere" in the spec intends.
+- **writes** (``DEFAULT_PROTECTED_WRITES``) — "do not clobber this".
+  Git metadata, aura config, shell rc files, ``/etc``. The destructive
+  blast-radius list; fires only on tools whose metadata declares
+  ``is_destructive=True``.
+- **reads** (``DEFAULT_PROTECTED_READS``) — "do not let the model see this".
+  A narrower subset: ssh keys, shell rc files, ``/etc``. Fires on ANY tool
+  with a resolvable path arg, destructive or not. The reads list closes
+  the Plan B refactor hole where ``read_file("~/.ssh/id_rsa")`` used to
+  auto-allow because the old ``is_read_only`` branch skipped safety.
+
+Why ``.git/`` and ``.aura/`` are writes-only
+---------------------------------------------
+
+An agent legitimately *reads* ``.git/HEAD`` (to check branch state) and
+``.aura/settings.json`` (self-introspection). These aren't secrets. What
+matters is that writes to them are irreversible damage. So they stay on
+the writes list and stay off the reads list — asymmetric on purpose.
+
+Glob syntax is gitignore-style via ``pathspec``. The spec §6 entry
+``.git/**`` is expressed as ``**/.git/**`` so pathspec matches a ``.git/``
+directory at any depth in the tree — same convention for ``.aura/`` and
+``.ssh/``.
 
 ``is_protected`` is pure + defensive: no exceptions escape, no filesystem
-mutations — a broken safety check must never crash the agent.
+mutations. A broken safety check must never crash the agent.
 """
 
 from __future__ import annotations
@@ -23,14 +38,29 @@ from typing import Any
 
 import pathspec
 
-# NOTE: ``**/.git/**`` instead of the spec's bare ``.git/**``. pathspec's
-# gitignore treats a leading ``**/`` as "match at any depth", which is
-# what "any .git/ anywhere in the tree" means. Same for ``.aura/**`` and
-# ``.ssh/**``. Home-dir rc files use ``~`` which is expanded to the
-# caller's home at compile time inside ``is_protected``.
-DEFAULT_PROTECTED: tuple[str, ...] = (
+# Writes list — "do not clobber this".
+# ``**/.git/**`` (not ``.git/**``) because pathspec's gitignore treats a
+# leading ``**/`` as "match at any depth", which is what "any .git/
+# anywhere in the tree" means. Same convention for ``.aura/`` and
+# ``.ssh/``. Home-dir rc files use ``~``, expanded at compile time inside
+# ``is_protected``.
+DEFAULT_PROTECTED_WRITES: tuple[str, ...] = (
     "**/.git/**",
     "**/.aura/**",
+    "**/.ssh/**",
+    "~/.bashrc",
+    "~/.zshrc",
+    "~/.profile",
+    "~/.bash_profile",
+    "~/.zprofile",
+    "/etc/**",
+)
+
+# Reads list — "do not let the model see this".
+# Narrower than writes: ``.git/`` and ``.aura/`` are legitimate read
+# targets for an agent (git log, self-config), so they're absent here on
+# purpose. Only paths whose contents are secrets remain.
+DEFAULT_PROTECTED_READS: tuple[str, ...] = (
     "**/.ssh/**",
     "~/.bashrc",
     "~/.zshrc",
@@ -45,28 +75,46 @@ DEFAULT_PROTECTED: tuple[str, ...] = (
 class SafetyPolicy:
     """Immutable protect/exempt glob lists consulted before any prompt.
 
-    ``protected`` entries block writes; ``exempt`` entries are explicit
-    overrides — an exempt match suppresses a protected match.
+    ``protected_writes`` entries block destructive tools; ``protected_reads``
+    entries block any tool with a path arg (destructive or not). A single
+    ``exempt`` list covers both directions — an explicit override that
+    suppresses any matching protected entry.
     """
 
-    protected: tuple[str, ...]
+    protected_writes: tuple[str, ...]
+    protected_reads: tuple[str, ...]
     exempt: tuple[str, ...]
 
 
-DEFAULT_SAFETY: SafetyPolicy = SafetyPolicy(protected=DEFAULT_PROTECTED, exempt=())
+DEFAULT_SAFETY: SafetyPolicy = SafetyPolicy(
+    protected_writes=DEFAULT_PROTECTED_WRITES,
+    protected_reads=DEFAULT_PROTECTED_READS,
+    exempt=(),
+)
 
 
-def is_protected(path: Path | str, policy: SafetyPolicy) -> bool:
-    """True iff ``path`` lies under ``policy.protected`` and not ``policy.exempt``.
+def is_protected(
+    path: Path | str,
+    policy: SafetyPolicy,
+    *,
+    is_write: bool,
+) -> bool:
+    """True iff ``path`` is blocked by the direction-appropriate list.
+
+    - ``is_write=True`` consults ``policy.protected_writes``.
+    - ``is_write=False`` consults ``policy.protected_reads``.
+
+    ``policy.exempt`` applies in both directions — an exempt match
+    suppresses a protected match regardless of which list fired.
 
     Input handling:
 
     - ``path`` may be a ``Path`` or ``str``. ``~`` in the input is expanded.
     - The path is absolutized (relative → cwd-joined) AND resolved (symlinks
-      followed). Patterns are matched against BOTH — a symlink pointing into
-      a protected dir is blocked (resolve catches it) AND a direct write to
-      e.g. ``/etc/passwd`` is blocked even on macOS where ``/etc`` resolves
-      to ``/private/etc`` (absolute-only form catches it).
+      followed). Patterns are matched against BOTH — a symlink pointing
+      into a protected dir is blocked (resolve catches it) AND a direct
+      write to e.g. ``/etc/passwd`` is blocked even on macOS where ``/etc``
+      resolves to ``/private/etc`` (absolute-only form catches it).
     - Policy patterns containing a leading ``~`` are expanded against
       ``Path.home()`` before matching.
 
@@ -79,7 +127,8 @@ def is_protected(path: Path | str, policy: SafetyPolicy) -> bool:
         if not candidates:
             return False
 
-        protected_spec = _compile_spec(policy.protected)
+        active = policy.protected_writes if is_write else policy.protected_reads
+        protected_spec = _compile_spec(active)
         exempt_spec = _compile_spec(policy.exempt)
 
         if any(exempt_spec.match_file(t) for t in candidates):

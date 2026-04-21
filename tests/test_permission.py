@@ -1,7 +1,13 @@
-"""Tests for aura.core.hooks.permission.make_permission_hook (Task 7 rewrite).
+"""Tests for aura.core.hooks.permission.make_permission_hook.
 
-Covers the decision flow in spec §5 — order, short-circuits, journal events,
-AskerResponse invariants, and the asker-exception-is-deny defensive path.
+Covers the post-Plan-B decision flow in spec §5 — order, short-circuits,
+journal events, AskerResponse invariants, and the asker-exception-is-deny
+defensive path.
+
+Post Plan B (2026-04-21): the old ``is_read_only`` auto-allow branch is
+gone. Tools previously auto-allowed by that branch now flow through
+``rule_allow`` against ``DEFAULT_ALLOW_RULES``. Safety fires for any
+path-arg tool (reads list or writes list depending on direction).
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ from aura.core.hooks.permission import (
     PermissionAsker,
     make_permission_hook,
 )
+from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.permissions.store import PermissionStoreError
@@ -33,6 +40,10 @@ class _P(BaseModel):
     pass
 
 
+class _PathArgs(BaseModel):
+    path: str
+
+
 def _noop() -> dict[str, Any]:
     return {}
 
@@ -43,11 +54,12 @@ def _tool(
     is_read_only: bool = False,
     is_destructive: bool = False,
     rule_matcher: Callable[[dict[str, Any], str], bool] | None = None,
+    args_schema: type[BaseModel] = _P,
 ) -> BaseTool:
     return build_tool(
         name=name,
         description=name,
-        args_schema=_P,
+        args_schema=args_schema,
         func=_noop,
         is_read_only=is_read_only,
         is_destructive=is_destructive,
@@ -83,9 +95,6 @@ def journal_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
     def _capture(event: str, /, **fields: Any) -> None:
         events.append((event, fields))
 
-    # Patch the journal module itself — the hook imports journal as a module
-    # alias and the mypy-recognized attribute path is ``journal.write`` on the
-    # module, not ``permission_module.journal.write``.
     from aura.core.persistence import journal as journal_mod
 
     monkeypatch.setattr(journal_mod, "write", _capture)
@@ -117,8 +126,6 @@ def test_asker_response_is_frozen() -> None:
 
 
 def test_permission_asker_runtime_checkable() -> None:
-    # Runtime-checkable Protocol: an instance with the right callable attribute
-    # must satisfy isinstance. The check is structural, not nominal.
     asker = _SpyAsker(response=AskerResponse(choice="accept"))
     assert isinstance(asker, PermissionAsker)
 
@@ -140,13 +147,12 @@ async def test_bypass_mode_short_circuits_even_on_protected_path(
     )
     # Destructive tool writing to a protected path — bypass still wins.
     result = await hook(
-        tool=_tool(is_destructive=True),
+        tool=_tool(is_destructive=True, args_schema=_PathArgs),
         args={"path": "/etc/passwd"},
         state=LoopState(),
     )
     assert result is None
     assert spy.calls == []
-    # Both the loud bypass event AND the generic decision event are emitted.
     names = [e[0] for e in journal_events]
     assert "permission_bypass" in names
     assert "permission_decision" in names
@@ -154,7 +160,7 @@ async def test_bypass_mode_short_circuits_even_on_protected_path(
     assert decision_event[1]["reason"] == "mode_bypass"
 
 
-async def test_safety_fires_before_read_only_checks_and_skips_asker(
+async def test_safety_blocks_destructive_write_to_protected_path(
     journal_events: list[tuple[str, dict[str, Any]]],
     tmp_path: Path,
 ) -> None:
@@ -165,38 +171,73 @@ async def test_safety_fires_before_read_only_checks_and_skips_asker(
         rules=RuleSet(),
         project_root=tmp_path,
     )
-    # Destructive tool writing to .git path — safety blocks.
     result = await hook(
-        tool=_tool(is_destructive=True),
+        tool=_tool(is_destructive=True, args_schema=_PathArgs),
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=LoopState(),
     )
     assert isinstance(result, ToolResult)
     assert result.ok is False
-    assert result.error == "denied: write to protected path (safety policy)"
+    assert result.error == "denied: protected path (safety policy)"
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "safety_blocked"
 
 
-async def test_safety_skipped_on_read_only_tool_even_with_protected_path(
+async def test_safety_blocks_read_file_of_ssh_key(
+    journal_events: list[tuple[str, dict[str, Any]]],
     tmp_path: Path,
 ) -> None:
+    """The invariant we're closing: read_file(~/.ssh/id_rsa) denies with
+    safety_blocked instead of being auto-allowed."""
+    # Rule that would otherwise allow read_file — prove safety fires FIRST.
+    rules = RuleSet(rules=(Rule(tool="read_file", content=None),))
     spy = _SpyAsker()
     hook = make_permission_hook(
         asker=spy,
         session=SessionRuleSet(),
-        rules=RuleSet(),
+        rules=rules,
         project_root=tmp_path,
     )
-    # read_only tool — must not short-circuit through safety.
+    tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
     result = await hook(
-        tool=_tool(is_read_only=True),
+        tool=tool,
+        args={"path": str(Path.home() / ".ssh" / "id_rsa")},
+        state=LoopState(),
+    )
+    assert isinstance(result, ToolResult)
+    assert result.ok is False
+    assert result.error == "denied: protected path (safety policy)"
+    assert spy.calls == []
+    decision_event = next(e for e in journal_events if e[0] == "permission_decision")
+    assert decision_event[1]["reason"] == "safety_blocked"
+
+
+async def test_read_of_git_path_is_not_blocked_by_safety(
+    journal_events: list[tuple[str, dict[str, Any]]],
+    tmp_path: Path,
+) -> None:
+    """Reads of .git/ are legitimate (git log etc); reads list does NOT
+    include .git/. With a matching rule in the set, the call auto-allows
+    via rule_allow."""
+    rules = RuleSet(rules=(Rule(tool="read_file", content=None),))
+    spy = _SpyAsker()
+    hook = make_permission_hook(
+        asker=spy,
+        session=SessionRuleSet(),
+        rules=rules,
+        project_root=tmp_path,
+    )
+    tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
+    result = await hook(
+        tool=tool,
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=LoopState(),
     )
-    assert result is None  # read_only allows
+    assert result is None
     assert spy.calls == []
+    decision_event = next(e for e in journal_events if e[0] == "permission_decision")
+    assert decision_event[1]["reason"] == "rule_allow"
 
 
 async def test_safety_skipped_on_destructive_tool_without_path_arg(
@@ -219,23 +260,61 @@ async def test_safety_skipped_on_destructive_tool_without_path_arg(
     assert len(spy.calls) == 1  # asker was consulted
 
 
-async def test_read_only_tool_allows_without_asking(
+# --- rule match and default rules ---
+
+
+async def test_read_file_rule_matches_goes_to_rule_allow(
     journal_events: list[tuple[str, dict[str, Any]]],
+    tmp_path: Path,
 ) -> None:
+    """Passing the built-in default rule for read_file into the RuleSet
+    yields ``rule_allow`` — the new path replacing the old ``read_only``
+    branch."""
+    rules = RuleSet(rules=DEFAULT_ALLOW_RULES)
     spy = _SpyAsker()
     hook = make_permission_hook(
         asker=spy,
         session=SessionRuleSet(),
-        rules=RuleSet(),
-        project_root=Path("/tmp"),
+        rules=rules,
+        project_root=tmp_path,
     )
+    tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
     result = await hook(
-        tool=_tool(is_read_only=True), args={}, state=LoopState(),
+        tool=tool,
+        args={"path": str(tmp_path / "ordinary.txt")},
+        state=LoopState(),
     )
     assert result is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
-    assert decision_event[1]["reason"] == "read_only"
+    assert decision_event[1]["reason"] == "rule_allow"
+    assert decision_event[1]["rule"] == "read_file"
+
+
+async def test_read_file_with_empty_ruleset_goes_to_ask(
+    journal_events: list[tuple[str, dict[str, Any]]],
+    tmp_path: Path,
+) -> None:
+    """Empty RuleSet + no session rule + not on safety list → asker is
+    consulted even for read_only tools. Proves the old auto-allow branch
+    is gone."""
+    spy = _SpyAsker(response=AskerResponse(choice="accept"))
+    hook = make_permission_hook(
+        asker=spy,
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=tmp_path,
+    )
+    tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
+    result = await hook(
+        tool=tool,
+        args={"path": str(tmp_path / "ordinary.txt")},
+        state=LoopState(),
+    )
+    assert result is None
+    assert len(spy.calls) == 1
+    decision_event = next(e for e in journal_events if e[0] == "permission_decision")
+    assert decision_event[1]["reason"] == "user_accept"
 
 
 async def test_project_rules_match_takes_priority_over_session(
@@ -257,9 +336,6 @@ async def test_project_rules_match_takes_priority_over_session(
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "rule_allow"
-    # The project rule is the one recorded — identity check via to_string is fine
-    # because both rules have identical content; the key insight is it was reached
-    # without asker and without touching session-only rules.
     assert decision_event[1]["rule"] == project_rule.to_string()
 
 
@@ -291,7 +367,6 @@ async def test_ask_accept_allows(
     result = await hook(tool=_tool(), args={}, state=LoopState())
     assert result is None
     assert len(spy.calls) == 1
-    # The MVP rule_hint is tool-wide.
     assert spy.calls[0]["rule_hint"] == Rule(tool="writer", content=None)
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_accept"
@@ -359,7 +434,6 @@ async def test_ask_always_project_scope_calls_save_rule(
     result = await hook(tool=_tool(), args={}, state=LoopState())
     assert result is None
     assert save_calls == [(tmp_path, rule, "project")]
-    # Project scope did NOT add to session — the disk is the store.
     assert session.rules() == ()
 
 
@@ -388,14 +462,10 @@ async def test_ask_always_project_save_failure_degrades_to_session(
         project_root=tmp_path,
     )
     result = await hook(tool=_tool(), args={}, state=LoopState())
-    # Current call still succeeds — the user consented; disk failure doesn't revoke it.
     assert result is None
-    # Degraded to session scope.
     assert session.rules() == (rule,)
-    # Failure journaled.
     names = [e[0] for e in journal_events]
     assert "permission_save_failed" in names
-    # Decision is still user_always.
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_always"
 
@@ -426,9 +496,6 @@ async def test_asker_basexception_propagates_does_not_deny(
     exc_type: type[BaseException],
     journal_events: list[tuple[str, dict[str, Any]]],
 ) -> None:
-    # KeyboardInterrupt / CancelledError / SystemExit must propagate so the
-    # outer loop (Agent.astream) handles cancellation cleanly. Swallowing
-    # them as "user_deny" would wedge Ctrl+C behavior.
     spy = _SpyAsker(raise_=exc_type())
     hook = make_permission_hook(
         asker=spy,
@@ -438,51 +505,45 @@ async def test_asker_basexception_propagates_does_not_deny(
     )
     with pytest.raises(exc_type):
         await hook(tool=_tool(), args={}, state=LoopState())
-    # No decision should have been journaled — the call never terminated.
     assert not any(e[0] == "permission_decision" for e in journal_events)
 
 
 async def test_hook_stashes_decision_on_state_custom() -> None:
-    """The hook writes Decision to state.custom["_aura_pending_decision"].
-
-    Transient slot the loop pops immediately after run_pre_tool. Verifying
-    here ensures the stashing invariant holds at the hook boundary even
-    without the loop running.
-    """
+    """The hook writes Decision to state.custom["_aura_pending_decision"]."""
     from aura.core.permissions.decision import Decision
 
+    rules = RuleSet(rules=(Rule(tool="writer", content=None),))
     hook = make_permission_hook(
         asker=_SpyAsker(),
         session=SessionRuleSet(),
-        rules=RuleSet(),
+        rules=rules,
         project_root=Path("/tmp"),
     )
     state = LoopState()
-    await hook(tool=_tool(is_read_only=True), args={}, state=state)
+    await hook(tool=_tool(), args={}, state=state)
     stashed = state.custom.get("_aura_pending_decision")
     assert isinstance(stashed, Decision)
-    assert stashed.reason == "read_only"
+    assert stashed.reason == "rule_allow"
     assert stashed.allow is True
 
 
 async def test_hook_stash_is_overwritten_across_calls() -> None:
-    """Single-slot stash is overwritten each call — the loop pops it between
-    calls, but if the loop didn't pop (hypothetical misuse), a subsequent
-    call still overwrites rather than stacking."""
+    """Single-slot stash is overwritten each call."""
     spy = _SpyAsker(response=AskerResponse(choice="accept"))
+    rules = RuleSet(rules=(Rule(tool="writer", content=None),))
     hook = make_permission_hook(
         asker=spy,
         session=SessionRuleSet(),
-        rules=RuleSet(),
+        rules=rules,
         project_root=Path("/tmp"),
     )
     state = LoopState()
-    # First call: read-only.
-    await hook(tool=_tool(is_read_only=True), args={}, state=state)
-    first = state.custom["_aura_pending_decision"]
-    assert first.reason == "read_only"
-    # Second call without popping: the slot is overwritten, not appended.
+    # First call: rule_allow (writer rule matches).
     await hook(tool=_tool(), args={}, state=state)
+    first = state.custom["_aura_pending_decision"]
+    assert first.reason == "rule_allow"
+    # Second call: different tool, no matching rule → asker answers accept.
+    await hook(tool=_tool("different"), args={}, state=state)
     second = state.custom["_aura_pending_decision"]
     assert second.reason == "user_accept"
     assert second is not first

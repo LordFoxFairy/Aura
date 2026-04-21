@@ -49,8 +49,7 @@ def _error_text(tool_name: str, reason: _ReadStatus, path: Path) -> str:
                 f"(offset=0, limit=None) before overwriting."
             )
         return (
-            f"file has not been read yet. read_file({path}) before "
-            f"overwriting. (path={path})"
+            f"file has not been read yet. read_file({path}) before overwriting."
         )
     # edit_file
     if reason == "stale":
@@ -64,8 +63,7 @@ def _error_text(tool_name: str, reason: _ReadStatus, path: Path) -> str:
             f"(offset=0, limit=None) before edit."
         )
     return (
-        f"file has not been read yet. read_file({path}) before "
-        f"edit. (path={path})"
+        f"file has not been read yet. read_file({path}) before edit."
     )
 
 

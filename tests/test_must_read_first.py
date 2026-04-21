@@ -630,6 +630,31 @@ async def test_write_file_error_messages_say_overwriting_not_editing(
 
 
 @pytest.mark.asyncio
+async def test_never_read_message_no_duplicated_path(tmp_path: Path) -> None:
+    # Regression guard: the never_read error message must cite the path
+    # exactly once. Prior version duplicated it ("read_file({p}) ... (path={p})").
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+
+    for tool_factory in (_edit_tool, _write_tool):
+        target = tmp_path / f"f_{tool_factory.__name__}.txt"
+        target.write_text("hello\n")
+        result = await hook(
+            tool=tool_factory(),
+            args={"path": str(target), "old_str": "hello", "new_str": "bye"}
+            if tool_factory is _edit_tool
+            else {"path": str(target)},
+            state=LoopState(),
+        )
+        assert isinstance(result, ToolResult)
+        assert result.error is not None
+        assert result.error.count(str(target.resolve())) == 1, (
+            f"path appeared {result.error.count(str(target.resolve()))}x in: "
+            f"{result.error!r}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_journal_event_shows_write_file_as_tool(
     tmp_path: Path,
 ) -> None:

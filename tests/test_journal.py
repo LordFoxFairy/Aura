@@ -79,3 +79,46 @@ def test_write_appends_not_overwrites(tmp_path: Path) -> None:
     lines = (tmp_path / "events.jsonl").read_text().strip().split("\n")
     assert len(lines) == 3
     assert [json.loads(line)["event"] for line in lines] == ["a", "b", "c"]
+
+
+def test_configure_does_not_raise_on_unwritable_parent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Contract: the journal's documented invariant is that audit failures
+    # never crash the agent. Before this test, write() honored that but
+    # configure() could raise OSError if mkdir failed (e.g. read-only FS).
+    # End-to-end the promise was broken — if configure raised, you never
+    # reached write(). Close the gap at the module boundary.
+    existing_file = tmp_path / "blocker"
+    existing_file.write_text("x")
+    # Can't mkdir a child *under a file* — mkdir raises NotADirectoryError
+    # (an OSError subclass). configure must swallow it.
+    unreachable = existing_file / "nested" / "events.jsonl"
+    journal_module.configure(unreachable)
+
+    # State must be disabled — subsequent writes are no-ops.
+    journal_module.write("post_failed_configure")
+    assert not unreachable.exists()
+
+    # Stderr carries a one-line warning so the user knows audit is off
+    # rather than silently losing events.
+    captured = capsys.readouterr()
+    assert "audit" in captured.err.lower() or "log" in captured.err.lower()
+
+
+def test_configure_failure_does_not_poison_later_configure(
+    tmp_path: Path,
+) -> None:
+    # A failed configure leaves the module in disabled state — a subsequent
+    # configure() to a good path must restore normal operation.
+    existing_file = tmp_path / "blocker"
+    existing_file.write_text("x")
+    journal_module.configure(existing_file / "nope" / "events.jsonl")
+
+    good_log = tmp_path / "good.jsonl"
+    journal_module.configure(good_log)
+    journal_module.write("recovered")
+
+    lines = good_log.read_text().strip().split("\n")
+    assert len(lines) == 1
+    assert json.loads(lines[0])["event"] == "recovered"

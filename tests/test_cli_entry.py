@@ -59,6 +59,46 @@ def test_plaintext_api_key_emits_warning(tmp_path: Path) -> None:
     assert "plaintext" in out
 
 
+def test_plaintext_api_key_writes_journal_event(tmp_path: Path) -> None:
+    # Troubleshooting contract: the console warning is ephemeral — scrolls
+    # off, lost to the user who started aura in a screen session, whatever.
+    # An operator grepping events.jsonl for "why did this provider expose a
+    # key" must find a machine-readable record. Console + journal both fire.
+    import pytest
+    from rich.console import Console
+
+    from aura.cli.__main__ import _warn_plaintext_api_keys
+    from aura.config.loader import load_config
+    from aura.core.persistence import journal
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "providers": [
+            {"name": "alpha", "protocol": "openai", "api_key": "sk-1"},
+            {"name": "beta", "protocol": "openai", "api_key_env": "BETA_KEY"},
+            {"name": "gamma", "protocol": "openai", "api_key": "sk-2"},
+        ],
+        "router": {"default": "alpha:gpt-4o-mini"},
+    }))
+    cfg = load_config(user_config=config_path, project_config=tmp_path / "absent.json")
+
+    events: list[tuple[str, dict[str, object]]] = []
+
+    def _capture(event: str, /, **fields: object) -> None:
+        events.append((event, fields))
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(journal, "write", _capture)
+        _warn_plaintext_api_keys(
+            cfg, Console(file=io.StringIO(), force_terminal=False, width=200),
+        )
+
+    plaintext_events = [e for e in events if e[0] == "plaintext_api_key_warning"]
+    assert len(plaintext_events) == 2  # alpha + gamma, beta uses api_key_env
+    names = {e[1]["provider"] for e in plaintext_events}
+    assert names == {"alpha", "gamma"}
+
+
 def _ns(**kw: object) -> object:
     import argparse
 

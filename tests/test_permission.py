@@ -213,6 +213,32 @@ async def test_safety_blocks_read_file_of_ssh_key(
     assert decision_event[1]["reason"] == "safety_blocked"
 
 
+async def test_safety_blocked_audit_records_offending_path(
+    journal_events: list[tuple[str, dict[str, Any]]],
+    tmp_path: Path,
+) -> None:
+    # Troubleshooting contract: when safety_blocked fires, the audit entry
+    # must name the offending path. Operators reading events.jsonl should be
+    # able to see *which* path tripped the policy without re-running. Args
+    # as a whole are NOT logged (they can carry secrets); only the resolved
+    # safety target, which is by definition already on a public protected
+    # list.
+    rules = RuleSet(rules=(Rule(tool="read_file", content=None),))
+    hook = make_permission_hook(
+        asker=_SpyAsker(),
+        session=SessionRuleSet(),
+        rules=rules,
+        project_root=tmp_path,
+    )
+    tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
+    offending = str(Path.home() / ".ssh" / "id_rsa")
+    await hook(tool=tool, args={"path": offending}, state=LoopState())
+
+    decision_event = next(e for e in journal_events if e[0] == "permission_decision")
+    assert decision_event[1]["reason"] == "safety_blocked"
+    assert decision_event[1].get("target") == offending
+
+
 async def test_read_of_git_path_is_not_blocked_by_safety(
     journal_events: list[tuple[str, dict[str, Any]]],
     tmp_path: Path,

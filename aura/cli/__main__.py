@@ -66,12 +66,15 @@ def _resolve_mode(
 
 
 def _warn_plaintext_api_keys(config: AuraConfig, console: Console) -> None:
+    from aura.core import journal
+
     for provider in config.providers:
         if provider.api_key:
             console.print(
                 f"[yellow]Warning: provider {provider.name!r} uses a plaintext "
                 f"api_key in config. Prefer api_key_env for security.[/yellow]"
             )
+            journal.write("plaintext_api_key_warning", provider=provider.name)
 
 
 def _fail_startup(console: Console, exc: BaseException) -> int:

@@ -192,6 +192,7 @@ def make_permission_hook(
             reason=decision.reason,
             rule=decision.rule.to_string() if decision.rule is not None else None,
             mode=mode,
+            target=decision.target,
         )
         # Transient per-call stash: loop._plan_tool_calls reads this back
         # IMMEDIATELY after run_pre_tool returns (same tool call, same
@@ -227,7 +228,7 @@ async def _decide(
     if target is not None:
         is_write = bool((tool.metadata or {}).get("is_destructive", False))
         if is_protected(target, safety, is_write=is_write):
-            return Decision(allow=False, reason="safety_blocked")
+            return Decision(allow=False, reason="safety_blocked", target=target)
 
     # 3. Rule match — project first (includes built-in defaults), session second.
     matched = rules.matches(tool.name, args, tool)

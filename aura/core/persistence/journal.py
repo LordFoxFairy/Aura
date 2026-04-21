@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,21 @@ _path: Path | None = None
 
 
 def configure(path: Path) -> None:
+    # Invariant: audit failures never crash the agent (see write() below).
+    # mkdir on a read-only FS, a path-under-a-file, or a non-existent root
+    # raises OSError; honor the same contract here by falling through to
+    # disabled state + a one-line stderr warning. Otherwise a bad log path
+    # in config would crash startup before we ever reached write().
     global _path
-    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        _path = None
+        print(
+            f"aura: audit log disabled — cannot prepare {path.parent}: {exc}",
+            file=sys.stderr,
+        )
+        return
     _path = path
 
 

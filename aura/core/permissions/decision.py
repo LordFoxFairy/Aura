@@ -53,6 +53,12 @@ class Decision:
     allow: bool
     reason: DecisionReason
     rule: Rule | None = None
+    # Populated when reason == "safety_blocked" with the resolved path that
+    # tripped the policy. Audit consumers record this so operators can see
+    # *which* path was rejected without re-running. Args as a whole are not
+    # captured (they can carry secrets); the target is already on a public
+    # protected list so logging it reveals nothing new.
+    target: str | None = None
 
     def __post_init__(self) -> None:
         if self.reason in _ALLOW_REASONS and not self.allow:

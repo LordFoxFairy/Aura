@@ -215,22 +215,18 @@ def test_log_config_unknown_key_raises() -> None:
         })
 
 
-def test_permissions_config_surfaced_on_aura_config() -> None:
-    from aura.schemas.permissions import PermissionsConfig
+def test_aura_config_rejects_permissions_key() -> None:
+    # Post-2026-04-21: permission config doesn't live in config.json anymore.
+    # It lives in settings.json (loaded by aura.core.permissions.store). If
+    # a user writes ``"permissions": {...}`` in config.json they'd get silent
+    # half-effects (old double-track bug). Now they get a loud
+    # ``extra="forbid"`` error telling them to move it.
+    import pytest
+    from pydantic import ValidationError
 
-    cfg = AuraConfig.model_validate({
-        "providers": [{"name": "x", "protocol": "openai"}],
-        "router": {"default": "x:m"},
-        "permissions": {"mode": "bypass", "allow": ["bash"]},
-    })
-    assert isinstance(cfg.permissions, PermissionsConfig)
-    assert cfg.permissions.mode == "bypass"
-    assert cfg.permissions.allow == ["bash"]
-
-
-def test_permissions_absent_yields_none() -> None:
-    cfg = AuraConfig.model_validate({
-        "providers": [{"name": "x", "protocol": "openai"}],
-        "router": {"default": "x:m"},
-    })
-    assert cfg.permissions is None
+    with pytest.raises(ValidationError):
+        AuraConfig.model_validate({
+            "providers": [{"name": "x", "protocol": "openai"}],
+            "router": {"default": "x:m"},
+            "permissions": {"mode": "bypass", "allow": ["bash"]},
+        })

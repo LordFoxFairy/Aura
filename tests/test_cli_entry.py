@@ -66,41 +66,42 @@ def _ns(**kw: object) -> object:
 
 
 def test_resolve_mode_defaults_to_default() -> None:
+    # Post-2026-04-21: _resolve_mode takes a PermissionsConfig, not AuraConfig.
+    # No flag + default PermissionsConfig (mode="default") → "default".
     from aura.cli.__main__ import _resolve_mode
-    from aura.config.schema import AuraConfig
+    from aura.schemas.permissions import PermissionsConfig
 
-    cfg = AuraConfig.model_validate({
-        "providers": [{"name": "openai", "protocol": "openai"}],
-        "router": {"default": "openai:gpt-4o-mini"},
-        "tools": {"enabled": []},
-    })
     args = _ns(bypass_permissions=False)
-    assert _resolve_mode(args, cfg) == "default"  # type: ignore[arg-type]
+    assert _resolve_mode(args, PermissionsConfig()) == "default"  # type: ignore[arg-type]
 
 
-def test_resolve_mode_reads_config_permissions_mode() -> None:
+def test_resolve_mode_reads_permissions_config_mode() -> None:
+    # PermissionsConfig comes from settings.json (via store.load), not from
+    # AuraConfig. Mode set there should be honored when the flag is off.
     from aura.cli.__main__ import _resolve_mode
-    from aura.config.schema import AuraConfig
+    from aura.schemas.permissions import PermissionsConfig
 
-    cfg = AuraConfig.model_validate({
-        "providers": [{"name": "openai", "protocol": "openai"}],
-        "router": {"default": "openai:gpt-4o-mini"},
-        "tools": {"enabled": []},
-        "permissions": {"mode": "bypass"},
-    })
+    perm_cfg = PermissionsConfig(mode="bypass")
     args = _ns(bypass_permissions=False)
-    assert _resolve_mode(args, cfg) == "bypass"  # type: ignore[arg-type]
+    assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
 
 
-def test_resolve_mode_cli_flag_wins_over_config_default() -> None:
+def test_resolve_mode_cli_flag_wins_over_settings_default() -> None:
     from aura.cli.__main__ import _resolve_mode
-    from aura.config.schema import AuraConfig
+    from aura.schemas.permissions import PermissionsConfig
 
-    cfg = AuraConfig.model_validate({
-        "providers": [{"name": "openai", "protocol": "openai"}],
-        "router": {"default": "openai:gpt-4o-mini"},
-        "tools": {"enabled": []},
-        "permissions": {"mode": "default"},
-    })
+    perm_cfg = PermissionsConfig(mode="default")
     args = _ns(bypass_permissions=True)
-    assert _resolve_mode(args, cfg) == "bypass"  # type: ignore[arg-type]
+    assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
+
+
+def test_resolve_mode_cli_flag_wins_even_over_settings_bypass() -> None:
+    # Trivial but worth locking: flag True always wins regardless of the
+    # settings value. (A user could explicitly set bypass in both places;
+    # ordering must be predictable.)
+    from aura.cli.__main__ import _resolve_mode
+    from aura.schemas.permissions import PermissionsConfig
+
+    perm_cfg = PermissionsConfig(mode="bypass")
+    args = _ns(bypass_permissions=True)
+    assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]

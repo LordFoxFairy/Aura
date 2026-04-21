@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
     from aura.config.schema import AuraConfig
     from aura.core.permissions.mode import Mode
+    from aura.schemas.permissions import PermissionsConfig
 
 
 def _force_utf8_streams() -> None:
@@ -45,13 +46,23 @@ def _make_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _resolve_mode(args: argparse.Namespace, config: AuraConfig) -> Mode:
-    # CLI flag wins over config; config.permissions.mode wins over built-in default.
+def _resolve_mode(
+    args: argparse.Namespace, perm_cfg: PermissionsConfig,
+) -> Mode:
+    """Pick the active permission mode.
+
+    Precedence (highest first):
+    1. ``--bypass-permissions`` CLI flag
+    2. ``permissions.mode`` in ``.aura/settings.json`` (or local override)
+    3. Built-in default ``"default"`` (via PermissionsConfig.mode default)
+
+    No double-track: the mode comes SOLELY from the permission config
+    loaded by ``store.load`` (which already merges project + local), never
+    from ``AuraConfig`` — that file is provider/router/storage only.
+    """
     if args.bypass_permissions:
         return "bypass"
-    if config.permissions is not None and config.permissions.mode:
-        return config.permissions.mode
-    return "default"
+    return perm_cfg.mode
 
 
 def _warn_plaintext_api_keys(config: AuraConfig, console: Console) -> None:
@@ -164,7 +175,7 @@ def main() -> int:
             protected_reads=DEFAULT_PROTECTED_READS,
             exempt=tuple(perm_cfg.safety_exempt),
         )
-        mode = _resolve_mode(args, config)
+        mode = _resolve_mode(args, perm_cfg)
         if mode == "bypass":
             print_bypass_banner(console)
             journal.write("permission_bypass_active")

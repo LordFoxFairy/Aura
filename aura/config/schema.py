@@ -8,7 +8,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from aura.errors import AuraError
-from aura.schemas.permissions import PermissionsConfig
 
 
 class ProviderConfig(BaseModel):
@@ -69,10 +68,12 @@ class AuraConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     log: LogConfig = Field(default_factory=LogConfig)
-    # When ``None`` the agent uses empty defaults (no persisted rules,
-    # mode="default"). Populated by the config loader or direct validation
-    # when the user's settings.json contains a ``permissions`` key.
-    permissions: PermissionsConfig | None = None
+    # NOTE: permission config does NOT live here. Providers/router/storage/log
+    # are runtime wiring; permissions are a separate concern with their own
+    # file(s) at ``.aura/settings.json`` + ``.aura/settings.local.json``,
+    # loaded by ``aura.core.permissions.store.load``. Keeping them separate
+    # means each file has ONE purpose and the user knows exactly which file
+    # to edit. See spec §7.
 
     @model_validator(mode="after")
     def _validate_cross_refs(self) -> AuraConfig:

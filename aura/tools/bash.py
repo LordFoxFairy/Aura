@@ -22,7 +22,9 @@ from aura.core.permissions.matchers import exact_match_on
 from aura.schemas.tool import ToolError, tool_metadata
 
 _DEFAULT_TIMEOUT = 30
-_MAX_OUTPUT_BYTES = 30_000
+_MAX_OUTPUT_BYTES = 30_000  # what the model sees — kept small to protect context
+_HARD_CEILING_BYTES = 100 * 1024 * 1024  # 100 MB per stream before we kill the proc
+_STREAM_CHUNK = 8192
 _SHUTDOWN_GRACE = 0.5
 _REAP_TIMEOUT = 2.0
 
@@ -41,17 +43,64 @@ def _preview(args: dict[str, Any]) -> str:
     return f"command: {args.get('command', '')}"
 
 
-def _cap_stream(data: str) -> tuple[str, bool]:
-    """Tail-preserving byte cap; returns (possibly-truncated text, was_truncated)."""
-    encoded = data.encode("utf-8")
-    total = len(encoded)
+def _format_streamed(tail_bytes: bytes, total: int) -> tuple[str, bool]:
+    """Turn the streamed-tail bytes + total count into the model-facing string.
+
+    Mirrors the old in-memory ``_cap_stream`` return shape: if the total
+    exceeded the per-stream cap, prepend a marker noting the dropped byte
+    count and return ``truncated=True``. Decodes with ``errors='replace'``
+    so a mid-multibyte tail slice yields U+FFFD at worst — safe for logs.
+    """
     if total <= _MAX_OUTPUT_BYTES:
-        return data, False
-    kept = encoded[-_MAX_OUTPUT_BYTES:]
-    dropped = total - len(kept)
-    tail = kept.decode("utf-8", errors="replace")
-    marker = f"… ({dropped} bytes truncated; showing last {_MAX_OUTPUT_BYTES} of {total})\n"
+        return tail_bytes.decode("utf-8", errors="replace"), False
+    dropped = total - len(tail_bytes)
+    tail = tail_bytes.decode("utf-8", errors="replace")
+    marker = (
+        f"… ({dropped} bytes truncated; showing last {_MAX_OUTPUT_BYTES} "
+        f"of {total})\n"
+    )
     return marker + tail, True
+
+
+async def _stream_capped(
+    stream: asyncio.StreamReader | None, proc: Process
+) -> tuple[bytes, int, bool]:
+    """Read ``stream`` to EOF while keeping only the last ``_MAX_OUTPUT_BYTES``
+    in memory. If total bytes read for this stream crosses the hard ceiling,
+    fire ``_shutdown(proc)`` so the child cannot keep pumping gigabytes into
+    Python RSS.
+
+    Returns ``(tail_bytes, total_bytes, killed_at_hard_ceiling)``.
+
+    The tail buffer is bounded to ``_MAX_OUTPUT_BYTES`` + one chunk — we
+    trim after each append. This keeps a 10 GB output producer pinned at
+    ~30 KB of Python-side memory per stream, plus ripple through the OS
+    pipe buffer (usually 64 KB).
+    """
+    if stream is None:
+        return b"", 0, False
+    buf = bytearray()
+    total = 0
+    killed = False
+    while True:
+        try:
+            chunk = await stream.read(_STREAM_CHUNK)
+        except Exception:  # pragma: no cover - defensive; stream error
+            break
+        if not chunk:
+            break
+        total += len(chunk)
+        buf.extend(chunk)
+        if len(buf) > _MAX_OUTPUT_BYTES:
+            # Trim in-place to the tail window.
+            del buf[: len(buf) - _MAX_OUTPUT_BYTES]
+        if total >= _HARD_CEILING_BYTES and not killed:
+            killed = True
+            # Kill the producer; the stream will EOF shortly. Keep looping
+            # to drain any already-buffered bytes so the final tail is
+            # stable rather than abruptly chopped.
+            await _shutdown(proc)
+    return bytes(buf), total, killed
 
 
 async def _shutdown(proc: Process, grace: float = _SHUTDOWN_GRACE) -> None:
@@ -121,8 +170,10 @@ class Bash(BaseTool):
     name: str = "bash"
     description: str = (
         "Run a shell command with a timeout. Returns stdout, stderr, exit_code, "
-        "and truncated (True when stdout or stderr exceeded the per-stream byte cap; "
-        "truncation keeps the tail and prepends a marker noting the dropped byte count)."
+        "truncated (True when stdout or stderr exceeded the per-stream byte cap; "
+        "tail preserved, head replaced with a marker), and killed_at_hard_ceiling "
+        "(True when the child was terminated for dumping more than the per-stream "
+        "100 MB hard ceiling into Python memory)."
     )
     args_schema: type[BaseModel] = BashParams
     metadata: dict[str, Any] | None = tool_metadata(
@@ -149,32 +200,60 @@ class Bash(BaseTool):
         except OSError as exc:
             raise ToolError(f"failed to spawn subprocess: {exc}") from exc
 
+        # Stream both pipes concurrently with ring-buffer tails + per-stream
+        # hard-ceiling enforcement. This replaces proc.communicate(), which
+        # would buffer the entire output before trimming — for a runaway
+        # producer (`yes`, `cat /dev/zero`, pathological build output) that
+        # buffer is RSS-unbounded. Streaming caps Python memory at ~60 KB
+        # (2 × _MAX_OUTPUT_BYTES) regardless of how much the child emits.
+        stdout_task = asyncio.create_task(_stream_capped(proc.stdout, proc))
+        stderr_task = asyncio.create_task(_stream_capped(proc.stderr, proc))
+        # Hold the gather-future in a local so we can explicitly consume
+        # its exception on the error path. Without this, asyncio logs an
+        # "exception was never retrieved" warning when wait_for cancels it.
+        gather_fut = asyncio.gather(stdout_task, stderr_task)
+
+        async def _cleanup() -> None:
+            for t in (stdout_task, stderr_task):
+                if not t.done():
+                    t.cancel()
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await gather_fut
+
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
+            stdout_result, stderr_result = await asyncio.wait_for(
+                gather_fut, timeout=timeout
             )
         except TimeoutError as exc:
+            await _cleanup()
             await _shutdown(proc)
             await _drain_pipes(proc)
             raise ToolError(f"timeout after {timeout}s: {exc}") from exc
         except asyncio.CancelledError:
+            await _cleanup()
             await _shutdown(proc)
             await _drain_pipes(proc)
             raise
         except BaseException:
+            await _cleanup()
             await _shutdown(proc)
             await _drain_pipes(proc)
             raise
 
-        stdout_text = stdout_b.decode("utf-8", errors="replace")
-        stderr_text = stderr_b.decode("utf-8", errors="replace")
-        stdout, stdout_truncated = _cap_stream(stdout_text)
-        stderr, stderr_truncated = _cap_stream(stderr_text)
+        # Both streams have EOF'd — reap the process to capture returncode.
+        with contextlib.suppress(TimeoutError, Exception):
+            await asyncio.wait_for(proc.wait(), timeout=_REAP_TIMEOUT)
+
+        stdout_tail, stdout_total, stdout_killed = stdout_result
+        stderr_tail, stderr_total, stderr_killed = stderr_result
+        stdout, stdout_truncated = _format_streamed(stdout_tail, stdout_total)
+        stderr, stderr_truncated = _format_streamed(stderr_tail, stderr_total)
         return {
             "stdout": stdout,
             "stderr": stderr,
             "exit_code": proc.returncode,
             "truncated": stdout_truncated or stderr_truncated,
+            "killed_at_hard_ceiling": stdout_killed or stderr_killed,
         }
 
 

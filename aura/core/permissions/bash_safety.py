@@ -87,6 +87,7 @@ Reason = Literal[
     "cr_outside_double_quote",
     "malformed_with_separator",
     "cd_git_compound",
+    "command_substitution",
 ]
 
 
@@ -110,9 +111,16 @@ def check_bash_safety(command: str) -> BashSafetyViolation | None:
 
     Order (documented contract — tests depend on it):
       1. cr_outside_double_quote  — cheap, no tokenization needed
-      2. zsh_dangerous_command    — per-segment first-token scan
-      3. malformed_with_separator — shlex raises + separator outside quotes
-      4. cd_git_compound          — both tokens present in the flat tokenization
+      2. command_substitution     — ``$(...)`` / ``` `...` ``` / eval / ``-c``
+      3. zsh_dangerous_command    — per-segment first-token scan
+      4. malformed_with_separator — shlex raises + separator outside quotes
+      5. cd_git_compound          — both tokens present in the flat tokenization
+
+    Rule 2 precedes rule 3 because command substitution is the canonical
+    bypass of the zsh-builtin check: ``echo $(zmodload x)`` tokenizes with
+    ``$(zmodload`` as one token and ``x)`` as another, so the zsh rule
+    never sees ``zmodload`` as a first token — bash nonetheless expands
+    the substitution at runtime and executes it.
     """
     if not isinstance(command, str) or not command:
         return None
@@ -123,17 +131,22 @@ def check_bash_safety(command: str) -> BashSafetyViolation | None:
         if violation is not None:
             return violation
 
-        # 2. ZSH dangerous command (per segment).
+        # 2. Command substitution — bypass of all other static checks.
+        violation = _check_command_substitution(command)
+        if violation is not None:
+            return violation
+
+        # 3. ZSH dangerous command (per segment).
         violation = _check_zsh_dangerous(command)
         if violation is not None:
             return violation
 
-        # 3. Malformed + separator.
+        # 4. Malformed + separator.
         violation = _check_malformed_with_separator(command)
         if violation is not None:
             return violation
 
-        # 4. cd + git compound.
+        # 5. cd + git compound.
         violation = _check_cd_git_compound(command)
         if violation is not None:
             return violation
@@ -170,7 +183,45 @@ def _check_cr_outside_quotes(command: str) -> BashSafetyViolation | None:
 
 
 # ---------------------------------------------------------------------------
-# Rule 2 — zsh dangerous builtin as a segment's first token
+# Rule 2 — command substitution / eval / shell -c flag (bypass of static checks)
+# ---------------------------------------------------------------------------
+
+
+# Single-quote strip FIRST — bash does NOT substitute inside '...' literals,
+# so a literal "$(" there is harmless. Then scan the residual for the three
+# dynamic-exec patterns.
+_SINGLE_QUOTED = re.compile(r"'[^']*'")
+_DYNAMIC_EXEC = re.compile(
+    r"""
+    \$\(           |  # POSIX command substitution
+    `              |  # backtick substitution
+    (?<![\w-])(?:bash|sh|zsh)\s+-c(?:\s|$) |  # shell -c <cmd>
+    (?<![\w-])eval(?:\s|$)                    # eval as a free token
+    """,
+    re.VERBOSE,
+)
+
+
+def _check_command_substitution(command: str) -> BashSafetyViolation | None:
+    """Reject dynamic-execution constructs that evaluate arbitrary strings at
+    runtime: ``$(...)`` / backticks / ``(ba|z|)sh -c`` / ``eval``. Each is
+    a bypass vector — the outer command is innocent-looking; the inner
+    payload only materializes when bash expands it. Single-quoted regions
+    are stripped before scanning (bash disables substitution in ``'...'``)."""
+    residual = _SINGLE_QUOTED.sub("", command)
+    if _DYNAMIC_EXEC.search(residual):
+        return BashSafetyViolation(
+            reason="command_substitution",
+            detail=(
+                "command substitution ($(...), backticks, or -c flag) "
+                "bypasses static command checks"
+            ),
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Rule 3 — zsh dangerous builtin as a segment's first token
 # ---------------------------------------------------------------------------
 
 

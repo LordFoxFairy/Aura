@@ -225,6 +225,46 @@ async def test_bash_timeout_still_kills_subprocess() -> None:
             os.unlink(pid_path)
 
 
+async def test_bash_huge_output_hits_hard_ceiling() -> None:
+    """A command that would dump 200MB to stdout must be killed at the
+    hard ceiling — we must not let the full 200MB reach Python RSS.
+
+    Uses `yes | head -c 200000000` (200MB). Expected shape:
+      - ToolResult returned (no ToolError raised)
+      - truncated is True (output exceeds _MAX_OUTPUT_BYTES)
+      - killed_at_hard_ceiling is True (stream hit _HARD_CEILING_BYTES)
+      - stdout byte length bounded by the cap (+ tail-marker overhead)
+
+    Skip note: if this test is flaky on heavily-loaded CI (timing of the
+    hard-ceiling trip vs subprocess exit), raise the ceiling or split
+    the assertion into two cases; do NOT revert — the regression window
+    is explicitly the memory-blowup path.
+    """
+    # 200MB > 100MB hard ceiling, fits a 5-second timeout on a dev box.
+    out = await bash.ainvoke(
+        {"command": "yes y | head -c 200000000", "timeout": 30}
+    )
+    assert out["truncated"] is True
+    assert out["killed_at_hard_ceiling"] is True
+    # Stdout must be bounded; the cap marker adds a bounded preamble.
+    stdout_bytes = out["stdout"].encode("utf-8")
+    assert len(stdout_bytes) <= 30_000 + 200
+
+
+async def test_bash_below_hard_ceiling_not_killed() -> None:
+    """Output above the 30KB display cap but below the 100MB hard ceiling:
+    truncation marker appears, but the stream is NOT killed at the hard
+    ceiling and the process exits normally."""
+    out = await bash.ainvoke(
+        {"command": "yes y | head -c 100000", "timeout": 10}
+    )
+    assert out["truncated"] is True
+    assert out["killed_at_hard_ceiling"] is False
+    # head exits 0 after emitting N bytes; `yes` dies with SIGPIPE, but the
+    # pipeline exit status is `head`'s.
+    assert out["exit_code"] == 0
+
+
 async def test_bash_sigterm_race_cleaned_up_with_sigkill() -> None:
     """Child ignores SIGTERM — ladder must escalate to SIGKILL."""
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".pid") as pf:

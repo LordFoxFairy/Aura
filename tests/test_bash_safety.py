@@ -159,6 +159,64 @@ def test_cd_and_git_as_quoted_text_is_safe() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Command substitution / eval / -c flag — bypass of all other static checks
+# ---------------------------------------------------------------------------
+
+
+def test_command_substitution_blocks_dangerous_inner() -> None:
+    # shlex collapses `$(zmodload zsh/system)` into two tokens
+    # `$(zmodload` and `zsh/system)`, so the zsh rule never sees `zmodload`
+    # as the first token. The substitution rule closes this bypass.
+    v = check_bash_safety("echo $(zmodload zsh/system)")
+    assert isinstance(v, BashSafetyViolation)
+    assert v.reason == "command_substitution"
+
+
+def test_backtick_substitution_blocks() -> None:
+    v = check_bash_safety("echo `zmodload xyz`")
+    assert isinstance(v, BashSafetyViolation)
+    assert v.reason == "command_substitution"
+
+
+def test_bash_dash_c_flag_blocks() -> None:
+    v = check_bash_safety("bash -c 'zmodload x'")
+    assert isinstance(v, BashSafetyViolation)
+    assert v.reason == "command_substitution"
+
+
+def test_eval_first_token_blocks() -> None:
+    v = check_bash_safety("eval 'something dangerous'")
+    assert isinstance(v, BashSafetyViolation)
+    assert v.reason == "command_substitution"
+
+
+def test_single_quoted_dollar_paren_allowed() -> None:
+    # Single quotes disable substitution in bash — the literal `$(...)`
+    # never reaches a subshell, so it isn't an attack.
+    assert check_bash_safety("echo 'text with $(not-substituted)'") is None
+
+
+def test_double_quoted_dollar_paren_blocked() -> None:
+    # Double quotes DO substitute — `"$(zmodload x)"` IS an attack.
+    v = check_bash_safety('echo "dangerous $(zmodload x)"')
+    assert isinstance(v, BashSafetyViolation)
+    assert v.reason == "command_substitution"
+
+
+def test_normal_command_still_passes_after_substitution_rule() -> None:
+    # Regression guard — the new rule must not flag benign commands.
+    assert check_bash_safety("ls -la") is None
+
+
+def test_order_cr_wins_over_substitution() -> None:
+    # Command has BOTH an out-of-quote CR AND command substitution.
+    # CR is checked first → reason must be cr_outside_double_quote.
+    v = check_bash_safety("echo $(ls)\rzmodload x")
+    assert isinstance(v, BashSafetyViolation)
+    assert v.reason == "cr_outside_double_quote"
+
+
+# ---------------------------------------------------------------------------
 # Order of checks — documented contract
 # ---------------------------------------------------------------------------
 

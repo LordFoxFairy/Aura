@@ -27,6 +27,11 @@ from aura.core.permissions.rule import Rule
 from aura.core.permissions.rule_hint import derive_rule_hint
 from aura.core.persistence import journal
 
+# Visual cap on prompt preview text so a huge ``bash`` command (or similar)
+# doesn't blow out the radiolist dialog layout. Visual only — the tool still
+# receives the full args.
+_PREVIEW_MAX_CHARS = 200
+
 
 def _tag(tool: BaseTool) -> str:
     """Classification tag for the title line (spec §8.1).
@@ -44,7 +49,13 @@ def _tag(tool: BaseTool) -> str:
 
 
 def _preview(tool: BaseTool, args: dict[str, Any]) -> str:
-    """One-line preview of this call's args; falls back to the tool name."""
+    """One-line preview of this call's args; falls back to the tool name.
+
+    Preview output is capped at ``_PREVIEW_MAX_CHARS`` so a tool returning a
+    huge string (e.g. ``bash`` with a 5000-char command) doesn't blow out the
+    radiolist dialog layout. The cap is visual only — the full args still
+    reach the tool; this just keeps the prompt readable.
+    """
     preview_fn = (tool.metadata or {}).get("args_preview")
     if callable(preview_fn):
         try:
@@ -52,6 +63,8 @@ def _preview(tool: BaseTool, args: dict[str, Any]) -> str:
         except Exception:  # noqa: BLE001 — preview must never break the prompt
             return tool.name
         if isinstance(out, str) and out:
+            if len(out) > _PREVIEW_MAX_CHARS:
+                return out[: _PREVIEW_MAX_CHARS - 1] + "\u2026"
             return out
     return tool.name
 

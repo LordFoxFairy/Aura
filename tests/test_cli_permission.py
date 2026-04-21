@@ -273,6 +273,31 @@ async def test_missing_args_preview_falls_back_to_tool_name(
     assert "bash" in combined
 
 
+async def test_long_preview_is_truncated_with_ellipsis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A tool whose args_preview returns a huge string must NOT blow out the
+    # radiolist layout. The CLI asker caps the preview visually.
+    factory, captured = _stub_dialog(3)
+    monkeypatch.setattr("aura.cli.permission.radiolist_dialog", factory)
+    big_cmd = "x" * 500
+    tool = build_tool(
+        name="bash",
+        description="bash",
+        args_schema=_P,
+        func=_noop,
+        args_preview=lambda args: f"command: {args.get('command', '')}",
+    )
+    asker = make_cli_asker()
+    await asker(tool=tool, args={"command": big_cmd}, rule_hint=_HINT)
+    text = _text_of(captured)
+    # Truncated: ends with ellipsis, and total visible body is bounded.
+    assert "\u2026" in text
+    # The preview line should be <= 200 chars including the ellipsis.
+    first_line = text.splitlines()[0] if text else ""
+    assert len(first_line) <= 200
+
+
 async def test_destructive_tag_in_text(monkeypatch: pytest.MonkeyPatch) -> None:
     factory, captured = _stub_dialog(3)
     monkeypatch.setattr("aura.cli.permission.radiolist_dialog", factory)

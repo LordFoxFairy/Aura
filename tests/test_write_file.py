@@ -43,19 +43,47 @@ async def test_write_file_empty_content(tmp_path: Path) -> None:
     assert target.stat().st_size == 0
 
 
-async def test_write_file_missing_parent_dir_fails(tmp_path: Path) -> None:
-    target = tmp_path / "nonexistent_dir" / "file.txt"
-    with pytest.raises(ToolError, match="parent directory"):
-        await write_file.ainvoke({"path": str(target), "content": "data"})
-    assert not target.exists()
-
-
-async def test_write_file_does_not_auto_create_parent(tmp_path: Path) -> None:
+async def test_write_file_creates_missing_parent_dir(tmp_path: Path) -> None:
     missing_parent = tmp_path / "nonexistent_dir"
     target = missing_parent / "file.txt"
-    with pytest.raises(ToolError):
-        await write_file.ainvoke({"path": str(target), "content": "data"})
-    assert not missing_parent.exists()
+    out = await write_file.ainvoke({"path": str(target), "content": "data"})
+    assert out == {"written": 4}
+    assert missing_parent.is_dir()
+    assert target.read_text(encoding="utf-8") == "data"
+
+
+async def test_write_file_creates_nested_missing_parents(tmp_path: Path) -> None:
+    target = tmp_path / "a" / "b" / "c" / "deep.txt"
+    out = await write_file.ainvoke({"path": str(target), "content": "deep"})
+    assert out == {"written": 4}
+    assert (tmp_path / "a").is_dir()
+    assert (tmp_path / "a" / "b").is_dir()
+    assert (tmp_path / "a" / "b" / "c").is_dir()
+    assert target.read_text(encoding="utf-8") == "deep"
+
+
+async def test_write_file_auto_create_idempotent_on_existing_parent(tmp_path: Path) -> None:
+    target = tmp_path / "file.txt"
+    out = await write_file.ainvoke({"path": str(target), "content": "ok"})
+    assert out == {"written": 2}
+    assert target.read_text(encoding="utf-8") == "ok"
+
+
+async def test_write_file_mkdir_permission_error_reported(tmp_path: Path) -> None:
+    import os
+    import sys
+
+    if sys.platform == "win32" or os.geteuid() == 0:  # pragma: no cover
+        pytest.skip("chmod-based permission test not reliable as root or on Windows")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o500)
+    try:
+        target = locked / "newdir" / "file.txt"
+        with pytest.raises(ToolError, match="cannot create parent dir"):
+            await write_file.ainvoke({"path": str(target), "content": "data"})
+    finally:
+        locked.chmod(0o700)
 
 
 async def test_write_file_path_is_directory_fails(tmp_path: Path) -> None:

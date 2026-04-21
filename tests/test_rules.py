@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
+from aura.core import journal as journal_module
 from aura.core.memory.rules import (
     Rule,
     RulesBundle,
@@ -236,6 +238,63 @@ class TestDiscovery:
         assert "bad.md" not in names_u
         assert names_c == {"ok.md"}
 
+    def test_yaml_parse_failure_emits_journal_event(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = cwd / ".aura" / "rules"
+        rules_dir.mkdir(parents=True)
+        bad_md = rules_dir / "bad.md"
+        bad_md.write_text("---\npaths: [broken\n---\nbody\n")
+
+        log = tmp_path / "events.jsonl"
+        journal_module.configure(log)
+        try:
+            load_rules(cwd)
+        finally:
+            journal_module.reset()
+
+        events = [
+            json.loads(line)
+            for line in log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        matching = [e for e in events if e["event"] == "rule_yaml_parse_failed"]
+        assert len(matching) == 1, f"expected 1 rule_yaml_parse_failed, got {events}"
+        ev = matching[0]
+        assert ev["path"] == str(bad_md.resolve()) or ev["path"] == str(bad_md)
+        assert isinstance(ev["error"], str) and ev["error"]
+
+    def test_invalid_paths_type_emits_journal_event(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = cwd / ".aura" / "rules"
+        rules_dir.mkdir(parents=True)
+        rule_md = rules_dir / "r.md"
+        # `paths: 42` — int is not a supported type; _extract_globs returns _SKIP.
+        rule_md.write_text("---\npaths: 42\n---\nbody\n")
+
+        log = tmp_path / "events.jsonl"
+        journal_module.configure(log)
+        try:
+            load_rules(cwd)
+        finally:
+            journal_module.reset()
+
+        events = [
+            json.loads(line)
+            for line in log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        matching = [e for e in events if e["event"] == "rule_paths_invalid_type"]
+        assert len(matching) == 1, f"expected 1 rule_paths_invalid_type, got {events}"
+        ev = matching[0]
+        assert ev["path"] == str(rule_md.resolve()) or ev["path"] == str(rule_md)
+        assert ev["actual_type"] == "int"
+
 
 def _make_rule(source: Path, base_dir: Path, globs: tuple[str, ...]) -> Rule:
     return Rule(
@@ -335,6 +394,36 @@ class TestMatching:
         assert [r.source_path for r in result] == sorted(
             [rf_a.resolve(), rf_z.resolve()]
         )
+
+    def test_malformed_glob_emits_journal_event(self, tmp_path: Path) -> None:
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        target = proj / "foo.py"
+        target.write_text("")
+        rule_file = proj / ".aura" / "rules" / "bad.md"
+        rule_file.parent.mkdir(parents=True)
+        rule_file.write_text("body")
+        rule = _make_rule(rule_file, proj, ("[z-a]",))
+        bundle = RulesBundle(unconditional=[], conditional=[rule])
+
+        log = tmp_path / "events.jsonl"
+        journal_module.configure(log)
+        try:
+            match(bundle, target)
+        finally:
+            journal_module.reset()
+
+        events = [
+            json.loads(line)
+            for line in log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        matching = [e for e in events if e["event"] == "rule_glob_compile_failed"]
+        assert len(matching) == 1, f"expected 1 rule_glob_compile_failed, got {events}"
+        ev = matching[0]
+        assert ev["path"] == str(rule.source_path)
+        assert ev["glob"] == "[z-a]"
+        assert isinstance(ev["error"], str) and ev["error"]
 
 
 class TestCache:

@@ -155,10 +155,25 @@ def _build_rule(md_path: Path, *, base_dir: Path) -> Rule | None:
     else:
         try:
             parsed = yaml.safe_load(frontmatter_text)
-        except yaml.YAMLError:
+        except yaml.YAMLError as exc:
+            from aura.core import journal
+
+            journal.write(
+                "rule_yaml_parse_failed", path=str(md_path), error=str(exc)
+            )
             return None  # 恶意 YAML → 静默跳过整条规则
         globs_or_skip = _extract_globs(parsed)
         if globs_or_skip is _SKIP:
+            from aura.core import journal
+
+            actual_type = type(parsed["paths"]).__name__ if isinstance(
+                parsed, dict
+            ) and "paths" in parsed else type(parsed).__name__
+            journal.write(
+                "rule_paths_invalid_type",
+                path=str(md_path),
+                actual_type=actual_type,
+            )
             return None  # `paths` 是未知类型 → 跳过
         globs = globs_or_skip  # type: ignore[assignment]
 
@@ -273,7 +288,15 @@ def _rule_matches_path(rule: Rule, resolved_path: Path) -> bool:
             spec = pathspec.PathSpec.from_lines("gitignore", [glob])
             if spec.match_file(match_target):
                 return True
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            from aura.core import journal
+
+            journal.write(
+                "rule_glob_compile_failed",
+                path=str(rule.source_path),
+                glob=glob,
+                error=str(exc),
+            )
             continue
     return False
 

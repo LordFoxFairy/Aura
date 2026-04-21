@@ -77,7 +77,22 @@ async def run_repl_async(
                 _console.print(result.text)
             continue
 
-        await _run_turn(agent, line, renderer, _console)
+        try:
+            await _run_turn(agent, line, renderer, _console)
+        except Exception as exc:  # noqa: BLE001 — REPL resilience
+            # Don't catch BaseException: KeyboardInterrupt/SystemExit/
+            # CancelledError must still propagate up to main() so the
+            # whole process can exit cleanly. But a network hiccup, an
+            # LLM client bug, or a provider 500 should NOT tear down the
+            # user's interactive session — surface the error, journal it,
+            # loop back to the prompt.
+            journal.write(
+                "turn_failed",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+            _console.print(
+                f"[red]turn failed: {type(exc).__name__}: {exc}[/red]"
+            )
 
         if verbose:
             _print_verbose_summary(agent, _console)

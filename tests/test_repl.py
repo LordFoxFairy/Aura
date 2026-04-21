@@ -182,3 +182,38 @@ async def test_non_bypass_mode_uses_plain_prompt(tmp_path: Path) -> None:
     assert seen_prompts
     assert "bypass" not in seen_prompts[0]
     agent.close()
+
+
+async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:
+    # Real resilience: if Agent.astream raises (network error, client bug,
+    # provider 500), the REPL must print an error and keep looping, NOT
+    # crash the interactive session with a traceback.
+    class _ExplodingModel:
+        async def ainvoke(self, *a: object, **kw: object) -> object:
+            raise RuntimeError("network went sideways")
+        def bind_tools(self, tools: list[object]) -> _ExplodingModel:
+            return self
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+    })
+    agent = Agent(
+        config=cfg,
+        model=_ExplodingModel(),  # type: ignore[arg-type]
+        storage=SessionStorage(tmp_path / "db"),
+    )
+    console, buf = _capture_console()
+
+    # Two lines: the first triggers the exploding model; the second /exit.
+    # If the REPL is resilient, both get processed and we exit cleanly.
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["hello", "/exit"]),
+        console=console,
+    )
+    out = buf.getvalue()
+    assert "turn failed" in out
+    assert "network went sideways" in out
+    agent.close()

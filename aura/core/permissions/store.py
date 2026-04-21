@@ -222,6 +222,13 @@ def save_rule(
             f"scope must be 'project' or 'local', got {scope!r}",
         )
     _write_rule_to_file(settings, rule)
+    # Side-effect: a project-scope save creates ``.aura/`` on first run,
+    # which means ``ensure_local_settings`` (run once at CLI startup) has
+    # already no-op'd. Drop the sibling local template in now so the user
+    # discovers the machine-local file on THIS run, not the next one.
+    # Idempotent — no-op if settings.local.json already exists.
+    if scope == "project":
+        ensure_local_settings(project_root)
 
 
 def ensure_local_settings(project_root: Path) -> tuple[Path, bool]:

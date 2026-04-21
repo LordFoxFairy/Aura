@@ -198,12 +198,23 @@ def test_load_ruleset_merges_project_and_local_rules(tmp_path: Path) -> None:
     assert rs.rules[1].tool == "bash"
 
 
-def test_save_rule_writes_to_project_not_local_by_default(tmp_path: Path) -> None:
-    # save_rule is the default "remember for this project" path — it must
-    # never silently pollute settings.local.json.
+def test_save_rule_default_scope_writes_the_rule_into_settings_json(
+    tmp_path: Path,
+) -> None:
+    # save_rule is the default "remember for this project" path: the RULE
+    # goes into settings.json, never settings.local.json. (The local file
+    # may also get auto-created as an empty template alongside — that's
+    # the "first-run discoverability" side-effect, covered separately.)
     save_rule(tmp_path, Rule(tool="bash", content="npm test"))
-    assert (tmp_path / ".aura" / "settings.json").exists()
-    assert not (tmp_path / ".aura" / "settings.local.json").exists()
+    project_file = tmp_path / ".aura" / "settings.json"
+    assert project_file.is_file()
+    content = json.loads(project_file.read_text())
+    assert content["permissions"]["allow"] == ["bash(npm test)"]
+    # The local file, if present, is the empty template — no rules in it.
+    local_file = tmp_path / ".aura" / "settings.local.json"
+    if local_file.exists():
+        local = json.loads(local_file.read_text())
+        assert local["permissions"]["allow"] == []
 
 
 def test_save_rule_scope_local_writes_to_settings_local_json(tmp_path: Path) -> None:
@@ -221,7 +232,12 @@ def test_save_rule_scope_project_writes_to_settings_json(tmp_path: Path) -> None
     rule = Rule(tool="bash", content="npm test")
     save_rule(tmp_path, rule, scope="project")
     assert (tmp_path / ".aura" / "settings.json").is_file()
-    assert not (tmp_path / ".aura" / "settings.local.json").exists()
+    # Post-2026-04-21: project-scope save also drops the empty local template
+    # for first-run discoverability. The rule is NOT in the local file.
+    local_file = tmp_path / ".aura" / "settings.local.json"
+    if local_file.exists():
+        local = json.loads(local_file.read_text())
+        assert local["permissions"]["allow"] == []
     cfg = load(tmp_path)
     assert cfg.allow == [rule.to_string()]
 
@@ -272,6 +288,29 @@ def test_ensure_local_creates_file_with_template(tmp_path: Path) -> None:
     # keys round-trip).
     assert "//" in data
     assert "bash(" in data["//"]  # Content includes an example rule
+
+
+def test_save_rule_project_scope_also_creates_local_template(
+    tmp_path: Path,
+) -> None:
+    # First-run path: user picks "always in project" → save_rule creates
+    # ``.aura/`` AND drops the local template alongside. If we waited for
+    # the next CLI startup to run ``ensure_local_settings``, the user would
+    # only see ``settings.local.json`` the second time they ran aura.
+    assert not (tmp_path / ".aura").exists()
+    save_rule(tmp_path, Rule(tool="bash", content="npm test"), scope="project")
+    assert (tmp_path / ".aura" / "settings.json").is_file()
+    assert (tmp_path / ".aura" / "settings.local.json").is_file()
+
+
+def test_save_rule_local_scope_does_not_disturb_project_file(
+    tmp_path: Path,
+) -> None:
+    # Saving to local scope should NEVER create/touch settings.json.
+    assert not (tmp_path / ".aura").exists()
+    save_rule(tmp_path, Rule(tool="bash", content="ssh prod"), scope="local")
+    assert (tmp_path / ".aura" / "settings.local.json").is_file()
+    assert not (tmp_path / ".aura" / "settings.json").exists()
 
 
 def test_ensure_local_template_roundtrips_through_save_rule(tmp_path: Path) -> None:

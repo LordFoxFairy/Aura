@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -32,9 +32,15 @@ class ToolCallCompleted:
 
 @dataclass(frozen=True)
 class Final:
-    """Final concatenated text response from the agent loop."""
+    """Final concatenated text response from the agent loop.
+
+    ``reason`` marks WHY the loop stopped — ``"natural"`` (model emitted no
+    more tool_calls) or ``"max_turns"`` (the loop hit its turn cap). The CLI
+    dims a "stopped: max turns reached" line when reason != natural.
+    """
 
     message: str
+    reason: Literal["natural", "max_turns"] = "natural"
 
 
 @dataclass(frozen=True)

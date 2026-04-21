@@ -115,11 +115,16 @@ class AgentLoop:
         context: Context,
         hooks: HookChain | None = None,
         state: LoopState | None = None,
+        max_turns: int | None = 50,
     ) -> None:
         self._registry = registry
         self._hooks = hooks or HookChain()
         self._state = state or LoopState()
         self._context = context
+        # Mirror claude-code query.ts:1705. Default 50 is Aura policy: claude-code
+        # leaves this to the caller, we ship a sane default to stop runaway
+        # tool-call loops. Explicit None disables the cap (no-cap semantics).
+        self._max_turns = max_turns
         # bind_tools 只在构造时调一次：schema 在 registry 固定后不变，多 turn 共享同一 bound model。
         # 空 registry 跳过 bind_tools —— 某些 provider 对 tools=[] 行为不一致，直接不绑更稳。
         self._bound = model.bind_tools(registry.tools()) if len(registry) > 0 else model
@@ -127,6 +132,10 @@ class AgentLoop:
     @property
     def state(self) -> LoopState:
         return self._state
+
+    @property
+    def max_turns(self) -> int | None:
+        return self._max_turns
 
     async def run_turn(
         self, *, user_prompt: str, history: list[BaseMessage]
@@ -152,6 +161,26 @@ class AgentLoop:
                 ended_with="tool_loop",
                 tool_count=len(ai.tool_calls),
             )
+
+            # max_turns cap — mirrors claude-code query.ts:1705. Check runs
+            # AFTER the tool batch is gathered (not mid-batch) and BEFORE the
+            # next model invoke. Natural stops (no tool_calls) hit the branch
+            # above and never reach here — Final.reason stays "natural" there.
+            if (
+                self._max_turns is not None
+                and self._state.turn_count >= self._max_turns
+            ):
+                journal.write(
+                    "turn_end",
+                    turn=self._state.turn_count,
+                    ended_with="max_turns_reached",
+                    max_turns=self._max_turns,
+                )
+                yield Final(
+                    message=f"max turns reached ({self._max_turns})",
+                    reason="max_turns",
+                )
+                return
 
     async def _invoke_model(self, history: list[BaseMessage]) -> AIMessage:
         # turn_count 先于 pre_model hook 递增，hook 看到的是"即将开始的第 N 轮"。

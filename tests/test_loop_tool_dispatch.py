@@ -14,6 +14,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.config.schema import AuraConfig
+from aura.core import journal as journal_module
 from aura.core.agent import Agent
 from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
@@ -186,3 +187,122 @@ async def test_parallel_safe_tools_run_concurrently(tmp_path: Path) -> None:
     agent.close()
 
     assert elapsed < 0.35, f"expected parallel <0.35s, got {elapsed:.2f}s"
+
+
+def _make_tool_call_turn(call_id: str) -> FakeTurn:
+    return FakeTurn(message=AIMessage(
+        content="",
+        tool_calls=[{"name": "echo", "args": {"msg": "hi"}, "id": call_id}],
+    ))
+
+
+@pytest.mark.asyncio
+async def test_max_turns_caps_runaway_tool_loop(tmp_path: Path) -> None:
+    # A buggy model that always emits a tool_call must not infinite-loop —
+    # max_turns=3 means we execute 3 tool batches then stop with reason="max_turns".
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        turns = [_make_tool_call_turn(f"tc_{i}") for i in range(10)]
+        model = FakeChatModel(turns=turns)
+        registry = ToolRegistry([_echo_tool])
+        loop = AgentLoop(
+            model=model, registry=registry, context=make_minimal_context(),
+            hooks=HookChain(), max_turns=3,
+        )
+
+        history: list[BaseMessage] = []
+        events: list[AgentEvent] = []
+        async for ev in loop.run_turn(user_prompt="go", history=history):
+            events.append(ev)
+
+        completed = [e for e in events if isinstance(e, ToolCallCompleted)]
+        assert len(completed) == 3, f"expected 3 ToolCallCompleted, got {len(completed)}"
+
+        finals = [e for e in events if isinstance(e, Final)]
+        assert len(finals) == 1
+        assert finals[0].reason == "max_turns"
+
+        journal_events = [json.loads(line) for line in log.read_text().splitlines()]
+        turn_ends = [e for e in journal_events if e["event"] == "turn_end"]
+        assert any(e.get("ended_with") == "max_turns_reached" for e in turn_ends), \
+            f"expected ended_with=max_turns_reached, got {[e.get('ended_with') for e in turn_ends]}"
+    finally:
+        journal_module.reset()
+
+
+@pytest.mark.asyncio
+async def test_max_turns_none_disables_cap() -> None:
+    # max_turns=None mirrors claude-code's "no value = no cap" semantics —
+    # the loop must run to the model's natural stop regardless of depth.
+    turns: list[FakeTurn] = [_make_tool_call_turn(f"tc_{i}") for i in range(60)]
+    turns.append(FakeTurn(message=AIMessage(content="done")))
+    model = FakeChatModel(turns=turns)
+    registry = ToolRegistry([_echo_tool])
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(),
+        hooks=HookChain(), max_turns=None,
+    )
+
+    history: list[BaseMessage] = []
+    events: list[AgentEvent] = []
+    async for ev in loop.run_turn(user_prompt="go", history=history):
+        events.append(ev)
+
+    completed = [e for e in events if isinstance(e, ToolCallCompleted)]
+    assert len(completed) == 60
+
+    finals = [e for e in events if isinstance(e, Final)]
+    assert len(finals) == 1
+    assert finals[0].reason == "natural"
+    assert finals[0].message == "done"
+
+
+def test_max_turns_default_is_50() -> None:
+    # Aura policy: when claude-code leaves max_turns to the caller, we ship
+    # a sane default. 50 is deep enough for real multi-turn work, low enough
+    # to stop runaway loops.
+    model = FakeChatModel(turns=[])
+    loop = AgentLoop(
+        model=model, registry=ToolRegistry(()), context=make_minimal_context(),
+        hooks=HookChain(),
+    )
+    assert loop.max_turns == 50
+
+
+@pytest.mark.asyncio
+async def test_max_turns_checked_after_tool_batch_not_mid_batch() -> None:
+    # Mirror claude-code query.ts:1705 — cap fires AFTER tool results are
+    # gathered, not mid-batch. With 3 tool_calls in a single turn and cap=1,
+    # all 3 must still execute; only the NEXT turn is blocked.
+    tool_calls = [
+        {"name": "echo", "args": {"msg": "a"}, "id": "tc_1"},
+        {"name": "echo", "args": {"msg": "b"}, "id": "tc_2"},
+        {"name": "echo", "args": {"msg": "c"}, "id": "tc_3"},
+    ]
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(content="", tool_calls=tool_calls)),
+        FakeTurn(message=AIMessage(content="should-not-reach")),
+    ])
+    registry = ToolRegistry([_echo_tool])
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(),
+        hooks=HookChain(), max_turns=1,
+    )
+
+    history: list[BaseMessage] = []
+    events: list[AgentEvent] = []
+    async for ev in loop.run_turn(user_prompt="go", history=history):
+        events.append(ev)
+
+    completed = [e for e in events if isinstance(e, ToolCallCompleted)]
+    assert len(completed) == 3, f"all 3 tool_calls must execute; got {len(completed)}"
+    assert [e.name for e in completed] == ["echo", "echo", "echo"]
+
+    # Only the first turn was invoked — the second (would-be natural-stop) turn never fires.
+    assert model.ainvoke_calls == 1
+
+    finals = [e for e in events if isinstance(e, Final)]
+    assert len(finals) == 1
+    assert finals[0].reason == "max_turns"

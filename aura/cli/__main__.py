@@ -138,10 +138,14 @@ def main() -> int:
             disk_rules = store.load_ruleset(project_root)
         except AuraConfigError as exc:
             return _fail_startup(console, exc)
-        # Built-in defaults come first so ``read_file`` / ``grep`` / ``glob``
-        # auto-allow via rule match without the user having to type them;
-        # user rules from disk are appended. First-match semantics hold.
-        ruleset = RuleSet(rules=DEFAULT_ALLOW_RULES + disk_rules.rules)
+        # User rules first, built-in defaults last. Both are allow-only so
+        # the DECISION is the same regardless of order — what changes is
+        # which rule gets reported in the ``permission_decision`` journal
+        # event. A user who wrote ``"read_file(/tmp/specific)"`` in their
+        # settings.json deserves to see THEIR rule in the audit, not a
+        # generic default tool-wide. Defaults act as the backstop when no
+        # user rule matches.
+        ruleset = RuleSet(rules=disk_rules.rules + DEFAULT_ALLOW_RULES)
         mode = _resolve_mode(args, config)
         if mode == "bypass":
             print_bypass_banner(console)

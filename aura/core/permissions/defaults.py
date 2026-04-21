@@ -16,15 +16,17 @@ auto-allowed because the safety policy only fired on destructive tools.
 The fix is structural, not cosmetic: the decision order collapses back to
 ``bypass → safety → rules → ask``, and the friction-reduction role of the
 old step 3 moves here — into a tuple of built-in allow-rules composed with
-user rules at agent startup (``DEFAULT_ALLOW_RULES + disk_rules.rules``).
+user rules at agent startup as ``RuleSet(rules=disk_rules.rules + DEFAULT_ALLOW_RULES)``
+— user rules first so their audit entry wins when both match; defaults
+act as the backstop.
 
 What it gives us
 ----------------
 
 - **Composable.** A user can add their own rules in
-  ``.aura/settings.json``; built-in defaults are just prepended. Same type
-  (``Rule``), same matching semantics (``RuleSet.matches``), same journal
-  reason (``rule_allow``).
+  ``.aura/settings.json``; built-in defaults are appended at startup. Same
+  type (``Rule``), same matching semantics (``RuleSet.matches``), same
+  journal reason (``rule_allow``).
 - **Visible.** The journal event for a default-allowed tool records the
   matched rule string (``read_file``), not a magic reason like
   ``read_only``. Auditors see exactly which rule fired.

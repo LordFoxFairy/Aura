@@ -568,3 +568,38 @@ async def test_every_terminal_decision_emits_permission_decision(
     assert fields["tool"] == "writer"
     assert fields["mode"] == "default"
     assert fields["rule"] is None
+
+
+async def test_user_rule_wins_audit_over_default_when_both_match(
+    journal_events: list[tuple[str, dict[str, Any]]],
+) -> None:
+    """If a user-supplied specific rule and a generic default rule could
+    both match, RuleSet iterates in tuple order → first-match wins. The
+    CLI composes ``disk_rules + defaults`` (user rules first) so the
+    user's explicit intent is what lands in the audit trail."""
+    from aura.core.permissions.matchers import path_prefix_on
+    # Simulate the CLI's composition: user rule first, default tool-wide last.
+    user_rule = Rule(tool="read_file", content="/tmp/specific")
+    default_rule = Rule(tool="read_file", content=None)
+    # _tool() with a path_prefix_on matcher so the user's pattern rule can fire.
+    read_tool = _tool("read_file",
+                      is_read_only=True,
+                      rule_matcher=path_prefix_on("path"),
+                      args_schema=_PathArgs)
+    spy = _SpyAsker()
+    hook = make_permission_hook(
+        asker=spy,
+        session=SessionRuleSet(),
+        rules=RuleSet(rules=(user_rule, default_rule)),  # user first
+        project_root=Path("/tmp"),
+    )
+    result = await hook(
+        tool=read_tool,
+        args={"path": "/tmp/specific/foo.txt"},
+        state=LoopState(),
+    )
+    assert result is None  # allowed
+    decision_event = next(e for e in journal_events if e[0] == "permission_decision")
+    # The USER's specific rule should be reported — not the generic default.
+    assert decision_event[1]["rule"] == user_rule.to_string()
+    assert spy.calls == []

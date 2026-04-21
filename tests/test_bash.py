@@ -73,3 +73,55 @@ def test_bash_metadata_includes_matcher_and_preview() -> None:
     preview = meta.get("args_preview")
     assert callable(preview)
     assert preview({"command": "ls"}) == "command: ls"
+
+
+async def test_bash_stdout_capped_at_30k() -> None:
+    # Produce 50_000 bytes of 'x' on stdout ending with a recognizable tail.
+    out = await bash.ainvoke(
+        {"command": "printf 'x%.0s' $(seq 1 49990); printf 'TAILMARKER'"}
+    )
+    stdout_bytes = out["stdout"].encode("utf-8")
+    # The marker itself adds a bounded number of bytes; 200 is generous.
+    assert len(stdout_bytes) <= 30_000 + 200
+    assert out["stdout"].startswith("… (")
+    assert out["truncated"] is True
+    # Tail preserved: the final sentinel (well under 1000 bytes from end) must remain.
+    assert "TAILMARKER" in out["stdout"]
+
+
+async def test_bash_stderr_capped_independently() -> None:
+    out = await bash.ainvoke(
+        {
+            "command": (
+                "printf 'y%.0s' $(seq 1 49990) 1>&2; printf 'ERRTAIL' 1>&2"
+            )
+        }
+    )
+    stderr_bytes = out["stderr"].encode("utf-8")
+    assert len(stderr_bytes) <= 30_000 + 200
+    assert out["stderr"].startswith("… (")
+    assert out["truncated"] is True
+    assert out["stdout"] == ""
+    assert "ERRTAIL" in out["stderr"]
+
+
+async def test_bash_small_output_not_truncated() -> None:
+    out = await bash.ainvoke({"command": "echo hello"})
+    assert out["truncated"] is False
+    assert "… (" not in out["stdout"]
+
+
+async def test_bash_exactly_at_limit_not_truncated() -> None:
+    # Exactly 30_000 bytes of 'x' (no trailing newline).
+    out = await bash.ainvoke({"command": "printf 'x%.0s' $(seq 1 30000)"})
+    assert len(out["stdout"].encode("utf-8")) == 30_000
+    assert out["truncated"] is False
+    assert not out["stdout"].startswith("… (")
+
+
+async def test_bash_tail_preserved_in_truncation() -> None:
+    out = await bash.ainvoke(
+        {"command": "printf 'x%.0s' $(seq 1 50000); echo SENTINEL"}
+    )
+    assert out["truncated"] is True
+    assert "SENTINEL" in out["stdout"]

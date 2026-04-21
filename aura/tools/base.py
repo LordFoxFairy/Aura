@@ -33,6 +33,19 @@ def build_tool(
     rule_matcher: ToolRuleMatcher | None = None,
     args_preview: ToolArgsPreview | None = None,
 ) -> BaseTool:
+    """TEST-ONLY factory for one-off ``StructuredTool`` instances.
+
+    Production tools MUST subclass ``BaseTool`` directly and set
+    ``metadata=tool_metadata(...)``. This factory exists purely as syntactic
+    sugar for tests that need to spin up a minimal tool with specific
+    capability flags — e.g. hook-level tests that care about the
+    ``is_destructive`` bit but not about a real implementation body.
+
+    Using ``build_tool`` outside ``tests/`` is a code smell: production tools
+    benefit from subclass-scoped type checking, clearer stack traces, and
+    the ability to override lifecycle hooks. If you find yourself reaching
+    for ``build_tool`` in ``aura/``, promote the tool to its own subclass.
+    """
     return StructuredTool.from_function(
         func=func,
         coroutine=coroutine,

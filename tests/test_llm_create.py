@@ -272,3 +272,31 @@ def test_create_resolved_fields_win_over_params(
     kw = _stub_kwargs(model)
     assert kw["model"] == "gpt-4o-mini"
     assert kw["base_url"] == "https://good.example"
+
+
+# ---------------------------------------------------------------------------
+# Protocol-table invariant — prevent silent drift between the runtime
+# _PROTOCOLS dict in aura/core/llm.py and the static Literal in
+# aura/config/schema.py::ProviderConfig.protocol. Adding a provider to ONE
+# without the other leaves either unreachable code or a pydantic-rejected
+# config; either way the drift is loud, not silent — but having the two
+# places out of sync is itself a smell, so this test enforces parity.
+# ---------------------------------------------------------------------------
+
+
+def test_protocols_dict_matches_provider_literal() -> None:
+    from typing import get_args
+
+    from aura.config.schema import ProviderConfig
+    from aura.core.llm import _PROTOCOLS
+
+    # Pydantic's Literal annotation is accessible via the model's field info.
+    protocol_field = ProviderConfig.model_fields["protocol"]
+    literal_args = set(get_args(protocol_field.annotation))
+
+    assert set(_PROTOCOLS.keys()) == literal_args, (
+        f"_PROTOCOLS keys {set(_PROTOCOLS.keys())} drifted from "
+        f"ProviderConfig.protocol Literal {literal_args}. Adding a provider "
+        "requires updating BOTH aura/core/llm.py::_PROTOCOLS AND "
+        "aura/config/schema.py::ProviderConfig.protocol."
+    )

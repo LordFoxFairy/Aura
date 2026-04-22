@@ -27,6 +27,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from aura.core.memory import project_memory
 from aura.core.memory.rules import Rule, RulesBundle
 from aura.core.memory.rules import match as match_rules
+from aura.core.skills.types import Skill
 from aura.schemas.todos import TodoItem
 
 _AURA_MD = "AURA.md"
@@ -57,6 +58,7 @@ class Context:
         system_prompt: str,
         primary_memory: str,
         rules: RulesBundle,
+        skills: list[Skill] | None = None,
         todos_provider: Callable[[], list[TodoItem]] | None = None,
     ) -> None:
         self._cwd = cwd.resolve()
@@ -67,6 +69,15 @@ class Context:
         self._nested_fragments: list[NestedFragment] = []
         self._matched_rule_paths: set[Path] = set()
         self._matched_rules: list[Rule] = []
+        # Skills are static for the session: the available list comes in at
+        # construction (rendered as <skills-available> on every build). The
+        # invoked list grows append-only via record_skill_invocation and
+        # dedups by source_path — mirrors _matched_rules. /clear constructs a
+        # new Context instance, which resets _invoked_skills while keeping
+        # _skills_available populated (same Skill list passed back in).
+        self._skills_available: list[Skill] = list(skills) if skills else []
+        self._invoked_skill_paths: set[Path] = set()
+        self._invoked_skills: list[Skill] = []
         # Must-read-first invariant (mirrors claude-code FileEditTool.ts:275–287):
         # edit_file must see a prior successful read_file on the same resolved
         # path AND the file must not have changed on disk since. Populated by
@@ -80,6 +91,19 @@ class Context:
     # ------------------------------------------------------------------
     # Progressive state mutation (append-only within a session)
     # ------------------------------------------------------------------
+
+    def record_skill_invocation(self, skill: Skill) -> None:
+        """Append ``skill`` to the invoked list (dedup by ``source_path``).
+
+        Called from ``SkillCommand.handle`` via ``Agent.record_skill_invocation``
+        when the user types ``/<skill.name>``. The body is rendered as a
+        ``<skill-invoked>`` HumanMessage on the next ``build()`` call; the
+        model therefore sees it on the turn *following* invocation.
+        """
+        if skill.source_path in self._invoked_skill_paths:
+            return
+        self._invoked_skill_paths.add(skill.source_path)
+        self._invoked_skills.append(skill)
 
     def on_tool_touched_path(self, path: Path) -> None:
         try:
@@ -213,6 +237,31 @@ class Context:
                     f'<rule src="{rule.source_path}">\n'
                     f"{rule.content}\n"
                     "</rule>"
+                )
+            )
+
+        # Skills — system-tier context like rules, placed AFTER rules so
+        # rules keep their stable position (better prompt-cache behavior) and
+        # BEFORE history so the invoked body influences the model on the
+        # turn following invocation. <skills-available> is rendered once
+        # (the full catalogue), then one <skill-invoked> per distinct skill.
+        if self._skills_available:
+            available_lines = [
+                f"- {s.name}: {s.description}" for s in self._skills_available
+            ]
+            messages.append(
+                HumanMessage(
+                    "<skills-available>\n"
+                    + "\n".join(available_lines)
+                    + "\n</skills-available>"
+                )
+            )
+        for skill in self._invoked_skills:
+            messages.append(
+                HumanMessage(
+                    f'<skill-invoked name="{skill.name}">\n'
+                    f"{skill.body}\n"
+                    "</skill-invoked>"
                 )
             )
 

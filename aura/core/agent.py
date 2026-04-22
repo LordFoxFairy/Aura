@@ -23,6 +23,7 @@ from aura.core.permissions.session import SessionRuleSet
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
+from aura.core.skills import Skill, load_skills
 from aura.schemas.events import AgentEvent, Final
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError
@@ -102,6 +103,10 @@ class Agent:
         self._system_prompt = build_system_prompt()
         self._primary_memory = project_memory.load_project_memory(self._cwd)
         self._rules = rules.load_rules(self._cwd)
+        # Skills: user-layer (~/.aura/skills/) + project-layer (<cwd>/.aura/skills/).
+        # Loaded once at Agent init; not re-scanned on /clear (v0.2.0 MVP — no
+        # hot reload). Collision resolution inside the loader logs to journal.
+        self._skill_registry = load_skills(cwd=self._cwd)
         self._context = self._build_context()
         # Hard-floor bash safety — Tier A shell attacks (zsh builtins, CR
         # parser differential, malformed+separator, cd+git compound). Inserted
@@ -186,6 +191,15 @@ class Agent:
         self._loop = self._build_loop()
         journal.write("session_cleared", session=self._session_id)
 
+    def record_skill_invocation(self, skill: Skill) -> None:
+        """Proxy to Context — appends ``skill`` to the invoked list.
+
+        Exposed on Agent so that :class:`SkillCommand` (which is constructed
+        with an Agent, not a Context) doesn't need to reach into a private
+        attribute.
+        """
+        self._context.record_skill_invocation(skill)
+
     @property
     def state(self) -> LoopState:
         return self._state
@@ -219,6 +233,7 @@ class Agent:
             system_prompt=self._system_prompt,
             primary_memory=self._primary_memory,
             rules=self._rules,
+            skills=self._skill_registry.list(),
             todos_provider=lambda: self._state.custom.get("todos", []),
         )
 

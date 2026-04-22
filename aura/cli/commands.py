@@ -17,6 +17,7 @@ from aura.core.commands.builtin import (
     HelpCommand,
     ModelCommand,
 )
+from aura.core.skills.command import SkillCommand
 
 __all__ = [
     "Command",
@@ -27,14 +28,23 @@ __all__ = [
 ]
 
 
-def build_default_registry() -> CommandRegistry:
-    """Return a registry pre-populated with Aura's built-in commands."""
+def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
+    """Return a registry pre-populated with Aura's built-in commands.
+
+    If ``agent`` is provided, also register one :class:`SkillCommand` per
+    skill loaded by the Agent (user + project layers). The optional kwarg
+    preserves the zero-arg call for callers that still build a registry
+    without an Agent (e.g. legacy tests).
+    """
     r = CommandRegistry()
     # HelpCommand needs the registry to enumerate commands at /help time.
     r.register(HelpCommand(registry=r))
     r.register(ExitCommand())
     r.register(ClearCommand())
     r.register(ModelCommand())
+    if agent is not None:
+        for skill in agent._skill_registry.list():
+            r.register(SkillCommand(skill=skill, agent=agent))
     return r
 
 

@@ -37,7 +37,7 @@ async def run_repl_async(
     _input = input_fn if input_fn is not None else _default_input
     _console = console if console is not None else Console()
     renderer = Renderer(_console)
-    registry = build_default_registry()
+    registry = build_default_registry(agent=agent)
 
     _print_welcome(agent, _console)
 

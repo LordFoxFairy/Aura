@@ -1069,3 +1069,50 @@ async def test_clear_session_wipes_todos(tmp_path: Path) -> None:
     ]
     assert todo_humans == []
     agent.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_skills_loaded_at_init_from_cwd_and_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _chdir(monkeypatch, tmp_path)
+    # Two layers: user-layer skill in fake HOME, project-layer skill in cwd.
+    home = tmp_path / "_fake_home"
+    (home / ".aura" / "skills").mkdir(parents=True, exist_ok=True)
+    (home / ".aura" / "skills" / "user-skill.md").write_text(
+        "---\nname: user-skill\ndescription: from user.\n---\nUSER-BODY\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".aura" / "skills").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".aura" / "skills" / "proj-skill.md").write_text(
+        "---\nname: proj-skill\ndescription: from project.\n---\nPROJ-BODY\n",
+        encoding="utf-8",
+    )
+
+    agent = _agent(tmp_path, turns=[])
+    names = {s.name for s in agent._skill_registry.list()}
+    assert names == {"user-skill", "proj-skill"}
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_record_skill_invocation_reaches_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aura.core.skills.types import Skill
+
+    _chdir(monkeypatch, tmp_path)
+    agent = _agent(tmp_path, turns=[])
+    skill = Skill(
+        name="ping",
+        description="ping desc",
+        body="PING-BODY",
+        source_path=tmp_path / "ping.md",
+        layer="project",
+    )
+    agent.record_skill_invocation(skill)
+    messages = agent._context.build([])
+    blob = " ".join(str(m.content) for m in messages)
+    assert '<skill-invoked name="ping">' in blob
+    assert "PING-BODY" in blob
+    agent.close()

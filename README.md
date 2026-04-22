@@ -80,7 +80,7 @@ Permission rules live separately in `.aura/settings.json` (committed, shared) an
 
 ## Built-in tools
 
-Nine tools ship with Aura:
+Eleven tools ship with Aura:
 
 | Tool | Purpose | Notes |
 |---|---|---|
@@ -93,8 +93,63 @@ Nine tools ship with Aura:
 | `todo_write` | Session task list | Exactly-one `in_progress` cardinality enforced |
 | `ask_user_question` | Ask the user mid-turn | Free-text or 2–6 option list; TTY-gated |
 | `web_fetch` | Fetch URL + content | SSRF-hardened (blocks cloud-metadata IPs, private-network, loopback); prompted — not auto-allow |
+| `task_create` | Spawn subagent (fire-and-forget) | Returns `task_id` immediately; child runs detached on the event loop via `asyncio.create_task`; child gets a `:memory:` SessionStorage + own Context + no MCP + no skills (MVP); `task_create` + `task_output` stripped from the child's tool list (no recursion in MVP) |
+| `task_output` | Fetch subagent transcript | Read-only, concurrency-safe; raises on unknown `task_id` |
 
 All are `BaseTool` subclasses with Aura metadata (`tool_metadata(...)` sets `is_read_only`, `is_destructive`, `is_concurrency_safe`, `rule_matcher`, `args_preview`, `max_result_size_chars`).
+
+## Skills
+
+User-authored skills loaded from `~/.aura/skills/*.md` (global) and `<cwd>/.aura/skills/*.md` (project-local). Each skill registers as a slash-invokable command `/<name>`; the skill's markdown body is injected into the model's context on invocation as a `<skill-invoked name="...">` HumanMessage tag — same tag-based mechanism as project memory and nested memory. The skills listing also surfaces as a `<skills-available>` tag so the model knows what's available even before invocation. User-layer wins on cross-layer name collision; intra-layer duplicates drop with a `skill_parse_failed` journal event.
+
+Example `~/.aura/skills/refactor-python.md`:
+
+```markdown
+---
+name: refactor-python
+description: Python refactoring assistant — extracts functions, renames cleanly.
+---
+When the user invokes this skill, you are in refactor-python mode. Work in small
+diffs. Always run the test suite after each edit. Prefer `rg`-backed grep over
+semantic guesses. Never rename across the public API boundary without asking.
+```
+
+The REPL shows `/refactor-python` in `/help` automatically. Directory-form skills, file-pattern triggers, LLM-invokable `SkillTool`, and hot reload are deferred to 0.2.x.
+
+## MCP
+
+MCP servers connect via `langchain-mcp-adapters` (stdio transport; HTTP/SSE deferred). Discovered tools are auto-namespaced `mcp__<server>__<tool>` and registered dynamically into the `ToolRegistry` after `Agent.aconnect()`; the model is re-bound with the updated tool set via `AgentLoop._rebind_tools`. MCP prompts surface as slash commands `/<server>__<prompt>` with `source="mcp"`. Aura applies conservative defaults to each MCP tool: `is_destructive=True`, `is_concurrency_safe=False`, `max_result_size_chars=30_000` — because the library can't speak to the semantics of arbitrary server tools.
+
+Config block:
+
+```json
+{
+  "mcp_servers": [
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/workspace"],
+      "env": {},
+      "transport": "stdio",
+      "enabled": true
+    }
+  ]
+}
+```
+
+Per-server failures are isolated (the library's bulk `get_tools()` crashes on any single failure; `MCPManager` loops per server). Each failure journals `mcp_connect_failed` and the other servers still come up. Teardown reflects over `aclose` / `close` because the library has no teardown API today.
+
+## Compact
+
+`/compact` (or `Agent.compact(source="manual")`) summarizes the history prefix and rebuilds the conversation around a `<session-summary>` HumanMessage tag. Session state you can't regenerate is preserved across the boundary: `_read_records` (must-read-first fingerprints), `_invoked_skills`, `state.custom['todos']`, session permission rules, cumulative `total_tokens_used`. Discovery caches — project memory, rules, `_nested_fragments`, `_matched_rules` — are cleared and re-discovered on the next turn. `SystemMessage` is untouched (prompt-cache friendly).
+
+Use when a session has accumulated many turns but the model is still doing useful work — compact preserves continuity without paying for the full history on every subsequent request. Last `KEEP_LAST_N_TURNS=3` turns stay raw. Summary is produced by the unbound raw model (no tool calls possible by construction). Auto-trigger at `AUTO_COMPACT_THRESHOLD=150_000`, selective file re-injection, and reactive recompact on "prompt too long" API errors are deferred to 0.4.1.
+
+## Subagents
+
+`task_create(description, prompt)` schedules a subagent via `asyncio.create_task(run_task(...))` and returns a `task_id` immediately; the parent's loop continues without blocking. The subagent is a fresh `Agent` built by `SubagentFactory` with the same config + model + permissions but its own `:memory:` SessionStorage and its own Context. `task_output(task_id)` fetches the current `TaskRecord` (status + final result + error). `/tasks` lists the 20 most recent records. `Agent.close()` cancels any in-flight subagents (parent cancel cascades).
+
+The unified rendering channel (prompt-toolkit Application refactor with foldable regions + dialog queue) is the other half of the original Phase E design and is deferred to 0.6.0. Today subagent output is visible via `task_output` + `/tasks` only — there's no mid-turn streaming into the REPL pane.
 
 ## Permissions & safety
 
@@ -118,14 +173,20 @@ Aura has three layers — all composed via `HookChain.pre_tool` in `build_agent`
 
 ## Slash commands
 
+Slash commands are backed by a unified `CommandRegistry` (since 0.1.1) that also hosts skill commands (one per loaded skill) and MCP prompts (one per remote `<server>__<prompt>`). Run `/help` for the live list.
+
 | Command | Effect |
 |---|---|
-| `/help` | show command list |
+| `/help` | show command list (live-enumerated, includes skills + MCP prompts) |
 | `/exit` | exit the REPL (also Ctrl+D) |
 | `/clear` | clear the current session's history and turn counter |
 | `/model` | show the current default model + router aliases |
 | `/model <alias>` | switch via router alias (e.g. `/model opus`) |
 | `/model <provider:model>` | switch directly (e.g. `/model openrouter:anthropic/claude-opus-4`) |
+| `/compact` | summarize history + preserve session state (see Compact section) |
+| `/tasks` | list recent subagent tasks (id prefix + status + description, top 20) |
+| `/<skill-name>` | invoke a user-authored skill (auto-registered from `~/.aura/skills/` + `<cwd>/.aura/skills/`) |
+| `/<server>__<prompt>` | invoke an MCP prompt (auto-registered when MCP server connects) |
 
 ## Default hooks
 
@@ -210,17 +271,31 @@ agent = build_agent(load_config(), hooks=hooks)
 
 - Spec: `docs/specs/2026-04-17-aura-mvp-design.md`
 - Plan: `docs/plans/2026-04-17-aura-mvp.md`
-- Phase E design (deferred): `docs/specs/2026-04-21-phase-e-subagent.md`
+- Phase E design (rendering channel deferred to 0.6.0): `docs/specs/2026-04-21-phase-e-subagent.md`
 - Research — claude-code design principles: `docs/research/claude-code-design-principles.md`
 - Manual: `docs/manual/` (per-module how-tos)
+- Changelog: `CHANGELOG.md` (v0.1.0 → v0.5.0)
 
 ## Status
 
-**MVP (phase 1, walking skeleton).** Own-loop, JSON config, 9 built-in tools, hook-based extensibility, end-to-end permissions + safety. LangChain client-layer only. 827 tests green; `aura --version` reports `0.1.0`.
+**0.5.0 — six incremental releases since the walking-skeleton MVP.** Own-loop, JSON config, 11 built-in tools, hook-based extensibility, end-to-end permissions + safety, skills, MCP, compact, subagents. LangChain client-layer only. 921 tests green.
+
+| Tag | Theme |
+|---|---|
+| `v0.1.0` | Walking skeleton — own-loop, 9 tools, permissions + safety, 3-layer context memory |
+| `v0.1.1` | Unified `Command` abstraction — `CommandRegistry` + `Command` Protocol (prereq for Skills + MCP) |
+| `v0.2.0` | Skills MVP — `~/.aura/skills/*.md` + `<cwd>/.aura/skills/*.md` with slash-command invocation |
+| `v0.3.0` | MCP via `langchain-mcp-adapters` — stdio transport, `mcp__<server>__<tool>` namespace, dynamic tool registry |
+| `v0.4.0` | Compact — `Agent.compact()` summarizes history; `_read_records` / skills / todos / session rules survive |
+| `v0.5.0` | Task tool — fire-and-forget subagent via `asyncio.create_task`; `task_create` / `task_output` / `/tasks` |
 
 **Deferred to later phases:**
-- Subagent (`Task` tool) + unified prompt-toolkit rendering channel — see `docs/specs/2026-04-21-phase-e-subagent.md`
-- MCP integration, skills, Tauri desktop, auto-compact
+- Unified prompt-toolkit rendering channel (foldable regions, dialog queue) — the other half of original Phase E, see `docs/specs/2026-04-21-phase-e-subagent.md` — 0.6.0
+- Auto-compact trigger, selective file re-injection, reactive recompact — 0.4.1
+- Skills: directory form, file-pattern triggers, LLM-invokable `SkillTool`, hot reload — 0.2.x
+- MCP: HTTP/SSE transport, skill/MCP inheritance by subagents — 0.3.x / 0.5.x
+- Subagents: recursion, permission inheritance, full transcript accumulation — 0.5.x
+- Tauri desktop — not scheduled
 - Token-budget diminishing-returns detection (advisory; `max_turns=50` is the hard floor today)
 
 ## License

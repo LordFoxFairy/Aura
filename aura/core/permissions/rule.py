@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from typing import Any, cast
 
 from langchain_core.tools import BaseTool
@@ -31,13 +32,20 @@ class Rule:
         """True iff this rule covers a call of ``tool_name`` with ``args``.
 
         Resolution:
-        1. Name mismatch → False.
+        1. Tool-name match — exact equality, OR ``fnmatch`` when ``*``
+           appears in ``self.tool``. The wildcard form exists so rules
+           can cover a whole MCP server's surface in one line, e.g.
+           ``mcp__github__*`` matches every tool namespaced to the
+           ``github`` server. Mismatch → False.
         2. Tool-wide rule (``content is None``) → True, regardless of args.
         3. Pattern rule → delegate to the tool's ``rule_matcher`` in metadata;
            absent matcher → False (conservative: a tool that never declared
            how to match arg patterns cannot be allowed by a pattern rule).
         """
-        if tool_name != self.tool:
+        if "*" in self.tool:
+            if not fnmatchcase(tool_name, self.tool):
+                return False
+        elif tool_name != self.tool:
             return False
         if self.content is None:
             return True

@@ -141,3 +141,48 @@ def test_pattern_rule_returns_false_when_matcher_rejects() -> None:
     rule = Rule(tool="bash", content="npm test")
     tool = _fake_tool("bash", rule_matcher=lambda _args, _content: False)
     assert rule.matches("bash", {"command": "npm test"}, tool) is False
+
+
+# ---------------------------------------------------------------------------
+# Wildcard tool-name matching — MCP use case (tool names namespaced per server)
+# ---------------------------------------------------------------------------
+
+
+def test_wildcard_matches_mcp_namespaced_tool_name() -> None:
+    # `allow: ["mcp__github__*"]` was silently not working before the
+    # fnmatch path because Rule.matches did exact equality on tool name.
+    # Regression guard: make sure wildcard coverage does match.
+    rule = Rule(tool="mcp__github__*", content=None)
+    tool = _fake_tool("mcp__github__issue_search")
+    assert rule.matches("mcp__github__issue_search", {}, tool) is True
+
+
+def test_wildcard_does_not_match_different_server() -> None:
+    rule = Rule(tool="mcp__github__*", content=None)
+    tool = _fake_tool("mcp__gitlab__issue_search")
+    assert rule.matches("mcp__gitlab__issue_search", {}, tool) is False
+
+
+def test_wildcard_pattern_rule_still_requires_matcher() -> None:
+    # A wildcard rule with content (pattern rule) still needs rule_matcher
+    # on the tool. Conservative: missing matcher → reject.
+    rule = Rule(tool="mcp__github__*", content="foo")
+    tool = _fake_tool("mcp__github__tool")  # no rule_matcher metadata
+    assert rule.matches("mcp__github__tool", {"x": 1}, tool) is False
+
+
+def test_non_wildcard_rule_unchanged_by_fnmatch_path() -> None:
+    # Regression guard: the wildcard branch must not alter existing exact
+    # matching for rules that don't contain "*".
+    rule = Rule(tool="bash", content=None)
+    tool = _fake_tool("bash")
+    assert rule.matches("bash", {}, tool) is True
+    assert rule.matches("grep", {}, tool) is False
+
+
+def test_single_star_wildcard_matches_any_tool() -> None:
+    # Edge case: "*" alone covers every tool. Useful in test fixtures but
+    # users are unlikely to write it at the rule level.
+    rule = Rule(tool="*", content=None)
+    assert rule.matches("bash", {}, _fake_tool("bash")) is True
+    assert rule.matches("mcp__anything__tool", {}, _fake_tool("mcp__anything__tool")) is True

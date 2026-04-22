@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Literal
@@ -13,6 +14,7 @@ from langchain_core.tools import BaseTool
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core import llm
 from aura.core.compact import CompactResult, run_compact
+from aura.core.compact.constants import AUTO_COMPACT_THRESHOLD
 from aura.core.hooks import HookChain
 from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.hooks.budget import default_hooks
@@ -64,6 +66,8 @@ class Agent:
         session_id: str = _DEFAULT_SESSION,
         session_rules: SessionRuleSet | None = None,
         question_asker: QuestionAsker | None = None,
+        auto_compact_threshold: int = AUTO_COMPACT_THRESHOLD,
+        session_log_dir: Path | None = None,
     ) -> None:
         # ``session_rules``: CLI hands in the same SessionRuleSet that was used
         # to build the permission hook; Agent.clear_session drops its runtime
@@ -74,6 +78,10 @@ class Agent:
         self._hooks = hooks or HookChain()
         self._state = LoopState()
         self._session_rules = session_rules
+        # Auto-compact trigger. Non-zero = enabled. When a turn completes
+        # successfully and total_tokens_used crosses the threshold, astream
+        # calls self.compact(source="auto") before returning. 0 disables it.
+        self._auto_compact_threshold = auto_compact_threshold
         # Subagent plumbing (0.5.0). The factory is built lazily from the
         # parent's config + model spec; spawning it here keeps Agent.__init__
         # self-contained for tests that don't care about subagents.
@@ -113,6 +121,17 @@ class Agent:
             else:  # pragma: no cover — guardrail for future additions
                 raise RuntimeError(f"unwired stateful tool: {name}")
         self._session_id = session_id
+        # Session-scoped journal: when ``session_log_dir`` is passed, every
+        # journal.write made during astream routes to a per-session JSONL
+        # file. Enables two concurrent Agents in the same process (subagents,
+        # server workers) to keep their audit trails fully separate.
+        if session_log_dir is not None:
+            session_log_dir.mkdir(parents=True, exist_ok=True)
+            self._session_log_path: Path | None = (
+                session_log_dir / f"{self._session_id}.jsonl"
+            )
+        else:
+            self._session_log_path = None
         # config.tools.enabled → lookup → ToolRegistry. Built once per Agent.
         tools: list[BaseTool] = []
         for name in self._config.tools.enabled:
@@ -161,27 +180,54 @@ class Agent:
         #   CancelledError → yield Final + re-raise → 跳过 else → 下次从 pre-turn 状态恢复
         # max_turns 由 AgentLoop 直接 yield Final(reason="max_turns") 表示，走正常 save 路径。
         # 保证：存储里永远不会出现半截 turn（AI tool_call 缺对应 tool result 等）。
-        journal.write(
-            "astream_begin",
-            session=self._session_id,
-            prompt_preview=prompt[:200],
+        #
+        # The session_scope context routes every journal.write made on this
+        # task — including ones emitted deep inside the loop / tools — to the
+        # per-session JSONL file. contextvars propagate across ``await`` and
+        # ``async for`` on the same task, so nested awaits inherit the scope
+        # automatically.
+        ctx = (
+            journal.session_scope(self._session_log_path)
+            if self._session_log_path is not None
+            else contextlib.nullcontext()
         )
-        history = self._storage.load(self._session_id)
-        try:
-            async for event in self._loop.run_turn(user_prompt=prompt, history=history):
-                yield event
-        except asyncio.CancelledError:
-            journal.write("astream_cancelled", session=self._session_id)
-            yield Final(message="(cancelled)")
-            raise
-        else:
-            self._storage.save(self._session_id, history)
+        with ctx:
             journal.write(
-                "astream_end",
+                "astream_begin",
                 session=self._session_id,
-                history_len=len(history),
-                total_tokens=self._state.total_tokens_used,
+                prompt_preview=prompt[:200],
             )
+            history = self._storage.load(self._session_id)
+            try:
+                async for event in self._loop.run_turn(user_prompt=prompt, history=history):
+                    yield event
+            except asyncio.CancelledError:
+                journal.write("astream_cancelled", session=self._session_id)
+                yield Final(message="(cancelled)")
+                raise
+            else:
+                self._storage.save(self._session_id, history)
+                journal.write(
+                    "astream_end",
+                    session=self._session_id,
+                    history_len=len(history),
+                    total_tokens=self._state.total_tokens_used,
+                )
+                # Auto-compact post-turn. Deliberately AFTER save + astream_end
+                # so the summary turn sees a stable, already-persisted history
+                # and we don't interleave compact I/O with the caller's yield
+                # stream. Zero threshold disables; any positive value arms it.
+                if (
+                    self._auto_compact_threshold > 0
+                    and self._state.total_tokens_used > self._auto_compact_threshold
+                ):
+                    journal.write(
+                        "auto_compact_triggered",
+                        session=self._session_id,
+                        tokens=self._state.total_tokens_used,
+                        threshold=self._auto_compact_threshold,
+                    )
+                    await self.compact(source="auto")
 
     def switch_model(self, spec: str) -> None:
         journal.write("model_switch_attempt", spec=spec)

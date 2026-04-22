@@ -148,6 +148,35 @@ async def test_task_output_reflects_final_result_after_subagent_finishes(
     assert info["final_result"] == "subagent-final"
 
 
+def test_subagent_factory_strips_mcp_servers_from_child_config() -> None:
+    # Even when parent has mcp_servers configured, the subagent spawned
+    # from SubagentFactory must see mcp_servers=[] (0.5.0 isolation).
+    # MCP state (connections, discovered tools) is per-agent and MUST NOT
+    # leak from parent to child — verified at the config boundary since
+    # Agent.aconnect() short-circuits on empty mcp_servers.
+    parent_config = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+        "mcp_servers": [{
+            "name": "github",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-github"],
+            "env": {},
+            "transport": "stdio",
+        }],
+    })
+    factory = SubagentFactory(
+        parent_config=parent_config,
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(turns=[]),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+    child_agent = factory.spawn("sub-prompt")
+    assert child_agent._config.mcp_servers == []
+    child_agent.close()
+
+
 @pytest.mark.asyncio
 async def test_parent_cancel_cascades_to_subagent(tmp_path: Path) -> None:
     store = TasksStore()

@@ -2,6 +2,175 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.5.0] — Task tool (scoped Phase E)
+
+Fire-and-forget subagent dispatch. Parent returns immediately with a `task_id`; child runs detached on the event loop; transcripts fetched later via `task_output`. Matches claude-code's `shouldDefer: true` pattern (`TaskCreateTool.ts:67`).
+
+### Headlines
+
+- `task_create` + `task_output` built-in tools; `/tasks` slash command listing recent subagent runs.
+- SubagentFactory inherits parent config + model + permissions; subagent OWNS an in-memory `:memory:` SessionStorage, OWNS its own Context, and OWNS its own `HookChain`.
+- Parent `Agent._running_tasks: dict[task_id, asyncio.Task]` tracks handles; `Agent.close()` cancels each — parent cancel cascades to subagent.
+- Unified prompt-toolkit rendering channel (the other half of the original Phase E design) deferred to 0.6.0.
+
+### Added
+
+- `aura/core/tasks/` — `TasksStore` (keyed by `task_id`, append-only on completion), `SubagentFactory.spawn`, `run_task` background coroutine.
+- `aura/tools/task_create.py` — stateful tool (Agent injects `store` + `factory` + `running` dict); `_arun` schedules `asyncio.create_task(run_task(...))` and returns `{task_id, description, status=running}` immediately. Done-callback pops the handle to prevent unbounded map growth.
+- `aura/tools/task_output.py` — read-only, concurrency-safe; raises `ToolError` on unknown id.
+- `aura/core/commands/tasks.py` — `/tasks` lists recent records (id prefix + status + description), sorted by `started_at` desc, top 20.
+- `TaskRecord` dataclass: `{id, parent_id, description, prompt, status, messages, final_result, error, started_at, finished_at}`.
+
+### Changed
+
+- `Agent` now constructs a `TasksStore` + `SubagentFactory` at init and wires them into `task_create`. Uses pydantic `PrivateAttr` for `_running_tasks` (typed field would deep-copy the dict during validation and break identity-sharing with the tool).
+- `Agent.close()` extended to cancel all in-flight `_running_tasks` and await their completion.
+
+### Deferred (0.5.x / 0.6.0)
+
+- Per-subagent permission inheritance.
+- Recursion (subagent spawns subagent) — MVP strips `task_create` + `task_output` from the child's tool list by construction.
+- Skill/MCP sharing with parent (child today gets `SkillRegistry()` and `mcp_servers=[]`).
+- Full transcript accumulation (today only `Final` is recorded).
+- Unified prompt-toolkit Application + foldable regions + dialog queue — `docs/specs/2026-04-21-phase-e-subagent.md` §Target architecture.
+
+### Stats
+
+- 903 → 921 tests. Lint + mypy clean (159 source files).
+
+## [0.4.0] — Compact
+
+Conversation compaction with state preservation. `Agent.compact(source=...)` summarizes history via an unbound summary model, preserves session state that can't be regenerated, and clears discovery caches that can.
+
+### Headlines
+
+- Manual `/compact` slash command; auto-trigger deferred to 0.4.1 (AgentLoop has no back-ref to Agent; adding one would violate the clean-loop invariant).
+- Survives compact: `_read_records`, `_invoked_skills`, `state.custom['todos']`, session rules, `total_tokens_used`.
+- Cleared + re-discovered: project_memory, rules cache, `_nested_fragments`, `_matched_rules`.
+- `SystemMessage` untouched (prompt-cache friendly). Summary rendered as `<session-summary>` HumanMessage — same tag pattern as `<project-memory>` / `<skill-invoked>`.
+
+### Added
+
+- `aura/core/compact/` — `compact.py::run_compact` free function (complex logic stays independently testable); `prompt.py::SUMMARY_SYSTEM` enforces TEXT-ONLY + structured sections (goal / decisions / files-touched / tools-used / open-threads / next-steps).
+- `Agent.compact(source="manual")` thin wrapper over `run_compact`.
+- `/compact` command via `CompactCommand` (0.1.1 CommandRegistry).
+- Constants pinned now so 0.4.1 auto-wiring doesn't shuffle module boundaries: `KEEP_LAST_N_TURNS=3`, `SUMMARY_BUDGET=50_000`, `AUTO_COMPACT_THRESHOLD=150_000` (declared, unused in 0.4.0).
+- Journal event: `compact_applied` with `source` / `before_tokens` / `after_tokens`.
+
+### Changed
+
+- Summary turn dispatched via `self._model.ainvoke` directly (not `self._bound`) — the unbound model makes tool calls impossible by construction; "TEXT ONLY" prompt guard is the belt, the unbound model is the suspenders.
+- `must_read_first` hook closure re-swapped post-compact (same pattern as `clear_session`) so the closure points at the new Context's `_read_records`.
+
+### Deferred (0.4.1)
+
+- Auto-trigger at `AUTO_COMPACT_THRESHOLD`.
+- Selective re-injection of `MAX_FILES_TO_RESTORE=5` most-recent files with `MAX_TOKENS_PER_FILE=5000` cap (constants declared; today compact relies on the preserved tail to carry recent file contents).
+- API-error reactive recompact (when the model returns "prompt too long").
+
+### Stats
+
+- 885 → 903 tests. Lint + mypy clean (148 source files).
+
+## [0.3.0] — MCP via langchain-mcp-adapters
+
+MCP client integration. A prior iteration handwrote transport + JSON-RPC correlation + JSON-Schema-to-pydantic bridge (~350 LOC). This release replaces that stack with `langchain-mcp-adapters` (`>=0.2,<1.0`); Aura's MCP module is purely the Aura-specific layer: metadata defaults, namespace prefix, command bridge, graceful degradation.
+
+### Headlines
+
+- `aura/core/mcp/` — `MCPManager` wraps `MultiServerMCPClient` with per-server error isolation.
+- Tool namespace `mcp__<server>__<tool>` applied by Aura (not the library) if not already prefixed.
+- Dynamic tool registration: `ToolRegistry.register()` / `unregister()`; `AgentLoop._rebind_tools()` re-binds the model with an updated tool set after post-construction discovery.
+- `Agent.aconnect()` — async, post-construction; failures never re-raise (graceful degradation).
+
+### Added
+
+- `aura/core/mcp/adapter.py::add_aura_metadata` — attaches capability flags to library-returned tools. Defaults are conservative: `is_destructive=True`, `is_concurrency_safe=False`, `max_result_size_chars=30_000` (we don't trust unknown servers' read-only claims; users override per-server).
+- `aura/core/mcp/adapter.py::make_mcp_command` — wraps an MCP prompt (fetched via `client.get_prompt`) as a slash command `/<server>__<prompt>` with `source="mcp"`, feeding through the 0.1.1 CommandRegistry.
+- `aura/core/mcp/manager.py::MCPManager` — loops `get_tools(server_name=...)` per server (library's bulk `get_tools()` crashes on any single failure) and journals each failure as `mcp_connect_failed`. Defensive `stop_all` that reflects over `aclose` / `close` (library has no teardown API today).
+- `AuraConfig.mcp_servers: list[MCPServerConfig]` — `{name, command, args, env, transport, enabled}`. stdio only (HTTP/SSE deferred to 0.3.x).
+- `Agent.aconnect()` — establishes MCP connections, registers discovered tools, stores commands. No-op when no servers configured.
+- CLI: `aura/cli/__main__.py` wraps REPL launch in an async entry that awaits `agent.aconnect()` before `run_repl_async`.
+
+### Changed
+
+- `ToolRegistry` gained `register(tool)` (raises on duplicate) and `unregister(name)` (idempotent — MCP disconnect safety).
+- `AgentLoop.__init__` now saves `self._model` at init to support `_rebind_tools()`.
+- `Agent.close()` extended to tear down MCP manager; handles both running-loop (`create_task`) and sync-close (`asyncio.run`) cases.
+- `build_default_registry` extended to register `agent._mcp_commands` after skills.
+
+### Known library limitations (documented, monitor upstream)
+
+- No native per-server isolation in `get_tools()` — Aura loops.
+- No teardown API — Aura reflects-probes for one.
+- Prompt enumeration requires `async with client.session()` per server — `MCPManager` caches the list at connect time.
+
+### Stats
+
+- 868 → 885 tests. Lint + mypy clean (141 source files).
+
+## [0.2.0] — Skills MVP (command-mode)
+
+User-authored skills loaded from `~/.aura/skills/*.md` (global) and `<cwd>/.aura/skills/*.md` (project-local). Each skill registers as a slash-invokable command; its body is injected into context on invocation via Aura's existing tag-based Context mechanism — the equivalent of claude-code's `<system-reminder>` HumanMessage pattern.
+
+### Headlines
+
+- SKILL files: YAML frontmatter (`name` + `description` required) + markdown body.
+- User layer wins on cross-layer name collision; intra-user-layer duplicates drop with journal warning (`skill_parse_failed` — matches `rules.py` observability pattern).
+- Context gains `<skills-available>` (listing, rendered when non-empty) and `<skill-invoked name="...">` (body per invocation, deduped by source_path).
+- Slash command per skill auto-prefixed `/<name>` via the 0.1.1 CommandRegistry.
+
+### Added
+
+- `aura/core/skills/` — `loader.py` (scans both layers, YAML frontmatter parse, non-recursive, `.md` only), `registry.py` (register / get / list), `command.py::SkillCommand` (`source="skill"`, handle calls `agent.record_skill_invocation`), `types.py::Skill`.
+- Context fields: `_skills_available: list[Skill]` (populated at construction, rendered as one `<skills-available>` HumanMessage when non-empty — empty-tag bug avoided by omitting entirely), `_invoked_skills: list[Skill]` (append-only via `record_skill_invocation`).
+- Placement in `build()` message list: between `<rule>` and `<todos>`. Rules predate skills in the cache prefix, so skills AFTER rules keeps cached prefixes stable as skills churn.
+- `Agent.record_skill_invocation()` delegates to Context.
+- `build_default_registry(agent=None)` extended: when `agent` is supplied, registers one `SkillCommand` per skill in `agent._skill_registry`; `/help` enumerates them automatically.
+
+### Changed
+
+- `Agent.__init__` loads skills via `load_skills(cwd=...)`, stores `_skill_registry`, threads skills into `_build_context(skills=...)`.
+- `Agent.clear_session` rebuilds Context (invoked-skills list resets naturally via new instance); skills registry persists — same list is re-threaded into the new Context (no re-scan; hot reload is 0.2.x).
+- REPL passes `agent` into `build_default_registry`.
+
+### Deferred (0.2.x)
+
+- Directory-form skills (`<dir>/SKILL.md` with supporting files).
+- Triggers beyond slash command (file patterns, keyword match).
+- LLM-invokable `SkillTool` (skill invocation from within a turn).
+- Runtime file watcher for hot reload.
+- Skills from MCP servers (depends on 0.3.0 which followed).
+
+### Stats
+
+- 842 → 868 tests. Lint + mypy clean (135 source files).
+
+## [0.1.1] — Unified Command abstraction
+
+Prereq release for Skills + MCP. Both need runtime command registration (skills expose slash commands; MCP prompts become commands); the old hardcoded if-else in `aura/cli/commands.py` couldn't accommodate either without editing that file every time.
+
+### Headlines
+
+- New `aura/core/commands/` subpackage: `Command` Protocol + `CommandRegistry`.
+- Four builtins (`/help`, `/exit`, `/clear`, `/model`) migrated from hardcoded if-else to `Command` instances.
+- `aura/cli/commands.py` shrunk to a ~50-line façade: `build_default_registry()` + `async dispatch(line, agent, registry)`.
+
+### Added
+
+- `aura/core/commands/types.py` — `Command` Protocol (`name` / `description` / `source` / async `handle`), `CommandResult` dataclass, `CommandKind` + `CommandSource` Literals. Protocol is NOT `@runtime_checkable` — mypy structural check at `register()` sites is sufficient and avoids isinstance overhead.
+- `aura/core/commands/registry.py` — `CommandRegistry` with `register` / `unregister` / `list` / async `dispatch`. `register` raises on duplicate; `unregister` is idempotent (MCP disconnect safety); `list` returns sorted by name. `dispatch` returns `handled=False` for non-slash input, `handled=True` with `"unknown..."` for unknown slash.
+- `aura/core/commands/builtin.py` — `HelpCommand` (holds registry ref for live enumeration), `ExitCommand`, `ClearCommand`, `ModelCommand` (preserves `_model_status` + `UnknownModelSpecError`).
+- Forward-facing test `test_command_from_skill_source_registers_and_dispatches` — stub Command with `source="skill"` registers and dispatches cleanly, anchoring that the Protocol accommodates Skills/MCP without further churn.
+
+### Changed
+
+- **Breaking (internal)**: `dispatch(line, agent)` → `async dispatch(line, agent, registry)`. Only caller is the REPL — 3-line update (import + registry construction once at startup + await on dispatch).
+
+### Stats
+
+- 827 → 842 tests. Lint + mypy clean.
+
 ## [0.1.0] — Unreleased (walking skeleton MVP)
 
 First functional MVP: own-loop agent with end-to-end permissions, 9 built-in tools, multi-layer context memory, hook-based extensibility, and claude-code-aligned safety invariants.

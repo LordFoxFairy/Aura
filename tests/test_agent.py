@@ -1198,6 +1198,46 @@ async def test_agent_aconnect_registers_tools_into_registry(
     agent.close()
 
 
+def test_agent_registers_task_tools_and_tasks_store(tmp_path: Path) -> None:
+    cfg = _minimal_config(enabled=["task_create", "task_output"])
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+    # Store + factory live on the agent and back the two tools.
+    assert agent._tasks_store is not None
+    names = [t.name for t in agent._registry.tools()]
+    assert "task_create" in names
+    assert "task_output" in names
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_close_cancels_running_subagent_tasks(tmp_path: Path) -> None:
+    cfg = _minimal_config(enabled=["task_create"])
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+
+    # Create a pending future that never resolves, and register it into the
+    # running-tasks map through the same dict the tool uses. Simulates an
+    # in-flight subagent.
+    loop = asyncio.get_running_loop()
+    hung = loop.create_task(asyncio.sleep(10))
+    agent._running_tasks["phantom"] = hung
+    # Also mark the store so close() sees a record in status=running.
+    rec = agent._tasks_store.create(description="phantom", prompt="hang")
+    agent._running_tasks[rec.id] = hung
+
+    agent.close()
+    # Give the cancellation a tick to propagate.
+    await asyncio.sleep(0)
+    assert hung.cancelled() or hung.done()
+
+
 @pytest.mark.asyncio
 async def test_agent_aconnect_graceful_on_manager_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

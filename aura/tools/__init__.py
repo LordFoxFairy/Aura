@@ -23,6 +23,8 @@ from aura.tools.edit_file import EditFile, edit_file
 from aura.tools.glob import Glob, glob
 from aura.tools.grep import Grep, grep
 from aura.tools.read_file import ReadFile, read_file
+from aura.tools.task_create import TaskCreate
+from aura.tools.task_output import TaskOutput
 from aura.tools.todo_write import TodoWrite
 from aura.tools.web_fetch import WebFetch, web_fetch
 from aura.tools.write_file import WriteFile, write_file
@@ -40,6 +42,8 @@ BUILTIN_TOOLS: dict[str, BaseTool] = {
 BUILTIN_STATEFUL_TOOLS: dict[str, type[BaseTool]] = {
     "todo_write": TodoWrite,
     "ask_user_question": AskUserQuestion,
+    "task_create": TaskCreate,
+    "task_output": TaskOutput,
 }
 
 __all__ = [
@@ -51,6 +55,8 @@ __all__ = [
     "Glob",
     "Grep",
     "ReadFile",
+    "TaskCreate",
+    "TaskOutput",
     "TodoWrite",
     "ToolError",
     "ToolResult",

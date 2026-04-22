@@ -27,6 +27,8 @@ from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
 from aura.core.skills import Skill, load_skills
+from aura.core.tasks.factory import SubagentFactory
+from aura.core.tasks.store import TasksStore
 from aura.schemas.events import AgentEvent, Final
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError
@@ -72,6 +74,18 @@ class Agent:
         self._hooks = hooks or HookChain()
         self._state = LoopState()
         self._session_rules = session_rules
+        # Subagent plumbing (0.5.0). The factory is built lazily from the
+        # parent's config + model spec; spawning it here keeps Agent.__init__
+        # self-contained for tests that don't care about subagents.
+        self._tasks_store = TasksStore()
+        self._subagent_factory = SubagentFactory(
+            parent_config=self._config,
+            parent_model_spec=self._config.router.get("default", ""),
+        )
+        # Map: task_id -> the detached asyncio.Task handle. Shared with the
+        # ``task_create`` tool so Agent.close() can cancel still-running
+        # subagents without reaching back into the tool's internals.
+        self._running_tasks: dict[str, asyncio.Task[None]] = {}
         # Stateless built-ins come from shared singletons; stateful ones are
         # instantiated per-Agent so each gets its own dependency (LoopState
         # for todo_write, QuestionAsker for ask_user_question).
@@ -88,6 +102,14 @@ class Agent:
                 self._available_tools[name] = cls(
                     asker=question_asker or _unavailable_question_asker,
                 )
+            elif name == "task_create":
+                self._available_tools[name] = cls(
+                    store=self._tasks_store,
+                    factory=self._subagent_factory,
+                    running=self._running_tasks,
+                )
+            elif name == "task_output":
+                self._available_tools[name] = cls(store=self._tasks_store)
             else:  # pragma: no cover — guardrail for future additions
                 raise RuntimeError(f"unwired stateful tool: {name}")
         self._session_id = session_id
@@ -299,6 +321,15 @@ class Agent:
         )
 
     def close(self) -> None:
+        # Cancel any still-running subagent tasks first so they don't keep
+        # scribbling into a half-torn-down agent. ``cancel()`` is a request,
+        # not a join — we don't await here (close is sync), but the event
+        # loop will deliver the CancelledError next time the task is
+        # scheduled, at which point run_task flips the record to cancelled.
+        for task_id, task in list(self._running_tasks.items()):
+            if not task.done():
+                task.cancel()
+            self._running_tasks.pop(task_id, None)
         # stop_all() is async; Agent.close() is sync (legacy SDK API).
         # Run a small event loop if none is running; otherwise schedule +
         # best-effort-detach. This mirrors the storage close path which is

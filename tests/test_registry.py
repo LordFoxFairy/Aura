@@ -155,6 +155,39 @@ async def test_partition_interleaved_unsafe_breaks_batches() -> None:
     assert sizes == [2, 1, 1, 1, 1]
 
 
+def test_registry_register_adds_tool() -> None:
+    reg = ToolRegistry([_tool_a])
+    reg.register(_tool_b)
+    assert "tool_b" in reg
+    assert reg["tool_b"] is _tool_b
+
+
+def test_registry_register_rejects_duplicate_name() -> None:
+    reg = ToolRegistry([_tool_a])
+    dup = build_tool(
+        name="tool_a",
+        description="duplicate",
+        args_schema=_AParams,
+        func=_noop_a,
+    )
+    with pytest.raises(ValueError, match="already registered"):
+        reg.register(dup)
+
+
+def test_registry_unregister_removes_tool() -> None:
+    reg = ToolRegistry([_tool_a, _tool_b])
+    reg.unregister("tool_a")
+    assert "tool_a" not in reg
+    assert "tool_b" in reg
+
+
+def test_registry_unregister_is_idempotent_on_missing_name() -> None:
+    reg = ToolRegistry([_tool_a])
+    reg.unregister("ghost")
+    reg.unregister("ghost")
+    assert "tool_a" in reg
+
+
 async def test_partition_short_circuited_step_goes_solo() -> None:
     """A step with decision != None runs solo even if its tool is_concurrency_safe."""
     class _P(BaseModel):

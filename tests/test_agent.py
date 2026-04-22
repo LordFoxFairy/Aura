@@ -1116,3 +1116,129 @@ async def test_agent_record_skill_invocation_reaches_context(
     assert '<skill-invoked name="ping">' in blob
     assert "PING-BODY" in blob
     agent.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_aconnect_noop_when_no_mcp_servers(tmp_path: Path) -> None:
+    """No configured MCP servers → aconnect is a silent no-op, no manager
+    is instantiated, and no mcp commands are stored."""
+    cfg = _minimal_config(enabled=[])
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+    await agent.aconnect()
+    assert getattr(agent, "_mcp_manager", None) is None
+    assert getattr(agent, "_mcp_commands", []) == []
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_aconnect_registers_tools_into_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """aconnect() should pull tools from MCPManager and register them into
+    the agent's ToolRegistry, then rebind the loop's bound model."""
+    from langchain_core.tools import StructuredTool
+
+    from aura.config.schema import MCPServerConfig
+    from aura.core.mcp import manager as manager_mod
+    from aura.schemas.tool import tool_metadata
+
+    class _McpArgs(BaseModel):
+        q: str = ""
+
+    async def _coro(q: str = "") -> dict[str, Any]:
+        return {}
+
+    fake_tool = StructuredTool(
+        name="mcp__gh__search",
+        description="gh search",
+        args_schema=_McpArgs,
+        coroutine=_coro,
+        metadata=tool_metadata(is_destructive=True),
+    )
+
+    class _FakeManager:
+        def __init__(self, configs: list[MCPServerConfig]) -> None:
+            pass
+
+        async def start_all(self) -> tuple[list[Any], list[Any]]:
+            return [fake_tool], []
+
+        async def stop_all(self) -> None:
+            return None
+
+    # Agent does ``from aura.core.mcp import MCPManager`` at module load,
+    # so the name Agent resolves is the one in the agent module namespace.
+    # Patch that (and the source modules for completeness).
+    from aura.core import agent as agent_mod
+    monkeypatch.setattr(agent_mod, "MCPManager", _FakeManager)
+    monkeypatch.setattr(manager_mod, "MCPManager", _FakeManager)
+    import aura.core.mcp as mcp_pkg
+    monkeypatch.setattr(mcp_pkg, "MCPManager", _FakeManager)
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+        "mcp_servers": [
+            {"name": "gh", "command": "npx", "args": ["-y", "server"]},
+        ],
+    })
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+    await agent.aconnect()
+
+    assert "mcp__gh__search" in agent._registry
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_aconnect_graceful_on_manager_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If MCPManager.start_all blows up entirely, aconnect must not re-raise —
+    the agent starts without MCP tools."""
+    from aura.config.schema import MCPServerConfig
+    from aura.core.mcp import manager as manager_mod
+
+    class _BrokenManager:
+        def __init__(self, configs: list[MCPServerConfig]) -> None:
+            pass
+
+        async def start_all(self) -> tuple[list[Any], list[Any]]:
+            raise RuntimeError("total failure")
+
+        async def stop_all(self) -> None:
+            return None
+
+    from aura.core import agent as agent_mod
+    monkeypatch.setattr(agent_mod, "MCPManager", _BrokenManager)
+    monkeypatch.setattr(manager_mod, "MCPManager", _BrokenManager)
+    import aura.core.mcp as mcp_pkg
+    monkeypatch.setattr(mcp_pkg, "MCPManager", _BrokenManager)
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+        "mcp_servers": [
+            {"name": "bad", "command": "npx", "args": []},
+        ],
+    })
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[FakeTurn(AIMessage(content="still alive"))]),
+        storage=_storage(tmp_path),
+    )
+    # Must not raise.
+    await agent.aconnect()
+    # Agent is still usable.
+    events = await _collect(agent, "hi")
+    assert any(isinstance(e, Final) for e in events)
+    agent.close()

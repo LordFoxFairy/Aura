@@ -16,6 +16,7 @@ from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.hooks.budget import default_hooks
 from aura.core.hooks.must_read_first import make_must_read_first_hook
 from aura.core.loop import AgentLoop
+from aura.core.mcp import MCPManager
 from aura.core.memory import project_memory, rules
 from aura.core.memory.context import Context
 from aura.core.memory.system_prompt import build_system_prompt
@@ -124,6 +125,12 @@ class Agent:
         self._must_read_first_hook = make_must_read_first_hook(self._context)
         self._hooks.pre_tool.append(self._must_read_first_hook)
         self._loop = self._build_loop()
+        # MCP is wired at construction to declare the slots, but no
+        # connection happens here — aconnect() does that work async. Sync
+        # construction MUST remain sync so the existing Agent(...) call
+        # sites (tests, SDK users) don't have to thread an event loop.
+        self._mcp_manager: MCPManager | None = None
+        self._mcp_commands: list[object] = []
 
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
         # 事务性：history 只在 turn 正常完成才 save（else 分支）。
@@ -237,7 +244,69 @@ class Agent:
             todos_provider=lambda: self._state.custom.get("todos", []),
         )
 
+    async def aconnect(self) -> None:
+        """Establish MCP connections and register discovered tools / prompts.
+
+        Must be called before the first turn if ``mcp_servers`` are
+        configured. No-op if no servers are configured. Failures are
+        journalled and swallowed — the agent starts without the failing
+        servers' tools (graceful degradation is a v0.3.0 non-negotiable).
+        """
+        if not self._config.mcp_servers:
+            return
+        try:
+            manager = MCPManager(self._config.mcp_servers)
+            tools, commands = await manager.start_all()
+        except Exception as exc:  # noqa: BLE001
+            journal.write(
+                "mcp_aconnect_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            return
+        self._mcp_manager = manager
+        for t in tools:
+            # Collisions with built-ins or a previous MCP discovery pass
+            # would raise; journal + skip so a duplicate doesn't take the
+            # whole aconnect down.
+            try:
+                self._registry.register(t)
+            except ValueError as exc:
+                journal.write(
+                    "mcp_tool_register_skipped",
+                    tool=t.name,
+                    error=str(exc),
+                )
+        self._mcp_commands = list(commands)
+        self._loop._rebind_tools(self._registry.tools())
+        journal.write(
+            "mcp_aconnect_done",
+            tool_count=len(tools),
+            command_count=len(commands),
+        )
+
     def close(self) -> None:
+        # stop_all() is async; Agent.close() is sync (legacy SDK API).
+        # Run a small event loop if none is running; otherwise schedule +
+        # best-effort-detach. This mirrors the storage close path which is
+        # pure-sync.
+        if self._mcp_manager is not None:
+            import asyncio as _asyncio
+
+            try:
+                loop = _asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            try:
+                if loop is None:
+                    _asyncio.run(self._mcp_manager.stop_all())
+                else:
+                    loop.create_task(self._mcp_manager.stop_all())
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "mcp_stop_all_failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            self._mcp_manager = None
         self._storage.close()
 
     async def __aenter__(self) -> Agent:

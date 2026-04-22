@@ -23,3 +23,23 @@ class ToolRegistry(dict[str, BaseTool]):
 
     def tools(self) -> list[BaseTool]:
         return list(self.values())
+
+    def register(self, tool: BaseTool) -> None:
+        """Add ``tool`` to the registry; raise on duplicate name.
+
+        Exists for dynamic registration (MCP tools discovered post-Agent
+        construction). Constructor-time dedup via __init__'s loop is the
+        normal path; this variant raises a name-oriented error so callers
+        get a useful message out of the error path.
+        """
+        if tool.name in self:
+            raise ValueError(f"tool {tool.name!r} is already registered")
+        self[tool.name] = tool
+
+    def unregister(self, name: str) -> None:
+        """Remove the tool with the given ``name``; idempotent.
+
+        Absent name is a no-op so MCP teardown / skill reload sites don't
+        need to probe membership first.
+        """
+        self.pop(name, None)

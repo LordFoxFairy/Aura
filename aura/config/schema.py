@@ -55,6 +55,24 @@ class LogConfig(BaseModel):
     path: str = "~/.aura/logs/events.jsonl"
 
 
+class MCPServerConfig(BaseModel):
+    """One MCP server entry. The ``name`` namespaces tools as
+    ``mcp__<name>__<tool>`` and commands as ``/<name>__<prompt>``.
+
+    We only support stdio for this release; ``transport`` is kept as a field
+    so adding SSE/HTTP later is a non-breaking schema change.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    command: str
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    transport: Literal["stdio"] = "stdio"
+    enabled: bool = True
+
+
 class AuraConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -68,6 +86,7 @@ class AuraConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     log: LogConfig = Field(default_factory=LogConfig)
+    mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     # NOTE: permission config does NOT live here. Providers/router/storage/log
     # are runtime wiring; permissions are a separate concern with their own
     # file(s) at ``.aura/settings.json`` + ``.aura/settings.local.json``,

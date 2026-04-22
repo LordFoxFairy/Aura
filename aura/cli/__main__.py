@@ -209,11 +209,24 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         return _fail_startup(console, exc)
 
-    try:
-        asyncio.run(run_repl_async(
+    async def _entry() -> None:
+        # aconnect must run inside the same event loop as the REPL so the
+        # underlying MultiServerMCPClient's stdio sessions stay bound to a
+        # single loop. Never re-raise — graceful degradation is the whole
+        # point of the wrapping in Agent.aconnect itself; this extra try
+        # is belt-and-braces for future refactors.
+        try:
+            await agent.aconnect()
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]mcp connect error (continuing): {exc}[/yellow]")
+            journal.write("mcp_connect_cli_error", error=str(exc))
+        await run_repl_async(
             agent, console=console, verbose=args.verbose,
             bypass=(mode == "bypass"),
-        ))
+        )
+
+    try:
+        asyncio.run(_entry())
     except KeyboardInterrupt:
         # asyncio.run swallows the first SIGINT (to cancel the running task);
         # only a second Ctrl+C propagates here. Convert it to a clean exit so

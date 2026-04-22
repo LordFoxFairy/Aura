@@ -45,6 +45,11 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     if agent is not None:
         for skill in agent._skill_registry.list():
             r.register(SkillCommand(skill=skill, agent=agent))
+        # MCP commands were collected at aconnect() time; register them
+        # last so a name collision with a built-in / skill is flagged
+        # rather than silently shadowed.
+        for cmd in agent._mcp_commands:
+            r.register(cmd)  # type: ignore[arg-type]
     return r
 
 

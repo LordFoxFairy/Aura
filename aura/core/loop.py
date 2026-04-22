@@ -125,9 +125,23 @@ class AgentLoop:
         # leaves this to the caller, we ship a sane default to stop runaway
         # tool-call loops. Explicit None disables the cap (no-cap semantics).
         self._max_turns = max_turns
+        # Save the raw model so _rebind_tools can rebind a fresh tool set
+        # after MCP registers tools post-construction. Without the ref we'd
+        # be rebinding an already-bound model (double-bind is unsupported
+        # on some providers).
+        self._model = model
         # bind_tools 只在构造时调一次：schema 在 registry 固定后不变，多 turn 共享同一 bound model。
         # 空 registry 跳过 bind_tools —— 某些 provider 对 tools=[] 行为不一致，直接不绑更稳。
         self._bound = model.bind_tools(registry.tools()) if len(registry) > 0 else model
+
+    def _rebind_tools(self, tools: list[BaseTool]) -> None:
+        """Rebind the loop's model with an updated tool set.
+
+        Called by :meth:`Agent.aconnect` after MCP registers tools
+        dynamically. Empty ``tools`` falls back to the raw model (matches
+        the constructor's behaviour for an empty registry).
+        """
+        self._bound = self._model.bind_tools(tools) if tools else self._model
 
     @property
     def state(self) -> LoopState:

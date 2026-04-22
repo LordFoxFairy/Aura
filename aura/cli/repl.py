@@ -12,7 +12,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from aura import __version__
-from aura.cli.commands import dispatch
+from aura.cli.commands import build_default_registry, dispatch
 from aura.cli.render import Renderer
 from aura.cli.spinner import ThinkingSpinner
 from aura.core.agent import Agent
@@ -37,6 +37,7 @@ async def run_repl_async(
     _input = input_fn if input_fn is not None else _default_input
     _console = console if console is not None else Console()
     renderer = Renderer(_console)
+    registry = build_default_registry()
 
     _print_welcome(agent, _console)
 
@@ -63,7 +64,7 @@ async def run_repl_async(
 
         journal.write("user_input", line=line[:500])
 
-        result = dispatch(line, agent)
+        result = await dispatch(line, agent, registry)
         if result.handled:
             journal.write(
                 "slash_command",

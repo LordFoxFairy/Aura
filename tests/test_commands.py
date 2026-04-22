@@ -1,11 +1,20 @@
-"""Tests for aura.cli.commands.dispatch."""
+"""Tests for the aura.cli.commands façade.
+
+Exercises the public surface (``build_default_registry`` + async
+``dispatch``) end-to-end — mechanics of the underlying registry and each
+built-in command are covered in ``test_command_registry.py``. These tests
+are the regression guard against anyone breaking the façade import path
+or its wiring of the four default commands.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from aura.cli.commands import dispatch
+import pytest
+
+from aura.cli.commands import build_default_registry, dispatch
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.llm import UnknownModelSpecError
@@ -29,83 +38,112 @@ def _agent(tmp_path: Path) -> Agent:
     )
 
 
-def test_dispatch_non_slash_not_handled(tmp_path: Path) -> None:
+def test_default_registry_has_four_builtins() -> None:
+    r = build_default_registry()
+    names = {c.name for c in r.list()}
+    assert names == {"/help", "/exit", "/clear", "/model"}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_non_slash_not_handled(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    result = dispatch("hello there", agent)
+    r = build_default_registry()
+    result = await dispatch("hello there", agent, r)
     assert result.handled is False
     assert result.kind == "noop"
     assert result.text == ""
 
 
-def test_dispatch_help_prints_command_list(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_dispatch_help_prints_command_list(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    result = dispatch("/help", agent)
+    r = build_default_registry()
+    result = await dispatch("/help", agent, r)
     assert result.handled is True
     assert result.kind == "print"
+    # Don't pin exact wording — registry enumerates dynamically now.
+    assert "/help" in result.text
     assert "/exit" in result.text
+    assert "/clear" in result.text
     assert "/model" in result.text
 
 
-def test_dispatch_exit(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_dispatch_exit(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    result = dispatch("/exit", agent)
+    r = build_default_registry()
+    result = await dispatch("/exit", agent, r)
     assert result.handled is True
     assert result.kind == "exit"
 
 
-def test_dispatch_clear_calls_agent_clear_session() -> None:
+@pytest.mark.asyncio
+async def test_dispatch_clear_calls_agent_clear_session() -> None:
     mock_agent = MagicMock(spec=Agent)
-    result = dispatch("/clear", mock_agent)
+    r = build_default_registry()
+    result = await dispatch("/clear", mock_agent, r)
     assert mock_agent.clear_session.called
     assert result.handled and result.kind == "print"
     assert "cleared" in result.text
 
 
-def test_dispatch_model_no_arg_shows_status(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_dispatch_model_no_arg_shows_status(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    result = dispatch("/model", agent)
+    r = build_default_registry()
+    result = await dispatch("/model", agent, r)
     assert result.handled is True
     assert result.kind == "print"
     assert "default" in result.text
     assert "opus" in result.text
 
 
-def test_dispatch_model_with_router_alias(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_dispatch_model_with_router_alias() -> None:
     mock_agent = MagicMock(spec=Agent)
-    result = dispatch("/model opus", mock_agent)
+    r = build_default_registry()
+    result = await dispatch("/model opus", mock_agent, r)
     mock_agent.switch_model.assert_called_once_with("opus")
     assert result.handled is True
     assert result.kind == "print"
     assert "switched to opus" in result.text
 
 
-def test_dispatch_model_unknown_returns_error_text(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_dispatch_model_unknown_returns_error_text() -> None:
     mock_agent = MagicMock(spec=Agent)
     mock_agent.switch_model.side_effect = UnknownModelSpecError(
         "model spec", "bogus-not-an-alias is not a router alias"
     )
-    result = dispatch("/model bogus-not-an-alias", mock_agent)
+    r = build_default_registry()
+    result = await dispatch("/model bogus-not-an-alias", mock_agent, r)
     assert result.handled is True
     assert result.kind == "print"
     assert "error:" in result.text
     assert "bogus" in result.text
 
 
-def test_dispatch_unknown_slash_command(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_dispatch_unknown_slash_command(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    result = dispatch("/foo", agent)
+    r = build_default_registry()
+    result = await dispatch("/foo", agent, r)
     assert result.handled is True
     assert result.kind == "print"
     assert "unknown command" in result.text
 
 
-def test_dispatch_empty_line_not_handled(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_dispatch_empty_line_not_handled(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    result = dispatch("", agent)
+    r = build_default_registry()
+    result = await dispatch("", agent, r)
     assert result.handled is False
 
 
-def test_dispatch_whitespace_line_not_handled(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_dispatch_whitespace_line_not_handled(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    result = dispatch("   ", agent)
+    r = build_default_registry()
+    result = await dispatch("   ", agent, r)
     assert result.handled is False

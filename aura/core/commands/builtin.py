@@ -66,6 +66,25 @@ class ClearCommand:
         )
 
 
+class CompactCommand:
+    """``/compact`` — summarize old history + preserve session state."""
+
+    name = "/compact"
+    description = "summarize history + preserve state"
+    source: CommandSource = "builtin"
+
+    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+        result = await agent.compact(source="manual")
+        return CommandResult(
+            handled=True,
+            kind="print",
+            text=(
+                f"compact applied ({result.before_tokens} -> "
+                f"{result.after_tokens} tokens)"
+            ),
+        )
+
+
 class ModelCommand:
     """``/model [spec]`` — show or switch the current model."""
 

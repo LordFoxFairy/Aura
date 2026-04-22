@@ -38,10 +38,10 @@ def _agent(tmp_path: Path) -> Agent:
     )
 
 
-def test_default_registry_has_four_builtins() -> None:
+def test_default_registry_has_five_builtins() -> None:
     r = build_default_registry()
     names = {c.name for c in r.list()}
-    assert names == {"/help", "/exit", "/clear", "/model"}
+    assert names == {"/help", "/exit", "/clear", "/compact", "/model"}
 
 
 @pytest.mark.asyncio

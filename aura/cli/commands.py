@@ -13,6 +13,7 @@ from aura.core.agent import Agent
 from aura.core.commands import Command, CommandRegistry, CommandResult
 from aura.core.commands.builtin import (
     ClearCommand,
+    CompactCommand,
     ExitCommand,
     HelpCommand,
     ModelCommand,
@@ -41,6 +42,7 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     r.register(HelpCommand(registry=r))
     r.register(ExitCommand())
     r.register(ClearCommand())
+    r.register(CompactCommand())
     r.register(ModelCommand())
     if agent is not None:
         for skill in agent._skill_registry.list():

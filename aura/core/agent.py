@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Literal
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core import llm
+from aura.core.compact import CompactResult, run_compact
 from aura.core.hooks import HookChain
 from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.hooks.budget import default_hooks
@@ -197,6 +199,18 @@ class Agent:
         self._hooks.pre_tool.insert(0, self._bash_safety_hook)
         self._loop = self._build_loop()
         journal.write("session_cleared", session=self._session_id)
+
+    async def compact(
+        self, *, source: Literal["manual", "auto"] = "manual",
+    ) -> CompactResult:
+        """Summarize old history, preserve session state, rebuild Context.
+
+        Entry point for ``/compact`` and (future) auto-compact. The heavy
+        lifting lives in :func:`aura.core.compact.run_compact`; this method
+        exists so callers have a stable surface and so the skill/command
+        layer doesn't need to reach into the compact module directly.
+        """
+        return await run_compact(self, source=source)
 
     def record_skill_invocation(self, skill: Skill) -> None:
         """Proxy to Context — appends ``skill`` to the invoked list.

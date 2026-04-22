@@ -24,6 +24,8 @@ from langchain_core.outputs import ChatResult
 
 from aura.config.schema import AuraConfig
 from aura.core.persistence.storage import SessionStorage
+from aura.core.skills.registry import SkillRegistry
+from aura.core.skills.types import Skill
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.run import run_task
 from aura.core.tasks.store import TasksStore
@@ -148,23 +150,24 @@ async def test_task_output_reflects_final_result_after_subagent_finishes(
     assert info["final_result"] == "subagent-final"
 
 
-def test_subagent_factory_strips_mcp_servers_from_child_config() -> None:
-    # Even when parent has mcp_servers configured, the subagent spawned
-    # from SubagentFactory must see mcp_servers=[] (0.5.0 isolation).
-    # MCP state (connections, discovered tools) is per-agent and MUST NOT
-    # leak from parent to child — verified at the config boundary since
-    # Agent.aconnect() short-circuits on empty mcp_servers.
+def test_subagent_inherits_parent_mcp_servers() -> None:
+    # Parity with claude-code: subagents inherit the parent's MCP server
+    # list so they can talk to the same external tools. Each subagent runs
+    # its own aconnect so connections are independent (langchain-mcp-adapters
+    # spawns a fresh session per get_tools call anyway), but the SERVER
+    # CONFIG LIST must cross the boundary.
+    mcp_entry = {
+        "name": "github",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {},
+        "transport": "stdio",
+    }
     parent_config = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
-        "mcp_servers": [{
-            "name": "github",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-github"],
-            "env": {},
-            "transport": "stdio",
-        }],
+        "mcp_servers": [mcp_entry],
     })
     factory = SubagentFactory(
         parent_config=parent_config,
@@ -173,7 +176,87 @@ def test_subagent_factory_strips_mcp_servers_from_child_config() -> None:
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
     child_agent = factory.spawn("sub-prompt")
-    assert child_agent._config.mcp_servers == []
+    assert len(child_agent._config.mcp_servers) == 1
+    assert child_agent._config.mcp_servers[0].name == "github"
+    child_agent.close()
+
+
+def test_subagent_inherits_parent_skills(tmp_path: Path) -> None:
+    # Parent's loaded SkillRegistry must cross to the subagent — otherwise
+    # /<skill> invocations inside the subagent see nothing. Pre-loaded
+    # registry is passed through Agent(pre_loaded_skills=...) so the child
+    # doesn't re-scan the disk (cheaper + exact parity with parent).
+    parent_skills = SkillRegistry([
+        Skill(
+            name="alpha",
+            description="alpha skill",
+            body="ALPHA-BODY",
+            source_path=Path("/fake/alpha.md"),
+            layer="user",
+        ),
+        Skill(
+            name="beta",
+            description="beta skill",
+            body="BETA-BODY",
+            source_path=Path("/fake/beta.md"),
+            layer="project",
+        ),
+    ])
+    parent_config = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+    })
+    factory = SubagentFactory(
+        parent_config=parent_config,
+        parent_model_spec="openai:gpt-4o-mini",
+        parent_skills=parent_skills,
+        model_factory=lambda: FakeChatModel(turns=[]),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+    child_agent = factory.spawn("sub-prompt")
+    names = {s.name for s in child_agent._skill_registry.list()}
+    assert names == {"alpha", "beta"}
+    child_agent.close()
+
+
+def test_subagent_still_cannot_recurse_via_task_create() -> None:
+    # Recursion guard: even though subagent inherits the parent tool set,
+    # task_create + task_output MUST be stripped so a subagent can't spawn
+    # further subagents (dispatch not wired into child Agents in 0.5.x).
+    parent_config = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
+    })
+    factory = SubagentFactory(
+        parent_config=parent_config,
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(turns=[]),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+    child_agent = factory.spawn("sub-prompt")
+    enabled = child_agent._config.tools.enabled
+    assert "task_create" not in enabled
+    assert "task_output" not in enabled
+    child_agent.close()
+
+
+def test_subagent_inherits_allowed_tools_excluding_task_tools() -> None:
+    # Parent has 4 tools enabled; child sees the non-task-tool subset.
+    parent_config = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
+    })
+    factory = SubagentFactory(
+        parent_config=parent_config,
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(turns=[]),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+    child_agent = factory.spawn("sub-prompt")
+    assert child_agent._config.tools.enabled == ["bash", "read_file"]
     child_agent.close()
 
 

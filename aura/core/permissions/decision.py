@@ -37,14 +37,18 @@ DecisionReason = Literal[
     "user_accept",
     "user_always",
     "mode_bypass",
+    "mode_accept_edits",
     "user_deny",
     "safety_blocked",
+    "plan_mode_blocked",
 ]
 
 _ALLOW_REASONS: frozenset[str] = frozenset(
-    {"rule_allow", "user_accept", "user_always", "mode_bypass"}
+    {"rule_allow", "user_accept", "user_always", "mode_bypass", "mode_accept_edits"}
 )
-_DENY_REASONS: frozenset[str] = frozenset({"user_deny", "safety_blocked"})
+_DENY_REASONS: frozenset[str] = frozenset(
+    {"user_deny", "safety_blocked", "plan_mode_blocked"}
+)
 _RULE_REQUIRED_REASONS: frozenset[str] = frozenset({"rule_allow", "user_always"})
 
 
@@ -91,6 +95,8 @@ class Decision:
                 return f"auto-allowed: rule `{self.rule.to_string()}`"
             case "mode_bypass":
                 return "allowed: mode_bypass"
+            case "mode_accept_edits":
+                return "allowed: mode_accept_edits"
             case "user_accept":
                 return "allowed: user"
             case "user_always":
@@ -100,3 +106,5 @@ class Decision:
                 return "denied: user"
             case "safety_blocked":
                 return "blocked: safety"
+            case "plan_mode_blocked":
+                return "blocked: plan mode (dry-run)"

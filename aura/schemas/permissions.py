@@ -16,6 +16,6 @@ from pydantic import BaseModel, ConfigDict, Field
 class PermissionsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["default", "bypass"] = "default"
+    mode: Literal["default", "bypass", "plan", "accept_edits"] = "default"
     allow: list[str] = Field(default_factory=list)
     safety_exempt: list[str] = Field(default_factory=list)

@@ -322,3 +322,164 @@ async def test_compact_result_dataclass_shape(tmp_path: Path) -> None:
     # may add usage if a usage hook were wired — here it isn't, so equal).
     assert isinstance(result.after_tokens, int)
     agent.close()
+
+
+# ---------------------------------------------------------------------------
+# Item 1 — selective file re-injection after compact
+# ---------------------------------------------------------------------------
+
+
+def _touch_with_mtime(path: Path, body: str, mtime: float) -> None:
+    """Write ``body`` to ``path`` then force its mtime — ordering the reads."""
+    path.write_text(body)
+    import os
+    os.utime(path, (mtime, mtime))
+
+
+@pytest.mark.asyncio
+async def test_compact_reinjects_top_n_recent_files_by_mtime(
+    tmp_path: Path,
+) -> None:
+    """Top MAX_FILES_TO_RESTORE read files (by mtime DESC) re-injected after compact."""
+    from aura.core.compact.constants import MAX_FILES_TO_RESTORE
+
+    agent = _make_agent(tmp_path)
+    _seed_history(agent, pairs=10)
+
+    # Create 7 files, staggered mtimes — file_6 is newest, file_0 oldest.
+    files: list[Path] = []
+    for i in range(7):
+        p = tmp_path / f"file_{i}.txt"
+        _touch_with_mtime(p, f"BODY-{i}", mtime=1_000_000 + i)
+        agent._context.record_read(p)
+        files.append(p)
+
+    await agent.compact(source="manual")
+
+    # History: summary + N recent-file messages + preserved tail.
+    history = agent._storage.load(agent.session_id)
+    recent_file_messages = [
+        m for m in history
+        if isinstance(m, HumanMessage) and "<recent-file" in str(m.content)
+    ]
+    assert len(recent_file_messages) == MAX_FILES_TO_RESTORE
+
+    # Top 5 by mtime DESC = files 6, 5, 4, 3, 2.
+    joined = "\n".join(str(m.content) for m in recent_file_messages)
+    for i in (6, 5, 4, 3, 2):
+        assert f"BODY-{i}" in joined, f"expected BODY-{i} in re-injected blob"
+    # Older files skipped.
+    for i in (1, 0):
+        assert f"BODY-{i}" not in joined
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_compact_skips_partial_reads_in_reinjection(tmp_path: Path) -> None:
+    """Files whose recorded read was partial do NOT get re-injected."""
+    agent = _make_agent(tmp_path)
+    _seed_history(agent, pairs=10)
+
+    full = tmp_path / "full.txt"
+    part = tmp_path / "part.txt"
+    _touch_with_mtime(full, "FULL-BODY", mtime=2_000_000)
+    _touch_with_mtime(part, "PART-BODY", mtime=3_000_000)  # newer, but partial
+    agent._context.record_read(full)
+    agent._context.record_read(part, partial=True)
+
+    await agent.compact(source="manual")
+
+    history = agent._storage.load(agent.session_id)
+    blob = "\n".join(str(m.content) for m in history)
+    assert "FULL-BODY" in blob
+    assert "PART-BODY" not in blob
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_compact_handles_deleted_file_during_reinjection(
+    tmp_path: Path,
+) -> None:
+    """A recorded file deleted before compact is silently skipped (no crash)."""
+    agent = _make_agent(tmp_path)
+    _seed_history(agent, pairs=10)
+
+    alive = tmp_path / "alive.txt"
+    dead = tmp_path / "dead.txt"
+    _touch_with_mtime(alive, "ALIVE-BODY", mtime=1_000_000)
+    _touch_with_mtime(dead, "DEAD-BODY", mtime=2_000_000)  # newer
+    agent._context.record_read(alive)
+    agent._context.record_read(dead)
+    dead.unlink()
+
+    # Must not raise.
+    await agent.compact(source="manual")
+
+    history = agent._storage.load(agent.session_id)
+    blob = "\n".join(str(m.content) for m in history)
+    assert "ALIVE-BODY" in blob
+    assert "DEAD-BODY" not in blob
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_compact_caps_file_body_at_max_tokens_per_file(
+    tmp_path: Path,
+) -> None:
+    """Oversize file bodies are truncated with a ``(truncated)`` marker."""
+    from aura.core.compact.constants import MAX_TOKENS_PER_FILE
+
+    agent = _make_agent(tmp_path)
+    _seed_history(agent, pairs=10)
+
+    # 4 chars/token approx → cap is MAX_TOKENS_PER_FILE * 4 chars.
+    max_chars = MAX_TOKENS_PER_FILE * 4
+    huge_body = "X" * (max_chars + 500)
+    big = tmp_path / "big.txt"
+    _touch_with_mtime(big, huge_body, mtime=1_000_000)
+    agent._context.record_read(big)
+
+    await agent.compact(source="manual")
+
+    history = agent._storage.load(agent.session_id)
+    recent = [
+        str(m.content) for m in history
+        if isinstance(m, HumanMessage) and "<recent-file" in str(m.content)
+    ]
+    assert recent, "expected a <recent-file> block"
+    blob = recent[0]
+    assert "(truncated)" in blob
+    # Total payload roughly bounded — tag + truncated body stays close to max_chars.
+    assert len(blob) <= max_chars + 1_000
+    agent.close()
+
+
+@pytest.mark.asyncio
+async def test_compact_recent_files_rendered_before_preserved_tail(
+    tmp_path: Path,
+) -> None:
+    """Order: summary, *<recent-file>, *preserved_tail."""
+    agent = _make_agent(tmp_path)
+    _seed_history(agent, pairs=10)
+
+    p = tmp_path / "r.txt"
+    _touch_with_mtime(p, "RECENT-BODY", mtime=1_500_000)
+    agent._context.record_read(p)
+
+    await agent.compact(source="manual")
+
+    history = agent._storage.load(agent.session_id)
+    # history[0] = summary
+    assert "<session-summary>" in str(history[0].content)
+    # history[1] = recent-file (only one recorded)
+    assert "<recent-file" in str(history[1].content)
+    assert "RECENT-BODY" in str(history[1].content)
+    # history[2..] = preserved tail (user-7/assistant-7 onwards).
+    tail = history[2:]
+    # None of the tail messages should be a <recent-file> or <session-summary>.
+    assert all(
+        "<recent-file" not in str(m.content)
+        and "<session-summary>" not in str(m.content)
+        for m in tail
+    )
+    agent.close()

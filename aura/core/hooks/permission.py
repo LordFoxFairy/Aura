@@ -1,6 +1,7 @@
 """Permission layer — PreToolHook factory that gates every tool call.
 
-Spec: ``docs/specs/2026-04-19-aura-permission.md`` §5.
+Spec: ``docs/specs/2026-04-19-aura-permission.md`` §5, extended 2026-04-21
+with the ``plan`` and ``accept_edits`` modes.
 
 Decision order (short-circuits at first match):
 
@@ -10,13 +11,19 @@ Decision order (short-circuits at first match):
    ``metadata["is_destructive"]``) picks which protected list to consult:
    the writes list for destructive tools, the (narrower) reads list for
    everyone else. Tools without a path arg (``bash``) fall through; the
-   user's rule grant is the backstop there.
-3. Rule match — project rules first, session rules second. The project
+   user's rule grant is the backstop there. Runs BEFORE the plan /
+   accept_edits mode branches so no mode can short-circuit safety.
+3. ``mode == "plan"`` → dry-run deny with ``plan_mode_blocked``. Reports
+   what the agent *would* have done without side effects.
+4. ``mode == "accept_edits"`` AND tool name ∈ ``{read_file, write_file,
+   edit_file}`` → auto-allow with ``mode_accept_edits``. Any other tool
+   falls through to the rule / ask path.
+5. Rule match — project rules first, session rules second. The project
    RuleSet carries built-in defaults from
    ``aura.core.permissions.defaults.DEFAULT_ALLOW_RULES`` composed with
    user rules at startup, so ``read_file`` / ``grep`` / ``glob`` hit
    ``rule_allow`` without a prompt while still passing through safety.
-4. Ask — delegate to the CLI asker; install the returned rule if
+6. Ask — delegate to the CLI asker; install the returned rule if
    ``always``.
 
 Layer boundaries (enforced by construction, not convention):
@@ -51,6 +58,18 @@ from aura.schemas.tool import ToolResult
 
 # Shared empty immutable RuleSet — safe as a default (frozen, no mutable state).
 _EMPTY_RULESET = RuleSet()
+
+# Tools whose invocation ``accept_edits`` mode auto-allows (once safety has
+# cleared). Deliberately a tight closed set: the user opts into "yes, keep
+# editing files" without also opting into shell commands, web fetches, or
+# custom tools. Matches claude-code's "accept edits" mode behavior.
+_ACCEPT_EDITS_TOOLS: frozenset[str] = frozenset({"read_file", "write_file", "edit_file"})
+
+# Cap for the plan-mode "would have called" error string. Tool args can be
+# multi-kilobyte (write_file.content, bash.command). We truncate so a
+# dry-run error doesn't flood the model's context window, but the full
+# args are still emitted to the journal for the operator's audit trail.
+_PLAN_PREVIEW_MAX_CHARS = 200
 
 
 @dataclass(frozen=True)
@@ -98,8 +117,55 @@ class PermissionAsker(Protocol):
     ) -> AskerResponse: ...
 
 
+def _plan_args_preview(tool: BaseTool, args: dict[str, Any]) -> str:
+    """One-line preview of a planned call's args for plan-mode dry-run output.
+
+    Prefers the tool's own ``args_preview`` (same function used by the
+    CLI prompt renderer — keeps the two surfaces consistent) and falls
+    back to a compact ``key=repr(value)`` list when a tool doesn't ship
+    one. Truncated to ``_PLAN_PREVIEW_MAX_CHARS`` with a single ellipsis
+    character so very large args (a bash command embedding a script,
+    a write_file body) don't explode the model-facing error.
+    """
+    preview_fn = (tool.metadata or {}).get("args_preview")
+    if callable(preview_fn):
+        try:
+            out = preview_fn(args)
+        except Exception:  # noqa: BLE001 — preview must never break the deny path
+            out = None
+        if isinstance(out, str) and out:
+            return _truncate(out, _PLAN_PREVIEW_MAX_CHARS)
+    # Fallback — compact "k=repr(v)" join. Uses ``repr`` so strings show
+    # their quoting (easy to spot the boundary in an error message).
+    joined = ", ".join(f"{k}={v!r}" for k, v in args.items())
+    return _truncate(joined, _PLAN_PREVIEW_MAX_CHARS)
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
+
+
+def _plan_error_message(tool: BaseTool, args: dict[str, Any]) -> str:
+    """Compose the model-facing error string for ``plan_mode_blocked``.
+
+    Format: ``plan mode: would have called {tool}({args_preview})`` — it
+    tells the model to stop executing AND gives the planner enough context
+    to iterate on the plan without re-deriving the args.
+    """
+    return (
+        f"plan mode: would have called {tool.name}({_plan_args_preview(tool, args)})"
+    )
+
+
 def _deny_message(decision: Decision) -> str:
-    """Model-facing error string for denied decisions. Concise + actionable."""
+    """Model-facing error string for denied decisions. Concise + actionable.
+
+    Note: ``plan_mode_blocked`` is handled out-of-band by the hook so the
+    message can embed the tool name + args preview without threading them
+    through Decision.
+    """
     match decision.reason:
         case "safety_blocked":
             return "denied: protected path (safety policy)"
@@ -201,6 +267,12 @@ def make_permission_hook(
         state.custom["_aura_pending_decision"] = decision
         if decision.allow:
             return None
+        if decision.reason == "plan_mode_blocked":
+            # The plan-mode error needs tool name + args preview, which
+            # aren't on Decision. Compose here where they're in scope.
+            return ToolResult(
+                ok=False, error=_plan_error_message(tool, args),
+            )
         return ToolResult(ok=False, error=_deny_message(decision))
 
     return _hook
@@ -217,27 +289,46 @@ async def _decide(
     mode: Mode,
     safety: SafetyPolicy,
 ) -> Decision:
-    # 1. Bypass mode — loud and first.
+    # 1. Bypass mode — loud and first. Note: bypass deliberately does NOT
+    # run through safety here; the safety floor for bypass lives at the
+    # tool level (bash_safety_hook) and for path tools is enforced by
+    # the OS (write to /etc/passwd would fail anyway). This matches the
+    # existing spec contract and the pre-existing test
+    # ``test_bypass_mode_short_circuits_even_on_protected_path``.
     if mode == "bypass":
         journal.write("permission_bypass", tool=tool.name)
         return Decision(allow=True, reason="mode_bypass")
 
     # 2. Safety — any tool with a resolvable path arg, write-or-read
-    # direction chosen by the tool's is_destructive flag.
+    # direction chosen by the tool's is_destructive flag. Runs BEFORE
+    # plan/accept_edits so no mode can sneak past the protected list.
     target = _safety_target(args)
     if target is not None:
         is_write = bool((tool.metadata or {}).get("is_destructive", False))
         if is_protected(target, safety, is_write=is_write):
             return Decision(allow=False, reason="safety_blocked", target=target)
 
-    # 3. Rule match — project first (includes built-in defaults), session second.
+    # 3. Plan mode — dry-run deny for every safety-cleared tool call.
+    # Deliberately placed AFTER safety so a plan-mode session still
+    # surfaces safety_blocked decisions for protected paths (the user
+    # sees the real reason, not a generic "plan would have called").
+    if mode == "plan":
+        return Decision(allow=False, reason="plan_mode_blocked")
+
+    # 4. accept_edits mode — auto-allow the edit-family tools. Any other
+    # tool (bash, web_fetch, custom) falls through to the rule/ask path,
+    # so side-effecting calls still require explicit consent.
+    if mode == "accept_edits" and tool.name in _ACCEPT_EDITS_TOOLS:
+        return Decision(allow=True, reason="mode_accept_edits")
+
+    # 5. Rule match — project first (includes built-in defaults), session second.
     matched = rules.matches(tool.name, args, tool)
     if matched is None:
         matched = session.matches(tool.name, args, tool)
     if matched is not None:
         return Decision(allow=True, reason="rule_allow", rule=matched)
 
-    # 4. Ask.
+    # 6. Ask.
     rule_hint = Rule(tool=tool.name, content=None)
     try:
         response = await asker(tool=tool, args=args, rule_hint=rule_hint)

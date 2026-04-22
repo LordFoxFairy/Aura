@@ -55,6 +55,30 @@ class LogConfig(BaseModel):
     path: str = "~/.aura/logs/events.jsonl"
 
 
+class WebSearchConfig(BaseModel):
+    """Backend selection for the ``web_search`` tool.
+
+    ``provider`` picks the backend; ``duckduckgo`` is the zero-config default
+    and the only one actually implemented in this release. ``tavily`` and
+    ``serper`` slots exist so config validates (and users can pin a future
+    backend without a schema migration) — invoking them raises a clear
+    ``ToolError`` telling the user the backend is not yet implemented.
+
+    ``api_key_env`` names the env var that holds the key (the key itself is
+    never stored in config). Ignored for the DuckDuckGo backend.
+
+    ``max_results`` is the default cap when the caller invokes ``web_search``
+    without an explicit ``max_results`` argument (i.e. the schema default
+    fires). An explicit argument always wins.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["duckduckgo", "tavily", "serper"] = "duckduckgo"
+    api_key_env: str | None = None
+    max_results: int = Field(default=5, ge=1, le=20)
+
+
 class MCPServerConfig(BaseModel):
     """One MCP server entry. The ``name`` namespaces tools as
     ``mcp__<name>__<tool>`` and commands as ``/<name>__<prompt>``.
@@ -87,6 +111,7 @@ class AuraConfig(BaseModel):
     ui: UIConfig = Field(default_factory=UIConfig)
     log: LogConfig = Field(default_factory=LogConfig)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
+    web_search: WebSearchConfig | None = None
     # NOTE: permission config does NOT live here. Providers/router/storage/log
     # are runtime wiring; permissions are a separate concern with their own
     # file(s) at ``.aura/settings.json`` + ``.aura/settings.local.json``,

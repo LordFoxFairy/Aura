@@ -28,7 +28,7 @@ from aura.core.permissions.session import SessionRuleSet
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
-from aura.core.skills import Skill, load_skills
+from aura.core.skills import Skill, SkillRegistry, load_skills
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
 from aura.schemas.events import AgentEvent, Final
@@ -38,6 +38,25 @@ from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 from aura.tools.ask_user import QuestionAsker
 
 _DEFAULT_SESSION = "default"
+
+# Substring signatures that identify provider-level "context length exceeded"
+# errors. We match on stringified message — not exception type — so we don't
+# have to import openai / anthropic SDK types and so custom/wrapper models
+# keep working. Lowercased at compare time; covers OpenAI, Anthropic,
+# Google, and generic "too many tokens" phrasings.
+_CONTEXT_OVERFLOW_PHRASES: tuple[str, ...] = (
+    "context length",
+    "context_length_exceeded",
+    "maximum context",
+    "prompt is too long",
+    "too many tokens",
+)
+
+
+def _is_context_overflow(exc: BaseException) -> bool:
+    """True iff ``exc``'s message matches a known context-overflow signature."""
+    msg = str(exc).lower()
+    return any(phrase in msg for phrase in _CONTEXT_OVERFLOW_PHRASES)
 
 
 async def _unavailable_question_asker(
@@ -68,6 +87,7 @@ class Agent:
         question_asker: QuestionAsker | None = None,
         auto_compact_threshold: int = AUTO_COMPACT_THRESHOLD,
         session_log_dir: Path | None = None,
+        pre_loaded_skills: SkillRegistry | None = None,
     ) -> None:
         # ``session_rules``: CLI hands in the same SessionRuleSet that was used
         # to build the permission hook; Agent.clear_session drops its runtime
@@ -82,13 +102,26 @@ class Agent:
         # successfully and total_tokens_used crosses the threshold, astream
         # calls self.compact(source="auto") before returning. 0 disables it.
         self._auto_compact_threshold = auto_compact_threshold
-        # Subagent plumbing (0.5.0). The factory is built lazily from the
-        # parent's config + model spec; spawning it here keeps Agent.__init__
-        # self-contained for tests that don't care about subagents.
+        # Skills: user-layer (~/.aura/skills/) + project-layer (<cwd>/.aura/skills/).
+        # Loaded once at Agent init; not re-scanned on /clear (v0.2.0 MVP — no
+        # hot reload). Collision resolution inside the loader logs to journal.
+        # When ``pre_loaded_skills`` is passed in (subagent path), use that
+        # registry directly — skips the disk scan and guarantees exact parity
+        # with the parent's skill set.
+        self._cwd = Path.cwd()
+        if pre_loaded_skills is not None:
+            self._skill_registry = pre_loaded_skills
+        else:
+            self._skill_registry = load_skills(cwd=self._cwd)
+        # Subagent plumbing. Built AFTER _skill_registry so the factory can
+        # hand the parent's (this Agent's) pre-loaded skills through to any
+        # child Agent it spawns — matches claude-code's "subagent inherits
+        # parent tool set" semantics.
         self._tasks_store = TasksStore()
         self._subagent_factory = SubagentFactory(
             parent_config=self._config,
             parent_model_spec=self._config.router.get("default", ""),
+            parent_skills=self._skill_registry,
         )
         # Map: task_id -> the detached asyncio.Task handle. Shared with the
         # ``task_create`` tool so Agent.close() can cancel still-running
@@ -118,6 +151,11 @@ class Agent:
                 )
             elif name == "task_output":
                 self._available_tools[name] = cls(store=self._tasks_store)
+            elif name == "web_search":
+                # web_search takes an optional WebSearchConfig; when the user
+                # did not declare ``web_search:`` in config, the tool falls
+                # back to its own defaults (DuckDuckGo, max_results=5).
+                self._available_tools[name] = cls(config=self._config.web_search)
             else:  # pragma: no cover — guardrail for future additions
                 raise RuntimeError(f"unwired stateful tool: {name}")
         self._session_id = session_id
@@ -143,14 +181,9 @@ class Agent:
                 )
             tools.append(tool)
         self._registry = ToolRegistry(tools)
-        self._cwd = Path.cwd()
         self._system_prompt = build_system_prompt()
         self._primary_memory = project_memory.load_project_memory(self._cwd)
         self._rules = rules.load_rules(self._cwd)
-        # Skills: user-layer (~/.aura/skills/) + project-layer (<cwd>/.aura/skills/).
-        # Loaded once at Agent init; not re-scanned on /clear (v0.2.0 MVP — no
-        # hot reload). Collision resolution inside the loader logs to journal.
-        self._skill_registry = load_skills(cwd=self._cwd)
         self._context = self._build_context()
         # Hard-floor bash safety — Tier A shell attacks (zsh builtins, CR
         # parser differential, malformed+separator, cd+git compound). Inserted
@@ -198,6 +231,13 @@ class Agent:
                 prompt_preview=prompt[:200],
             )
             history = self._storage.load(self._session_id)
+            # Reactive recompact: if the model signals a context-length
+            # overflow on this turn, run compact(source="reactive") and
+            # retry the turn ONCE against the compacted history. Only the
+            # first failure triggers the recovery; a second overflow on the
+            # retry is re-raised so persistent-overflow bugs (e.g. system
+            # prompt already too long) surface instead of looping forever.
+            retry_exc: BaseException | None = None
             try:
                 async for event in self._loop.run_turn(user_prompt=prompt, history=history):
                     yield event
@@ -205,29 +245,48 @@ class Agent:
                 journal.write("astream_cancelled", session=self._session_id)
                 yield Final(message="(cancelled)")
                 raise
-            else:
-                self._storage.save(self._session_id, history)
+            except Exception as exc:
+                if not _is_context_overflow(exc):
+                    raise
                 journal.write(
-                    "astream_end",
+                    "reactive_compact_triggered",
                     session=self._session_id,
-                    history_len=len(history),
-                    total_tokens=self._state.total_tokens_used,
+                    error=str(exc),
                 )
-                # Auto-compact post-turn. Deliberately AFTER save + astream_end
-                # so the summary turn sees a stable, already-persisted history
-                # and we don't interleave compact I/O with the caller's yield
-                # stream. Zero threshold disables; any positive value arms it.
-                if (
-                    self._auto_compact_threshold > 0
-                    and self._state.total_tokens_used > self._auto_compact_threshold
-                ):
-                    journal.write(
-                        "auto_compact_triggered",
-                        session=self._session_id,
-                        tokens=self._state.total_tokens_used,
-                        threshold=self._auto_compact_threshold,
-                    )
-                    await self.compact(source="auto")
+                # Stash and retry OUTSIDE the except — avoids nested-exception
+                # chaining if compact or the retry turn itself raises.
+                retry_exc = exc
+
+            if retry_exc is not None:
+                await self.compact(source="reactive")
+                # compact replaced history with [summary, *recent_files, *tail];
+                # the retry must see the new messages.
+                history = self._storage.load(self._session_id)
+                async for event in self._loop.run_turn(user_prompt=prompt, history=history):
+                    yield event
+
+            self._storage.save(self._session_id, history)
+            journal.write(
+                "astream_end",
+                session=self._session_id,
+                history_len=len(history),
+                total_tokens=self._state.total_tokens_used,
+            )
+            # Auto-compact post-turn. Deliberately AFTER save + astream_end
+            # so the summary turn sees a stable, already-persisted history
+            # and we don't interleave compact I/O with the caller's yield
+            # stream. Zero threshold disables; any positive value arms it.
+            if (
+                self._auto_compact_threshold > 0
+                and self._state.total_tokens_used > self._auto_compact_threshold
+            ):
+                journal.write(
+                    "auto_compact_triggered",
+                    session=self._session_id,
+                    tokens=self._state.total_tokens_used,
+                    threshold=self._auto_compact_threshold,
+                )
+                await self.compact(source="auto")
 
     def switch_model(self, spec: str) -> None:
         journal.write("model_switch_attempt", spec=spec)
@@ -269,7 +328,7 @@ class Agent:
         journal.write("session_cleared", session=self._session_id)
 
     async def compact(
-        self, *, source: Literal["manual", "auto"] = "manual",
+        self, *, source: Literal["manual", "auto", "reactive"] = "manual",
     ) -> CompactResult:
         """Summarize old history, preserve session state, rebuild Context.
 

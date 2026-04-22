@@ -30,21 +30,26 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from aura.core.compact.constants import KEEP_LAST_N_TURNS
+from aura.core.compact.constants import (
+    KEEP_LAST_N_TURNS,
+    MAX_FILES_TO_RESTORE,
+    MAX_TOKENS_PER_FILE,
+)
 from aura.core.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
 from aura.core.memory import project_memory, rules
-from aura.core.memory.context import Context
+from aura.core.memory.context import Context, _ReadRecord
 from aura.core.persistence import journal
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
 
-CompactSource = Literal["manual", "auto"]
+CompactSource = Literal["manual", "auto", "reactive"]
 
 
 @dataclass(frozen=True)
@@ -61,6 +66,47 @@ class CompactResult:
     before_tokens: int
     after_tokens: int
     source: CompactSource
+
+
+def _build_recent_file_messages(
+    read_records: dict[Path, _ReadRecord],
+) -> list[HumanMessage]:
+    """Render up to MAX_FILES_TO_RESTORE <recent-file> HumanMessages.
+
+    Selection rule: sort by mtime DESC, drop entries whose recorded read was
+    partial, take top ``MAX_FILES_TO_RESTORE``. Files that can no longer be
+    read from disk (deleted / permission-changed post-read) are silently
+    skipped — this path runs AFTER the summary turn already captured them by
+    text, so losing their body is not catastrophic.
+
+    Each file's body is capped at ``MAX_TOKENS_PER_FILE * 4`` characters
+    (4 chars/token ballpark for English/code mix); oversize bodies get a
+    trailing ``… (truncated)`` marker so the model knows content is missing.
+    """
+    ranked = sorted(
+        read_records.items(), key=lambda kv: kv[1].mtime, reverse=True,
+    )
+    max_chars = MAX_TOKENS_PER_FILE * 4
+    messages: list[HumanMessage] = []
+    for path, record in ranked:
+        if len(messages) >= MAX_FILES_TO_RESTORE:
+            break
+        if record.partial:
+            continue
+        try:
+            body = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            # File deleted, renamed, or unreadable since the original read.
+            # Benign — skip rather than fail the whole compact.
+            continue
+        if len(body) > max_chars:
+            body = body[:max_chars] + "\n… (truncated)"
+        messages.append(
+            HumanMessage(
+                content=f'<recent-file path="{path}">\n{body}\n</recent-file>',
+            )
+        )
+    return messages
 
 
 def _serialize_history(messages: list[BaseMessage]) -> str:
@@ -124,22 +170,28 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
     # CAN'T call one even if tempted.
     summary_text = await _run_summary_turn(agent._model, to_summarize)
 
-    # Rebuild history: summary tag + preserved tail.
+    # --- Pre-cleanup state capture (lifted BEFORE we build new_history so
+    # the re-injection step below can consult the outgoing read_records). ---
+    old_ctx = agent._context
+    preserved_read_records = dict(old_ctx._read_records)
+    preserved_invoked_skills = list(old_ctx._invoked_skills)
+    preserved_invoked_paths = set(old_ctx._invoked_skill_paths)
+
+    # Selective file re-injection: the summary may be too lean to continue
+    # work on a specific file. Re-inject the most-recently-touched FULL
+    # reads' bodies as <recent-file> HumanMessages. Partial reads are skipped
+    # (an incomplete view confuses the model more than omitting the body).
+    recent_file_msgs = _build_recent_file_messages(preserved_read_records)
+
+    # Rebuild history: summary tag + recent files + preserved tail.
     new_history: list[BaseMessage] = [
         HumanMessage(
             content=f"<session-summary>\n{summary_text}\n</session-summary>",
         ),
+        *recent_file_msgs,
         *preserved_tail,
     ]
     agent._storage.save(agent.session_id, new_history)
-
-    # --- Post-compact cleanup: clear discovery, preserve state. ---
-    old_ctx = agent._context
-
-    # Preserved state (lifted off the old Context before it's replaced).
-    preserved_read_records = dict(old_ctx._read_records)
-    preserved_invoked_skills = list(old_ctx._invoked_skills)
-    preserved_invoked_paths = set(old_ctx._invoked_skill_paths)
 
     # Drop module-level caches so the next build re-reads CLAUDE.md / rules.
     project_memory.clear_cache(agent._cwd)

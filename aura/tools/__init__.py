@@ -27,6 +27,7 @@ from aura.tools.task_create import TaskCreate
 from aura.tools.task_output import TaskOutput
 from aura.tools.todo_write import TodoWrite
 from aura.tools.web_fetch import WebFetch, web_fetch
+from aura.tools.web_search import WebSearch
 from aura.tools.write_file import WriteFile, write_file
 
 BUILTIN_TOOLS: dict[str, BaseTool] = {
@@ -44,6 +45,7 @@ BUILTIN_STATEFUL_TOOLS: dict[str, type[BaseTool]] = {
     "ask_user_question": AskUserQuestion,
     "task_create": TaskCreate,
     "task_output": TaskOutput,
+    "web_search": WebSearch,
 }
 
 __all__ = [
@@ -61,6 +63,7 @@ __all__ = [
     "ToolError",
     "ToolResult",
     "WebFetch",
+    "WebSearch",
     "WriteFile",
     "bash",
     "build_tool",

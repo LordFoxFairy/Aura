@@ -110,3 +110,32 @@ def test_audit_line_user_deny() -> None:
 
 def test_audit_line_safety_blocked() -> None:
     assert Decision(allow=False, reason="safety_blocked").audit_line() == "blocked: safety"
+
+
+# ---------------------------------------------------------------------------
+# 4-mode completion: plan_mode_blocked + mode_accept_edits reason invariants
+# ---------------------------------------------------------------------------
+
+
+def test_mode_accept_edits_is_allow_reason() -> None:
+    d = Decision(allow=True, reason="mode_accept_edits")
+    assert d.allow is True
+    assert d.reason == "mode_accept_edits"
+    assert d.rule is None
+
+
+def test_mode_accept_edits_must_be_allow() -> None:
+    with pytest.raises(ValueError, match="allow"):
+        Decision(allow=False, reason="mode_accept_edits")
+
+
+def test_plan_mode_blocked_is_deny_reason() -> None:
+    d = Decision(allow=False, reason="plan_mode_blocked")
+    assert d.allow is False
+    assert d.reason == "plan_mode_blocked"
+    assert d.rule is None
+
+
+def test_plan_mode_blocked_must_be_deny() -> None:
+    with pytest.raises(ValueError, match="allow"):
+        Decision(allow=True, reason="plan_mode_blocked")

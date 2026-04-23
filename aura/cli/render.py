@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -15,6 +16,7 @@ from rich.text import Text
 from aura.schemas.events import (
     AgentEvent,
     AssistantDelta,
+    Final,
     PermissionAudit,
     ToolCallCompleted,
     ToolCallProgress,
@@ -31,14 +33,55 @@ def _hint_for_error(tool_name: str, error: str) -> str | None:
     return hint_for_error(tool_name, error)
 
 
+# Markdown detection — pragmatic heuristic, not a full CommonMark parse.
+# Matches the markers rich.Markdown actually styles differently from plain
+# text: ATX headings, fenced code, list items, inline code, bold/italic,
+# links, blockquotes. Multi-line content gets the benefit of the doubt
+# (rich's paragraph reflow is harmless for prose; the win on code fences
+# alone is worth it). One-liners with zero markers short-circuit to plain
+# ``console.print`` to skip rich.Markdown's AST pass on trivial answers.
+_MD_PATTERNS = (
+    re.compile(r"^#{1,6}\s", re.MULTILINE),       # # heading
+    re.compile(r"^\s*[-*+]\s", re.MULTILINE),     # - list / * list / + list
+    re.compile(r"^\s*\d+\.\s", re.MULTILINE),     # 1. ordered list
+    re.compile(r"^\s*>\s", re.MULTILINE),         # > blockquote
+    re.compile(r"```"),                           # fenced code
+    re.compile(r"`[^`\n]+`"),                     # inline code
+    re.compile(r"\*\*[^*\n]+\*\*"),               # **bold**
+    re.compile(r"(?<![*\w])\*[^*\n]+\*(?!\w)"),   # *italic*
+    re.compile(r"\[[^\]\n]+\]\([^)\n]+\)"),       # [text](url) link
+)
+
+
+def _looks_like_markdown(text: str) -> bool:
+    """Heuristic — does ``text`` carry any markdown markers worth rendering?
+
+    Short-circuits on the first hit. A string with no markers at all goes
+    through plain ``console.print``; anything with even one marker is
+    routed to ``rich.markdown.Markdown`` where the full parser takes over.
+    """
+    return any(pat.search(text) for pat in _MD_PATTERNS)
+
+
 class Renderer:
-    def __init__(self, console: Console) -> None:
+    def __init__(self, console: Console, *, markdown: bool = True) -> None:
         self._console = console
+        self._markdown_enabled = markdown
+        # Buffer for AssistantDelta text; flushed on the first non-delta
+        # event (so tool-call output lands after prose) and on ``finish()``.
+        # Streaming markdown chunk-by-chunk would break mid-fence rendering,
+        # so we defer until the turn's text is complete before handing it
+        # to rich.Markdown.
+        self._pending_text = ""
 
     def on_event(self, event: AgentEvent) -> None:
         if isinstance(event, AssistantDelta):
-            self._console.print(Markdown(event.text))
+            self._pending_text += event.text
             return
+        # Any non-delta event means "the assistant paragraph is done, flush
+        # it before rendering what comes next" — this preserves prose →
+        # tool-call → prose ordering within a turn.
+        self._flush_pending()
         if isinstance(event, ToolCallStarted):
             # Escape variable content — tool input / name may contain ``[...]``
             # which rich would otherwise interpret as inline markup.
@@ -83,11 +126,32 @@ class Renderer:
             else:
                 self._console.print("[green]✓[/green]")
             return
-        # Final events carry no new text: the body was already streamed via
-        # AssistantDelta, so the renderer intentionally drops them.
+        if isinstance(event, Final):
+            # Final carries no new text under normal (natural) stops — the
+            # body was already streamed via AssistantDelta and flushed
+            # above. Synthetic Finals (e.g. max_turns_reached) are dropped
+            # here too; the REPL owns rendering the "stopped: max turns"
+            # line itself.
+            return
 
     def finish(self) -> None:
+        # Flush any trailing assistant text (e.g. turn ended without a
+        # Final event in tests) before the terminal newline.
+        self._flush_pending()
         self._console.print()
+
+    def _flush_pending(self) -> None:
+        """Emit buffered assistant text as markdown-or-plain, then clear."""
+        text = self._pending_text
+        self._pending_text = ""
+        if not text or not text.strip():
+            return
+        if self._markdown_enabled and _looks_like_markdown(text):
+            self._console.print(
+                Markdown(text, code_theme="monokai", inline_code_lexer="python"),
+            )
+        else:
+            self._console.print(text)
 
 
 def compact_args(args: dict[str, Any], *, max_len: int = 80) -> str:

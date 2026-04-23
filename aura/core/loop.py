@@ -20,11 +20,13 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
 
+from aura.config.schema import RetryConfig
 from aura.core.hooks import HookChain
 from aura.core.memory.context import Context
 from aura.core.permissions.decision import Decision
 from aura.core.persistence import journal
 from aura.core.registry import ToolRegistry
+from aura.core.retry import with_retry
 from aura.schemas.events import (
     AgentEvent,
     AssistantDelta,
@@ -131,11 +133,17 @@ class AgentLoop:
         hooks: HookChain | None = None,
         state: LoopState | None = None,
         max_turns: int | None = 50,
+        retry_config: RetryConfig | None = None,
     ) -> None:
         self._registry = registry
         self._hooks = hooks or HookChain()
         self._state = state or LoopState()
         self._context = context
+        # Retry policy for the narrow ``model.ainvoke()`` site. ``None`` =
+        # library defaults (3 attempts, 1s base, 30s cap, jitter on) via
+        # :class:`aura.config.schema.RetryConfig`. Stored as a concrete
+        # RetryConfig so ``_invoke_model`` does not branch per call.
+        self._retry_config = retry_config or RetryConfig()
         # Mirror claude-code query.ts:1705. Default 50 is Aura policy: claude-code
         # leaves this to the caller, we ship a sane default to stop runaway
         # tool-call loops. Explicit None disables the cap (no-cap semantics).
@@ -218,7 +226,16 @@ class AgentLoop:
         # Context.build 是整个代码库中唯一组装 messages 的构造点 ——
         # 不要在别处拼 SystemMessage/HumanMessage 传给模型。
         messages = self._context.build(history)
-        ai = await self._bound.ainvoke(messages)
+        # Wrap ONLY the SDK call — not tool dispatch, not hook run, not
+        # history.append — so retries are surgical and tool semantics stay
+        # untouched. Transient 429 / 503 / connection drops become
+        # recoverable; auth errors still surface immediately.
+        ai = await with_retry(
+            lambda: self._bound.ainvoke(messages),
+            max_attempts=self._retry_config.max_attempts,
+            base_delay_s=self._retry_config.base_delay_s,
+            max_delay_s=self._retry_config.max_delay_s,
+        )
         history.append(ai)
         await self._hooks.run_post_model(
             ai_message=ai, history=history, state=self._state,

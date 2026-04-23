@@ -19,6 +19,11 @@ from aura.core.commands.builtin import (
     ModelCommand,
 )
 from aura.core.commands.export import ExportCommand
+from aura.core.commands.git_commands import (
+    GitDiffCommand,
+    GitLogCommand,
+    GitStatusCommand,
+)
 from aura.core.commands.tasks import TaskGetCommand, TasksCommand, TaskStopCommand
 from aura.core.skills.command import SkillCommand
 
@@ -50,6 +55,9 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     r.register(TasksCommand())
     r.register(TaskGetCommand())
     r.register(TaskStopCommand())
+    r.register(GitStatusCommand())
+    r.register(GitDiffCommand())
+    r.register(GitLogCommand())
     if agent is not None:
         for skill in agent._skill_registry.list():
             r.register(SkillCommand(skill=skill, agent=agent))

@@ -44,6 +44,7 @@ def test_default_registry_has_builtin_set() -> None:
     assert names == {
         "/help", "/exit", "/clear", "/compact", "/model", "/export",
         "/tasks", "/task-get", "/task-stop",
+        "/status", "/diff", "/log",
     }
 
 

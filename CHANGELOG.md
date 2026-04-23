@@ -2,6 +2,35 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.8.3] — Markdown rendering + retry logic + git slash commands
+
+Three more subagents in parallel. 1300 tests green.
+
+### Shipped
+
+- **Rich markdown rendering for assistant output** — Renderer buffers `AssistantDelta` text, flushes on any non-delta event or `finish()`, and routes text with markdown markers through `rich.markdown.Markdown(code_theme="monokai", inline_code_lexer="python")`. Plain text bypasses rich overhead. `UIConfig.markdown: bool = True` toggle. Renderer gains a `markdown: bool = True` kwarg (backward-compat default).
+- **Retry logic with exponential backoff** — new `aura/core/retry.py` with `with_retry(fn, max_attempts, base_delay_s, max_delay_s, jitter, retriable)`. Classifies transient errors by exception class name OR message substring (no SDK imports, durable across provider versions). `_RETRIABLE_CLASS_NAMES`: RateLimitError / ServiceUnavailableError / APITimeoutError / APIConnectionError / InternalServerError / ConflictError. Substring: rate limit / 503 / 502 / 504 / timeout / overloaded / try again. Deny-list wins over allow-list (auth errors containing "timeout" don't retry forever). `asyncio.CancelledError` always propagates. Wrapped ONLY around the narrow `model.ainvoke` site. `AuraConfig.retry: RetryConfig | None`.
+- **Git-aware slash commands** — `/status`, `/diff`, `/log`.
+  - `/status` — `git status --short --branch`, formatted with branch bold cyan, file status codes color-coded (M/A/D/??), empty tree → "working tree clean".
+  - `/diff` — stat summary by default; `/diff --full` for full patch; `/diff --staged` for index. Direct ANSI passthrough from git, truncated at 500 lines.
+  - `/log` — `git log --oneline --decorate --color=always -20` default; `/log N` for last N commits (clamped [1, 100]).
+  - All three: graceful "not a git repository" / "git not installed" / timeout errors; never crash the REPL.
+  - Design note: commands use `writer: Callable[[str], object]` instead of `Console` so `aura/core/` keeps its "no rich imports" invariant (enforced by `test_core_does_not_import_ui_frameworks`).
+
+### Changed
+
+- `aura/cli/render.py` — buffer-and-flush path, markdown routing, heuristic `_looks_like_markdown()`.
+- `aura/config/schema.py` — `UIConfig.markdown`, `RetryConfig` + `AuraConfig.retry`.
+- `aura/core/loop.py` — `retry_config` ctor kwarg; `with_retry` around `_invoke_model`.
+- `aura/core/agent.py` — `_build_loop` passes `retry_config=self._config.retry`.
+- `aura/cli/commands.py` — registers `/status`, `/diff`, `/log`.
+- `aura/core/commands/git_commands.py` (NEW) — 3 git commands + `_git()` shell-out helper.
+- `aura/core/retry.py` (NEW) — retry helper + classifier.
+
+### Stats
+
+- 1300 tests pass (1248 + 52 new: 12 markdown + 23 retry + 17 git). Lint + mypy clean.
+
 ## [0.8.2] — MCP HTTP/SSE + /export + ASCII welcome
 
 Three more subagents in parallel. Zero merge conflicts, 1248 tests green.

@@ -216,3 +216,162 @@ def test_tool_call_completed_bash_shows_exit_marker_on_failure() -> None:
     out = buf.getvalue()
     assert "✓" in out
     assert "exit 2" in out
+
+
+# --------------------------------------------------------------------------
+# Markdown rendering path (buffer-on-delta, flush-on-boundary).
+#
+# Streaming chunk-by-chunk through ``rich.Markdown`` would break mid-fence
+# rendering, so the renderer buffers AssistantDelta text and only flushes
+# at turn boundaries (any non-delta event) or ``finish()``. Tests below
+# cover the markdown/plain branch, empty/whitespace short-circuit, the
+# UIConfig toggle, and the ordering guarantee (prose flushes BEFORE the
+# tool line that triggered the flush).
+# --------------------------------------------------------------------------
+def test_assistant_delta_not_emitted_incrementally() -> None:
+    r, buf = _capture()
+    r.on_event(AssistantDelta(text="chunk one "))
+    # Before flush, nothing should be on the wire — avoids duplicate
+    # output when the final markdown block renders.
+    assert buf.getvalue() == ""
+    r.on_event(AssistantDelta(text="chunk two"))
+    assert buf.getvalue() == ""
+    r.finish()
+    out = buf.getvalue()
+    assert "chunk one" in out
+    assert "chunk two" in out
+
+
+def test_assistant_delta_with_heading_renders_as_markdown() -> None:
+    r, buf = _capture()
+    r.on_event(AssistantDelta(text="# Title\n\nBody text."))
+    r.finish()
+    out = buf.getvalue()
+    # Markdown strips the raw ``#`` marker (renders as a styled heading);
+    # the literal ``# Title`` text should NOT appear.
+    assert "# Title" not in out
+    assert "Title" in out
+    assert "Body text" in out
+
+
+def test_assistant_delta_with_code_fence_renders_as_markdown() -> None:
+    r, buf = _capture()
+    r.on_event(AssistantDelta(text="```python\nprint('hi')\n```"))
+    r.finish()
+    out = buf.getvalue()
+    # Code-fence content survives; fence markers themselves are consumed.
+    assert "print" in out
+    assert "```" not in out
+
+
+def test_looks_like_markdown_heuristic_matrix() -> None:
+    # Direct unit test for the marker heuristic. One positive case per
+    # supported syntax + confirmation that marker-free prose does NOT
+    # route through rich.Markdown.
+    from aura.cli.render import _looks_like_markdown
+
+    assert _looks_like_markdown("# heading") is True
+    assert _looks_like_markdown("## sub heading") is True
+    assert _looks_like_markdown("- bullet") is True
+    assert _looks_like_markdown("1. item") is True
+    assert _looks_like_markdown("> quoted") is True
+    assert _looks_like_markdown("```python\nx\n```") is True
+    assert _looks_like_markdown("use `foo` here") is True
+    assert _looks_like_markdown("**bold**") is True
+    assert _looks_like_markdown("see [here](http://x)") is True
+    # Negative cases — plain prose must short-circuit.
+    assert _looks_like_markdown("hello world") is False
+    assert _looks_like_markdown("42") is False
+    assert _looks_like_markdown("a sentence with no markup at all.") is False
+
+
+def test_assistant_delta_plain_text_skips_markdown_wrapping() -> None:
+    # Marker-free content is routed through plain ``console.print``,
+    # which emits the string verbatim with a trailing newline. The output
+    # width is NOT reflowed by Markdown's block layout — so a short
+    # string stays short (no trailing padding from rich.Markdown's
+    # paragraph renderer).
+    r, buf = _capture()
+    r.on_event(AssistantDelta(text="hello world"))
+    r.finish()
+    out = buf.getvalue()
+    assert "hello world" in out
+    # Plain-print of a short string is <= a handful of bytes + one \n.
+    # rich.Markdown would emit a paragraph block (multiple spaces of
+    # right-padding, an extra blank line). Guarding on byte count is
+    # the cleanest way to prove the plain branch ran.
+    assert len(out) < 20
+
+
+def test_assistant_delta_markdown_content_renders_via_markdown() -> None:
+    # Symmetric check: content WITH markers routes through
+    # rich.Markdown — the ``**bold**`` markers get consumed by the
+    # parser rather than appearing verbatim in the output.
+    r, buf = _capture()
+    r.on_event(AssistantDelta(text="**bold** statement"))
+    r.finish()
+    out = buf.getvalue()
+    assert "bold" in out
+    assert "statement" in out
+    # rich.Markdown strips the asterisks (renders as styled text).
+    assert "**bold**" not in out
+
+
+def test_assistant_delta_empty_content_emits_no_output() -> None:
+    r, buf = _capture()
+    r.on_event(AssistantDelta(text=""))
+    # finish() adds one trailing newline — that's the ONLY output.
+    r.finish()
+    assert buf.getvalue() == "\n"
+
+
+def test_assistant_delta_whitespace_only_content_emits_no_output() -> None:
+    r, buf = _capture()
+    r.on_event(AssistantDelta(text="   \n\t\n  "))
+    r.finish()
+    assert buf.getvalue() == "\n"
+
+
+def test_assistant_delta_flushed_before_tool_call_started() -> None:
+    # Ordering guarantee: prose must land on screen BEFORE the tool-call
+    # line that triggered the flush. Otherwise a "let me check" preamble
+    # would appear AFTER the ◆ read_file(...) line.
+    r, buf = _capture()
+    r.on_event(AssistantDelta(text="let me check"))
+    r.on_event(ToolCallStarted(name="read_file", input={"path": "/x"}))
+    out = buf.getvalue()
+    prose_pos = out.index("let me check")
+    tool_pos = out.index("◆")
+    assert prose_pos < tool_pos
+
+
+def test_renderer_markdown_toggle_disables_markdown_path() -> None:
+    # UIConfig.ui.markdown=False → Renderer(markdown=False) → even
+    # marker-rich content goes through plain ``console.print``, so raw
+    # markdown markers survive in the output.
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=False, width=200, highlight=False)
+    r = Renderer(console, markdown=False)
+    r.on_event(AssistantDelta(text="# Heading\n\n**bold**"))
+    r.finish()
+    out = buf.getvalue()
+    assert "# Heading" in out
+    assert "**bold**" in out
+
+
+def test_finish_flushes_pending_assistant_text() -> None:
+    # A turn that ends without a Final event (test harness, or an
+    # astream that yields only AssistantDelta) must still surface the
+    # buffered text on finish() — otherwise it would be silently dropped.
+    r, buf = _capture()
+    r.on_event(AssistantDelta(text="trailing text"))
+    r.finish()
+    assert "trailing text" in buf.getvalue()
+
+
+def test_final_event_flushes_pending_text() -> None:
+    r, buf = _capture()
+    r.on_event(AssistantDelta(text="pending"))
+    r.on_event(Final(message="pending"))
+    # Flush happens on Final, before finish() adds its trailing newline.
+    assert "pending" in buf.getvalue()

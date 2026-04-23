@@ -523,6 +523,7 @@ class Agent:
             context=self._context,
             hooks=self._hooks,
             state=self._state,
+            retry_config=self._config.retry,
         )
 
     def _build_context(self) -> Context:

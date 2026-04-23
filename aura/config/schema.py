@@ -49,6 +49,14 @@ class UIConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     theme: str = "default"
+    # When True (default), the renderer passes assistant text through
+    # ``rich.markdown.Markdown`` so code fences, headings, lists, bold,
+    # etc. render with styling. Set False for raw-text output (scripts
+    # that grep transcripts; terminals that mis-render box-drawing;
+    # personal preference). The heuristic still short-circuits on
+    # marker-free content, so the toggle only matters when content
+    # actually contains markdown.
+    markdown: bool = True
 
 
 class LogConfig(BaseModel):
@@ -77,6 +85,25 @@ class WebSearchConfig(BaseModel):
     provider: Literal["duckduckgo"] = "duckduckgo"
     api_key_env: str | None = None
     max_results: int = Field(default=5, ge=1, le=20)
+
+
+class RetryConfig(BaseModel):
+    """Retry policy for transient LLM provider errors.
+
+    Wraps the narrow ``model.ainvoke(...)`` call in the agent loop — not the
+    whole turn, and not tool invocations (those have their own semantics).
+    ``None`` on :class:`AuraConfig.retry` means "use library defaults"
+    (:func:`aura.core.retry.with_retry` bakes those in); setting any field
+    here overrides the corresponding default while the rest keep library
+    values. Bounds are defensive against footguns — ``max_attempts`` capped
+    at 10 keeps a stuck provider from holding a turn hostage for minutes.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    base_delay_s: float = Field(default=1.0, gt=0)
+    max_delay_s: float = Field(default=30.0, gt=0)
 
 
 class MCPServerConfig(BaseModel):
@@ -150,6 +177,11 @@ class AuraConfig(BaseModel):
     log: LogConfig = Field(default_factory=LogConfig)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     web_search: WebSearchConfig | None = None
+    # Retry policy for transient LLM provider errors (HTTP 429 / 503 / 504,
+    # connection drops, "overloaded"). ``None`` = use library defaults from
+    # :func:`aura.core.retry.with_retry` (3 attempts, 1s base, 30s cap,
+    # jitter on). Pin ``max_attempts=1`` to disable retries entirely.
+    retry: RetryConfig | None = None
     # Optional per-user override for the context window the status bar uses
     # to render the live context-pressure ratio. When ``None``, Aura looks
     # the window up by model spec via ``aura.core.llm.get_context_window``;

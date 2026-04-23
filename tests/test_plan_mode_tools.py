@@ -53,9 +53,23 @@ def _enter_tool(agent: _FakeAgent) -> EnterPlanMode:
     )
 
 
-def _exit_tool(agent: _FakeAgent) -> ExitPlanMode:
+async def _always_yes_asker(
+    _question: str, _options: list[str] | None, _default: str | None,
+) -> str:
+    # Default asker for exit_plan_mode tests that don't care about the
+    # approval gate itself — test_exit_plan_mode.py covers the gate.
+    return "Yes"
+
+
+def _exit_tool(
+    agent: _FakeAgent,
+    *,
+    asker: Any = None,
+) -> ExitPlanMode:
     return ExitPlanMode(
-        mode_setter=agent.set_mode, mode_getter=lambda: agent.mode,
+        mode_setter=agent.set_mode,
+        mode_getter=lambda: agent.mode,
+        asker=asker or _always_yes_asker,
     )
 
 
@@ -110,27 +124,39 @@ def test_enter_plan_mode_caps_plan_length() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_exit_plan_mode_defaults_to_default() -> None:
+async def test_exit_plan_mode_defaults_to_default() -> None:
     agent = _FakeAgent(mode="plan")
     tool = _exit_tool(agent)
-    result = tool.invoke({})
+    result = await tool.ainvoke({"plan": "1. do thing"})
     assert agent.mode == "default"
-    assert result == {"previous_mode": "plan", "new_mode": "default"}
+    assert result == {
+        "previous_mode": "plan",
+        "new_mode": "default",
+        "plan": "1. do thing",
+        "approved": True,
+    }
 
 
-def test_exit_plan_mode_accepts_accept_edits_target() -> None:
+async def test_exit_plan_mode_accepts_accept_edits_target() -> None:
     agent = _FakeAgent(mode="plan")
     tool = _exit_tool(agent)
-    result = tool.invoke({"to_mode": "accept_edits"})
+    result = await tool.ainvoke({
+        "plan": "1. edit foo", "to_mode": "accept_edits",
+    })
     assert agent.mode == "accept_edits"
-    assert result == {"previous_mode": "plan", "new_mode": "accept_edits"}
+    assert result == {
+        "previous_mode": "plan",
+        "new_mode": "accept_edits",
+        "plan": "1. edit foo",
+        "approved": True,
+    }
 
 
-def test_exit_plan_mode_rejects_non_plan_origin() -> None:
+async def test_exit_plan_mode_rejects_non_plan_origin() -> None:
     agent = _FakeAgent(mode="default")
     tool = _exit_tool(agent)
     with pytest.raises(ToolError):
-        tool.invoke({})
+        await tool.ainvoke({"plan": "1. thing"})
 
 
 def test_exit_plan_mode_rejects_bypass_as_target() -> None:
@@ -141,7 +167,7 @@ def test_exit_plan_mode_rejects_bypass_as_target() -> None:
     agent = _FakeAgent(mode="plan")
     tool = _exit_tool(agent)
     with pytest.raises(ValidationError):
-        tool.invoke({"to_mode": "bypass"})
+        tool.invoke({"plan": "1. thing", "to_mode": "bypass"})
 
 
 # ---------------------------------------------------------------------------

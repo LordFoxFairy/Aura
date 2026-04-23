@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.application.run_in_terminal import run_in_terminal
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
@@ -105,15 +106,24 @@ def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
     def _(event: Any) -> None:
         current = agent.mode
         if current == "bypass":
-            console.print(
-                "[dim]shift+tab disabled under --bypass-permissions[/dim]"
+            # ``run_in_terminal`` defers the print until pt yields the
+            # screen — writing to stdout from inside a key-binding
+            # callback otherwise races pt's renderer and corrupts the
+            # redraw.
+            run_in_terminal(
+                lambda: console.print(
+                    "[dim]shift+tab disabled under "
+                    "--bypass-permissions[/dim]"
+                )
             )
             return
         new_mode = _cycle_mode(current)
         agent.set_mode(new_mode)
-        console.print(
-            f"[dim]mode: {new_mode}  "
-            f"(press shift+tab to cycle · esc to reset to default)[/dim]"
+        run_in_terminal(
+            lambda: console.print(
+                f"[dim]mode: {new_mode}  "
+                f"(press shift+tab to cycle · esc to reset to default)[/dim]"
+            )
         )
         event.app.invalidate()
 
@@ -124,7 +134,7 @@ def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
         if agent.mode == "bypass" or agent.mode == "default":
             return
         agent.set_mode("default")
-        console.print("[dim]mode: default[/dim]")
+        run_in_terminal(lambda: console.print("[dim]mode: default[/dim]"))
         event.app.invalidate()
 
     @kb.add("escape", "enter")
@@ -486,37 +496,25 @@ def _print_verbose_summary(agent: Agent, console: Console) -> None:
 def _print_post_turn_status(
     agent: Agent, console: Console, last_turn_seconds: float = 0.0,
 ) -> None:
-    """Print a dim checkpoint status line right after a response finishes.
+    """Print a minimal turn-end checkpoint in the scrollback.
 
-    prompt_toolkit's ``bottom_toolbar`` only renders while pt owns the
-    screen (i.e. during the prompt). While the model is streaming a
-    response, pt is idle and the toolbar disappears — operators
-    reported this as "footer 消失了" ("the footer
-    disappeared"). Printing the same info as a plain dim rich line
-    after every turn gives them a persistent checkpoint: even in the
-    middle of a long conversation, the most recent turn's token /
-    mode / cwd info is always the last visible line before the next
-    ``aura>`` prompt.
+    pt's ``bottom_toolbar`` already carries the full live status
+    (model / context pressure / pinned / mode / cwd) while pt owns the
+    screen. The toolbar disappears during model streaming, so we still
+    want a scrollback marker — but the marker must NOT duplicate the
+    toolbar, or both render simultaneously when pt re-takes the screen
+    and the user sees the same info twice stacked above the prompt.
 
-    A truly always-visible status bar would require moving the REPL
-    to pt's full-screen ``Application`` mode, which is a v1.x
-    architecture change. This is the pragmatic middle ground.
+    Shape: a single dim line, ``done`` + elapsed time. Nothing else.
+    Everything else lives in the live toolbar.
     """
-    from aura.cli.status_bar import render_status_bar
-
-    stats = agent.state.custom.get("_token_stats", {})
-    input_tokens = int(stats.get("last_input_tokens", 0))
-    cache_tokens = int(stats.get("last_cache_read_tokens", 0))
-    text = render_status_bar(
-        model=agent.current_model or None,
-        input_tokens=input_tokens,
-        cache_read_tokens=cache_tokens,
-        pinned_estimate_tokens=agent.pinned_tokens_estimate,
-        context_window=agent.context_window,
-        mode=agent.mode,
-        cwd=Path.cwd(),
-        last_turn_seconds=last_turn_seconds,
-    )
+    text = Text("done", style="dim")
+    if last_turn_seconds > 0:
+        if last_turn_seconds < 60:
+            duration = f"{last_turn_seconds:.1f}s"
+        else:
+            duration = f"{int(last_turn_seconds)}s"
+        text.append(f"  ·  {duration}", style="dim")
     console.print(text)
 
 

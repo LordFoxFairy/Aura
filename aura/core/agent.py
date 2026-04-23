@@ -188,7 +188,7 @@ class Agent:
                 # did not declare ``web_search:`` in config, the tool falls
                 # back to its own defaults (DuckDuckGo, max_results=5).
                 self._available_tools[name] = cls(config=self._config.web_search)
-            elif name == "enter_plan_mode" or name == "exit_plan_mode":
+            elif name == "enter_plan_mode":
                 # Plan-mode control tools. Close over ``set_mode`` and the
                 # ``_mode`` read rather than injecting ``self`` so the
                 # tool's reach into the Agent is exactly one arrow: flip
@@ -197,6 +197,19 @@ class Agent:
                 self._available_tools[name] = cls(
                     mode_setter=self.set_mode,
                     mode_getter=lambda: self._mode,
+                )
+            elif name == "exit_plan_mode":
+                # Same mode_setter/mode_getter pattern as enter_plan_mode,
+                # PLUS an ``asker`` because exit_plan_mode requires user
+                # approval BEFORE mutating mode (matches claude-code's
+                # ExitPlanModeV2Tool.checkPermissions ask-behavior). The
+                # same QuestionAsker that ask_user_question uses is wired
+                # through here — reusing the CLI's prompt_toolkit Yes/No
+                # picker for free.
+                self._available_tools[name] = cls(
+                    mode_setter=self.set_mode,
+                    mode_getter=lambda: self._mode,
+                    asker=question_asker or _unavailable_question_asker,
                 )
             elif name == "skill":
                 # LLM-invocable skill trigger. ``recorder`` closes over

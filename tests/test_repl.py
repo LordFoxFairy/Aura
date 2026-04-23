@@ -429,6 +429,144 @@ async def test_single_line_slash_command_unchanged(tmp_path: Path) -> None:
     agent.close()
 
 
+def test_post_turn_status_is_slim_done_marker(tmp_path: Path) -> None:
+    # Bug fix — the post-turn checkpoint used to duplicate the whole
+    # bottom_toolbar (model / ctx bar / pinned / mode / cwd), which
+    # then collided with pt's live bottom_toolbar above the prompt.
+    # Shape is now: a single dim line with "done" + elapsed seconds.
+    # Nothing from the live toolbar should show up inline.
+    from aura.cli.repl import _print_post_turn_status
+
+    agent = _agent(tmp_path)
+    # Seed stats that WOULD have shown up in the old render — they must
+    # NOT appear in the new slim line.
+    agent.state.custom["_token_stats"] = {
+        "last_input_tokens": 9900,
+        "last_cache_read_tokens": 2600,
+    }
+    console, buf = _capture_console()
+
+    _print_post_turn_status(agent, console, last_turn_seconds=21.4)
+
+    out = buf.getvalue()
+    # New shape: "done" marker + elapsed seconds.
+    assert "done" in out
+    assert "21.4s" in out
+    # Old content that now lives ONLY in bottom_toolbar must not appear.
+    assert "model:" not in out
+    assert "pinned" not in out
+    assert "cached" not in out
+    assert "cwd" not in out
+    # Single-line output — no duplicated status bar (one trailing newline
+    # from rich is expected; no embedded newlines inside the content).
+    assert out.count("\n") == 1
+    agent.close()
+
+
+def test_post_turn_status_elides_duration_when_zero(tmp_path: Path) -> None:
+    # Defensive: zero elapsed means "we don't have a measurement yet".
+    # Skip the duration tail instead of printing "0.0s" noise.
+    from aura.cli.repl import _print_post_turn_status
+
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+
+    _print_post_turn_status(agent, console, last_turn_seconds=0.0)
+
+    out = buf.getvalue()
+    assert "done" in out
+    assert "s" not in out.replace("done", "")  # no seconds suffix
+    agent.close()
+
+
+def test_post_turn_status_uses_integer_seconds_at_or_above_60s(
+    tmp_path: Path,
+) -> None:
+    # Consistency with the live bottom_toolbar: sub-minute shows decimal,
+    # ≥60s drops the decimal (visual noise at that scale).
+    from aura.cli.repl import _print_post_turn_status
+
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+
+    _print_post_turn_status(agent, console, last_turn_seconds=125.7)
+
+    out = buf.getvalue()
+    assert "125s" in out
+    assert "125.7" not in out
+    agent.close()
+
+
+async def test_shift_tab_mode_cycle_confirmation_deferred_to_terminal(
+    tmp_path: Path,
+) -> None:
+    # Bug fix — key-binding handlers must NOT call ``console.print``
+    # directly; they must defer via ``run_in_terminal`` or they race
+    # pt's renderer and pollute the redraw.
+    #
+    # End-to-end proof: drive a real PromptSession through pt's pipe
+    # input, send ESC+[+Z (shift+tab) then a single char "q" and CR,
+    # and assert (a) the mode actually flipped and (b) the confirmation
+    # text reached the captured console buffer via run_in_terminal's
+    # deferred invocation.
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from aura.cli.repl import _build_mode_key_bindings
+
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+    kb = _build_mode_key_bindings(agent, console)
+    assert agent.mode == "default"
+
+    with create_pipe_input() as inp:
+        # Shift+Tab at xterm-compatible terminals emits ESC [ Z.
+        inp.send_text("\x1b[Zq\r")
+        session: PromptSession[str] = PromptSession(
+            key_bindings=kb, input=inp, output=DummyOutput(),
+        )
+        await session.prompt_async("> ")
+
+    # Mode cycled default → accept_edits.
+    assert agent.mode == "accept_edits"
+    # Confirmation line made it out via run_in_terminal (the lambda
+    # fires once pt yields, which happens inline in the test loop).
+    assert "mode: accept_edits" in buf.getvalue()
+    agent.close()
+
+
+async def test_escape_resets_mode_confirmation_deferred_to_terminal(
+    tmp_path: Path,
+) -> None:
+    # Same guarantee as shift+tab: escape must go through run_in_terminal
+    # so the reset confirmation doesn't race pt's renderer.
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from aura.cli.repl import _build_mode_key_bindings
+
+    agent = _agent(tmp_path)
+    agent.set_mode("accept_edits")
+    console, buf = _capture_console()
+    kb = _build_mode_key_bindings(agent, console)
+
+    with create_pipe_input() as inp:
+        # Escape, then (after the non-eager timeout resolves on its own
+        # via the pipe draining) a plain Enter to submit.
+        inp.send_text("\x1b")
+        inp.send_text("q\r")
+        session: PromptSession[str] = PromptSession(
+            key_bindings=kb, input=inp, output=DummyOutput(),
+        )
+        await session.prompt_async("> ")
+
+    assert agent.mode == "default"
+    assert "mode: default" in buf.getvalue()
+    agent.close()
+
+
 async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:
     # Real resilience: if Agent.astream raises (network error, client bug,
     # provider 500), the REPL must print an error and keep looping, NOT

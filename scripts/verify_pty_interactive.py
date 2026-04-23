@@ -95,15 +95,12 @@ class _Pty:
             return None
 
     def close(self) -> None:
-        try:
+        import contextlib
+        with contextlib.suppress(OSError):
             os.close(self.master_fd)
-        except OSError:
-            pass
         if self.proc.poll() is None:
-            try:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
         self.proc.wait(timeout=5)
 
 

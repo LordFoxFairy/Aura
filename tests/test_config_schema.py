@@ -20,13 +20,14 @@ def test_defaults() -> None:
     assert p.base_url is None
     assert cfg.router == {"default": "openai:gpt-4o-mini"}
     assert cfg.tools.enabled == [
+        "ask_user_question",
         "bash", "bash_background", "edit_file",
         "enter_plan_mode", "exit_plan_mode",
         "glob", "grep", "read_file", "skill",
         "task_create", "task_get", "task_list", "task_stop",
         "todo_write", "web_fetch", "write_file",
     ]
-    assert cfg.ui.theme == "default"
+    assert cfg.ui.markdown is True
     assert cfg.storage.path == "~/.aura/sessions.db"
 
 
@@ -127,7 +128,7 @@ def test_full_nested_dict_happy_path() -> None:
             "router": {"default": "a:gpt-4o-mini", "claude": "b:claude-3-5-sonnet-latest"},
             "tools": {"enabled": ["read_file"]},
             "storage": {"path": "/tmp/x.db"},
-            "ui": {"theme": "default"},
+            "ui": {"markdown": True},
         }
     )
     assert len(cfg.providers) == 2
@@ -136,7 +137,7 @@ def test_full_nested_dict_happy_path() -> None:
     assert cfg.router == {"default": "a:gpt-4o-mini", "claude": "b:claude-3-5-sonnet-latest"}
     assert cfg.tools.enabled == ["read_file"]
     assert cfg.storage.path == "/tmp/x.db"
-    assert cfg.ui.theme == "default"
+    assert cfg.ui.markdown is True
 
 
 def test_model_name_with_colon_preserved_in_router() -> None:

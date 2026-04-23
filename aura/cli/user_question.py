@@ -163,23 +163,32 @@ async def _read_free_text(
     """
     await pause_spinner_if_active()
 
-    # Print the question above the input line so the user sees what
-    # they're answering. The prompt_async line editor then reads on
-    # its own line, which is the claude-code pattern.
-    # We use stdout directly (via rich Console) for the question so
-    # the label is part of the scrollback, not a pt widget.
-    console = Console()
-    console.print()
-    console.print(_SEPARATOR, style="dim")
-    console.print()
-    console.print(f"[bold]{question}[/bold]")
-    default_hint = f" [dim](default: {default})[/dim]" if default else ""
-    console.print(f"  [dim]Enter to confirm · Esc / Ctrl+C to cancel{default_hint}[/dim]")
-    console.print()
-
     session: PromptSession[str] = PromptSession()
     try:
+        # Acquire the mutex BEFORE printing the question label. Previously
+        # the console.print() chain ran outside the lock, creating a ~10ms
+        # window where a racing permission widget (or another ask) could
+        # render on top of the half-printed label (fix: audit finding,
+        # verified by scripts/verify_pty_interactive.py). The rich writes
+        # are fast; holding the lock across them is negligible cost for
+        # guaranteed visual isolation.
         async with prompt_mutex():
+            # Print the question above the input line so the user sees
+            # what they're answering. The prompt_async line editor then
+            # reads on its own line, which is the claude-code pattern.
+            console = Console()
+            console.print()
+            console.print(_SEPARATOR, style="dim")
+            console.print()
+            console.print(f"[bold]{question}[/bold]")
+            default_hint = (
+                f" [dim](default: {default})[/dim]" if default else ""
+            )
+            console.print(
+                f"  [dim]Enter to confirm · Esc / Ctrl+C to cancel"
+                f"{default_hint}[/dim]"
+            )
+            console.print()
             if timeout is not None:
                 raw = await asyncio.wait_for(
                     session.prompt_async("  ❯ "), timeout=timeout,

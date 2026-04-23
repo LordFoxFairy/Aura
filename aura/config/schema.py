@@ -27,6 +27,7 @@ class ToolsConfig(BaseModel):
 
     enabled: list[str] = Field(
         default_factory=lambda: [
+            "ask_user_question",
             "bash", "bash_background", "edit_file",
             "enter_plan_mode", "exit_plan_mode",
             "glob", "grep", "read_file", "skill",
@@ -48,7 +49,6 @@ class StorageConfig(BaseModel):
 class UIConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    theme: str = "default"
     # When True (default), the renderer passes assistant text through
     # ``rich.markdown.Markdown`` so code fences, headings, lists, bold,
     # etc. render with styling. Set False for raw-text output (scripts

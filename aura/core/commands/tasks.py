@@ -57,10 +57,16 @@ class TasksCommand:
         if not records:
             return CommandResult(handled=True, kind="print", text="(no tasks)")
         records = sorted(records, key=lambda r: -r.started_at)[:20]
-        lines = [
-            f"{r.id[:_SHORT_ID]}  {r.status:>10}  {r.description}"
-            for r in records
-        ]
+        # Show kind + agent_type alongside status so the operator can tell a
+        # "verify" subagent from a "general-purpose" one at a glance; matches
+        # the LLM-facing task_list tool which also carries both fields.
+        lines = []
+        for r in records:
+            flavor = r.agent_type or r.kind  # "subagent" kind → agent_type
+            lines.append(
+                f"{r.id[:_SHORT_ID]}  {r.status:>10}  "
+                f"[{flavor:>15}]  {r.description}"
+            )
         return CommandResult(
             handled=True, kind="print", text="\n".join(lines)
         )
@@ -89,9 +95,14 @@ class TaskGetCommand:
         )
         lines = [
             f"id          {rec.id[:_SHORT_ID]}",
+            f"kind        {rec.kind}",
+        ]
+        if rec.agent_type is not None:
+            lines.append(f"agent_type  {rec.agent_type}")
+        lines.extend([
             f"status      {rec.status}",
             f"description {rec.description}",
-        ]
+        ])
         if duration is not None:
             lines.append(f"duration    {duration:.2f}s")
         if rec.progress.tool_count:

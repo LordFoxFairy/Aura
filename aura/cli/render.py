@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.markup import escape as rich_escape
+from rich.panel import Panel
+from rich.text import Text
 
 from aura.schemas.events import (
     AgentEvent,
@@ -41,7 +44,12 @@ class Renderer:
             return
         if isinstance(event, ToolCallCompleted):
             if event.error:
-                self._console.print(f"[red]✗ {rich_escape(event.error)}[/red]")
+                self._console.print(_render_tool_error(event.name, event.error))
+                return
+            formatter = _TOOL_RESULT_FORMATTERS.get(event.name)
+            if formatter is not None:
+                summary = rich_escape(formatter(event.output))
+                self._console.print(f"[green]✓[/green] [dim]{summary}[/dim]")
             else:
                 self._console.print("[green]✓[/green]")
             return
@@ -58,3 +66,179 @@ def compact_args(args: dict[str, Any], *, max_len: int = 80) -> str:
     if len(rendered) <= max_len:
         return rendered
     return rendered[:max_len] + "…"
+
+
+# ---------------------------------------------------------------------------
+# Per-tool result formatters. Each produces a short one-line summary attached
+# after the ✓ on a successful ToolCallCompleted. Mirrors claude-code's
+# ``renderToolResultMessage`` per-tool customisation. Formatters MUST be total
+# over their documented input shape AND degrade gracefully on anything else —
+# the renderer is on the hot path and cannot raise on a surprising dict.
+# ---------------------------------------------------------------------------
+def _format_read_file_result(output: Any) -> str:
+    """read_file → "N lines, X.Y KB" or "N of M lines (partial)"."""
+    if not isinstance(output, dict):
+        return str(output)
+    lines = output.get("lines", 0)
+    total = output.get("total_lines", 0)
+    if output.get("partial"):
+        return f"{lines} of {total} lines (partial)"
+    content = output.get("content", "")
+    size_kb = len(content) / 1024 if isinstance(content, str) else 0.0
+    return f"{lines} lines, {size_kb:.1f} KB"
+
+
+def _format_write_file_result(output: Any) -> str:
+    """write_file → "N bytes written"."""
+    # The in-tree WriteFile currently returns {"written": N}, but the
+    # published contract documents {"bytes": N} — accept both so the
+    # formatter survives either without flagging a false-negative.
+    if isinstance(output, dict):
+        if "bytes" in output:
+            return f"{output['bytes']} bytes written"
+        if "written" in output:
+            return f"{output['written']} bytes written"
+    return "written"
+
+
+def _format_edit_file_result(output: Any) -> str:
+    """edit_file → "N replacements" or "created (N line[s])"."""
+    if isinstance(output, dict):
+        reps = output.get("replacements", 0)
+        if output.get("created"):
+            suffix = "" if reps == 1 else "s"
+            return f"created ({reps} line{suffix})"
+        suffix = "" if reps == 1 else "s"
+        return f"{reps} replacement{suffix}"
+    return "edited"
+
+
+def _format_grep_result(output: Any) -> str:
+    """grep → mode-specific count: files / matches / total."""
+    if isinstance(output, dict):
+        mode = output.get("mode")
+        trunc = " (truncated)" if output.get("truncated") else ""
+        if mode == "files_with_matches":
+            n = len(output.get("files", []))
+            suffix = "" if n == 1 else "s"
+            return f"{n} file{suffix}{trunc}"
+        if mode == "content":
+            n = len(output.get("matches", []))
+            # "match" → "matches" is irregular; hand-plural.
+            suffix = "" if n == 1 else "es"
+            return f"{n} match{suffix}{trunc}"
+        if mode == "count":
+            total = output.get("total", 0)
+            suffix = "" if total == 1 else "es"
+            return f"{total} match{suffix}{trunc}"
+    return "searched"
+
+
+def _format_glob_result(output: Any) -> str:
+    """glob → "N file[s]" [ (truncated)]."""
+    if isinstance(output, dict):
+        n = output.get("count", len(output.get("files", [])))
+        suffix = "" if n == 1 else "s"
+        trunc = " (truncated)" if output.get("truncated") else ""
+        return f"{n} file{suffix}{trunc}"
+    return "globbed"
+
+
+def _format_bash_result(output: Any) -> str:
+    """bash → "ok" / "output truncated" / "killed at 100 MB ceiling" + optional exit marker."""
+    if isinstance(output, dict):
+        code = output.get("exit_code", 0)
+        marker = "" if code == 0 else f" (exit {code})"
+        if output.get("killed_at_hard_ceiling"):
+            return f"killed at 100 MB ceiling{marker}"
+        if output.get("truncated"):
+            return f"output truncated{marker}"
+        return f"ok{marker}"
+    return "executed"
+
+
+def _format_task_create_result(output: Any) -> str:
+    """task_create → "task <id8> — <description>"."""
+    if isinstance(output, dict):
+        tid = str(output.get("task_id", "?"))
+        desc = output.get("description", "")
+        return f"task {tid[:8]} — {desc}"
+    return "spawned"
+
+
+_TOOL_RESULT_FORMATTERS: dict[str, Callable[[Any], str]] = {
+    "read_file": _format_read_file_result,
+    "write_file": _format_write_file_result,
+    "edit_file": _format_edit_file_result,
+    "grep": _format_grep_result,
+    "glob": _format_glob_result,
+    "bash": _format_bash_result,
+    "task_create": _format_task_create_result,
+}
+
+
+# ---------------------------------------------------------------------------
+# Error rendering — boxed panel + actionable hints. Replaces the previous
+# `✗ message` one-liner so operators see WHAT failed and a concrete next
+# step without hunting the transcript for context.
+# ---------------------------------------------------------------------------
+
+_ERROR_HINTS: list[tuple[str, str]] = [
+    # Order matters: first substring hit wins. Put the more-specific
+    # messages BEFORE shorter ones that would otherwise prefix-match.
+    ("ripgrep",
+     "install ripgrep — brew install ripgrep  (or the platform equivalent)"),
+    ("old_str not found",
+     "the string may have changed on disk; re-read the file to see "
+     "current content before the next edit_file"),
+    ("not found",
+     "check the path; the file may have been moved or deleted"),
+    ("has not been read yet",
+     "call read_file({path}) first — edit_file / write_file require a "
+     "prior read to catch staleness"),
+    ("file has changed since last read",
+     "re-read the file; its content drifted between read and edit"),
+    ("file was only partially read",
+     "read_file the target again with offset=0 limit=None before edit"),
+    ("unknown task_id",
+     "only IDs returned by task_create are valid; /tasks lists them"),
+    ("ripgrep",
+     "install ripgrep — brew install ripgrep  (or the platform equivalent)"),
+    ("cannot create parent dir",
+     "check write permissions on the parent directory"),
+    ("bash safety blocked",
+     "the command pattern is a hard floor; split into safer steps or "
+     "use non-matching syntax"),
+    ("plan mode",
+     "plan mode is active — switch to a different permission mode to "
+     "actually execute tools"),
+    ("timeout",
+     "raise the timeout kwarg for long-running work, or break the "
+     "command into chunks"),
+]
+
+
+def _hint_for_error(tool_name: str, error: str) -> str | None:
+    """First substring-match wins. Returns None when no hint applies; the
+    renderer omits the hint line entirely in that case rather than padding
+    with a generic 'try again' noise."""
+    _ = tool_name  # accepted for future per-tool routing; currently unused
+    haystack = error.lower()
+    for needle, hint in _ERROR_HINTS:
+        if needle.lower() in haystack:
+            return hint
+    return None
+
+
+def _render_tool_error(tool_name: str, error: str) -> Panel:
+    """Build a red-bordered panel with the error + optional hint.
+
+    Panel is chosen over a single dim line because tool errors are the
+    LLM's actionable feedback; giving them visual weight encourages the
+    model to read + correct rather than retry blindly."""
+    body = Text(error, style="red")
+    hint = _hint_for_error(tool_name, error)
+    if hint is not None:
+        body.append("\n\n")
+        body.append(hint, style="dim")
+    return Panel(body, title=f"[red]{tool_name} failed[/red]", border_style="red")

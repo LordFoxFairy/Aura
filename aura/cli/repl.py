@@ -4,21 +4,59 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
 from aura import __version__
 from aura.cli.commands import build_default_registry, dispatch
+from aura.cli.completion import SlashCommandCompleter, resolve_history_path
 from aura.cli.render import Renderer
 from aura.cli.spinner import ThinkingSpinner
 from aura.core.agent import Agent
+from aura.core.commands import CommandRegistry
 from aura.core.persistence import journal
 
 InputFn = Callable[[str], Awaitable[str]]
+
+_BOTTOM_TOOLBAR_HINT = "<tab> complete · <ctrl+r> search · <ctrl+d> exit"
+
+
+def _build_prompt_session(
+    registry: CommandRegistry,
+) -> PromptSession[str]:
+    """Construct a PromptSession wired with history, completion, and hints.
+
+    - ``FileHistory`` at ``~/.aura/history`` → up-arrow cycles across sessions.
+    - ``search_ignore_case=True`` → Ctrl+R reverse search, case-insensitive.
+    - ``SlashCommandCompleter`` with a live registry getter → Skill / MCP
+      commands registered after PromptSession construction still complete.
+    - ``complete_while_typing=False`` → menu only on Tab, never while typing
+      normal prompts (would be noisy).
+    - ``bottom_toolbar`` → dim hint about the keybindings.
+    """
+    history = FileHistory(str(resolve_history_path()))
+    completer = SlashCommandCompleter(lambda: registry)
+    return PromptSession(
+        history=history,
+        completer=completer,
+        complete_while_typing=False,
+        search_ignore_case=True,
+        bottom_toolbar=_BOTTOM_TOOLBAR_HINT,
+    )
+
+
+def _make_prompt_session_input(session: PromptSession[str]) -> InputFn:
+    async def _read(prompt: str) -> str:
+        return await session.prompt_async(prompt)
+
+    return _read
 
 
 async def _default_input(prompt: str) -> str:
@@ -34,10 +72,23 @@ async def run_repl_async(
     bypass: bool = False,
 ) -> None:
     journal.write("repl_started")
-    _input = input_fn if input_fn is not None else _default_input
     _console = console if console is not None else Console()
     renderer = Renderer(_console)
     registry = build_default_registry(agent=agent)
+
+    # Resolution order for the input function:
+    # 1. Explicit ``input_fn`` override (tests / non-interactive callers) —
+    #    always wins. Keeps the scripted test harness working verbatim.
+    # 2. If stdin is a TTY, build a PromptSession (history, completion,
+    #    Ctrl+R, bottom toolbar).
+    # 3. Otherwise fall back to plain ``input()`` so piped / dumb terminals
+    #    don't hang waiting on a prompt_toolkit renderer they can't drive.
+    if input_fn is not None:
+        _input: InputFn = input_fn
+    elif sys.stdin.isatty():
+        _input = _make_prompt_session_input(_build_prompt_session(registry))
+    else:
+        _input = _default_input
 
     _print_welcome(agent, _console)
 

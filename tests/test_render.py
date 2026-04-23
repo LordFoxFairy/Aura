@@ -53,12 +53,17 @@ def test_tool_call_completed_success_shows_checkmark() -> None:
     assert "✓" in buf.getvalue()
 
 
-def test_tool_call_completed_error_shows_cross_and_message() -> None:
+def test_tool_call_completed_error_shows_panel_with_tool_name_and_message() -> None:
+    # As of CLI polish, the renderer uses a boxed rich Panel for tool errors
+    # (see aura/cli/render.py::_render_tool_error) — no ✗ anymore. The panel
+    # includes the tool name in its title + the error message in the body.
     r, buf = _capture()
     r.on_event(ToolCallCompleted(name="bash", output=None, error="permission denied"))
     out = buf.getvalue()
-    assert "✗" in out
+    assert "bash" in out
     assert "permission denied" in out
+    # A rich Panel draws corner glyphs; one of them shows up.
+    assert "╭" in out or "┌" in out
 
 
 def test_final_closes_live_silently() -> None:
@@ -151,3 +156,63 @@ def test_renderer_escapes_bracket_markup_in_audit_text() -> None:
     r.on_event(PermissionAudit(tool="x", text="auto-allowed: rule `x([weird])`"))
     out = buf.getvalue()
     assert "[weird]" in out
+
+
+# --------------------------------------------------------------------------
+# Per-tool formatted summaries on ToolCallCompleted (spec §render polish).
+# --------------------------------------------------------------------------
+def test_tool_call_completed_read_file_renders_formatted_summary() -> None:
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="read_file",
+        output={
+            "content": "x" * 4300,
+            "lines": 142,
+            "total_lines": 142,
+            "offset": 0,
+            "limit": None,
+            "partial": False,
+        },
+    ))
+    out = buf.getvalue()
+    assert "✓" in out
+    assert "142 lines" in out
+    assert "KB" in out
+
+
+def test_tool_call_completed_error_still_uses_error_path() -> None:
+    # Error path should NOT consult the formatter registry, even for a known tool.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="read_file", output=None, error="ENOENT: no such file",
+    ))
+    out = buf.getvalue()
+    # Panel renders tool name in title + error in body; formatter summary
+    # ("42 lines, 1.5 KB") must NOT leak into the error output.
+    assert "read_file" in out
+    assert "ENOENT" in out
+    assert "lines" not in out
+    assert "KB" not in out
+
+
+def test_tool_call_completed_unknown_tool_uses_generic_fallback() -> None:
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="not_a_real_tool", output={"x": 1}))
+    out = buf.getvalue()
+    assert "✓" in out
+    # No per-tool formatter ran, so no structured summary text appears.
+    assert "lines" not in out
+
+
+def test_tool_call_completed_bash_shows_exit_marker_on_failure() -> None:
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="bash",
+        output={
+            "stdout": "", "stderr": "bad", "exit_code": 2,
+            "truncated": False, "killed_at_hard_ceiling": False,
+        },
+    ))
+    out = buf.getvalue()
+    assert "✓" in out
+    assert "exit 2" in out

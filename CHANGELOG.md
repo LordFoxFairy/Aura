@@ -2,6 +2,45 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.11.0] — Main channel claude-code parity
+
+Single-session parity sweep against the `docs/specs/2026-04-23-aura-main-channel-parity.md` contract. Every gap surfaced in the audit round (10 workstreams: G1/G4/G5/G8 parity, B1/B3/U4 reliability, U1/U2/U3 UX, plus a pty-driven E2E scenario) was closed in-tree with the real implementation — no stubs, no `NotImplementedError`, no "real impl later" pointers. Lands as one `v0.11.0` tag at the session's natural endpoint per the release-cadence rule.
+
+### Parity
+
+- **G1 — run_turn message persistence reorder** (`91d5808`): user HumanMessage + attachments are now appended to history AND persisted to `storage` BEFORE the first `model.ainvoke` call, matching claude-code `QueryEngine.ts:431+451`. Crash / SIGKILL / Ctrl-C mid-stream now leaves the user turn on disk — the next `resume` sees it. Reactive-compact retry reads attachments from history instead of re-injecting them, so the old `attachments=None` special-case is gone.
+- **G4 — PreToolOutcome direct-return contract** (`722e9ab`): `PreToolHook` returns `PreToolOutcome(short_circuit, decision)` directly; the `state.custom["_aura_pending_decision"]` side-channel is physically deleted. 4 pre-tool hooks + 25 test fixtures migrated to the new signature.
+- **G5 — structured `PermissionDenial` + `Agent.last_turn_denials()`** (`a3d1ee8`): frozen dataclass (tool_name / tool_use_id / tool_input / reason / target / timestamp) appended to a per-turn sink (`state.custom[DENIALS_SINK_KEY]`); Agent exposes a read-only tuple view. SDK / UI consumers no longer have to parse `events.jsonl` to learn what got denied this turn.
+- **G8 — subagents inherit parent `Context._read_records`** (`5287897`): `SubagentFactory.spawn()` shallow-copies the parent's read-record fingerprint map into the child's `Context` at spawn time. Files the parent already read are `read_status == "fresh"` in the child — no forced re-read, no wasted tokens, no must-read-first trips. Only `_read_records` crosses the boundary (`_matched_rules` / `_invoked_skills` / `_loaded_nested_paths` stay empty in the child).
+
+### Reliability
+
+- **B1 — permission audit journal records live mode** (`be324ac`): `permission_decision` events now serialize `_mode_provider()` instead of the captured-at-construction parameter, so a `lambda: agent.mode` wiring produces a string value in the JSONL (not `<function ... at 0x...>`), and the audit tracks mid-session `set_mode` correctly.
+- **B3 — `Agent.aclose(mcp_timeout=)` async shutdown** (`4f6e070`): canonical coroutine entry; sync `close()` is a compat wrapper that spins a fresh loop. Bounded by `asyncio.wait_for`, cancels `MCPManager.stop_all` at the deadline, emits `mcp_close_timeout` journal event with `elapsed_sec` / `timeout_sec` / `servers_hanging`. Happy path emits `mcp_stopped`; unexpected errors emit `mcp_close_error`. No more fire-and-forget `loop.create_task` leak.
+- **U4 — subagent wall-clock timeout** (`61871df`): per-subagent run bounded by `AURA_SUBAGENT_TIMEOUT_SEC` (default 300s). A runaway child that never terminates fails with `subagent_timeout` journal event instead of hanging the parent turn.
+
+### UX
+
+- **U1 — Ctrl+C three-state machine** (`993aae5`): parity with claude-code `useExitOnCtrlCD`. First press clears the current buffer; if the buffer is already empty, a 0.8s exit window is armed (bottom toolbar hints at double-press); a second Ctrl+C inside the window exits the REPL cleanly.
+- **U2 — animated welcome banner spinner** (`523e673`): darwin frame set borrowed from claude-code `SpinnerGlyph`; settles on `✱`. Non-TTY / pipe contexts short-circuit to the static render — no animation frames in scripted CI stdout.
+- **U3 — inline tool-result glyph** (`2371c25`): `✓ name(args) — summary` on a single line; the orphan-`✓` line artifact (rendered when the result summary was empty) is gone.
+
+### E2E
+
+- **`tests/e2e/test_parity_v0_11.py`** (new): pty-driven subprocess scenarios that exercise the parity scenario from the spec (§E2E Case) end-to-end — paste attachment, mid-stream SIGINT, resume by session id, safety-deny `/etc/passwd`, `last_turn_denials()` API, subagent read-record inheritance, `aclose` with hanging MCP stub. Uses stdlib `pty` (not `pexpect`), no network, no provider SDK. Gated behind `pytest -m e2e` so the default `make check` keeps its speed profile.
+
+### Migration notes (SDK consumers)
+
+- **Breaking — `PreToolHook` signature**: callers that implement custom pre-tool hooks must now return `PreToolOutcome(short_circuit=..., decision=...)` instead of the prior `ToolResult | None`. The minimal short-circuit-only shape is `PreToolOutcome(short_circuit=ToolResult(...), decision=None)`; the minimal decision-only shape is `PreToolOutcome(short_circuit=None, decision=Decision(...))`. See `aura/core/hooks/__init__.py` for the protocol definition.
+- **Breaking — `Agent.close()` inside a running loop with a live MCP manager**: previously this fire-and-forgot `stop_all` as a detached task. Now it raises `RuntimeError` pointing callers to `await agent.aclose(...)`. Callers without an MCP manager (bare Agent in unit tests) keep the sync-cleanup contract unchanged.
+- **Non-breaking additions**: `Agent.last_turn_denials()` (new read-only property-style method), `Agent.aclose(*, mcp_timeout=5.0)` (new coroutine), `Context(inherited_reads=...)` (new optional kwarg), `AURA_SUBAGENT_TIMEOUT_SEC` env var (default 300s).
+
+### Verification
+
+- `make check`: lint + mypy(aura+tests) + pytest — all green.
+- `pytest -m e2e`: pty-driven parity scenarios — all green.
+- `~/.aura/journal/events.jsonl` sanity tail after a manual dogfood session covers the spec's §E2E Case ordering (storage_save before turn_begin, live mode in permission_decision, mcp_close_timeout on hang, PermissionDenial on safety block).
+
 ## [0.10.0] — claude-code parity overhaul
 
 Big release. 18 commits, +404 tests (1313 → 1717), ~9000 new LOC. Multiple

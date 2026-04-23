@@ -329,3 +329,237 @@ def test_bottom_toolbar_prefers_real_cached_over_pinned_estimate(
     )
     assert "4.1k cached" in s
     assert "pinned" not in s
+
+
+# --------------------------------------------------------------------------
+# compact-soon warning (turn input ≥ 80% of window)
+# --------------------------------------------------------------------------
+
+
+def test_warning_shows_above_80_pct(tmp_path: Path) -> None:
+    # 85k / 100k = 85% — past the 80% heads-up threshold.
+    text = render_status_bar(
+        model="m",
+        input_tokens=85_000,
+        cache_read_tokens=0,
+        context_window=100_000,
+        mode="default",
+        cwd=tmp_path,
+    )
+    assert "⚠ compact soon" in text.plain
+
+
+def test_warning_absent_at_79_pct(tmp_path: Path) -> None:
+    # 79k / 100k = 79% — just under the threshold, no warning yet.
+    text = render_status_bar(
+        model="m",
+        input_tokens=79_000,
+        cache_read_tokens=0,
+        context_window=100_000,
+        mode="default",
+        cwd=tmp_path,
+    )
+    assert "compact soon" not in text.plain
+
+
+def test_warning_absent_when_no_input(tmp_path: Path) -> None:
+    # 0 input = no useful ratio; elide the warning regardless of window.
+    text = render_status_bar(
+        model="m",
+        input_tokens=0,
+        cache_read_tokens=0,
+        context_window=100_000,
+        mode="default",
+        cwd=tmp_path,
+    )
+    assert "compact soon" not in text.plain
+
+
+def test_warning_shows_above_80_pct_html(tmp_path: Path) -> None:
+    from aura.cli.status_bar import render_bottom_toolbar_html
+
+    s = str(
+        render_bottom_toolbar_html(
+            model="m",
+            input_tokens=85_000,
+            cache_read_tokens=0,
+            context_window=100_000,
+            mode="default",
+            cwd=tmp_path,
+        )
+    )
+    assert "⚠ compact soon" in s
+    assert "ansiyellow" in s
+
+
+def test_warning_absent_at_79_pct_html(tmp_path: Path) -> None:
+    from aura.cli.status_bar import render_bottom_toolbar_html
+
+    s = str(
+        render_bottom_toolbar_html(
+            model="m",
+            input_tokens=79_000,
+            cache_read_tokens=0,
+            context_window=100_000,
+            mode="default",
+            cwd=tmp_path,
+        )
+    )
+    assert "compact soon" not in s
+
+
+def test_warning_absent_when_no_input_html(tmp_path: Path) -> None:
+    from aura.cli.status_bar import render_bottom_toolbar_html
+
+    s = str(
+        render_bottom_toolbar_html(
+            model="m",
+            input_tokens=0,
+            cache_read_tokens=0,
+            context_window=100_000,
+            mode="default",
+            cwd=tmp_path,
+        )
+    )
+    assert "compact soon" not in s
+
+
+# --------------------------------------------------------------------------
+# wall-clock turn duration (``last_turn_seconds``)
+# --------------------------------------------------------------------------
+
+
+def test_render_status_bar_shows_seconds_with_decimal_under_60s(
+    tmp_path: Path,
+) -> None:
+    text = render_status_bar(
+        model="m",
+        input_tokens=0,
+        cache_read_tokens=0,
+        context_window=128_000,
+        mode="default",
+        cwd=tmp_path,
+        last_turn_seconds=3.4,
+    )
+    s = text.plain
+    assert "3.4s" in s
+    # Duration is the final piece so the eye lands on it last.
+    assert s.rstrip().endswith("3.4s")
+
+
+def test_render_status_bar_shows_integer_seconds_at_or_above_60s(
+    tmp_path: Path,
+) -> None:
+    text = render_status_bar(
+        model="m",
+        input_tokens=0,
+        cache_read_tokens=0,
+        context_window=128_000,
+        mode="default",
+        cwd=tmp_path,
+        last_turn_seconds=75.6,
+    )
+    s = text.plain
+    assert "75s" in s
+    # No decimal once we're past the minute threshold.
+    assert "75.6s" not in s
+    # The 60s boundary is inclusive — exactly 60 should also be integer.
+    text60 = render_status_bar(
+        model="m",
+        input_tokens=0,
+        cache_read_tokens=0,
+        context_window=128_000,
+        mode="default",
+        cwd=tmp_path,
+        last_turn_seconds=60.0,
+    )
+    assert "60s" in text60.plain
+    assert "60.0s" not in text60.plain
+
+
+def test_render_status_bar_elides_duration_when_zero(tmp_path: Path) -> None:
+    # Deterministic basename so tmp_path naming can't bleed into the
+    # assertion (pytest's default paths contain the function name).
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    # Default kwarg (0.0) suppresses the piece entirely so the first paint
+    # before any turn doesn't read ``... · cwd · 0.0s``.
+    text = render_status_bar(
+        model="m",
+        input_tokens=0,
+        cache_read_tokens=0,
+        context_window=128_000,
+        mode="default",
+        cwd=proj,
+    )
+    s = text.plain
+    # cwd (``proj``) is the last piece; no trailing duration should follow.
+    assert s.rstrip().endswith("proj")
+    assert "0.0s" not in s
+    # Be precise: look for a seconds piece, not the literal "0s" which
+    # could false-match inside a future cwd name. The full rendered form
+    # is ``N.Ns`` or ``Ns``; if none exist, no digits-followed-by-s.
+    import re
+    assert re.search(r"\d+(?:\.\d+)?s", s) is None
+
+
+def test_render_bottom_toolbar_html_shows_seconds_with_decimal_under_60s(
+    tmp_path: Path,
+) -> None:
+    from aura.cli.status_bar import render_bottom_toolbar_html
+
+    s = str(
+        render_bottom_toolbar_html(
+            model="m",
+            input_tokens=0,
+            cache_read_tokens=0,
+            context_window=128_000,
+            mode="default",
+            cwd=tmp_path,
+            last_turn_seconds=3.4,
+        )
+    )
+    assert "3.4s" in s
+
+
+def test_render_bottom_toolbar_html_shows_integer_seconds_at_or_above_60s(
+    tmp_path: Path,
+) -> None:
+    from aura.cli.status_bar import render_bottom_toolbar_html
+
+    s = str(
+        render_bottom_toolbar_html(
+            model="m",
+            input_tokens=0,
+            cache_read_tokens=0,
+            context_window=128_000,
+            mode="default",
+            cwd=tmp_path,
+            last_turn_seconds=75.6,
+        )
+    )
+    assert "75s" in s
+    assert "75.6s" not in s
+
+
+def test_render_bottom_toolbar_html_elides_duration_when_zero(
+    tmp_path: Path,
+) -> None:
+    from aura.cli.status_bar import render_bottom_toolbar_html
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    s = str(
+        render_bottom_toolbar_html(
+            model="m",
+            input_tokens=0,
+            cache_read_tokens=0,
+            context_window=128_000,
+            mode="default",
+            cwd=proj,
+        )
+    )
+    assert "0.0s" not in s
+    # No ``<digits>s`` duration piece when the kwarg defaults to 0.
+    import re
+    assert re.search(r">\d+(?:\.\d+)?s<", s) is None

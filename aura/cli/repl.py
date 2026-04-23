@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sys
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ InputFn = Callable[[str], Awaitable[str]]
 def _build_prompt_session(
     registry: CommandRegistry,
     agent: Agent | None = None,
+    last_turn_seconds_getter: Callable[[], float] | None = None,
 ) -> PromptSession[str]:
     """Construct a PromptSession wired with history, completion, and an
     informational bottom toolbar.
@@ -58,7 +60,11 @@ def _build_prompt_session(
     """
     history = FileHistory(str(resolve_history_path()))
     completer = SlashCommandCompleter(lambda: registry)
-    bottom_toolbar = _make_bottom_toolbar(agent) if agent is not None else None
+    bottom_toolbar = (
+        _make_bottom_toolbar(agent, last_turn_seconds_getter)
+        if agent is not None
+        else None
+    )
     style = Style.from_dict({
         "bottom-toolbar": "noreverse",
         "bottom-toolbar.text": "noreverse",
@@ -73,13 +79,21 @@ def _build_prompt_session(
     )
 
 
-def _make_bottom_toolbar(agent: Agent) -> Callable[[], Any]:
+def _make_bottom_toolbar(
+    agent: Agent,
+    last_turn_seconds_getter: Callable[[], float] | None = None,
+) -> Callable[[], Any]:
     """Build a pt-compatible bottom_toolbar callable that reads live agent
     state on each render. Closing over ``agent`` rather than snapshotting
     the values is the whole point: every turn's new ``_token_stats`` +
     any mid-session ``/model`` switch show up in the bar without manual
     re-wiring. ``Agent.mode`` and ``Agent.context_window`` encapsulate
-    the mode / window resolution so the toolbar stays a thin projection."""
+    the mode / window resolution so the toolbar stays a thin projection.
+
+    ``last_turn_seconds_getter`` is a closure over a REPL-scope mutable
+    so the bar picks up the most recent turn's wall-clock duration without
+    stashing it on agent state (it's display-only REPL info).
+    """
     from aura.cli.status_bar import render_bottom_toolbar_html
 
     def _render() -> Any:
@@ -87,6 +101,9 @@ def _make_bottom_toolbar(agent: Agent) -> Callable[[], Any]:
         input_tokens = int(stats.get("last_input_tokens", 0))
         cache_tokens = int(stats.get("last_cache_read_tokens", 0))
         model = agent.current_model or ""
+        last_secs = (
+            last_turn_seconds_getter() if last_turn_seconds_getter else 0.0
+        )
         return render_bottom_toolbar_html(
             model=model or None,
             input_tokens=input_tokens,
@@ -95,6 +112,7 @@ def _make_bottom_toolbar(agent: Agent) -> Callable[[], Any]:
             context_window=agent.context_window,
             mode=agent.mode,
             cwd=Path.cwd(),
+            last_turn_seconds=last_secs,
         )
 
     return _render
@@ -124,6 +142,12 @@ async def run_repl_async(
     renderer = Renderer(_console)
     registry = build_default_registry(agent=agent)
 
+    # Wall-clock duration of the most recent turn. Single-element list
+    # (not a bare float) so both the toolbar closure and the main loop
+    # can read / write the same cell without a dedicated class. Stays
+    # in the REPL closure — deliberately NOT on agent state.
+    last_turn_seconds: list[float] = [0.0]
+
     # Resolution order for the input function:
     # 1. Explicit ``input_fn`` override (tests / non-interactive callers) —
     #    always wins. Keeps the scripted test harness working verbatim.
@@ -135,7 +159,11 @@ async def run_repl_async(
         _input: InputFn = input_fn
     elif sys.stdin.isatty():
         _input = _make_prompt_session_input(
-            _build_prompt_session(registry, agent=agent)
+            _build_prompt_session(
+                registry,
+                agent=agent,
+                last_turn_seconds_getter=lambda: last_turn_seconds[0],
+            )
         )
     else:
         _input = _default_input
@@ -180,7 +208,9 @@ async def run_repl_async(
             continue
 
         try:
-            await _run_turn(agent, line, renderer, _console)
+            last_turn_seconds[0] = await _run_turn(
+                agent, line, renderer, _console,
+            )
         except Exception as exc:  # noqa: BLE001 — REPL resilience
             # Don't catch BaseException: KeyboardInterrupt/SystemExit/
             # CancelledError must still propagate up to main() so the
@@ -200,7 +230,7 @@ async def run_repl_async(
         # operator still sees the model/tokens/mode/cwd summary while pt's
         # bottom toolbar is hidden during streaming. Runs regardless of
         # --verbose (verbose adds the cumulative-totals summary on top).
-        _print_post_turn_status(agent, _console)
+        _print_post_turn_status(agent, _console, last_turn_seconds[0])
 
         if verbose:
             _print_verbose_summary(agent, _console)
@@ -231,7 +261,9 @@ def _print_verbose_summary(agent: Agent, console: Console) -> None:
     )
 
 
-def _print_post_turn_status(agent: Agent, console: Console) -> None:
+def _print_post_turn_status(
+    agent: Agent, console: Console, last_turn_seconds: float = 0.0,
+) -> None:
     """Print a dim checkpoint status line right after a response finishes.
 
     prompt_toolkit's ``bottom_toolbar`` only renders while pt owns the
@@ -261,13 +293,23 @@ def _print_post_turn_status(agent: Agent, console: Console) -> None:
         context_window=agent.context_window,
         mode=agent.mode,
         cwd=Path.cwd(),
+        last_turn_seconds=last_turn_seconds,
     )
     console.print(text)
 
 
 async def _run_turn(
     agent: Agent, prompt: str, renderer: Renderer, console: Console,
-) -> None:
+) -> float:
+    """Run one turn end-to-end; return its wall-clock duration in seconds.
+
+    The duration is captured at the REPL layer (not on ``Agent.state``)
+    because it's display-only info for the status bar — ephemeral,
+    orthogonal to agent semantics. Measured with ``time.perf_counter``
+    for monotonic wall time (unaffected by system clock adjustments).
+    """
+    from aura.cli._coordination import set_spinner_pause_callback
+
     spinner = ThinkingSpinner(console)
     spinner.start()
     spinner_stopped = False
@@ -278,6 +320,13 @@ async def _run_turn(
             spinner_stopped = True
             await spinner.stop()
 
+    # Let the permission asker (or any other mid-turn widget) pause the
+    # spinner before it takes the screen. Registered for the lifetime of
+    # this turn; cleared in the finally so an asker outside a turn
+    # (future: proactive bg tasks?) doesn't accidentally poke a stopped
+    # spinner.
+    set_spinner_pause_callback(_stop_spinner)
+
     async def _stream() -> None:
         async for event in agent.astream(prompt):
             await _stop_spinner()
@@ -285,6 +334,7 @@ async def _run_turn(
         await _stop_spinner()
         renderer.finish()
 
+    started = time.perf_counter()
     task = asyncio.create_task(_stream())
     try:
         await task
@@ -297,3 +347,5 @@ async def _run_turn(
         await _stop_spinner()
     finally:
         await _stop_spinner()
+        set_spinner_pause_callback(None)
+    return time.perf_counter() - started

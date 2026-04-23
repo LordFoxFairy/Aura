@@ -37,6 +37,9 @@ from pathlib import Path
 from prompt_toolkit.formatted_text import HTML
 from rich.text import Text
 
+# emit ⚠ warning when turn input exceeds this %; gives user a heads-up before the auto-compact floor
+_COMPACT_WARN_PCT = 80
+
 
 def _humanize_tokens(n: int) -> str:
     """1234 -> ``1.2k`` / 1_234_567 -> ``1.2M``. Matches the convention the
@@ -46,6 +49,19 @@ def _humanize_tokens(n: int) -> str:
     if n < 1_000_000:
         return f"{n/1000:.1f}k"
     return f"{n/1_000_000:.1f}M"
+
+
+def _format_duration(seconds: float) -> str:
+    """Turn-duration formatter.
+
+    Under 60s: one-decimal precision (``3.4s``) — turns finishing in
+    seconds are the common case and the decimal carries useful signal.
+    At or above 60s: integer seconds (``75s``) — once you're past a
+    minute the ``.4`` is noise.
+    """
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    return f"{int(seconds)}s"
 
 
 def _humanize_window(n: int) -> str:
@@ -74,6 +90,7 @@ def render_status_bar(
     mode: str,
     cwd: Path,
     pinned_estimate_tokens: int = 0,
+    last_turn_seconds: float = 0.0,
 ) -> Text:
     """Build a single-line dim status line as a ``rich.text.Text``.
 
@@ -116,7 +133,21 @@ def render_status_bar(
     if mode != "default":
         parts.append(f"{mode} mode")
 
+    if (
+        input_tokens > 0
+        and context_window > 0
+        and round(input_tokens / context_window * 100) >= _COMPACT_WARN_PCT
+    ):
+        parts.append("[yellow]⚠ compact soon[/yellow]")
+
     parts.append(cwd.name)
+
+    # Wall-clock duration of the last turn, appended as the final piece
+    # so the eye lands on it last. Elided when 0 (pre-first-turn paint)
+    # so the initial status line doesn't read ``... · cwd · 0.0s``.
+    if last_turn_seconds > 0:
+        parts.append(_format_duration(last_turn_seconds))
+
     return Text(" · ".join(parts), style="dim")
 
 
@@ -146,6 +177,7 @@ def render_bottom_toolbar_html(
     mode: str,
     cwd: Path,
     pinned_estimate_tokens: int = 0,
+    last_turn_seconds: float = 0.0,
 ) -> HTML:
     """Build the live bottom-toolbar shown under the REPL prompt.
 
@@ -186,6 +218,19 @@ def render_bottom_toolbar_html(
         )
     if mode != "default":
         pieces.append(f"<ansigray>{mode} mode</ansigray>")
+
+    if (
+        input_tokens > 0
+        and context_window > 0
+        and round(input_tokens / context_window * 100) >= _COMPACT_WARN_PCT
+    ):
+        pieces.append("<ansiyellow>⚠ compact soon</ansiyellow>")
+
     pieces.append(f"<ansigray>{cwd.name}</ansigray>")
+
+    if last_turn_seconds > 0:
+        pieces.append(
+            f"<ansigray>{_format_duration(last_turn_seconds)}</ansigray>"
+        )
 
     return HTML(" · ".join(pieces))

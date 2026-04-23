@@ -2,6 +2,40 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.7.5] — Interactive arrow-key permission widget + FIFO prompt mutex
+
+User dogfooded v0.7.4 and flagged two real problems: the prompt was typed-number-to-select (↑/↓ leaked through as raw escape codes) and the thinking spinner kept animating behind the prompt. Also pointed at claude-code's actual permission widget (screenshot) asking for that exact layout.
+
+### Headlines
+
+- `aura/cli/permission.py` now uses an inline `prompt_toolkit.Application` for true arrow-key navigation. ↑/↓ wrap-cursor, Enter / c-m / c-j commit, 1/2/3 number shortcuts jump-and-commit, Esc / Ctrl+C cancel. Rendered in-scrollback with `erase_when_done=True`.
+- Layout matches claude-code's permission dialog: horizontal rule separator, bold section title ("Bash command"), dim command preview, verb description, "Do you want to proceed?" heading, options with cyan cursor highlight, footer hints. No box, no glyph+tag noise.
+- Option wording: "Yes, and don't ask again for \`<rule>\` in this project" (matches claude-code; was "always allow").
+- `aura/cli/user_question.py` gets the same arrow-key widget for multi-choice; free-text path prints question inline + reads via PromptSession.
+
+### Added
+
+- `aura/cli/_coordination.py` — module-level single-writer state for two cross-module concerns: (a) spinner pause callback (REPL registers `ThinkingSpinner.stop` for the turn's lifetime, permission asker calls it before pt takes the screen — fixes the "✳ Concocting… ❯ 221" garble); (b) `prompt_mutex()` returns a process-wide `asyncio.Lock` that every interactive widget acquires, so concurrent prompts from parent + subagent serialize FIFO (mirrors claude-code's `promptQueue` at `REPL.tsx:1110`).
+- Turn-duration piece on both status-bar surfaces (appended as the last segment, elided when 0). Char-count / 4 tokenization via `_format_duration`; under-60s shows one decimal, ≥60s shows integer seconds.
+- Compact-warning piece (`⚠ compact soon`) on both surfaces when input-tokens / context-window ≥ 80%. Constant `_COMPACT_WARN_PCT = 80` in `status_bar.py`.
+
+### Removed
+
+- `_parse_choice` typed-number parser (replaced by key bindings).
+- `_build_dialog_text` radiolist body builder.
+- `tests/test_permission_dialog_polish.py` (replaced by the widget-level tests).
+
+### Dogfood
+
+Verified via pty-driven isolated tests:
+- 4 permission-widget scenarios pass (↓ wrap + Enter → 1; "2" shortcut → 2; bare Enter → default; Ctrl+C → None).
+- 2-task concurrent test: `task_two` waits on the mutex until `task_one` commits, then renders; FIFO preserved.
+- Full aura-in-pty dogfood: real bash tool-call triggers widget, UP arrow moves cursor, "3" commits No, audit-line `⚠ bash(pwd) — no` prints, tool correctly denied. Spinner stops cleanly before widget takes the screen.
+
+### Stats
+
+- 1094 tests. Lint + mypy clean.
+
 ## [0.7.4] — Inline permission prompts + leftover closure
 
 Closing round: owner wanted "不要遗留" — everything half-finished audited and either shipped or removed. Nothing new, just no more stubs.

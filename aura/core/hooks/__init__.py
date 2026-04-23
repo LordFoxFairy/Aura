@@ -16,8 +16,50 @@ from typing import Any, Protocol
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
+from aura.core.permissions.decision import Decision
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
+
+
+@dataclass(frozen=True)
+class PreToolOutcome:
+    """What a :class:`PreToolHook` returns — two independent channels.
+
+    - ``short_circuit``: non-None replaces the tool's own execution with
+      this :class:`ToolResult`. The tool is NOT invoked; the result lands
+      in history as a ToolMessage. Used by safety / budget / must-read
+      hooks to block a call without consulting the model.
+    - ``decision``: non-None carries a permission :class:`Decision` up to
+      :class:`aura.core.loop.AgentLoop._plan_tool_calls` which stamps it
+      onto the :class:`aura.core.loop.ToolStep` so a PermissionAudit can
+      be emitted between ToolCallStarted and ToolCallCompleted. A hook
+      that has nothing to say about permission returns ``decision=None``.
+
+    Both fields default to ``None`` — a hook that neither short-circuits
+    nor emits a decision returns :obj:`PreToolOutcome.passthrough` (or
+    equivalently ``PreToolOutcome()``). Returning an implicit ``None``
+    from a PreToolHook is a type error by design — the contract is strict
+    so future readers can rely on "every hook returns an outcome".
+
+    Minimal usage — a hook that only short-circuits::
+
+        async def my_hook(*, tool, args, state, **_):
+            if _should_block(tool, args):
+                return PreToolOutcome(
+                    short_circuit=ToolResult(ok=False, error="blocked"),
+                    decision=None,
+                )
+            return PRE_TOOL_PASSTHROUGH
+    """
+
+    short_circuit: ToolResult | None = None
+    decision: Decision | None = None
+
+
+# Shared sentinel for the "nothing to do" case so common hooks don't each
+# allocate a fresh PreToolOutcome on every call. Frozen dataclass = safe
+# to share by reference.
+PRE_TOOL_PASSTHROUGH: PreToolOutcome = PreToolOutcome()
 
 
 class PreModelHook(Protocol):
@@ -44,7 +86,28 @@ class PostModelHook(Protocol):
 
 
 class PreToolHook(Protocol):
-    # 返回 ToolResult = 短路，记入 history 但不调 ainvoke；返回 None = 放行。
+    """Pre-tool hook — gates / observes one tool call, returns PreToolOutcome.
+
+    The return value is strict (:class:`PreToolOutcome`, not
+    ``PreToolOutcome | None``): a hook that has nothing to do MUST
+    return :data:`PRE_TOOL_PASSTHROUGH` (or equivalently
+    ``PreToolOutcome()``). This catches "I forgot to return anything"
+    bugs at the type-checker, and keeps the
+    :meth:`HookChain.run_pre_tool` merge loop simple.
+
+    Channels:
+
+    - ``outcome.short_circuit`` non-None → tool is NOT invoked; this
+      :class:`ToolResult` becomes the tool's result.
+    - ``outcome.decision`` non-None → permission :class:`Decision`
+      surfaces on :class:`aura.core.loop.ToolStep.permission_decision`
+      for the auditor to emit a PermissionAudit event.
+
+    Both channels are independent. A permission hook typically sets
+    BOTH (allow-with-reason: ``decision=allow, short_circuit=None``;
+    deny: ``decision=deny, short_circuit=ToolResult(ok=False,...)``).
+    """
+
     async def __call__(
         self,
         *,
@@ -52,7 +115,7 @@ class PreToolHook(Protocol):
         args: dict[str, Any],
         state: LoopState,
         **kwargs: Any,
-    ) -> ToolResult | None: ...
+    ) -> PreToolOutcome: ...
 
 
 class PostToolHook(Protocol):
@@ -185,18 +248,48 @@ class HookChain:
         args: dict[str, Any],
         state: LoopState,
         **kwargs: Any,
-    ) -> ToolResult | None:
-        # ``**kwargs`` forwards per-call metadata to hooks. Today only
-        # ``tool_call_id`` flows through (G5 uses it to stamp
-        # PermissionDenial records); additional keys will land as more
-        # workstreams plumb data into the hook surface without having to
-        # revise every call site. PreToolHook accepts ``**kwargs`` by
-        # protocol so unchanged hooks silently ignore new keys.
+    ) -> PreToolOutcome:
+        """Merge pre_tool hook outcomes across the chain.
+
+        Merge semantics (intentional asymmetry — the two channels model
+        different intents):
+
+        - ``short_circuit`` is **first-wins**. The first hook that emits
+          a non-None ``short_circuit`` stops the chain immediately —
+          subsequent hooks are NOT called. Matches the pre-G4 contract:
+          safety / budget denials take precedence over anything further
+          down the chain, and once a ToolResult is decided there's
+          nothing for later hooks to add.
+        - ``decision`` is **last-wins** across hooks the chain actually
+          ran. Permission hooks typically sit at the end of the chain
+          (permission is the final gate before a tool executes), so the
+          last non-None decision is the authoritative one. A hook
+          earlier in the chain emitting a decision does not block a
+          later hook from overriding it — if an early hook
+          short-circuits, the later hook never runs so its (potential)
+          decision is naturally not considered.
+
+        ``**kwargs`` forwards per-call metadata to hooks. Today
+        ``tool_call_id`` flows through (G5 uses it to stamp
+        PermissionDenial records); additional keys land as more
+        workstreams plumb data into the hook surface without having to
+        revise every call site. :class:`PreToolHook` accepts
+        ``**kwargs`` by protocol so unchanged hooks silently ignore
+        new keys.
+        """
+        merged_decision: Decision | None = None
         for hook in self.pre_tool:
-            decision = await hook(tool=tool, args=args, state=state, **kwargs)
-            if decision is not None:
-                return decision
-        return None
+            outcome = await hook(tool=tool, args=args, state=state, **kwargs)
+            # Last-wins: any non-None decision updates the running merge.
+            if outcome.decision is not None:
+                merged_decision = outcome.decision
+            # First-wins: stop immediately on the first short-circuit.
+            if outcome.short_circuit is not None:
+                return PreToolOutcome(
+                    short_circuit=outcome.short_circuit,
+                    decision=merged_decision,
+                )
+        return PreToolOutcome(short_circuit=None, decision=merged_decision)
 
     async def run_post_tool(
         self,

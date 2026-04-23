@@ -29,7 +29,9 @@ Decision order (short-circuits at first match):
 Layer boundaries (enforced by construction, not convention):
 
 - **Hook** decides: assembles inputs into a ``Decision``, emits journal,
-  returns ``ToolResult`` or ``None``.
+  returns a :class:`aura.core.hooks.PreToolOutcome` carrying both the
+  :class:`Decision` (for the auditor) and a ``short_circuit``
+  :class:`ToolResult` on deny paths.
 - **Asker** asks: presents the choice to the user, returns
   ``AskerResponse`` (``accept`` / ``always`` / ``deny``).
 - **Store** saves: atomic write to ``.aura/settings.json``.
@@ -46,7 +48,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
 
-from aura.core.hooks import PreToolHook
+from aura.core.hooks import PreToolHook, PreToolOutcome
 from aura.core.permissions.decision import Decision
 from aura.core.permissions.denials import DENIALS_SINK_KEY, PermissionDenial
 from aura.core.permissions.mode import DEFAULT_MODE, Mode
@@ -292,7 +294,7 @@ def make_permission_hook(
         state: LoopState,
         tool_call_id: str = "",
         **_: Any,
-    ) -> ToolResult | None:
+    ) -> PreToolOutcome:
         # ``tool_call_id`` flows in from ``AgentLoop._plan_tool_calls`` via
         # run_pre_tool's ``**kwargs`` pass-through (see hooks/__init__.py).
         # Defaulted to "" so unit tests that build the hook standalone
@@ -330,13 +332,13 @@ def make_permission_hook(
             target=decision.target,
             **extra,
         )
-        # Transient per-call stash: loop._plan_tool_calls reads this back
-        # IMMEDIATELY after run_pre_tool returns (same tool call, same
-        # event-loop turn, no await in between) and pops it. Single-slot
-        # by design — tool plans are built sequentially so there's no race.
-        state.custom["_aura_pending_decision"] = decision
         if decision.allow:
-            return None
+            # Allow path: return the decision but no short_circuit — the
+            # Loop will invoke the tool, and if the decision is an
+            # auto-allow reason (rule_allow / mode_bypass) the Loop's
+            # auditor will emit a PermissionAudit between Started and
+            # Completed.
+            return PreToolOutcome(short_circuit=None, decision=decision)
         # G5: append a structured record to the per-turn denials sink. The
         # sink is a plain list owned by Agent and shared by reference
         # through state.custom; absent key = hook invoked outside a full
@@ -361,10 +363,14 @@ def make_permission_hook(
         if decision.reason == "plan_mode_blocked":
             # The plan-mode error needs tool name + args preview, which
             # aren't on Decision. Compose here where they're in scope.
-            return ToolResult(
+            short_circuit = ToolResult(
                 ok=False, error=_plan_error_message(tool, args),
             )
-        return ToolResult(ok=False, error=_deny_message(decision, feedback=feedback))
+        else:
+            short_circuit = ToolResult(
+                ok=False, error=_deny_message(decision, feedback=feedback),
+            )
+        return PreToolOutcome(short_circuit=short_circuit, decision=decision)
 
     return _hook
 

@@ -29,7 +29,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.cli._coordination import prompt_mutex
-from aura.core.hooks import HookChain
+from aura.core.hooks import HookChain, PreToolOutcome
 from aura.core.hooks.permission import (
     AskerResponse,
     PermissionAsker,
@@ -307,15 +307,18 @@ async def test_asker_timeout_is_per_call_not_shared(tmp_path: Path) -> None:
             args: dict[str, Any],
             state: Any,
             **_: Any,
-        ) -> ToolResult | None:
+        ) -> PreToolOutcome:
             try:
                 return await asyncio.wait_for(
                     base_hook(tool=tool, args=args, state=state),
                     timeout=timeout,
                 )
             except TimeoutError:
-                return ToolResult(
-                    ok=False, error="denied: asker timed out",
+                return PreToolOutcome(
+                    short_circuit=ToolResult(
+                        ok=False, error="denied: asker timed out",
+                    ),
+                    decision=None,
                 )
 
         return HookChain(pre_tool=[_timed_hook])

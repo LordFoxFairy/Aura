@@ -232,7 +232,6 @@ async def test_clear_session_wipes_read_state(tmp_path: Path) -> None:
     # old Context — previously-read files would still pass the must-read gate
     # after /clear, silently weakening the invariant. Assert both halves.
     from aura.schemas.state import LoopState
-    from aura.schemas.tool import ToolResult
     from aura.tools.base import build_tool
 
     class _PathOldNew(BaseModel):
@@ -259,15 +258,15 @@ async def test_clear_session_wipes_read_state(tmp_path: Path) -> None:
         func=lambda path, old_str, new_str: {"replacements": 1},
         is_destructive=True,
     )
-    result = await agent._must_read_first_hook(
+    outcome = await agent._must_read_first_hook(
         tool=edit_tool,
         args={"path": str(target), "old_str": "body", "new_str": "BODY"},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "has not been read" in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "has not been read" in outcome.short_circuit.error
 
 
 def test_unknown_tool_name_in_config_raises_AuraConfigError(tmp_path: Path) -> None:

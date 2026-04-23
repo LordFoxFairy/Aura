@@ -28,7 +28,7 @@ from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
 
-from aura.core.hooks import PreToolHook
+from aura.core.hooks import PRE_TOOL_PASSTHROUGH, PreToolHook, PreToolOutcome
 from aura.core.memory.context import Context
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
@@ -74,37 +74,37 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
         args: dict[str, Any],
         state: LoopState,
         **_: Any,
-    ) -> ToolResult | None:
+    ) -> PreToolOutcome:
         if tool.name not in ("edit_file", "write_file"):
-            return None
+            return PRE_TOOL_PASSTHROUGH
 
         raw = args.get("path")
         if not isinstance(raw, str) or not raw:
             # Tool's own arg-validation (pydantic schema) will reject —
             # don't pre-empt that error with a less specific one.
-            return None
+            return PRE_TOOL_PASSTHROUGH
 
         try:
             resolved = Path(raw).resolve()
         except OSError:
             # Let the tool's own error path surface (e.g. "not found").
-            return None
+            return PRE_TOOL_PASSTHROUGH
 
         if tool.name == "edit_file":
             # Mirror claude-code: allow new-file creation via empty old_str
             # without a prior read — there is nothing on disk to have read.
             # Narrowly scoped: requires old_str == "" AND path does not exist.
             if args.get("old_str") == "" and not resolved.exists():
-                return None
+                return PRE_TOOL_PASSTHROUGH
         else:  # write_file
             # File-unchanged guard only applies when there's a file to be
             # unchanged. Pure creation always passes through.
             if not resolved.exists():
-                return None
+                return PRE_TOOL_PASSTHROUGH
 
         status = context.read_status(resolved)
         if status == "fresh":
-            return None
+            return PRE_TOOL_PASSTHROUGH
 
         # Lazy import — same pattern as aura/core/memory/rules.py to keep
         # the journal dependency out of the module-load path.
@@ -116,6 +116,11 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
             path=str(resolved),
             reason=status,
         )
-        return ToolResult(ok=False, error=_error_text(tool.name, status, resolved))
+        return PreToolOutcome(
+            short_circuit=ToolResult(
+                ok=False, error=_error_text(tool.name, status, resolved),
+            ),
+            decision=None,
+        )
 
     return _hook

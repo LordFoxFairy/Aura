@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import HookChain
+from aura.core.hooks import PRE_TOOL_PASSTHROUGH, HookChain, PreToolOutcome
 from aura.core.hooks.budget import make_size_budget_hook
 from aura.core.loop import AgentLoop
 from aura.core.permissions.decision import Decision
@@ -115,8 +115,8 @@ async def test_pre_tool_fires_before_invoke_and_can_deny() -> None:
 
     async def deny(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> ToolResult | None:
-        return denied
+    ) -> PreToolOutcome:
+        return PreToolOutcome(short_circuit=denied, decision=None)
 
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     registry = ToolRegistry([_echo_tool])
@@ -177,9 +177,9 @@ async def test_hooks_all_fire_in_order_for_tool_turn() -> None:
 
     async def pre_tool(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> ToolResult | None:
+    ) -> PreToolOutcome:
         event_log.append("pre_tool")
-        return None
+        return PRE_TOOL_PASSTHROUGH
 
     async def post_tool(
         *, tool: BaseTool, args: dict[str, Any], result: ToolResult, state: LoopState,
@@ -237,21 +237,27 @@ async def test_hooks_see_monotonic_turn_count() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_allow_decision_emits_permission_audit_between_started_and_completed() -> None:
-    """A pre_tool hook that stashes ``_aura_pending_decision`` with a
-    rule_allow reason → loop emits PermissionAudit right after ToolCallStarted.
+    """A pre_tool hook returning an auto-allow Decision via PreToolOutcome →
+    loop emits PermissionAudit right after ToolCallStarted.
 
-    Proves the plumbing: hook → state.custom → loop reads/pops → emits
-    PermissionAudit → sequence is Started → Audit → Completed.
+    Proves the plumbing: hook returns PreToolOutcome(decision=...) → loop
+    reads it directly onto ToolStep.permission_decision → emits
+    PermissionAudit → sequence is Started → Audit → Completed. (Post-G4 —
+    no more state.custom side-channel.)
     """
     from aura.core.permissions.rule import Rule
 
     async def stashing_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> ToolResult | None:
-        state.custom["_aura_pending_decision"] = Decision(
-            allow=True, reason="rule_allow", rule=Rule(tool="echo", content=None),
+    ) -> PreToolOutcome:
+        return PreToolOutcome(
+            short_circuit=None,
+            decision=Decision(
+                allow=True,
+                reason="rule_allow",
+                rule=Rule(tool="echo", content=None),
+            ),
         )
-        return None
 
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     hooks = HookChain(pre_tool=[stashing_hook])
@@ -301,11 +307,11 @@ async def test_user_accept_decision_does_not_emit_permission_audit() -> None:
     audit line — the prompt itself was the audit."""
     async def stashing_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> ToolResult | None:
-        state.custom["_aura_pending_decision"] = Decision(
-            allow=True, reason="user_accept",
+    ) -> PreToolOutcome:
+        return PreToolOutcome(
+            short_circuit=None,
+            decision=Decision(allow=True, reason="user_accept"),
         )
-        return None
 
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     hooks = HookChain(pre_tool=[stashing_hook])
@@ -324,27 +330,107 @@ async def test_user_accept_decision_does_not_emit_permission_audit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_decision_stash_popped_between_calls_no_leak() -> None:
-    """After the loop reads a Decision on call #1, state.custom must not
-    still hold it when call #2 begins. Proves the pop-on-read invariant —
-    audits can't leak between tool calls."""
-    seen_states: list[dict[str, Any]] = []
+async def test_pre_tool_hook_returns_outcome_directly() -> None:
+    """AC-G4-1: a permission hook returns its Decision via
+    :class:`PreToolOutcome.decision`; the Loop populates
+    ``ToolStep.permission_decision`` without touching ``state.custom``.
 
+    Direct-return contract: the Loop reads the decision off the outcome
+    dataclass, never from a transient slot on state.custom. Only the
+    G5 denials sink is permitted on state.custom at this layer.
+    """
+    from aura.core.permissions.denials import DENIALS_SINK_KEY
     from aura.core.permissions.rule import Rule
 
-    async def stash_once(
+    expected_decision = Decision(
+        allow=True, reason="rule_allow", rule=Rule(tool="echo", content=None),
+    )
+    saw_custom_keys: list[set[str]] = []
+
+    async def hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> ToolResult | None:
-        # Snapshot state.custom BEFORE stashing — on call #2 the previous
-        # decision must already be gone (loop popped after call #1).
-        seen_states.append(dict(state.custom))
-        state.custom["_aura_pending_decision"] = Decision(
-            allow=True, reason="rule_allow", rule=Rule(tool="echo", content=None),
+    ) -> PreToolOutcome:
+        # Hook must NOT need to touch state.custom to communicate the
+        # decision — that's the whole point of G4.
+        saw_custom_keys.append(set(state.custom))
+        return PreToolOutcome(short_circuit=None, decision=expected_decision)
+
+    # Spy on the Loop's ToolStep to confirm the decision lands on it.
+    from aura.core.loop import ToolStep
+    captured_steps: list[ToolStep] = []
+
+    orig_plan = AgentLoop._plan_tool_calls
+
+    async def spy_plan(self, tool_calls):  # type: ignore[no-untyped-def]
+        steps = await orig_plan(self, tool_calls)
+        captured_steps.extend(steps)
+        return steps
+
+    model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
+    hooks = HookChain(pre_tool=[hook])
+    loop = AgentLoop(
+        model=model,
+        registry=ToolRegistry([_echo_tool]),
+        context=make_minimal_context(),
+        hooks=hooks,
+    )
+    AgentLoop._plan_tool_calls = spy_plan  # type: ignore[method-assign]
+    try:
+        events: list[AgentEvent] = []
+        async for ev in loop.run_turn(history=[HumanMessage(content="go")]):
+            events.append(ev)
+    finally:
+        AgentLoop._plan_tool_calls = orig_plan  # type: ignore[method-assign]
+
+    # AC-G4-1: Decision landed on ToolStep.permission_decision directly.
+    assert len(captured_steps) == 1
+    assert captured_steps[0].permission_decision is expected_decision
+
+    # AC-G4-2 (locally): no side-channel slot appeared on state.custom
+    # at any hook invocation, nor persisted after the Loop ran. The only
+    # key we tolerate here is the G5 denials sink (even that isn't set
+    # by the Loop in this test because there is no Agent wrapping it).
+    for keys in saw_custom_keys:
+        assert keys.issubset({DENIALS_SINK_KEY})
+    assert set(loop._state.custom).issubset({DENIALS_SINK_KEY})
+
+    # And the audit still emitted (auto-allow → PermissionAudit between
+    # Started and Completed).
+    assert any(isinstance(e, PermissionAudit) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_per_call_decisions_do_not_leak_across_tool_calls() -> None:
+    """Each tool call gets its own PreToolOutcome; nothing persists on
+    state.custom across calls. Post-G4 — with direct-return there is no
+    shared slot that could leak, but this test guards regression: the
+    loop must not read stale state between calls.
+
+    Each call has a distinct Decision object; the loop must emit one
+    PermissionAudit per call, matching the per-call decision."""
+    from aura.core.permissions.denials import DENIALS_SINK_KEY
+    from aura.core.permissions.rule import Rule
+
+    decisions = [
+        Decision(allow=True, reason="rule_allow", rule=Rule(tool="echo", content=None)),
+        Decision(allow=True, reason="mode_bypass"),
+    ]
+    seen_customs: list[set[str]] = []
+
+    async def per_call_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        # Snapshot state.custom keys BEFORE returning — must never
+        # contain any transient per-call decision slot (G4 removed it).
+        seen_customs.append(set(state.custom))
+        # Pop a distinct decision per call.
+        return PreToolOutcome(
+            short_circuit=None,
+            decision=decisions[len(seen_customs) - 1],
         )
-        return None
 
     # Two tool calls in one turn → loop processes them in sequence through
-    # _plan_tool_calls; the pop must happen between them.
+    # _plan_tool_calls.
     two_tools_turn = FakeTurn(message=AIMessage(
         content="",
         tool_calls=[
@@ -353,20 +439,26 @@ async def test_decision_stash_popped_between_calls_no_leak() -> None:
         ],
     ))
     model = FakeChatModel(turns=[two_tools_turn, _final_turn()])
-    hooks = HookChain(pre_tool=[stash_once])
+    hooks = HookChain(pre_tool=[per_call_hook])
     loop = AgentLoop(
         model=model,
         registry=ToolRegistry([_echo_tool]),
         context=make_minimal_context(),
         hooks=hooks,
     )
-    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
-        pass
 
-    assert len(seen_states) == 2
-    # Both snapshots (before stashing) must be clean of our key.
-    for snap in seen_states:
-        assert "_aura_pending_decision" not in snap
+    events: list[AgentEvent] = []
+    async for ev in loop.run_turn(history=[HumanMessage(content="go")]):
+        events.append(ev)
+
+    assert len(seen_customs) == 2
+    # Only the G5 denials sink is tolerated on state.custom at this
+    # layer; no transient per-call slot may appear.
+    for snap in seen_customs:
+        assert snap.issubset({DENIALS_SINK_KEY})
+    # Both auto-allow decisions surfaced distinct PermissionAudit events.
+    audits = [e for e in events if isinstance(e, PermissionAudit)]
+    assert len(audits) == 2
 
 
 @pytest.mark.asyncio

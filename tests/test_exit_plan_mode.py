@@ -336,8 +336,8 @@ async def test_exit_plan_mode_bypasses_plan_mode_blocklist_at_hook() -> None:
         mode="plan",
     )
     tool = _mk_tool("exit_plan_mode")
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"plan": "x"}, state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert spy.calls == []

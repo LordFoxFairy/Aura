@@ -29,7 +29,7 @@ from aura.core.hooks.permission import AskerResponse, make_permission_hook
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolError, ToolResult
+from aura.schemas.tool import ToolError
 from aura.tools.base import build_tool
 from aura.tools.enter_plan_mode import EnterPlanMode
 from aura.tools.exit_plan_mode import ExitPlanMode
@@ -264,13 +264,13 @@ async def test_plan_mode_blocks_write_file_through_hook() -> None:
         mode="plan",
     )
     tool = _mk_tool("write_file", is_destructive=True, args_schema=_PathArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"path": "/tmp/new.txt"}, state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "plan mode" in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "plan mode" in outcome.short_circuit.error
     assert spy.calls == []
 
 
@@ -286,10 +286,10 @@ async def test_plan_mode_allows_read_file_through_hook() -> None:
         mode="plan",
     )
     tool = _mk_tool("read_file", is_read_only=True, args_schema=_PathArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"path": "/tmp/ordinary.txt"}, state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert spy.calls == []
 
 
@@ -306,10 +306,10 @@ async def test_enter_plan_mode_is_not_blocked_by_plan_mode() -> None:
         mode="plan",
     )
     tool = _mk_tool("enter_plan_mode", args_schema=_PlanArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"plan": "do the thing"}, state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert spy.calls == []
 
 
@@ -325,8 +325,8 @@ async def test_exit_plan_mode_is_not_blocked_by_plan_mode() -> None:
         mode="plan",
     )
     tool = _mk_tool("exit_plan_mode", args_schema=_P)
-    result = await hook(tool=tool, args={}, state=LoopState())
-    assert result is None
+    outcome = await hook(tool=tool, args={}, state=LoopState())
+    assert outcome.short_circuit is None
     assert spy.calls == []
 
 
@@ -341,8 +341,8 @@ async def test_plan_mode_still_blocks_unknown_tools() -> None:
         mode="plan",
     )
     tool = _mk_tool("weird_custom_tool", args_schema=_P)
-    result = await hook(tool=tool, args={}, state=LoopState())
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "plan mode" in result.error
+    outcome = await hook(tool=tool, args={}, state=LoopState())
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "plan mode" in outcome.short_circuit.error

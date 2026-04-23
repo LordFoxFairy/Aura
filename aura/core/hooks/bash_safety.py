@@ -22,7 +22,7 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
-from aura.core.hooks import PreToolHook
+from aura.core.hooks import PRE_TOOL_PASSTHROUGH, PreToolHook, PreToolOutcome
 from aura.core.permissions.bash_safety import check_bash_safety
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
@@ -35,18 +35,18 @@ def make_bash_safety_hook() -> PreToolHook:
         args: dict[str, Any],
         state: LoopState,
         **_: Any,
-    ) -> ToolResult | None:
+    ) -> PreToolOutcome:
         if tool.name != "bash":
-            return None
+            return PRE_TOOL_PASSTHROUGH
 
         command = args.get("command")
         if not isinstance(command, str) or not command:
             # Tool's own arg-validation rejects; don't pre-empt.
-            return None
+            return PRE_TOOL_PASSTHROUGH
 
         violation = check_bash_safety(command)
         if violation is None:
-            return None
+            return PRE_TOOL_PASSTHROUGH
 
         # Lazy import — mirrors must_read_first.py — keeps the journal
         # dependency out of the module-load path.
@@ -58,12 +58,15 @@ def make_bash_safety_hook() -> PreToolHook:
             detail=violation.detail,
             command=command,
         )
-        return ToolResult(
-            ok=False,
-            error=(
-                f"bash safety blocked: {violation.detail} "
-                f"(reason={violation.reason})"
+        return PreToolOutcome(
+            short_circuit=ToolResult(
+                ok=False,
+                error=(
+                    f"bash safety blocked: {violation.detail} "
+                    f"(reason={violation.reason})"
+                ),
             ),
+            decision=None,
         )
 
     return _hook

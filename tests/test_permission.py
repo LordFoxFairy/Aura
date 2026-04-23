@@ -32,7 +32,6 @@ from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.permissions.store import PermissionStoreError
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 
@@ -159,12 +158,12 @@ async def test_bypass_mode_short_circuits_even_on_protected_path(
         mode="bypass",
     )
     # Destructive tool writing to a protected path — bypass still wins.
-    result = await hook(
+    outcome = await hook(
         tool=_tool(is_destructive=True, args_schema=_PathArgs),
         args={"path": "/etc/passwd"},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert spy.calls == []
     names = [e[0] for e in journal_events]
     assert "permission_bypass" in names
@@ -184,14 +183,14 @@ async def test_safety_blocks_destructive_write_to_protected_path(
         rules=RuleSet(),
         project_root=tmp_path,
     )
-    result = await hook(
+    outcome = await hook(
         tool=_tool(is_destructive=True, args_schema=_PathArgs),
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error == "denied: protected path (safety policy)"
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error == "denied: protected path (safety policy)"
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "safety_blocked"
@@ -213,14 +212,14 @@ async def test_safety_blocks_read_file_of_ssh_key(
         project_root=tmp_path,
     )
     tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool,
         args={"path": str(Path.home() / ".ssh" / "id_rsa")},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error == "denied: protected path (safety policy)"
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error == "denied: protected path (safety policy)"
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "safety_blocked"
@@ -268,12 +267,12 @@ async def test_read_of_git_path_is_not_blocked_by_safety(
         project_root=tmp_path,
     )
     tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool,
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "rule_allow"
@@ -290,12 +289,12 @@ async def test_safety_skipped_on_destructive_tool_without_path_arg(
         project_root=tmp_path,
     )
     # bash-like: destructive, but no args["path"] — safety convention doesn't fire.
-    result = await hook(
+    outcome = await hook(
         tool=_tool("bash", is_destructive=True),
         args={"command": "rm -rf /"},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert len(spy.calls) == 1  # asker was consulted
 
 
@@ -318,12 +317,12 @@ async def test_read_file_rule_matches_goes_to_rule_allow(
         project_root=tmp_path,
     )
     tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool,
         args={"path": str(tmp_path / "ordinary.txt")},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "rule_allow"
@@ -345,12 +344,12 @@ async def test_read_file_with_empty_ruleset_goes_to_ask(
         project_root=tmp_path,
     )
     tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool,
         args={"path": str(tmp_path / "ordinary.txt")},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert len(spy.calls) == 1
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_accept"
@@ -370,8 +369,8 @@ async def test_project_rules_match_takes_priority_over_session(
         rules=RuleSet(rules=(project_rule,)),
         project_root=Path("/tmp"),
     )
-    result = await hook(tool=_tool(), args={}, state=LoopState())
-    assert result is None
+    outcome = await hook(tool=_tool(), args={}, state=LoopState())
+    assert outcome.short_circuit is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "rule_allow"
@@ -388,8 +387,8 @@ async def test_session_rules_match_when_project_misses() -> None:
         rules=RuleSet(),  # empty
         project_root=Path("/tmp"),
     )
-    result = await hook(tool=_tool(), args={}, state=LoopState())
-    assert result is None
+    outcome = await hook(tool=_tool(), args={}, state=LoopState())
+    assert outcome.short_circuit is None
     assert spy.calls == []
 
 
@@ -403,8 +402,8 @@ async def test_ask_accept_allows(
         rules=RuleSet(),
         project_root=Path("/tmp"),
     )
-    result = await hook(tool=_tool(), args={}, state=LoopState())
-    assert result is None
+    outcome = await hook(tool=_tool(), args={}, state=LoopState())
+    assert outcome.short_circuit is None
     assert len(spy.calls) == 1
     assert spy.calls[0]["rule_hint"] == Rule(tool="writer", content=None)
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
@@ -421,10 +420,10 @@ async def test_ask_deny_returns_tool_result(
         rules=RuleSet(),
         project_root=Path("/tmp"),
     )
-    result = await hook(tool=_tool(), args={}, state=LoopState())
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error == "denied: user"
+    outcome = await hook(tool=_tool(), args={}, state=LoopState())
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error == "denied: user"
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_deny"
 
@@ -442,9 +441,9 @@ async def test_ask_deny_with_feedback_embeds_note_in_error(
         rules=RuleSet(),
         project_root=Path("/tmp"),
     )
-    result = await hook(tool=_tool(), args={}, state=LoopState())
-    assert isinstance(result, ToolResult)
-    assert result.error == "denied: user — note: wrong dir"
+    outcome = await hook(tool=_tool(), args={}, state=LoopState())
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.error == "denied: user — note: wrong dir"
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["feedback"] == "wrong dir"
 
@@ -452,7 +451,7 @@ async def test_ask_deny_with_feedback_embeds_note_in_error(
 async def test_ask_accept_with_feedback_keeps_allow_but_records_note(
     journal_events: list[tuple[str, dict[str, Any]]],
 ) -> None:
-    # Accept + feedback: tool still runs (result is None), but the
+    # Accept + feedback: tool still runs (no short_circuit), but the
     # feedback is journaled so downstream consumers / the model
     # transcript can see what the user said.
     spy = _SpyAsker(response=AskerResponse(choice="accept", feedback="ok, proceed"))
@@ -462,8 +461,8 @@ async def test_ask_accept_with_feedback_keeps_allow_but_records_note(
         rules=RuleSet(),
         project_root=Path("/tmp"),
     )
-    result = await hook(tool=_tool(), args={}, state=LoopState())
-    assert result is None
+    outcome = await hook(tool=_tool(), args={}, state=LoopState())
+    assert outcome.short_circuit is None
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["feedback"] == "ok, proceed"
 
@@ -498,8 +497,8 @@ async def test_ask_always_session_scope_adds_rule_to_session() -> None:
         rules=RuleSet(),
         project_root=Path("/tmp"),
     )
-    result = await hook(tool=_tool(), args={}, state=LoopState())
-    assert result is None
+    outcome = await hook(tool=_tool(), args={}, state=LoopState())
+    assert outcome.short_circuit is None
     assert session.rules() == (rule,)
 
 
@@ -527,8 +526,8 @@ async def test_ask_always_project_scope_calls_save_rule(
         rules=RuleSet(),
         project_root=tmp_path,
     )
-    result = await hook(tool=_tool(), args={}, state=LoopState())
-    assert result is None
+    outcome = await hook(tool=_tool(), args={}, state=LoopState())
+    assert outcome.short_circuit is None
     assert save_calls == [(tmp_path, rule, "project")]
     assert session.rules() == ()
 
@@ -557,8 +556,8 @@ async def test_ask_always_project_save_failure_degrades_to_session(
         rules=RuleSet(),
         project_root=tmp_path,
     )
-    result = await hook(tool=_tool(), args={}, state=LoopState())
-    assert result is None
+    outcome = await hook(tool=_tool(), args={}, state=LoopState())
+    assert outcome.short_circuit is None
     assert session.rules() == (rule,)
     names = [e[0] for e in journal_events]
     assert "permission_save_failed" in names
@@ -576,10 +575,10 @@ async def test_asker_exception_treated_as_deny(
         rules=RuleSet(),
         project_root=Path("/tmp"),
     )
-    result = await hook(tool=_tool(), args={}, state=LoopState())
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error == "denied: user"
+    outcome = await hook(tool=_tool(), args={}, state=LoopState())
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error == "denied: user"
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_deny"
 
@@ -604,8 +603,8 @@ async def test_asker_basexception_propagates_does_not_deny(
     assert not any(e[0] == "permission_decision" for e in journal_events)
 
 
-async def test_hook_stashes_decision_on_state_custom() -> None:
-    """The hook writes Decision to state.custom["_aura_pending_decision"]."""
+async def test_hook_returns_decision_on_outcome() -> None:
+    """The hook returns the Decision directly on PreToolOutcome (G4)."""
     from aura.core.permissions.decision import Decision
 
     rules = RuleSet(rules=(Rule(tool="writer", content=None),))
@@ -616,15 +615,23 @@ async def test_hook_stashes_decision_on_state_custom() -> None:
         project_root=Path("/tmp"),
     )
     state = LoopState()
-    await hook(tool=_tool(), args={}, state=state)
-    stashed = state.custom.get("_aura_pending_decision")
-    assert isinstance(stashed, Decision)
-    assert stashed.reason == "rule_allow"
-    assert stashed.allow is True
+    outcome = await hook(tool=_tool(), args={}, state=state)
+    assert isinstance(outcome.decision, Decision)
+    assert outcome.decision.reason == "rule_allow"
+    assert outcome.decision.allow is True
+    # Post-G4 direct-return contract: the hook MUST NOT write any
+    # transient decision slot to state.custom. Only the G5 denials
+    # sink key is allowed on state.custom at this layer, and that
+    # only for deny paths — rule_allow should not touch custom at all.
+    from aura.core.permissions.denials import DENIALS_SINK_KEY
+
+    assert all(
+        k == DENIALS_SINK_KEY for k in state.custom
+    ), f"unexpected state.custom key: {list(state.custom)!r}"
 
 
-async def test_hook_stash_is_overwritten_across_calls() -> None:
-    """Single-slot stash is overwritten each call."""
+async def test_hook_decision_refreshes_across_calls() -> None:
+    """Each call returns its own PreToolOutcome; no persistence on state."""
     spy = _SpyAsker(response=AskerResponse(choice="accept"))
     rules = RuleSet(rules=(Rule(tool="writer", content=None),))
     hook = make_permission_hook(
@@ -635,14 +642,14 @@ async def test_hook_stash_is_overwritten_across_calls() -> None:
     )
     state = LoopState()
     # First call: rule_allow (writer rule matches).
-    await hook(tool=_tool(), args={}, state=state)
-    first = state.custom["_aura_pending_decision"]
-    assert first.reason == "rule_allow"
+    first_outcome = await hook(tool=_tool(), args={}, state=state)
+    assert first_outcome.decision is not None
+    assert first_outcome.decision.reason == "rule_allow"
     # Second call: different tool, no matching rule → asker answers accept.
-    await hook(tool=_tool("different"), args={}, state=state)
-    second = state.custom["_aura_pending_decision"]
-    assert second.reason == "user_accept"
-    assert second is not first
+    second_outcome = await hook(tool=_tool("different"), args={}, state=state)
+    assert second_outcome.decision is not None
+    assert second_outcome.decision.reason == "user_accept"
+    assert second_outcome.decision is not first_outcome.decision
 
 
 async def test_every_terminal_decision_emits_permission_decision(
@@ -689,12 +696,12 @@ async def test_user_rule_wins_audit_over_default_when_both_match(
         rules=RuleSet(rules=(user_rule, default_rule)),  # user first
         project_root=Path("/tmp"),
     )
-    result = await hook(
+    outcome = await hook(
         tool=read_tool,
         args={"path": "/tmp/specific/foo.txt"},
         state=LoopState(),
     )
-    assert result is None  # allowed
+    assert outcome.short_circuit is None  # allowed
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     # The USER's specific rule should be reported — not the generic default.
     assert decision_event[1]["rule"] == user_rule.to_string()

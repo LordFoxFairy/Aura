@@ -210,13 +210,13 @@ async def test_hook_allow_does_not_append_denial_to_sink() -> None:
         rules=RuleSet(),
         project_root=Path("/tmp"),
     )
-    result = await hook(
+    outcome = await hook(
         tool=_tool("writer"),
         args={},
         state=state,
         tool_call_id="tc_allow_1",
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert sink == []
 
 
@@ -231,8 +231,8 @@ async def test_hook_without_sink_key_is_safe_noop() -> None:
         project_root=Path("/tmp"),
     )
     # No DENIALS_SINK_KEY in state.custom — must not crash.
-    result = await hook(tool=_tool(), args={}, state=state)
-    assert result is not None  # still a deny
+    outcome = await hook(tool=_tool(), args={}, state=state)
+    assert outcome.short_circuit is not None  # still a deny
     assert DENIALS_SINK_KEY not in state.custom
 
 

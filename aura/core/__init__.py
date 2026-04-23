@@ -2,6 +2,7 @@
 
 from aura.core.agent import Agent, build_agent
 from aura.core.hooks import (
+    PRE_TOOL_PASSTHROUGH,
     HookChain,
     PostModelHook,
     PostSessionHook,
@@ -11,6 +12,7 @@ from aura.core.hooks import (
     PreModelHook,
     PreSessionHook,
     PreToolHook,
+    PreToolOutcome,
     PreUserPromptHook,
 )
 from aura.core.hooks.budget import (
@@ -62,7 +64,9 @@ __all__ = [
     "PreCompactHook",
     "PreModelHook",
     "PreSessionHook",
+    "PRE_TOOL_PASSTHROUGH",
     "PreToolHook",
+    "PreToolOutcome",
     "PreUserPromptHook",
     "SessionStorage",
     "ToolCallCompleted",

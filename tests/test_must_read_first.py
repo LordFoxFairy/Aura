@@ -22,7 +22,6 @@ from aura.core.memory.context import Context
 from aura.core.memory.rules import RulesBundle
 from aura.core.persistence import journal as journal_module
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 
@@ -110,15 +109,15 @@ async def test_edit_file_rejected_without_prior_read(tmp_path: Path) -> None:
     target = tmp_path / "f.txt"
     target.write_text("hello\n")
 
-    result = await hook(
+    outcome = await hook(
         tool=_edit_tool(),
         args={"path": str(target), "old_str": "hello", "new_str": "bye"},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "has not been read" in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "has not been read" in outcome.short_circuit.error
 
 
 @pytest.mark.asyncio
@@ -129,12 +128,12 @@ async def test_edit_file_allowed_after_record_read(tmp_path: Path) -> None:
     ctx.record_read(target)
 
     hook = make_must_read_first_hook(ctx)
-    result = await hook(
+    outcome = await hook(
         tool=_edit_tool(),
         args={"path": str(target), "old_str": "hello", "new_str": "bye"},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
 
 
 @pytest.mark.asyncio
@@ -147,13 +146,13 @@ async def test_edit_file_rejected_when_different_path_read(tmp_path: Path) -> No
     ctx.record_read(a)
 
     hook = make_must_read_first_hook(ctx)
-    result = await hook(
+    outcome = await hook(
         tool=_edit_tool(),
         args={"path": str(b), "old_str": "B", "new_str": "C"},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
 
 
 @pytest.mark.asyncio
@@ -175,9 +174,9 @@ async def test_other_tools_pass_through_unaffected(tmp_path: Path) -> None:
     r4 = await hook(
         tool=_read_tool(), args={"path": str(target)}, state=LoopState(),
     )
-    assert r1 is None
-    assert r3 is None
-    assert r4 is None
+    assert r1.short_circuit is None
+    assert r3.short_circuit is None
+    assert r4.short_circuit is None
 
 
 @pytest.mark.asyncio
@@ -192,12 +191,12 @@ async def test_relative_and_absolute_paths_normalize(
     ctx.record_read(Path("foo.py"))
 
     hook = make_must_read_first_hook(ctx)
-    result = await hook(
+    outcome = await hook(
         tool=_edit_tool(),
         args={"path": str(target), "old_str": "pass", "new_str": "return"},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
 
 
 @pytest.mark.asyncio
@@ -210,15 +209,15 @@ async def test_non_existent_path_blocks_as_never_read(tmp_path: Path) -> None:
     ctx.record_read(ghost)
 
     hook = make_must_read_first_hook(ctx)
-    result = await hook(
+    outcome = await hook(
         tool=_edit_tool(),
         args={"path": str(ghost), "old_str": "x", "new_str": "y"},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "has not been read" in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "has not been read" in outcome.short_circuit.error
 
 
 @pytest.mark.asyncio
@@ -260,15 +259,15 @@ async def test_edit_file_rejected_when_file_changed_since_read(tmp_path: Path) -
     os.utime(target, (st.st_mtime + 10, st.st_mtime + 10))
 
     hook = make_must_read_first_hook(ctx)
-    result = await hook(
+    outcome = await hook(
         tool=_edit_tool(),
         args={"path": str(target), "old_str": "hello", "new_str": "bye"},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "has changed since last read" in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "has changed since last read" in outcome.short_circuit.error
 
 
 @pytest.mark.asyncio
@@ -283,9 +282,9 @@ async def test_stale_and_never_read_errors_are_distinct(tmp_path: Path) -> None:
         args={"path": str(never), "old_str": "x", "new_str": "y"},
         state=LoopState(),
     )
-    assert isinstance(r_never, ToolResult)
-    assert r_never.error is not None
-    assert "has not been read" in r_never.error
+    assert r_never.short_circuit is not None
+    assert r_never.short_circuit.error is not None
+    assert "has not been read" in r_never.short_circuit.error
 
     stale = tmp_path / "stale.txt"
     stale.write_text("x\n")
@@ -299,11 +298,11 @@ async def test_stale_and_never_read_errors_are_distinct(tmp_path: Path) -> None:
         args={"path": str(stale), "old_str": "x", "new_str": "y"},
         state=LoopState(),
     )
-    assert isinstance(r_stale, ToolResult)
-    assert r_stale.error is not None
-    assert "has changed since last read" in r_stale.error
+    assert r_stale.short_circuit is not None
+    assert r_stale.short_circuit.error is not None
+    assert "has changed since last read" in r_stale.short_circuit.error
 
-    assert r_never.error != r_stale.error
+    assert r_never.short_circuit.error != r_stale.short_circuit.error
 
 
 def test_fresh_after_record_returns_fresh_status(tmp_path: Path) -> None:
@@ -413,12 +412,12 @@ async def test_hook_allows_new_file_creation_via_empty_old_str(
     ctx = _ctx(tmp_path)
     hook = make_must_read_first_hook(ctx)
     ghost = tmp_path / "brand_new.txt"  # does NOT exist
-    result = await hook(
+    outcome = await hook(
         tool=_edit_tool(),
         args={"path": str(ghost), "old_str": "", "new_str": "hello\n"},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
 
 
 @pytest.mark.asyncio
@@ -430,15 +429,15 @@ async def test_hook_still_blocks_edit_with_old_str_on_never_read_file(
     target = tmp_path / "f.txt"
     target.write_text("hello\n")
 
-    result = await hook(
+    outcome = await hook(
         tool=_edit_tool(),
         args={"path": str(target), "old_str": "hello", "new_str": "bye"},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "has not been read" in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "has not been read" in outcome.short_circuit.error
 
 
 @pytest.mark.asyncio
@@ -460,15 +459,15 @@ async def test_partial_read_blocks_edit_with_partial_reason(
         assert ctx.read_status(target) == "partial"
 
         hook = make_must_read_first_hook(ctx)
-        result = await hook(
+        outcome = await hook(
             tool=_edit_tool(),
             args={"path": str(target), "old_str": "a", "new_str": "A"},
             state=LoopState(),
         )
-        assert isinstance(result, ToolResult)
-        assert result.ok is False
-        assert result.error is not None
-        assert "partially read" in result.error
+        assert outcome.short_circuit is not None
+        assert outcome.short_circuit.ok is False
+        assert outcome.short_circuit.error is not None
+        assert "partially read" in outcome.short_circuit.error
 
         events = [json.loads(line) for line in log.read_text().splitlines()]
         blocked = [e for e in events if e["event"] == "must_read_first_blocked"]
@@ -494,12 +493,12 @@ async def test_full_read_after_partial_read_recovers_fresh(
     assert ctx.read_status(target) == "fresh"
 
     hook = make_must_read_first_hook(ctx)
-    result = await hook(
+    outcome = await hook(
         tool=_edit_tool(),
         args={"path": str(target), "old_str": "a", "new_str": "A"},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
 
 
 # write_file — file-unchanged guard mirroring claude-code's FileWriteTool.
@@ -514,12 +513,12 @@ async def test_write_file_to_new_path_passes_through_hook(
     hook = make_must_read_first_hook(ctx)
     ghost = tmp_path / "brand_new.txt"  # does NOT exist
 
-    result = await hook(
+    outcome = await hook(
         tool=_write_tool(),
         args={"path": str(ghost)},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
 
 
 @pytest.mark.asyncio
@@ -531,16 +530,16 @@ async def test_write_file_overwrite_rejected_without_prior_read(
     target = tmp_path / "f.txt"
     target.write_text("hello\n")
 
-    result = await hook(
+    outcome = await hook(
         tool=_write_tool(),
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "has not been read" in result.error
-    assert "overwriting" in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "has not been read" in outcome.short_circuit.error
+    assert "overwriting" in outcome.short_circuit.error
 
 
 @pytest.mark.asyncio
@@ -553,12 +552,12 @@ async def test_write_file_overwrite_allowed_after_record_read(
     ctx.record_read(target)
 
     hook = make_must_read_first_hook(ctx)
-    result = await hook(
+    outcome = await hook(
         tool=_write_tool(),
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
 
 
 @pytest.mark.asyncio
@@ -575,15 +574,15 @@ async def test_write_file_overwrite_rejected_when_stale(
     os.utime(target, (st.st_mtime + 10, st.st_mtime + 10))
 
     hook = make_must_read_first_hook(ctx)
-    result = await hook(
+    outcome = await hook(
         tool=_write_tool(),
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "has changed since last read" in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "has changed since last read" in outcome.short_circuit.error
 
 
 @pytest.mark.asyncio
@@ -596,15 +595,15 @@ async def test_write_file_overwrite_rejected_when_partial(
     ctx.record_read(target, partial=True)
 
     hook = make_must_read_first_hook(ctx)
-    result = await hook(
+    outcome = await hook(
         tool=_write_tool(),
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "partially read" in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "partially read" in outcome.short_circuit.error
 
 
 @pytest.mark.asyncio
@@ -618,15 +617,15 @@ async def test_write_file_error_messages_say_overwriting_not_editing(
     target = tmp_path / "f.txt"
     target.write_text("hello\n")
 
-    result = await hook(
+    outcome = await hook(
         tool=_write_tool(),
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.error is not None
-    assert "overwriting" in result.error
-    assert "before edit" not in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.error is not None
+    assert "overwriting" in outcome.short_circuit.error
+    assert "before edit" not in outcome.short_circuit.error
 
 
 @pytest.mark.asyncio
@@ -639,18 +638,18 @@ async def test_never_read_message_no_duplicated_path(tmp_path: Path) -> None:
     for tool_factory in (_edit_tool, _write_tool):
         target = tmp_path / f"f_{tool_factory.__name__}.txt"
         target.write_text("hello\n")
-        result = await hook(
+        outcome = await hook(
             tool=tool_factory(),
             args={"path": str(target), "old_str": "hello", "new_str": "bye"}
             if tool_factory is _edit_tool
             else {"path": str(target)},
             state=LoopState(),
         )
-        assert isinstance(result, ToolResult)
-        assert result.error is not None
-        assert result.error.count(str(target.resolve())) == 1, (
-            f"path appeared {result.error.count(str(target.resolve()))}x in: "
-            f"{result.error!r}"
+        assert outcome.short_circuit is not None
+        assert outcome.short_circuit.error is not None
+        assert outcome.short_circuit.error.count(str(target.resolve())) == 1, (
+            f"path appeared {outcome.short_circuit.error.count(str(target.resolve()))}x in: "
+            f"{outcome.short_circuit.error!r}"
         )
 
 

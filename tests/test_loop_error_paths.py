@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import HookChain
+from aura.core.hooks import PRE_TOOL_PASSTHROUGH, HookChain, PreToolOutcome
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
 from aura.schemas.events import AgentEvent, Final, ToolCallCompleted
@@ -178,9 +178,9 @@ async def test_pre_tool_not_fired_for_unknown_tool() -> None:
 
     async def record(
         *, tool: BaseTool, args: dict[str, Any], state: object, **_: object
-    ) -> None:
+    ) -> PreToolOutcome:
         calls.append(tool.name)
-        return None
+        return PRE_TOOL_PASSTHROUGH
 
     hooks = HookChain(pre_tool=[record])
     model = FakeChatModel(turns=[

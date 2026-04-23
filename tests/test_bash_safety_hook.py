@@ -16,7 +16,6 @@ from pydantic import BaseModel
 from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.persistence import journal as journal_module
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 
@@ -50,52 +49,52 @@ def _read_tool() -> Any:
 @pytest.mark.asyncio
 async def test_non_bash_tool_passes_through() -> None:
     hook = make_bash_safety_hook()
-    result = await hook(
+    outcome = await hook(
         tool=_read_tool(),
         args={"path": "/tmp/x"},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
 
 
 @pytest.mark.asyncio
 async def test_safe_bash_passes_through() -> None:
     hook = make_bash_safety_hook()
-    result = await hook(
+    outcome = await hook(
         tool=_bash_tool(),
         args={"command": "ls -la"},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
 
 
 @pytest.mark.asyncio
 async def test_dangerous_bash_short_circuits() -> None:
     hook = make_bash_safety_hook()
-    result = await hook(
+    outcome = await hook(
         tool=_bash_tool(),
         args={"command": "zmodload zsh/system"},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "bash safety blocked" in result.error
-    assert "zsh_dangerous_command" in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "bash safety blocked" in outcome.short_circuit.error
+    assert "zsh_dangerous_command" in outcome.short_circuit.error
 
 
 @pytest.mark.asyncio
 async def test_cd_git_compound_short_circuits() -> None:
     hook = make_bash_safety_hook()
-    result = await hook(
+    outcome = await hook(
         tool=_bash_tool(),
         args={"command": "cd /x && git status"},
         state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error is not None
-    assert "cd_git_compound" in result.error
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error is not None
+    assert "cd_git_compound" in outcome.short_circuit.error
 
 
 @pytest.mark.asyncio
@@ -123,31 +122,31 @@ async def test_journal_event_on_block(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_empty_command_arg_passes_through() -> None:
     hook = make_bash_safety_hook()
-    result = await hook(
+    outcome = await hook(
         tool=_bash_tool(),
         args={"command": ""},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
 
 
 @pytest.mark.asyncio
 async def test_missing_command_arg_passes_through() -> None:
     hook = make_bash_safety_hook()
-    result = await hook(
+    outcome = await hook(
         tool=_bash_tool(),
         args={},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
 
 
 @pytest.mark.asyncio
 async def test_non_string_command_arg_passes_through() -> None:
     hook = make_bash_safety_hook()
-    result = await hook(
+    outcome = await hook(
         tool=_bash_tool(),
         args={"command": 42},
         state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None

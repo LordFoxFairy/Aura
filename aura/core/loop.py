@@ -87,10 +87,10 @@ class ToolStep:
     tool: BaseTool | None
     args: dict[str, object] | None
     decision: ToolResult | None
-    # Permission decision (auto-allow reason) captured from the permission
-    # hook via state.custom["_aura_pending_decision"]. Only populated when a
-    # permission hook is installed AND the hook ran to a Decision; None
-    # otherwise. Used to emit PermissionAudit after ToolCallStarted.
+    # Permission decision captured directly from the pre_tool hook chain's
+    # merged ``PreToolOutcome.decision``. Only populated when a permission
+    # hook is installed AND the hook ran to a Decision; None otherwise.
+    # Used to emit PermissionAudit after ToolCallStarted.
     permission_decision: Decision | None = None
 
 
@@ -404,20 +404,22 @@ class AgentLoop:
                     ))
                     continue
 
-            decision = await self._hooks.run_pre_tool(
+            outcome = await self._hooks.run_pre_tool(
                 tool=tool,
                 args=raw_args,
                 state=self._state,
                 tool_call_id=tc["id"],
             )
-            # Read+pop the transient permission decision IMMEDIATELY after the
-            # hook returns — same event-loop turn, no await in between, so the
-            # slot can't leak to the next tool call. Absent permission hook =>
-            # slot never set => pop returns None.
-            perm_decision = self._state.custom.pop("_aura_pending_decision", None)
+            # G4: PreToolOutcome carries both channels directly — no more
+            # state.custom side-channel. ``short_circuit`` is the ToolResult
+            # that replaces tool.execute(); ``decision`` is the permission
+            # Decision (if any) that drives the PermissionAudit emission.
             steps.append(ToolStep(
-                tool_call=tc, tool=tool, args=raw_args, decision=decision,
-                permission_decision=perm_decision,
+                tool_call=tc,
+                tool=tool,
+                args=raw_args,
+                decision=outcome.short_circuit,
+                permission_decision=outcome.decision,
             ))
         return steps
 

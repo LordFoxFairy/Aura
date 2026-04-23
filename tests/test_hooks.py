@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import HookChain
+from aura.core.hooks import PRE_TOOL_PASSTHROUGH, HookChain, PreToolOutcome
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
@@ -42,13 +42,14 @@ async def test_hookchain_empty_is_noop() -> None:
 
     await chain.run_pre_model(history=history, state=state)
     await chain.run_post_model(ai_message=ai_msg, history=history, state=state)
-    decision = await chain.run_pre_tool(tool=_stub_tool, args=args, state=state)
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args=args, state=state)
     final = await chain.run_post_tool(
         tool=_stub_tool, args=args, result=result, state=state
     )
 
     assert history == []
-    assert decision is None
+    assert outcome.short_circuit is None
+    assert outcome.decision is None
     assert final is result
 
 
@@ -91,37 +92,102 @@ async def test_pre_tool_short_circuits_with_tool_result() -> None:
 
     async def deny(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> ToolResult | None:
-        return denied
+    ) -> PreToolOutcome:
+        return PreToolOutcome(short_circuit=denied, decision=None)
 
     chain = HookChain(pre_tool=[deny])
-    result = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert result is denied
+    assert outcome.short_circuit is denied
 
 
 @pytest.mark.asyncio
 async def test_pre_tool_first_short_circuit_wins() -> None:
     call_log: list[str] = []
-    decision = ToolResult(ok=False, error="first")
+    first_denial = ToolResult(ok=False, error="first")
 
     async def first(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> ToolResult | None:
+    ) -> PreToolOutcome:
         call_log.append("first")
-        return decision
+        return PreToolOutcome(short_circuit=first_denial, decision=None)
 
     async def second(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> ToolResult | None:
+    ) -> PreToolOutcome:
         call_log.append("second")
-        return ToolResult(ok=False, error="second")
+        return PreToolOutcome(
+            short_circuit=ToolResult(ok=False, error="second"), decision=None,
+        )
 
     chain = HookChain(pre_tool=[first, second])
-    result = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert result is decision
+    assert outcome.short_circuit is first_denial
     assert call_log == ["first"]
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_decision_last_wins() -> None:
+    """Merge semantics: when multiple hooks emit decisions and none
+    short-circuit, the last non-None decision wins. Mirrors the typical
+    chain ordering where the permission hook runs last."""
+    from aura.core.permissions.decision import Decision
+    from aura.core.permissions.rule import Rule
+
+    first_decision = Decision(
+        allow=True, reason="rule_allow", rule=Rule(tool="stub", content=None),
+    )
+    last_decision = Decision(allow=True, reason="mode_bypass")
+
+    async def early(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        return PreToolOutcome(short_circuit=None, decision=first_decision)
+
+    async def late(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        return PreToolOutcome(short_circuit=None, decision=last_decision)
+
+    chain = HookChain(pre_tool=[early, late])
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+
+    assert outcome.decision is last_decision
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_decision_preserved_when_short_circuit_fires() -> None:
+    """When a hook short-circuits the chain, any decision collected so
+    far (from earlier hooks that ran) is preserved on the outcome —
+    the short-circuit does not erase decisions. A later hook's decision
+    that would have been last-wins is naturally not considered because
+    its hook never runs."""
+    from aura.core.permissions.decision import Decision
+
+    early_decision = Decision(allow=True, reason="mode_bypass")
+    sc = ToolResult(ok=False, error="stopped by middle hook")
+
+    async def decider(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        return PreToolOutcome(short_circuit=None, decision=early_decision)
+
+    async def blocker(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        return PreToolOutcome(short_circuit=sc, decision=None)
+
+    async def never_ran(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        raise AssertionError("hook must not run after a short-circuit")
+
+    chain = HookChain(pre_tool=[decider, blocker, never_ran])
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+
+    assert outcome.short_circuit is sc
+    assert outcome.decision is early_decision
 
 
 @pytest.mark.asyncio
@@ -171,16 +237,17 @@ async def test_multiple_hooks_of_same_type_run_in_registration_order() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_chain_returns_none_when_all_return_none() -> None:
+async def test_pre_tool_chain_passes_through_when_all_passthrough() -> None:
     async def pass_through(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> ToolResult | None:
-        return None
+    ) -> PreToolOutcome:
+        return PRE_TOOL_PASSTHROUGH
 
     chain = HookChain(pre_tool=[pass_through, pass_through])
-    result = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert result is None
+    assert outcome.short_circuit is None
+    assert outcome.decision is None
 
 
 @pytest.mark.asyncio
@@ -376,8 +443,8 @@ def test_merge_concatenates_all_nine_slots() -> None:
     async def _pre_tool(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState,
         **_: object,
-    ) -> ToolResult | None:
-        return None
+    ) -> PreToolOutcome:
+        return PRE_TOOL_PASSTHROUGH
 
     async def _post_tool(
         *, tool: BaseTool, args: dict[str, Any], result: ToolResult,

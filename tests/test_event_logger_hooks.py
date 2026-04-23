@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
 from aura.core import journal as journal_module
-from aura.core.hooks import HookChain
+from aura.core.hooks import PRE_TOOL_PASSTHROUGH, HookChain, PreToolOutcome
 from aura.core.hooks.logging import make_event_logger_hooks, wrap_with_event_logger
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
@@ -134,11 +134,12 @@ async def test_pre_tool_records_destructive_flag_and_args(
     chain = make_event_logger_hooks()
     tool = _fake_tool(destructive=True)
 
-    decision = await chain.run_pre_tool(
+    outcome = await chain.run_pre_tool(
         tool=tool, args={"x": 5}, state=LoopState(turn_count=2),
     )
 
-    assert decision is None
+    assert outcome.short_circuit is None
+    assert outcome.decision is None
     [event] = _events(_journal_to_tmp)
     assert event["event"] == "pre_tool"
     assert event["tool"] == "fake"
@@ -235,9 +236,9 @@ def test_wrap_with_event_logger_preserves_inner_order() -> None:
     async def _inner_post_model(**_: Any) -> None:
         inner_calls.append("inner_post_model")
 
-    async def _inner_pre_tool(**_: Any) -> None:
+    async def _inner_pre_tool(**_: Any) -> PreToolOutcome:
         inner_calls.append("inner_pre_tool")
-        return None
+        return PRE_TOOL_PASSTHROUGH
 
     async def _inner_post_tool(**kw: Any) -> ToolResult:
         inner_calls.append("inner_post_tool")

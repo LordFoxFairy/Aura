@@ -269,13 +269,13 @@ async def test_compact_reruns_must_read_first_hook_with_new_context(
         func=lambda path, old_str, new_str: {"replacements": 1},
         is_destructive=True,
     )
-    result = await agent._must_read_first_hook(
+    outcome = await agent._must_read_first_hook(
         tool=edit_tool,
         args={"path": str(target), "old_str": "body", "new_str": "BODY"},
         state=LoopState(),
     )
-    # Preserved record = fresh → None (no block).
-    assert result is None
+    # Preserved record = fresh → no short_circuit (no block).
+    assert outcome.short_circuit is None
     agent.close()
 
 

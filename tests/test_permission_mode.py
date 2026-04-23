@@ -25,7 +25,7 @@ from aura.core.permissions.mode import DEFAULT_MODE, Mode
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult, tool_metadata
+from aura.schemas.tool import tool_metadata
 from aura.tools.base import build_tool
 
 
@@ -138,10 +138,10 @@ async def test_plan_mode_allows_read_file() -> None:
         mode="plan",
     )
     tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"path": "/tmp/ordinary.txt"}, state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert spy.calls == []
 
 
@@ -155,11 +155,11 @@ async def test_plan_mode_blocks_write_file() -> None:
         mode="plan",
     )
     tool = _tool("write_file", is_destructive=True, args_schema=_PathArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"path": "/tmp/new.txt"}, state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
     assert spy.calls == []
 
 
@@ -173,11 +173,11 @@ async def test_plan_mode_blocks_bash() -> None:
         mode="plan",
     )
     tool = _tool("bash", is_destructive=True, args_schema=_BashArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"command": "ls"}, state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
     assert spy.calls == []
 
 
@@ -190,16 +190,16 @@ async def test_plan_mode_error_says_would_have_called() -> None:
         mode="plan",
     )
     tool = _tool("bash", is_destructive=True, args_schema=_BashArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"command": "ls -la"}, state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
     # Must mention plan mode + the tool name that was attempted.
-    assert result.error is not None
-    assert "plan mode" in result.error
-    assert "would have called" in result.error
-    assert "bash" in result.error
+    assert outcome.short_circuit.error is not None
+    assert "plan mode" in outcome.short_circuit.error
+    assert "would have called" in outcome.short_circuit.error
+    assert "bash" in outcome.short_circuit.error
 
 
 async def test_plan_mode_respects_safety_floor(tmp_path: Path) -> None:
@@ -216,17 +216,16 @@ async def test_plan_mode_respects_safety_floor(tmp_path: Path) -> None:
     )
     tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
     state = LoopState()
-    result = await hook(
+    outcome = await hook(
         tool=tool,
         args={"path": str(Path.home() / ".ssh" / "id_rsa")},
         state=state,
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
     # Safety wins: the decision must report safety_blocked, not plan_mode_blocked.
-    stashed = state.custom.get("_aura_pending_decision")
-    assert isinstance(stashed, Decision)
-    assert stashed.reason == "safety_blocked"
+    assert isinstance(outcome.decision, Decision)
+    assert outcome.decision.reason == "safety_blocked"
 
 
 async def test_plan_mode_stashes_plan_decision_in_state(
@@ -241,13 +240,12 @@ async def test_plan_mode_stashes_plan_decision_in_state(
     )
     tool = _tool("write_file", is_destructive=True, args_schema=_PathArgs)
     state = LoopState()
-    await hook(
+    outcome = await hook(
         tool=tool, args={"path": "/tmp/x"}, state=state,
     )
-    stashed = state.custom.get("_aura_pending_decision")
-    assert isinstance(stashed, Decision)
-    assert stashed.reason == "plan_mode_blocked"
-    assert stashed.allow is False
+    assert isinstance(outcome.decision, Decision)
+    assert outcome.decision.reason == "plan_mode_blocked"
+    assert outcome.decision.allow is False
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "plan_mode_blocked"
     assert decision_event[1]["mode"] == "plan"
@@ -271,10 +269,10 @@ async def test_accept_edits_mode_allows_read_file(
         mode="accept_edits",
     )
     tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"path": str(tmp_path / "ordinary.txt")}, state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "mode_accept_edits"
@@ -293,10 +291,10 @@ async def test_accept_edits_mode_allows_write_file(
         mode="accept_edits",
     )
     tool = _tool("write_file", is_destructive=True, args_schema=_PathArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"path": str(tmp_path / "new.txt")}, state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "mode_accept_edits"
@@ -315,10 +313,10 @@ async def test_accept_edits_mode_allows_edit_file(
         mode="accept_edits",
     )
     tool = _tool("edit_file", is_destructive=True, args_schema=_PathArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"path": str(tmp_path / "edited.txt")}, state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "mode_accept_edits"
@@ -336,10 +334,10 @@ async def test_accept_edits_mode_still_prompts_bash(tmp_path: Path) -> None:
         mode="accept_edits",
     )
     tool = _tool("bash", is_destructive=True, args_schema=_BashArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"command": "ls"}, state=LoopState(),
     )
-    assert result is None
+    assert outcome.short_circuit is None
     # The asker was consulted — proving accept_edits did NOT auto-allow bash.
     assert len(spy.calls) == 1
 
@@ -356,16 +354,15 @@ async def test_accept_edits_respects_safety_floor(tmp_path: Path) -> None:
     )
     tool = _tool("write_file", is_destructive=True, args_schema=_PathArgs)
     state = LoopState()
-    result = await hook(
+    outcome = await hook(
         tool=tool,
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=state,
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    stashed = state.custom.get("_aura_pending_decision")
-    assert isinstance(stashed, Decision)
-    assert stashed.reason == "safety_blocked"
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert isinstance(outcome.decision, Decision)
+    assert outcome.decision.reason == "safety_blocked"
 
 
 async def test_accept_edits_respects_user_deny_rule(tmp_path: Path) -> None:
@@ -383,12 +380,12 @@ async def test_accept_edits_respects_user_deny_rule(tmp_path: Path) -> None:
         mode="accept_edits",
     )
     tool = _tool("bash", is_destructive=True, args_schema=_BashArgs)
-    result = await hook(
+    outcome = await hook(
         tool=tool, args={"command": "rm -rf /tmp/wat"}, state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
-    assert result.error == "denied: user"
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert outcome.short_circuit.error == "denied: user"
 
 
 # ---------------------------------------------------------------------------
@@ -421,8 +418,8 @@ async def test_default_mode_unchanged_ask_flow(tmp_path: Path) -> None:
         mode="default",
     )
     tool = _tool("writer")
-    result = await hook(tool=tool, args={}, state=LoopState())
-    assert result is None
+    outcome = await hook(tool=tool, args={}, state=LoopState())
+    assert outcome.short_circuit is None
     assert len(spy.calls) == 1
 
 
@@ -436,8 +433,8 @@ async def test_bypass_mode_unchanged_auto_allow() -> None:
         mode="bypass",
     )
     tool = _tool("writer")
-    result = await hook(tool=tool, args={}, state=LoopState())
-    assert result is None
+    outcome = await hook(tool=tool, args={}, state=LoopState())
+    assert outcome.short_circuit is None
     assert spy.calls == []
 
 
@@ -492,15 +489,14 @@ async def test_safety_uses_callable_is_destructive_true_branch(tmp_path: Path) -
         mode="default",
     )
     state = LoopState()
-    result = await hook(
+    outcome = await hook(
         tool=tool,
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=state,
     )
-    assert isinstance(result, ToolResult)
-    stashed = state.custom.get("_aura_pending_decision")
-    assert isinstance(stashed, Decision)
-    assert stashed.reason == "safety_blocked"
+    assert outcome.short_circuit is not None
+    assert isinstance(outcome.decision, Decision)
+    assert outcome.decision.reason == "safety_blocked"
 
 
 async def test_safety_uses_callable_is_destructive_false_branch(tmp_path: Path) -> None:
@@ -529,16 +525,15 @@ async def test_safety_uses_callable_is_destructive_false_branch(tmp_path: Path) 
         mode="default",
     )
     state = LoopState()
-    result = await hook(
+    outcome = await hook(
         tool=tool,
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=state,
     )
     # Not blocked by safety — fell through to the ask path.
-    assert result is None
-    stashed = state.custom.get("_aura_pending_decision")
-    assert isinstance(stashed, Decision)
-    assert stashed.reason != "safety_blocked"
+    assert outcome.short_circuit is None
+    assert isinstance(outcome.decision, Decision)
+    assert outcome.decision.reason != "safety_blocked"
 
 
 async def test_safety_callable_receives_actual_args(tmp_path: Path) -> None:
@@ -596,16 +591,15 @@ async def test_safety_callable_exception_fails_safe_to_destructive(
         mode="default",
     )
     state = LoopState()
-    result = await hook(
+    outcome = await hook(
         tool=tool,
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=state,
     )
     # Fail-safe: treated as destructive → safety_blocked on protected write path.
-    assert isinstance(result, ToolResult)
-    stashed = state.custom.get("_aura_pending_decision")
-    assert isinstance(stashed, Decision)
-    assert stashed.reason == "safety_blocked"
+    assert outcome.short_circuit is not None
+    assert isinstance(outcome.decision, Decision)
+    assert outcome.decision.reason == "safety_blocked"
 
 
 async def test_accept_edits_bash_ls_still_prompts_not_auto_allowed(
@@ -631,11 +625,11 @@ async def test_accept_edits_bash_ls_still_prompts_not_auto_allowed(
     # on the accept_edits allow-list.
     from aura.tools.bash import bash as real_bash
 
-    result = await hook(
+    outcome = await hook(
         tool=real_bash, args={"command": "ls /tmp"}, state=LoopState(),
     )
     # Fell through to ask — the asker was consulted.
-    assert result is None
+    assert outcome.short_circuit is None
     assert len(spy.calls) == 1
 
 

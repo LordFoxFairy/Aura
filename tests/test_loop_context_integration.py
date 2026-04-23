@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import HookChain
+from aura.core.hooks import HookChain, PreToolOutcome
 from aura.core.loop import AgentLoop
 from aura.core.memory.context import Context
 from aura.core.memory.rules import Rule, RulesBundle
@@ -225,8 +225,10 @@ async def test_short_circuited_tool_does_not_trigger(tmp_path: Path) -> None:
 
     async def deny(
         *, tool: BaseTool, args: dict[str, Any], state: Any, **_: object,
-    ) -> ToolResult | None:
-        return ToolResult(ok=False, error="denied")
+    ) -> PreToolOutcome:
+        return PreToolOutcome(
+            short_circuit=ToolResult(ok=False, error="denied"), decision=None,
+        )
 
     model = FakeChatModel(turns=[
         _tool_turn("read_file", args={"path": str(target)}),

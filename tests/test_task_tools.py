@@ -492,3 +492,203 @@ async def test_parent_cancel_cascades_to_subagent(tmp_path: Path) -> None:
     r = store.get(rec.id)
     assert r is not None
     assert r.status == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# U4 — wall-clock timeout: a stalled subagent must NOT leave the record in
+# ``running`` forever. Regression guard for the P0 dogfood bug where users
+# had to manually ``task_stop`` a stuck child.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_task_wallclock_timeout_marks_failed(tmp_path: Path) -> None:
+    # Script a subagent whose model call hangs forever. Without the
+    # wallclock ceiling in run_task, ``await bg`` would deadlock — the
+    # test relies on ``asyncio.wait_for`` to prove the ceiling fires.
+    store = TasksStore()
+
+    class _HangingFake(FakeChatModel):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **_: Any,
+        ) -> ChatResult:
+            # Long enough that the 0.2s timeout MUST fire before this
+            # sleep returns (we need to hit the wallclock branch, not a
+            # natural completion).
+            await asyncio.sleep(30)
+            raise RuntimeError("should not get here")
+
+    factory = SubagentFactory(
+        parent_config=_cfg(enabled=[]),
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: _HangingFake(),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+
+    rec = store.create(description="hang", prompt="hang")
+    # 0.2s ceiling — ample for the task-startup overhead (factory.spawn
+    # + first model ainvoke dispatch are microseconds), tight enough
+    # that the whole test completes in well under a second.
+    bg = asyncio.create_task(
+        run_task(store, factory, rec.id, timeout_sec=0.2)
+    )
+    # Outer wait_for is belt-and-braces: if the timeout branch is broken
+    # this fails with a clear message in ~2s rather than hanging the
+    # whole test run.
+    await asyncio.wait_for(bg, timeout=2.0)
+
+    r = store.get(rec.id)
+    assert r is not None
+    assert r.status == "failed", (
+        f"expected failed after wallclock timeout, got {r.status!r}"
+    )
+    assert r.error is not None
+    assert "subagent_timeout" in r.error
+    # The error string surfaces the actual ceiling so operators know how
+    # long the child was given before we pulled the plug.
+    assert "0.2" in r.error
+
+
+@pytest.mark.asyncio
+async def test_run_task_timeout_fires_post_subagent_hook(
+    tmp_path: Path,
+) -> None:
+    # On wallclock trip, the parent's post_subagent chain MUST see
+    # status="failed" with the timeout error string — otherwise hook
+    # consumers (telemetry, UI) never learn the child stopped.
+    from aura.core.hooks import HookChain
+
+    store = TasksStore()
+    captured: list[dict[str, object]] = []
+
+    async def _capture_hook(
+        *,
+        task_id: str,
+        status: str,
+        final_text: str,
+        error: str | None,
+        **_: Any,
+    ) -> None:
+        captured.append(
+            {
+                "task_id": task_id,
+                "status": status,
+                "final_text": final_text,
+                "error": error,
+            }
+        )
+
+    hooks = HookChain()
+    hooks.post_subagent.append(_capture_hook)
+
+    class _HangingFake(FakeChatModel):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **_: Any,
+        ) -> ChatResult:
+            await asyncio.sleep(30)
+            raise RuntimeError("unreachable")
+
+    factory = SubagentFactory(
+        parent_config=_cfg(enabled=[]),
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: _HangingFake(),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+
+    rec = store.create(description="hang", prompt="hang")
+    bg = asyncio.create_task(
+        run_task(
+            store, factory, rec.id,
+            parent_hooks=hooks,
+            timeout_sec=0.15,
+        )
+    )
+    await asyncio.wait_for(bg, timeout=2.0)
+
+    assert len(captured) == 1
+    event = captured[0]
+    assert event["status"] == "failed"
+    assert event["task_id"] == rec.id
+    assert event["error"] is not None
+    assert "subagent_timeout" in str(event["error"])
+
+
+@pytest.mark.asyncio
+async def test_run_task_timeout_disabled_by_zero(
+    tmp_path: Path,
+) -> None:
+    # ``timeout_sec=0`` means "no wallclock ceiling" — the escape hatch
+    # for legitimate long-running agents. A subagent that completes
+    # naturally must still reach ``completed`` even with the timeout
+    # switched off.
+    store = TasksStore()
+    factory = SubagentFactory(
+        parent_config=_cfg(enabled=[]),
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(
+            turns=[FakeTurn(AIMessage(content="done"))]
+        ),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+
+    rec = store.create(description="fast", prompt="hi")
+    await asyncio.wait_for(
+        run_task(store, factory, rec.id, timeout_sec=0),
+        timeout=2.0,
+    )
+
+    r = store.get(rec.id)
+    assert r is not None
+    assert r.status == "completed"
+    assert r.final_result == "done"
+
+
+@pytest.mark.asyncio
+async def test_run_task_timeout_env_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # AURA_SUBAGENT_TIMEOUT_SEC must feed the ceiling when no explicit
+    # kwarg is passed — the env knob is what operators actually reach
+    # for when tuning the default globally.
+    monkeypatch.setenv("AURA_SUBAGENT_TIMEOUT_SEC", "0.12")
+    store = TasksStore()
+
+    class _HangingFake(FakeChatModel):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **_: Any,
+        ) -> ChatResult:
+            await asyncio.sleep(30)
+            raise RuntimeError("unreachable")
+
+    factory = SubagentFactory(
+        parent_config=_cfg(enabled=[]),
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: _HangingFake(),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+
+    rec = store.create(description="env-hang", prompt="hang")
+    # No explicit timeout_sec — env must take over.
+    await asyncio.wait_for(
+        run_task(store, factory, rec.id),
+        timeout=2.0,
+    )
+
+    r = store.get(rec.id)
+    assert r is not None
+    assert r.status == "failed"
+    assert r.error is not None
+    assert "0.12" in r.error

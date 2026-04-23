@@ -27,7 +27,9 @@ class ToolsConfig(BaseModel):
 
     enabled: list[str] = Field(
         default_factory=lambda: [
-            "bash", "edit_file", "glob", "grep", "read_file",
+            "bash", "bash_background", "edit_file",
+            "enter_plan_mode", "exit_plan_mode",
+            "glob", "grep", "read_file",
             "task_get", "task_list", "task_stop",
             "todo_write", "web_fetch", "write_file",
         ],

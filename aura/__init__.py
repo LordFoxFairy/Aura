@@ -5,7 +5,7 @@ from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core.agent import Agent, build_agent
 from aura.errors import AuraError
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 
 __all__ = [
     "Agent",

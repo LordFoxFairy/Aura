@@ -14,10 +14,11 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from aura.core.tasks.store import TasksStore
-from aura.core.tasks.types import TaskRecord, TaskStatus
+from aura.core.tasks.types import TaskKind, TaskRecord, TaskStatus
 from aura.schemas.tool import tool_metadata
 
 _StatusFilter = Literal["all", "running", "completed", "failed", "cancelled"]
+_KindFilter = Literal["all", "subagent", "shell"]
 
 
 class TaskListParams(BaseModel):
@@ -28,6 +29,13 @@ class TaskListParams(BaseModel):
             "every record."
         ),
     )
+    kind: _KindFilter = Field(
+        default="all",
+        description=(
+            "Filter by task kind: 'subagent' (task_create), 'shell' "
+            "(bash_background), or 'all' for both."
+        ),
+    )
     limit: int = Field(
         default=20, ge=1, le=200,
         description="Maximum number of tasks to return (newest first).",
@@ -35,13 +43,18 @@ class TaskListParams(BaseModel):
 
 
 def _preview(args: dict[str, Any]) -> str:
-    return f"task_list: {args.get('status', 'all')}"
+    bits = [args.get("status", "all")]
+    k = args.get("kind", "all")
+    if k != "all":
+        bits.append(f"kind={k}")
+    return f"task_list: {', '.join(bits)}"
 
 
 def _row(rec: TaskRecord) -> dict[str, Any]:
     return {
         "id": rec.id,
         "status": rec.status,
+        "kind": rec.kind,
         "description": rec.description,
         "started_at": rec.started_at,
     }
@@ -73,16 +86,27 @@ class TaskList(BaseTool):
     store: TasksStore
 
     def _run(
-        self, status: _StatusFilter = "all", limit: int = 20,
+        self,
+        status: _StatusFilter = "all",
+        kind: _KindFilter = "all",
+        limit: int = 20,
     ) -> dict[str, Any]:
-        return self._fetch(status, limit)
+        return self._fetch(status, kind, limit)
 
     async def _arun(
-        self, status: _StatusFilter = "all", limit: int = 20,
+        self,
+        status: _StatusFilter = "all",
+        kind: _KindFilter = "all",
+        limit: int = 20,
     ) -> dict[str, Any]:
-        return self._fetch(status, limit)
+        return self._fetch(status, kind, limit)
 
-    def _fetch(self, status: _StatusFilter, limit: int) -> dict[str, Any]:
+    def _fetch(
+        self,
+        status: _StatusFilter,
+        kind: _KindFilter,
+        limit: int,
+    ) -> dict[str, Any]:
         # Counts are over the FULL fleet regardless of filter — the user
         # asked "show me the failed ones", and also wants the running
         # count to know if anything is still in flight.
@@ -94,5 +118,8 @@ class TaskList(BaseTool):
         filter_status: TaskStatus | None = (
             None if status == "all" else status
         )
-        records = self.store.list(status=filter_status, limit=limit)
+        filter_kind: TaskKind | None = None if kind == "all" else kind
+        records = self.store.list(
+            status=filter_status, kind=filter_kind, limit=limit,
+        )
         return {"tasks": [_row(r) for r in records], "counts": counts}

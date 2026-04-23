@@ -2,6 +2,30 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.8.1] — Background bash + Plan mode tools + /model runtime switch
+
+3 parallel subagents again, merged zero conflicts. Each one closes a user-facing gap against claude-code.
+
+### Shipped
+
+- **`bash_background`** — fire-and-forget shell task. Returns a `task_id` immediately; process runs detached, stdout/stderr streamed line-by-line into `TaskRecord.progress.recent_activities` (ring-buffer cap 20, `[out]`/`[err]` prefixes). Stall detector fires a single `[stalled?]` marker after 30s of silence with output already captured (re-arms on new output). Shutdown ladder SIGTERM → 3s → SIGKILL on `task_stop`. Same bash-safety floor as the blocking `bash` tool (no `$(...)` / backticks / `-c`). `TaskRecord.kind: Literal["subagent", "shell"]` + `task_list` filter distinguishes shell tasks from subagent tasks.
+- **`enter_plan_mode` / `exit_plan_mode`** — LLM can programmatically flip mode. `enter_plan_mode(plan: str)` takes a markdown plan and sets mode → `plan`; `exit_plan_mode(to_mode="default")` restores. Both are **mode-exempt** so the LLM can always exit. Plan-mode enforcement tightened in `aura/core/hooks/permission.py`: allow list `{read_file, grep, glob, web_fetch, web_search, task_get, task_list}` + exempt `{enter_plan_mode, exit_plan_mode}`; everything else (including unknown tools) fails closed with `permission_decision` reason=`plan_mode_blocked`. Safety hooks still run before the mode branch.
+- **`/model` slash command** — runtime router switching. `/model` (no args) prints the current spec + aliases; `/model <alias>` / `/model provider:model` calls `Agent.switch_model(spec)` which re-resolves via `llm.resolve` + `llm.create`, replaces `self._model`, rebuilds the loop. History survives. `config.router["default"]` is untouched (static config ≠ live spec). Missing credentials / unknown provider raise `AuraConfigError` → printable REPL error, not a crash.
+
+### Changed
+
+- `aura/core/tasks/types.py` — `TaskKind` Literal, `kind` / `metadata` fields, `TaskProgress.line_count`.
+- `aura/core/tasks/store.py` — `create(kind=..., metadata=...)`, `list(kind=...)`, `record_shell_line`, `record_shell_marker`.
+- `aura/tools/task_list.py`, `task_get.py`, `task_stop.py` — kind filter / surface / bimodal stop (Task.cancel for subagents; Process.terminate→kill for shells).
+- `aura/core/agent.py` — `_running_shells` map, 3 new stateful tools wired, `switch_model` uses live spec field, `close()` kills orphan shells.
+- `aura/core/hooks/permission.py` — plan-mode read-allow + tool-exempt lists.
+- `aura/core/commands/builtin.py` — `/model` command with new format + `AuraConfigError` handling.
+- `aura/config/schema.py` — default `tools.enabled` gains `bash_background`, `enter_plan_mode`, `exit_plan_mode`.
+
+### Stats
+
+- 1217 tests pass (1181 + 36 new). Lint + mypy clean. Three subagents, zero merge conflicts.
+
 ## [0.8.0] — Task lifecycle tools + StatusLine hook + ctrl+e explain
 
 Major: Task subsystem gets a real lifecycle API (not just fire-and-forget), the bottom bar becomes user-extensible via a shell hook, and the permission widget gains ctrl+e for an inline explanation block. Shipped via 3 parallel subagents, merged zero conflicts.

@@ -19,7 +19,10 @@ from aura.schemas.tool import ToolError, ToolResult, tool_metadata
 from aura.tools.ask_user import AskUserQuestion
 from aura.tools.base import build_tool
 from aura.tools.bash import Bash, bash
+from aura.tools.bash_background import BashBackground
 from aura.tools.edit_file import EditFile, edit_file
+from aura.tools.enter_plan_mode import EnterPlanMode
+from aura.tools.exit_plan_mode import ExitPlanMode
 from aura.tools.glob import Glob, glob
 from aura.tools.grep import Grep, grep
 from aura.tools.read_file import ReadFile, read_file
@@ -52,6 +55,9 @@ BUILTIN_STATEFUL_TOOLS: dict[str, type[BaseTool]] = {
     "task_list": TaskList,
     "task_stop": TaskStop,
     "web_search": WebSearch,
+    "enter_plan_mode": EnterPlanMode,
+    "exit_plan_mode": ExitPlanMode,
+    "bash_background": BashBackground,
 }
 
 __all__ = [
@@ -59,7 +65,10 @@ __all__ = [
     "BUILTIN_TOOLS",
     "AskUserQuestion",
     "Bash",
+    "BashBackground",
     "EditFile",
+    "EnterPlanMode",
+    "ExitPlanMode",
     "Glob",
     "Grep",
     "ReadFile",

@@ -61,6 +61,7 @@ def _serialize(rec: TaskRecord, *, include_messages: bool) -> dict[str, Any]:
         "task_id": rec.id,
         "parent_id": rec.parent_id,
         "description": rec.description,
+        "kind": rec.kind,
         "status": rec.status,
         "started_at": rec.started_at,
         "finished_at": rec.finished_at,
@@ -70,6 +71,7 @@ def _serialize(rec: TaskRecord, *, include_messages: bool) -> dict[str, Any]:
         "progress": {
             "tool_count": rec.progress.tool_count,
             "token_count": rec.progress.token_count,
+            "line_count": rec.progress.line_count,
             "last_activity_at": rec.progress.last_activity_at,
             # Copy — caller should not be able to mutate the live ring.
             "recent_activities": list(rec.progress.recent_activities),

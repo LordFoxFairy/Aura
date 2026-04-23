@@ -97,19 +97,27 @@ async def test_dispatch_model_no_arg_shows_status(tmp_path: Path) -> None:
     result = await dispatch("/model", agent, r)
     assert result.handled is True
     assert result.kind == "print"
-    assert "default" in result.text
+    assert "current:" in result.text
+    assert "openai:gpt-4o-mini" in result.text
     assert "opus" in result.text
 
 
 @pytest.mark.asyncio
 async def test_dispatch_model_with_router_alias() -> None:
     mock_agent = MagicMock(spec=Agent)
+    mock_agent.current_model = "openai:gpt-4o-mini"
+
+    def _flip(spec: str) -> None:
+        mock_agent.current_model = spec
+
+    mock_agent.switch_model.side_effect = _flip
     r = build_default_registry()
     result = await dispatch("/model opus", mock_agent, r)
     mock_agent.switch_model.assert_called_once_with("opus")
     assert result.handled is True
     assert result.kind == "print"
-    assert "switched to opus" in result.text
+    assert "openai:gpt-4o-mini" in result.text
+    assert "opus" in result.text
 
 
 @pytest.mark.asyncio

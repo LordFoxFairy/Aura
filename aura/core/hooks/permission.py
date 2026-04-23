@@ -65,6 +65,28 @@ _EMPTY_RULESET = RuleSet()
 # custom tools. Matches claude-code's "accept edits" mode behavior.
 _ACCEPT_EDITS_TOOLS: frozenset[str] = frozenset({"read_file", "write_file", "edit_file"})
 
+# Plan mode allow-list. Pure read / information-gathering tools the planner
+# needs in order to draft a useful plan (read the code, search it, fetch
+# docs, inspect running subagents). These fall through to the normal
+# rule / ask pipeline so safety + default-allow rules still apply; plan
+# mode only removes the blanket dry-run for them.
+_PLAN_MODE_READ_TOOLS: frozenset[str] = frozenset(
+    {
+        "read_file", "grep", "glob",
+        "web_fetch", "web_search",
+        "task_get", "task_list",
+    }
+)
+
+# Tools that control plan mode itself MUST be reachable from plan mode,
+# otherwise the LLM could never exit. Bootstrap safety — these bypass
+# the plan-mode dry-run branch entirely and fall through to the usual
+# rule/ask pipeline. Kept separate from the read-allow list because the
+# intent is different: "mode control" vs "read-only browsing".
+_PLAN_MODE_EXEMPT_TOOLS: frozenset[str] = frozenset(
+    {"enter_plan_mode", "exit_plan_mode"}
+)
+
 # Cap for the plan-mode "would have called" error string. Tool args can be
 # multi-kilobyte (write_file.content, bash.command). We truncate so a
 # dry-run error doesn't flood the model's context window, but the full
@@ -338,11 +360,20 @@ async def _decide(
         if is_protected(target, safety, is_write=is_write):
             return Decision(allow=False, reason="safety_blocked", target=target), ""
 
-    # 3. Plan mode — dry-run deny for every safety-cleared tool call.
-    # Deliberately placed AFTER safety so a plan-mode session still
-    # surfaces safety_blocked decisions for protected paths (the user
-    # sees the real reason, not a generic "plan would have called").
-    if mode == "plan":
+    # 3. Plan mode — dry-run deny for every safety-cleared tool call,
+    # EXCEPT the read-tool allow-list (reads are how the planner does its
+    # job) and the plan-mode control tools (the LLM needs to be able to
+    # exit plan mode; blocking them would be a deadlock). Both exemptions
+    # fall through to the normal rule/ask pipeline below, so safety +
+    # default-allow rules still apply. Deliberately placed AFTER safety
+    # so a plan-mode session still surfaces safety_blocked decisions for
+    # protected paths (the user sees the real reason, not a generic
+    # "plan would have called").
+    if (
+        mode == "plan"
+        and tool.name not in _PLAN_MODE_EXEMPT_TOOLS
+        and tool.name not in _PLAN_MODE_READ_TOOLS
+    ):
         return Decision(allow=False, reason="plan_mode_blocked"), ""
 
     # 4. accept_edits mode — auto-allow the edit-family tools. Any other

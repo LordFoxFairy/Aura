@@ -95,6 +95,12 @@ class Agent:
         # rules alongside history and state so /clear is coherent.
         self._config = config
         self._model = model
+        # Live model spec — distinct from ``config.router["default"]`` which
+        # is the CONFIG surface and stays immutable. ``switch_model`` mutates
+        # only this field so the status bar + /model status reflect the
+        # currently-in-use model, while a subsequent ``clear_session`` or a
+        # fresh CLI run still starts from the configured default.
+        self._current_model_spec = config.router.get("default", "")
         self._storage = storage
         self._hooks = hooks or HookChain()
         self._state = LoopState()
@@ -134,6 +140,13 @@ class Agent:
         # ``task_create`` tool so Agent.close() can cancel still-running
         # subagents without reaching back into the tool's internals.
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
+        # Map: task_id -> the live asyncio.subprocess.Process for shell
+        # (bash_background) tasks. Shared with ``bash_background`` (which
+        # writes on spawn + removes on natural exit) and ``task_stop``
+        # (which reads + kills). Lives on the Agent for the same reason
+        # ``_running_tasks`` does — so ``Agent.close()`` can tear down
+        # orphan children deterministically.
+        self._running_shells: dict[str, asyncio.subprocess.Process] = {}
         # Stateless built-ins come from shared singletons; stateful ones are
         # instantiated per-Agent so each gets its own dependency (LoopState
         # for todo_write, QuestionAsker for ask_user_question).
@@ -162,12 +175,29 @@ class Agent:
                 self._available_tools[name] = cls(
                     store=self._tasks_store,
                     running=self._running_tasks,
+                    running_shells=self._running_shells,
+                )
+            elif name == "bash_background":
+                self._available_tools[name] = cls(
+                    store=self._tasks_store,
+                    running_shells=self._running_shells,
+                    running_tasks=self._running_tasks,
                 )
             elif name == "web_search":
                 # web_search takes an optional WebSearchConfig; when the user
                 # did not declare ``web_search:`` in config, the tool falls
                 # back to its own defaults (DuckDuckGo, max_results=5).
                 self._available_tools[name] = cls(config=self._config.web_search)
+            elif name == "enter_plan_mode" or name == "exit_plan_mode":
+                # Plan-mode control tools. Close over ``set_mode`` and the
+                # ``_mode`` read rather than injecting ``self`` so the
+                # tool's reach into the Agent is exactly one arrow: flip
+                # the permission mode. Same "closure-over-method" pattern
+                # as QuestionAsker.
+                self._available_tools[name] = cls(
+                    mode_setter=self.set_mode,
+                    mode_getter=lambda: self._mode,
+                )
             else:  # pragma: no cover — guardrail for future additions
                 raise RuntimeError(f"unwired stateful tool: {name}")
         self._session_id = session_id
@@ -309,13 +339,27 @@ class Agent:
                 await self.compact(source="auto")
 
     def switch_model(self, spec: str) -> None:
-        journal.write("model_switch_attempt", spec=spec)
+        """Swap the live model. Raises ``AuraConfigError`` on failure.
+
+        Resolves ``spec`` (router alias or ``provider:model``), constructs a
+        fresh LangChain model, and rebuilds the loop so subsequent turns use
+        it. Tools / hooks / context / history are untouched — the ongoing
+        conversation continues with the new model seeing the same state.
+
+        ``config.router["default"]`` stays unchanged by design: it's the
+        boot-time config, not the live spec. The live spec lives on
+        ``self._current_model_spec``.
+        """
+        old_spec = self._current_model_spec
+        journal.write("model_switch_attempt", old_spec=old_spec, new_spec=spec)
         provider, model_name = llm.resolve(spec, cfg=self._config)
         self._model = llm.create(provider, model_name)
+        self._current_model_spec = spec
         self._loop = self._build_loop()
         journal.write(
             "model_switched",
-            spec=spec,
+            old_spec=old_spec,
+            new_spec=spec,
             provider=provider.name,
             model=model_name,
         )
@@ -374,8 +418,9 @@ class Agent:
 
     @property
     def current_model(self) -> str:
-        """当前 default 对应的 'provider:model' 字符串。"""
-        return self._config.router.get("default", "")
+        """Live model spec — the string passed to ``switch_model`` most
+        recently, or ``config.router["default"]`` if no switch yet."""
+        return self._current_model_spec
 
     @property
     def mode(self) -> str:
@@ -540,6 +585,17 @@ class Agent:
             if not task.done():
                 task.cancel()
             self._running_tasks.pop(task_id, None)
+        # Shell tasks own a real subprocess — cancelling the watcher
+        # asyncio.Task above causes it to send SIGTERM→SIGKILL in its
+        # finally. Belt-and-braces: also SIGKILL any lingering handles
+        # here in case the watcher task already completed but the
+        # subprocess is somehow still alive (shouldn't happen, but close
+        # is our last chance to not leave zombies).
+        for task_id, proc in list(self._running_shells.items()):
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError, Exception):
+                    proc.kill()
+            self._running_shells.pop(task_id, None)
         # stop_all() is async; Agent.close() is sync (legacy SDK API).
         # Run a small event loop if none is running; otherwise schedule +
         # best-effort-detach. This mirrors the storage close path which is

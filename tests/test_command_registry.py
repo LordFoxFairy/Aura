@@ -209,13 +209,22 @@ async def test_model_command_delegates_to_agent_switch_model() -> None:
     r = CommandRegistry()
     r.register(ModelCommand())
     mock_agent = MagicMock(spec=Agent)
+    # Simulate the live-spec flip: current_model returns "old" before
+    # switch_model completes, then "opus" after.
+    mock_agent.current_model = "openai:gpt-4o-mini"
+
+    def _flip(spec: str) -> None:
+        mock_agent.current_model = spec
+
+    mock_agent.switch_model.side_effect = _flip
 
     result = await r.dispatch("/model opus", mock_agent)
 
     mock_agent.switch_model.assert_called_once_with("opus")
     assert result.handled is True
     assert result.kind == "print"
-    assert "switched to opus" in result.text
+    assert "openai:gpt-4o-mini" in result.text
+    assert "opus" in result.text
 
 
 @pytest.mark.asyncio

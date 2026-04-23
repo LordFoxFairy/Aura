@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from aura.config.schema import AuraConfigError
 from aura.core.commands.registry import CommandRegistry
 from aura.core.commands.types import CommandResult, CommandSource
-from aura.core.llm import UnknownModelSpecError
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
@@ -101,23 +101,33 @@ class ModelCommand:
             return CommandResult(
                 handled=True, kind="print", text=_model_status(agent)
             )
+        old = agent.current_model or "?"
         try:
             agent.switch_model(arg)
-        except UnknownModelSpecError as exc:
+        except AuraConfigError as exc:
+            # Catches UnknownModelSpecError, MissingCredentialError,
+            # MissingProviderDependencyError — any resolve/create failure
+            # surfaces as a printable error instead of crashing the REPL.
             return CommandResult(
                 handled=True, kind="print", text=f"error: {exc}"
             )
+        new = agent.current_model or arg
         return CommandResult(
-            handled=True, kind="print", text=f"switched to {arg}"
+            handled=True, kind="print", text=f"model: {old} → {new}"
         )
 
 
 def _model_status(agent: Agent) -> str:
-    default = agent.current_model or "?"
+    current = agent.current_model or "?"
     aliases = sorted(agent.router_aliases)
-    lines = [f"current default: {default}"]
+    lines = [f"current: {current}"]
     if aliases:
+        # Align alias names so the arrows line up — matches claude-code's
+        # ``/model`` picker formatting. Width from the longest alias name.
+        width = max(len(a) for a in aliases)
         lines.append("aliases:")
         for alias in aliases:
-            lines.append(f"  {alias} -> {agent.router_aliases[alias]}")
+            lines.append(
+                f"  {alias:<{width}} → {agent.router_aliases[alias]}"
+            )
     return "\n".join(lines)

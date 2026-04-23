@@ -125,12 +125,14 @@ def journal_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
 # ---------------------------------------------------------------------------
 
 
-async def test_plan_mode_blocks_read_file() -> None:
+async def test_plan_mode_allows_read_file() -> None:
+    # Plan mode keeps the read-tool allow-list reachable so the planner
+    # can gather context. A matching default-allow rule covers read_file,
+    # so the hook should return None (allow) without prompting.
     spy = _SpyAsker()
     hook = make_permission_hook(
         asker=spy,
         session=SessionRuleSet(),
-        # Even with a matching rule, plan mode still dry-runs.
         rules=RuleSet(rules=(Rule(tool="read_file", content=None),)),
         project_root=Path("/tmp"),
         mode="plan",
@@ -139,8 +141,7 @@ async def test_plan_mode_blocks_read_file() -> None:
     result = await hook(
         tool=tool, args={"path": "/tmp/ordinary.txt"}, state=LoopState(),
     )
-    assert isinstance(result, ToolResult)
-    assert result.ok is False
+    assert result is None
     assert spy.calls == []
 
 

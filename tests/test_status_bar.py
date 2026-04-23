@@ -221,22 +221,26 @@ def test_context_bar_clamps_over_100() -> None:
     assert out == "██████████"
 
 
-def test_pct_color_green_below_30() -> None:
-    from aura.cli.status_bar import _pct_color_tag
-    assert _pct_color_tag(0) == "ansigreen"
-    assert _pct_color_tag(29) == "ansigreen"
+def test_bottom_toolbar_is_uniformly_monochrome(tmp_path: Path) -> None:
+    # Deliberately no red / yellow / green traffic-light anywhere on the
+    # bar — operators told us the multi-coloured gradient against the
+    # rest of the line being uniform felt noisy. Mono ``ansigray`` only.
+    from aura.cli.status_bar import render_bottom_toolbar_html
 
-
-def test_pct_color_yellow_30_to_59() -> None:
-    from aura.cli.status_bar import _pct_color_tag
-    assert _pct_color_tag(30) == "ansiyellow"
-    assert _pct_color_tag(59) == "ansiyellow"
-
-
-def test_pct_color_red_60_and_above() -> None:
-    from aura.cli.status_bar import _pct_color_tag
-    assert _pct_color_tag(60) == "ansired"
-    assert _pct_color_tag(95) == "ansired"
+    for pct_driver in (100, 50_000, 150_000):  # low / mid / high pressure
+        s = str(
+            render_bottom_toolbar_html(
+                model="m",
+                input_tokens=pct_driver,
+                cache_read_tokens=0,
+                context_window=200_000,
+                mode="default",
+                cwd=tmp_path,
+            )
+        )
+        assert "ansired" not in s
+        assert "ansiyellow" not in s
+        assert "ansigreen" not in s
 
 
 def test_bottom_toolbar_html_contains_model_tokens_bar_cached(
@@ -278,19 +282,50 @@ def test_bottom_toolbar_html_omits_cached_when_zero(tmp_path: Path) -> None:
     assert "cached" not in s
 
 
-def test_bottom_toolbar_color_tag_at_high_pressure(tmp_path: Path) -> None:
-    # 150k/200k = 75% → red.
+def test_bottom_toolbar_shows_pinned_estimate_when_cached_is_zero(
+    tmp_path: Path,
+) -> None:
+    # Provider doesn't support prompt caching (cache_read_tokens=0) ⇒
+    # fall back to the estimate so the operator still sees a number for
+    # the pinned prompt channel. Use ``~`` prefix so it's clear this
+    # is an estimate, not a real measurement.
+    proj = tmp_path / "proj"
+    proj.mkdir()
     from aura.cli.status_bar import render_bottom_toolbar_html
+
     s = str(
         render_bottom_toolbar_html(
-            model="m",
-            input_tokens=150_000,
+            model="deepseek:glm-5",
+            input_tokens=0,
             cache_read_tokens=0,
+            context_window=512_000,
+            mode="default",
+            cwd=proj,
+            pinned_estimate_tokens=4_300,
+        )
+    )
+    assert "~4.3k pinned" in s
+    # Must NOT also render "cached" — the two are alternatives, not both.
+    assert "cached" not in s
+
+
+def test_bottom_toolbar_prefers_real_cached_over_pinned_estimate(
+    tmp_path: Path,
+) -> None:
+    # When the provider gives us a real number, use it. The estimate
+    # is just a fallback — real wins.
+    from aura.cli.status_bar import render_bottom_toolbar_html
+
+    s = str(
+        render_bottom_toolbar_html(
+            model="anthropic:claude-opus-4",
+            input_tokens=1000,
+            cache_read_tokens=4_100,  # real, from provider
             context_window=200_000,
             mode="default",
             cwd=tmp_path,
+            pinned_estimate_tokens=4_300,  # estimate, should be hidden
         )
     )
-    assert "ansired" in s
-    assert "ansiyellow" not in s
-    assert "ansigreen" not in s
+    assert "4.1k cached" in s
+    assert "pinned" not in s

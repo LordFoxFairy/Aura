@@ -31,7 +31,11 @@ def test_help_flag() -> None:
     assert "aura" in result.stdout.lower()
 
 
-def test_plaintext_api_key_emits_warning(tmp_path: Path) -> None:
+def test_plaintext_api_key_emits_warning_only_in_verbose(tmp_path: Path) -> None:
+    # Non-verbose runs SHOULD stay silent — the warning fires every startup
+    # otherwise and operators tune it out (which defeats the point of the
+    # warning in the first place). Verbose still prints for operators
+    # actively debugging or auditing.
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
         "providers": [{
@@ -48,22 +52,33 @@ def test_plaintext_api_key_emits_warning(tmp_path: Path) -> None:
     from aura.config.loader import load_config
 
     cfg = load_config(user_config=config_path, project_config=tmp_path / "absent.json")
-    buf = io.StringIO()
-    console = Console(file=buf, force_terminal=False, width=200)
 
-    _warn_plaintext_api_keys(cfg, console)
+    # Default (no --verbose) — silent.
+    buf_quiet = io.StringIO()
+    _warn_plaintext_api_keys(
+        cfg, Console(file=buf_quiet, force_terminal=False, width=200),
+    )
+    assert "Warning" not in buf_quiet.getvalue()
+    assert "plaintext" not in buf_quiet.getvalue()
 
-    out = buf.getvalue()
+    # --verbose — prints.
+    buf_verbose = io.StringIO()
+    _warn_plaintext_api_keys(
+        cfg, Console(file=buf_verbose, force_terminal=False, width=200),
+        verbose=True,
+    )
+    out = buf_verbose.getvalue()
     assert "Warning" in out
     assert "'test'" in out
     assert "plaintext" in out
 
 
 def test_plaintext_api_key_writes_journal_event(tmp_path: Path) -> None:
-    # Troubleshooting contract: the console warning is ephemeral — scrolls
-    # off, lost to the user who started aura in a screen session, whatever.
-    # An operator grepping events.jsonl for "why did this provider expose a
-    # key" must find a machine-readable record. Console + journal both fire.
+    # Troubleshooting contract: the console warning is ``--verbose`` only,
+    # so the journal entry MUST fire unconditionally — that's what makes
+    # the audit trail reliable. An operator grepping events.jsonl for
+    # "why did this provider expose a key" must find a machine-readable
+    # record regardless of whether anyone was watching the console.
     import pytest
     from rich.console import Console
 

@@ -11,6 +11,7 @@ from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -45,6 +46,12 @@ def _build_prompt_session(
       without polling. Shows model / context-pressure bar / pinned-cache /
       mode / cwd. Keybinding hints live in the welcome banner (shown once)
       — the bar is for always-relevant stateful info.
+    - ``style`` overrides pt's built-in ``reverse`` styling on
+      ``bottom-toolbar`` so the footer blends with the terminal
+      background instead of showing as a high-contrast inverted bar.
+      That default (designed for full-screen TUIs) fights our rich
+      welcome panel, which is plain-bg + dim text. Matching "looks
+      like a dim line" keeps the surface consistent.
 
     ``agent=None`` disables the bottom_toolbar (keeps the function usable
     in tests that only exercise history / completion wiring).
@@ -52,12 +59,17 @@ def _build_prompt_session(
     history = FileHistory(str(resolve_history_path()))
     completer = SlashCommandCompleter(lambda: registry)
     bottom_toolbar = _make_bottom_toolbar(agent) if agent is not None else None
+    style = Style.from_dict({
+        "bottom-toolbar": "noreverse",
+        "bottom-toolbar.text": "noreverse",
+    })
     return PromptSession(
         history=history,
         completer=completer,
         complete_while_typing=False,
         search_ignore_case=True,
         bottom_toolbar=bottom_toolbar,
+        style=style,
     )
 
 
@@ -79,6 +91,7 @@ def _make_bottom_toolbar(agent: Agent) -> Callable[[], Any]:
             model=model or None,
             input_tokens=input_tokens,
             cache_read_tokens=cache_tokens,
+            pinned_estimate_tokens=agent.pinned_tokens_estimate,
             context_window=agent.context_window,
             mode=agent.mode,
             cwd=Path.cwd(),
@@ -183,26 +196,29 @@ async def run_repl_async(
                 f"[red]turn failed: {type(exc).__name__}: {exc}[/red]"
             )
 
+        # Post-turn status checkpoint — printed AFTER every turn so the
+        # operator still sees the model/tokens/mode/cwd summary while pt's
+        # bottom toolbar is hidden during streaming. Runs regardless of
+        # --verbose (verbose adds the cumulative-totals summary on top).
+        _print_post_turn_status(agent, _console)
+
         if verbose:
             _print_verbose_summary(agent, _console)
 
 
 def _print_welcome(agent: Agent, console: Console) -> None:
+    # Compact 3-line banner — earlier 7-line version felt bulky on repeat
+    # startups. Everything still here: branding, entry hint, quit binding,
+    # model, cwd. Cyan accent kept on ``/help`` so it echoes the border.
     body = Text()
-    body.append("✱ Welcome to Aura", style="bold")
-    body.append(f" v{__version__}\n\n", style="dim")
+    body.append("✱ Aura", style="bold")
+    body.append(f" v{__version__}  ·  ", style="dim")
     body.append("/help", style="cyan")
-    body.append(" for help\n\n", style="dim")
-    body.append("cwd: ", style="dim")
-    body.append(f"{Path.cwd()}\n", style="")
+    body.append("  ·  Ctrl+D to exit\n", style="dim")
     body.append("model: ", style="dim")
-    body.append(agent.current_model, style="")
-    # Keybinding hints: shown ONCE at startup (clean prose) instead of on
-    # every prompt line as an ugly bottom_toolbar footer.
-    body.append(
-        "\n\nTab to autocomplete · Ctrl+R for history · Ctrl+D to exit",
-        style="dim",
-    )
+    body.append(f"{agent.current_model}\n", style="")
+    body.append("cwd: ", style="dim")
+    body.append(f"{Path.cwd()}", style="")
     console.print(Panel(body, border_style="cyan", padding=(0, 2)))
 
 
@@ -213,6 +229,40 @@ def _print_verbose_summary(agent: Agent, console: Console) -> None:
         f"{state.total_tokens_used:,} tokens \u00b7 "
         f"{agent.current_model}][/dim]"
     )
+
+
+def _print_post_turn_status(agent: Agent, console: Console) -> None:
+    """Print a dim checkpoint status line right after a response finishes.
+
+    prompt_toolkit's ``bottom_toolbar`` only renders while pt owns the
+    screen (i.e. during the prompt). While the model is streaming a
+    response, pt is idle and the toolbar disappears — operators
+    reported this as "footer 消失了" ("the footer
+    disappeared"). Printing the same info as a plain dim rich line
+    after every turn gives them a persistent checkpoint: even in the
+    middle of a long conversation, the most recent turn's token /
+    mode / cwd info is always the last visible line before the next
+    ``aura>`` prompt.
+
+    A truly always-visible status bar would require moving the REPL
+    to pt's full-screen ``Application`` mode, which is a v1.x
+    architecture change. This is the pragmatic middle ground.
+    """
+    from aura.cli.status_bar import render_status_bar
+
+    stats = agent.state.custom.get("_token_stats", {})
+    input_tokens = int(stats.get("last_input_tokens", 0))
+    cache_tokens = int(stats.get("last_cache_read_tokens", 0))
+    text = render_status_bar(
+        model=agent.current_model or None,
+        input_tokens=input_tokens,
+        cache_read_tokens=cache_tokens,
+        pinned_estimate_tokens=agent.pinned_tokens_estimate,
+        context_window=agent.context_window,
+        mode=agent.mode,
+        cwd=Path.cwd(),
+    )
+    console.print(text)
 
 
 async def _run_turn(

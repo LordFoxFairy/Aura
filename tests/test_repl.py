@@ -184,8 +184,10 @@ async def test_non_bypass_mode_uses_plain_prompt(tmp_path: Path) -> None:
     agent.close()
 
 
-async def test_welcome_banner_includes_keybinding_hints(tmp_path: Path) -> None:
-    # Hints live in the welcome banner now (once), not on every prompt.
+async def test_welcome_banner_shows_core_info_compactly(tmp_path: Path) -> None:
+    # Welcome is the 3-line compact form: branding, /help accent, Ctrl+D
+    # hint, model, cwd. Tab / Ctrl+R hints intentionally dropped — they
+    # were bloating the banner and operators learn them from /help.
     agent = _agent(tmp_path)
     console, buf = _capture_console()
 
@@ -193,13 +195,12 @@ async def test_welcome_banner_includes_keybinding_hints(tmp_path: Path) -> None:
         agent, input_fn=_ScriptedInput(["/exit"]), console=console,
     )
     out = buf.getvalue()
-    # Plain-prose, no angle-bracket syntax.
-    assert "Tab" in out
-    assert "autocomplete" in out
-    assert "Ctrl+R" in out
-    assert "history" in out
+    assert "Aura" in out
+    assert "/help" in out
     assert "Ctrl+D" in out
     assert "exit" in out
+    assert "model:" in out
+    assert "cwd:" in out
     agent.close()
 
 

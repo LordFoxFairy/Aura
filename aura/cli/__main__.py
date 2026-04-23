@@ -65,16 +65,27 @@ def _resolve_mode(
     return perm_cfg.mode
 
 
-def _warn_plaintext_api_keys(config: AuraConfig, console: Console) -> None:
+def _warn_plaintext_api_keys(
+    config: AuraConfig, console: Console, *, verbose: bool = False,
+) -> None:
+    """Audit plaintext ``api_key`` usage in config.
+
+    Journal entry fires ALWAYS so a security audit has full visibility.
+    The console warning only prints under ``--verbose`` — spamming it on
+    every startup taught operators to tune it out, which defeats the
+    purpose. Operators who care read the journal; casual users aren't
+    nagged every session.
+    """
     from aura.core import journal
 
     for provider in config.providers:
         if provider.api_key:
-            console.print(
-                f"[yellow]Warning: provider {provider.name!r} uses a plaintext "
-                f"api_key in config. Prefer api_key_env for security.[/yellow]"
-            )
             journal.write("plaintext_api_key_warning", provider=provider.name)
+            if verbose:
+                console.print(
+                    f"[yellow]Warning: provider {provider.name!r} uses a plaintext "
+                    f"api_key in config. Prefer api_key_env for security.[/yellow]"
+                )
 
 
 def _fail_startup(console: Console, exc: BaseException) -> int:
@@ -146,7 +157,7 @@ def main() -> int:
     )
 
     try:
-        _warn_plaintext_api_keys(config, console)
+        _warn_plaintext_api_keys(config, console, verbose=args.verbose)
         project_root = Path.cwd()
         local_path, created = store.ensure_local_settings(project_root)
         if created:

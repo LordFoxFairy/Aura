@@ -214,6 +214,14 @@ class Agent:
         # sites (tests, SDK users) don't have to thread an event loop.
         self._mcp_manager: MCPManager | None = None
         self._mcp_commands: list[object] = []
+        # Estimated size of the pinned prompt prefix (system msg + memory +
+        # rules + skill catalogue + tool schemas) in tokens. Computed once
+        # at construction so the status bar has a number to anchor against
+        # BEFORE the first turn, and also serves as the fallback indicator
+        # on providers that don't support prompt caching (deepseek, etc.)
+        # where ``cache_read_input_tokens`` will always be 0. Char count /
+        # 4 is the standard rough approximation.
+        self._pinned_tokens_estimate = self._estimate_pinned_tokens()
 
     async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
         # 事务性：history 只在 turn 正常完成才 save（else 分支）。
@@ -384,6 +392,52 @@ class Agent:
             return self._config.context_window
         from aura.core.llm import get_context_window
         return get_context_window(self.current_model)
+
+    @property
+    def pinned_tokens_estimate(self) -> int:
+        """Estimated size of the pinned prompt prefix in tokens.
+
+        Char-count / 4 approximation over: system message, project
+        memory, rules, skill catalogue, and the JSON-serialized schemas
+        of all currently-bound tools. Real
+        ``cache_read_input_tokens`` from a provider response is
+        strictly more accurate — but many providers (e.g. deepseek)
+        don't support prompt caching and always return 0, so the
+        status bar falls back to this estimate to give the operator
+        *some* anchor for the pinned channel size. Also surfaced
+        BEFORE the first turn, so the REPL opens with a meaningful
+        number instead of a zero."""
+        return self._pinned_tokens_estimate
+
+    def _estimate_pinned_tokens(self) -> int:
+        # Build the pinned messages with an empty history — everything
+        # from Context.build that doesn't depend on live turn state.
+        import json
+
+        char_count = 0
+        for message in self._context.build([]):
+            content = getattr(message, "content", "")
+            if isinstance(content, str):
+                char_count += len(content)
+        # Tool schemas go into every request as a separate payload the
+        # provider also bills against the cached prefix. Approximate via
+        # name + description + JSON-serialized args schema.
+        for tool in self._registry.tools():
+            char_count += len(tool.name or "")
+            char_count += len(tool.description or "")
+            try:
+                schema = json.dumps(
+                    getattr(tool, "args", {}) or {},
+                    default=str,
+                    ensure_ascii=False,
+                )
+            except (TypeError, ValueError):
+                schema = ""
+            char_count += len(schema)
+        # Standard 4-chars-per-token approximation. Not exact (provider
+        # tokenizers vary) but consistently in the ballpark, which is
+        # all an at-a-glance status indicator needs.
+        return char_count // 4
 
     @property
     def router_aliases(self) -> dict[str, str]:

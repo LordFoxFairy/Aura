@@ -1352,6 +1352,28 @@ def test_agent_context_window_honors_config_override(tmp_path: Path) -> None:
     assert agent.context_window == 1_000_000
 
 
+# --------------------------------------------------------------------------
+# Agent.pinned_tokens_estimate — local char-count estimate of pinned prefix
+# --------------------------------------------------------------------------
+def test_agent_pinned_tokens_estimate_is_positive(tmp_path: Path) -> None:
+    # The system prompt alone guarantees a positive count — even an empty
+    # project has a baseline pinned prefix. If this ever drops to zero,
+    # something broke in Context.build or the system prompt loader, and
+    # the bottom bar would silently show no pinned channel.
+    agent = _agent(tmp_path, turns=[FakeTurn(AIMessage(content="ok"))])
+    assert agent.pinned_tokens_estimate > 0
+
+
+def test_agent_pinned_tokens_estimate_is_stable_across_reads(tmp_path: Path) -> None:
+    # Property is a pure getter over a field computed once at __init__;
+    # must not drift across reads (no accidental recomputation that
+    # depends on live state).
+    agent = _agent(tmp_path, turns=[FakeTurn(AIMessage(content="ok"))])
+    first = agent.pinned_tokens_estimate
+    second = agent.pinned_tokens_estimate
+    assert first == second
+
+
 def test_agent_context_window_unknown_model_uses_generous_default(tmp_path: Path) -> None:
     # Frontier model not in the table ⇒ 512k default (not 128k) so the
     # pct-bar doesn't lie about a 1M-window model being at "40%" when it's

@@ -1,26 +1,28 @@
-"""CLI permission asker — list-select prompt via ``prompt_toolkit``.
+"""CLI permission asker — inline numbered prompt.
 
-Spec: ``docs/specs/2026-04-19-aura-permission.md`` §8.1–§8.5.
+Matches claude-code's permission UX: a short block printed into the
+scrollback, then a ``❯`` cursor for the user's numeric choice. No
+bordered dialog, no popup — the permission decision lives in the
+conversation timeline the same way the model's output does, so the
+user's flow stays linear top-to-bottom.
 
-One job: present the choice, capture the answer. The asker does NOT decide
-(that's the hook), does NOT persist (that's the store), and does NOT emit
-domain events beyond the two I/O-boundary journal lines it's responsible for
+Spec alignment: ``docs/specs/2026-04-19-aura-permission.md`` §8.1–§8.5.
+(The spec described a radiolist dialog for §8.1; this module deliberately
+diverges to the inline form because the boxed dialog fought the rest of
+the CLI's rich+prompt_toolkit REPL layout.)
+
+One job: present the choice, capture the answer. The asker does NOT
+decide (that's the hook), does NOT persist (that's the store), and does
+NOT emit domain events beyond the two I/O-boundary journal lines
 (``permission_asked`` / ``permission_answered``).
-
-Rule derivation for option 2 delegates to :func:`derive_rule_hint`:
-
-- precise pattern rule returned → label says "in this project", ``scope="project"``
-- ``None`` → label says "for this session", ``scope="session"`` with a tool-wide rule
 """
 
 from __future__ import annotations
 
-from html import escape as html_escape
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
-from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.shortcuts import radiolist_dialog
+from prompt_toolkit import PromptSession
 from rich.console import Console
 
 from aura.core.hooks.permission import AskerResponse, PermissionAsker
@@ -28,20 +30,25 @@ from aura.core.permissions.rule import Rule
 from aura.core.permissions.rule_hint import derive_rule_hint
 from aura.core.persistence import journal
 
-# Visual cap on prompt preview text so a huge ``bash`` command (or similar)
-# doesn't blow out the radiolist dialog layout. Visual only — the tool still
-# receives the full args.
+# Visual cap on the args preview so a huge ``bash`` command (or similar)
+# doesn't overflow the terminal. Visual only — the tool still receives
+# the full args.
 _PREVIEW_MAX_CHARS = 200
 
-_FOOTER_SHORTCUTS = "↑/↓ select · Enter confirm · Esc deny"
+
+_TAG_STYLE: dict[str, tuple[str, str]] = {
+    # color → rich markup name; marker → leading glyph on the header line.
+    "destructive": ("red", "⚠"),
+    "read-only": ("green", "●"),
+    "safe": ("yellow", "●"),
+}
 
 
-def _tag(tool: BaseTool) -> str:
-    """Classification tag for the title line (spec §8.1).
+def _tag(tool: BaseTool) -> Literal["destructive", "read-only", "safe"]:
+    """Classification tag for the header line.
 
-    Precedence: destructive > read-only > safe. Mutually exclusive by how
-    tools are tagged today; the explicit precedence here guards against
-    tools that (wrongly) set both flags.
+    Precedence: destructive > read-only > safe. The explicit ordering
+    guards against tools that (wrongly) set both flags.
     """
     metadata = tool.metadata or {}
     if metadata.get("is_destructive"):
@@ -54,10 +61,9 @@ def _tag(tool: BaseTool) -> str:
 def _preview(tool: BaseTool, args: dict[str, Any]) -> str:
     """One-line preview of this call's args; falls back to the tool name.
 
-    Preview output is capped at ``_PREVIEW_MAX_CHARS`` so a tool returning a
-    huge string (e.g. ``bash`` with a 5000-char command) doesn't blow out the
-    radiolist dialog layout. The cap is visual only — the full args still
-    reach the tool; this just keeps the prompt readable.
+    Capped at ``_PREVIEW_MAX_CHARS`` so a bash command with thousands of
+    characters can't blow out the terminal. Cap is visual only — the
+    full args still reach the tool.
     """
     preview_fn = (tool.metadata or {}).get("args_preview")
     if callable(preview_fn):
@@ -67,77 +73,19 @@ def _preview(tool: BaseTool, args: dict[str, Any]) -> str:
             return tool.name
         if isinstance(out, str) and out:
             if len(out) > _PREVIEW_MAX_CHARS:
-                return out[: _PREVIEW_MAX_CHARS - 1] + "\u2026"
+                return out[: _PREVIEW_MAX_CHARS - 1] + "…"
             return out
     return tool.name
-
-
-def _risk_indicator_html(tool: BaseTool) -> str:
-    """Colored risk indicator for the dialog header (prompt_toolkit HTML).
-
-    Mapping:
-      - destructive → red "⚠ destructive"
-      - read-only   → green "● read-only"
-      - neither     → yellow "? unknown"
-
-    The surrounding ``<style ...>`` tags are prompt_toolkit HTML syntax so the
-    terminal renders color; if HTML isn't supported the tag still reads as
-    plain text.
-    """
-    metadata = tool.metadata or {}
-    if metadata.get("is_destructive"):
-        return '<style fg="ansired">⚠ destructive</style>'
-    if metadata.get("is_read_only"):
-        return '<style fg="ansigreen">● read-only</style>'
-    return '<style fg="ansiyellow">? unknown</style>'
-
-
-def _build_dialog_text(tool: BaseTool, args: dict[str, Any]) -> str:
-    """Compose the body text for the permission dialog.
-
-    Pure function — no I/O, no journal writes. Tested in isolation; the live
-    ``_ask`` coroutine calls this to build the ``text`` kwarg handed to
-    ``radiolist_dialog``. The output is a prompt_toolkit HTML source string.
-
-    Layout (top to bottom):
-
-        <preview line, truncated to _PREVIEW_MAX_CHARS>
-        <risk indicator: destructive / read-only / unknown>
-        If you choose "allow always", <rule hint>:
-            <rule string OR "all <tool> calls will be auto-allowed">
-        <dim footer with keyboard shortcuts>
-    """
-    preview = _preview(tool, args)
-    indicator = _risk_indicator_html(tool)
-    derived = derive_rule_hint(tool, args)
-    if derived is not None:
-        rule_explanation = (
-            'If you choose "allow always", this rule will be saved:\n'
-            f"    {derived.to_string()}"
-        )
-    else:
-        rule_explanation = (
-            f'If you choose "allow always", all {tool.name} '
-            "calls will be auto-allowed (tool-wide)"
-        )
-    # Preview may contain ``<`` / ``>`` / ``&`` which prompt_toolkit's HTML
-    # parser would otherwise treat as markup — escape it. The indicator is
-    # our own trusted HTML; don't escape it.
-    safe_preview = html_escape(preview)
-    safe_rule_explanation = html_escape(rule_explanation)
-    footer = f'<style fg="ansibrightblack">{html_escape(_FOOTER_SHORTCUTS)}</style>'
-    return (
-        f"{safe_preview}\n"
-        f"{indicator}\n"
-        f"{safe_rule_explanation}\n\n"
-        f"{footer}"
-    )
 
 
 def _compose_option_two(
     tool: BaseTool, args: dict[str, Any],
 ) -> tuple[str, Rule, Literal["project", "session"]]:
-    """Return ``(label, rule, scope)`` for prompt option 2 (spec §8.2)."""
+    """Return ``(label, rule, scope)`` for the "yes, always" option.
+
+    - Precise rule (matcher present) → project scope, specific pattern
+    - No matcher → session scope, tool-wide fallback
+    """
     derived = derive_rule_hint(tool, args)
     if derived is not None:
         return (
@@ -152,12 +100,101 @@ def _compose_option_two(
     )
 
 
-def make_cli_asker() -> PermissionAsker:
-    """Return a ``PermissionAsker`` backed by ``prompt_toolkit``'s radiolist.
+def _render_prompt_block(
+    console: Console,
+    *,
+    tool: BaseTool,
+    preview: str,
+    tag: Literal["destructive", "read-only", "safe"],
+    option_two_label: str,
+    default_choice: int,
+) -> None:
+    """Print the inline permission block to ``console``.
 
-    Stateless — no closures beyond the prompt library's own internals. The
-    returned coroutine is safe to reuse across calls.
+    Layout (top → bottom):
+
+        ● <tool>  ·  <tag>
+          <preview>          (omitted when preview == tool.name)
+
+          ❯ 1. Yes
+            2. <option-two label>
+            3. No
+
+          Enter = default (N) · Ctrl+C to cancel
+
+    Rendered with rich markup — no box, no border. The only color
+    accent is the tag marker on the header (red / green / yellow for
+    destructive / read-only / safe). The rest is dim to sit quietly
+    against the surrounding conversation.
     """
+    color, marker = _TAG_STYLE[tag]
+    console.print()
+    console.print(
+        f"[{color}]{marker}[/{color}] [bold]{tool.name}[/bold]"
+        f"  [dim]·  {tag}[/dim]"
+    )
+    if preview and preview != tool.name:
+        console.print(f"  [dim]{preview}[/dim]")
+    console.print()
+    for n, label in ((1, "Yes"), (2, option_two_label), (3, "No")):
+        cursor = "❯" if n == default_choice else " "
+        console.print(f"  {cursor} {n}. {label}")
+    console.print()
+    console.print(
+        f"  [dim]Enter = default ({default_choice}) · Ctrl+C to cancel[/dim]"
+    )
+
+
+def _parse_choice(
+    raw: str, *, default: int,
+) -> int | None:
+    """Return parsed choice (1/2/3), or ``None`` to signal "reprompt".
+
+    Accepted tokens (case-insensitive, stripped):
+      - Empty line → default (1 for safe, 3 for destructive)
+      - ``1`` / ``y`` / ``yes`` → 1 (once)
+      - ``2`` / ``a`` / ``always`` → 2 (always, with rule)
+      - ``3`` / ``n`` / ``no`` → 3 (deny)
+      - anything else → ``None`` (caller prints a hint and re-reads)
+    """
+    tok = raw.strip().lower()
+    if tok == "":
+        return default
+    if tok in {"1", "y", "yes"}:
+        return 1
+    if tok in {"2", "a", "always"}:
+        return 2
+    if tok in {"3", "n", "no"}:
+        return 3
+    return None
+
+
+async def _read_choice(prompt: str = "  ❯ ") -> str:
+    """Read a single line from the terminal.
+
+    Uses a transient ``prompt_toolkit.PromptSession`` rather than raw
+    ``input()`` for two reasons:
+      1. Ctrl+C / Ctrl+D raise ``KeyboardInterrupt`` / ``EOFError``
+         without leaving the tty in a weird state (input() via
+         asyncio.to_thread can't be cancelled cleanly).
+      2. Arrow-key history and terminal line editing "just work", so
+         answering "1" feels the same as typing into the main REPL.
+
+    Each ask creates its own session (cheap) — keeps state from
+    leaking between permission prompts and avoids a module-level
+    mutable singleton.
+    """
+    session: PromptSession[str] = PromptSession()
+    return await session.prompt_async(prompt)
+
+
+def make_cli_asker(console: Console | None = None) -> PermissionAsker:
+    """Return a ``PermissionAsker`` backed by an inline prompt.
+
+    ``console`` — optional rich Console (tests inject a StringIO-backed
+    one for output capture). Production path creates a fresh Console.
+    """
+    _console = console or Console()
 
     async def _ask(
         *,
@@ -170,6 +207,7 @@ def make_cli_asker() -> PermissionAsker:
         option_two_label, option_two_rule, option_two_scope = _compose_option_two(
             tool, args,
         )
+        default_choice = 3 if tag == "destructive" else 1
 
         journal.write(
             "permission_asked",
@@ -178,32 +216,36 @@ def make_cli_asker() -> PermissionAsker:
             rule_hint=option_two_rule.to_string(),
         )
 
-        default_cursor = 3 if (tool.metadata or {}).get("is_destructive") else 1
-
-        # HTML formatted text gives us inline colour hints (destructive red,
-        # read-only/safe dim) without pulling a full Style object. Windows
-        # terminals without ANSI just render the tag as plain text.
-        title = HTML(f"<b>{html_escape(tool.name)}</b>  <i>{html_escape(tag)}</i>")
-        text = HTML(_build_dialog_text(tool, args))
+        _render_prompt_block(
+            _console,
+            tool=tool,
+            preview=preview,
+            tag=tag,
+            option_two_label=option_two_label,
+            default_choice=default_choice,
+        )
 
         try:
-            app = radiolist_dialog(
-                title=title,
-                text=text,
-                values=[
-                    (1, "Yes"),
-                    (2, option_two_label),
-                    (3, "No"),
-                ],
-                default=default_cursor,
-            )
-            choice = await app.run_async()
+            while True:
+                raw = await _read_choice()
+                choice = _parse_choice(raw, default=default_choice)
+                if choice is not None:
+                    break
+                _console.print(
+                    "  [yellow]Please enter 1, 2, or 3 (Enter for default).[/yellow]"
+                )
         except (KeyboardInterrupt, SystemExit):
-            # Ctrl+C / hard exit — let the upper loop handle cancellation.
-            # Spec §8.3: "Ctrl+C → deny" is enforced by the caller treating
-            # cancellation as deny; this layer must not swallow it into a
-            # soft-deny response.
-            raise
+            # Ctrl+C on the permission prompt is a first-class deny —
+            # matches claude-code's "Esc = deny" convention but without
+            # propagating cancellation up to the agent turn (the user
+            # said "no to this tool call", not "kill the whole session").
+            _console.print()
+            journal.write("permission_answered", tool=tool.name, choice="deny")
+            return AskerResponse(choice="deny")
+        except EOFError:
+            # Piped stdin hit end (or Ctrl+D) → fail closed to deny.
+            journal.write("permission_answered", tool=tool.name, choice="deny")
+            return AskerResponse(choice="deny")
         except Exception as exc:  # noqa: BLE001 — no-TTY / prompt failures
             journal.write(
                 "permission_prompt_unavailable",
@@ -222,7 +264,7 @@ def make_cli_asker() -> PermissionAsker:
                 scope=option_two_scope,
                 rule=option_two_rule,
             )
-        # choice == 3 or None (Esc / cancelled)
+        # choice == 3
         journal.write("permission_answered", tool=tool.name, choice="deny")
         return AskerResponse(choice="deny")
 
@@ -230,11 +272,7 @@ def make_cli_asker() -> PermissionAsker:
 
 
 def print_bypass_banner(console: Console) -> None:
-    """Print the bypass-mode startup warning (spec §8.5).
-
-    Task 9 wires the call site in ``aura/cli/__main__.py``; this module only
-    owns the rendering.
-    """
+    """Print the bypass-mode startup warning (spec §8.5)."""
     console.print(
         "[bold red]⚠  PERMISSION CHECKS DISABLED — "
         "all tool calls will run without asking[/bold red]",

@@ -83,18 +83,56 @@ class MCPServerConfig(BaseModel):
     """One MCP server entry. The ``name`` namespaces tools as
     ``mcp__<name>__<tool>`` and commands as ``/<name>__<prompt>``.
 
-    We only support stdio for this release; ``transport`` is kept as a field
-    so adding SSE/HTTP later is a non-breaking schema change.
+    Three transports are supported, matching ``langchain-mcp-adapters``:
+
+    - ``stdio`` (default): spawn a child process; requires ``command``.
+    - ``sse``: Server-Sent Events HTTP endpoint; requires ``url``.
+    - ``streamable_http``: streamable HTTP endpoint (the successor to SSE in
+      the upstream spec); requires ``url``.
+
+    For network transports, ``headers`` is passed through verbatim — this is
+    where bearer tokens / API keys go. For ``stdio`` the ``env`` dict is used
+    instead and ``url``/``headers`` are ignored.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    command: str
+    transport: Literal["stdio", "sse", "streamable_http"] = "stdio"
+    # Populated for stdio transport; unused (and must be None) for http/sse.
+    command: str | None = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
-    transport: Literal["stdio"] = "stdio"
+    # Populated for sse / streamable_http; must be None for stdio.
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
+
+    @model_validator(mode="after")
+    def _validate_transport_fields(self) -> MCPServerConfig:
+        if self.transport == "stdio":
+            if not self.command:
+                raise ValueError(
+                    f"MCP server {self.name!r}: 'command' is required for "
+                    "transport 'stdio'"
+                )
+            if self.url is not None:
+                raise ValueError(
+                    f"MCP server {self.name!r}: 'url' is not valid for "
+                    "transport 'stdio'; remove it or switch transport"
+                )
+        else:  # sse, streamable_http
+            if not self.url:
+                raise ValueError(
+                    f"MCP server {self.name!r}: 'url' is required for "
+                    f"transport {self.transport!r}"
+                )
+            if self.command is not None:
+                raise ValueError(
+                    f"MCP server {self.name!r}: 'command' is not valid for "
+                    f"transport {self.transport!r}; use 'url' instead"
+                )
+        return self
 
 
 class AuraConfig(BaseModel):

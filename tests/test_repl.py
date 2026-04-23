@@ -185,9 +185,13 @@ async def test_non_bypass_mode_uses_plain_prompt(tmp_path: Path) -> None:
 
 
 async def test_welcome_banner_shows_core_info_compactly(tmp_path: Path) -> None:
-    # Welcome is the 3-line compact form: branding, /help accent, Ctrl+D
-    # hint, model, cwd. Tab / Ctrl+R hints intentionally dropped — they
-    # were bloating the banner and operators learn them from /help.
+    # Welcome is now a panel-framed logo + 3 dim info lines (model, cwd,
+    # rotating tip) + a dim footer. Branding / entry hints / quit binding
+    # all preserved; added: wordmark (AURA), explicit version, and a
+    # rotating tip line. Cyan border is drawn with box-drawing glyphs.
+    from aura import __version__
+    from aura.cli.repl import _STARTUP_TIPS
+
     agent = _agent(tmp_path)
     console, buf = _capture_console()
 
@@ -195,12 +199,57 @@ async def test_welcome_banner_shows_core_info_compactly(tmp_path: Path) -> None:
         agent, input_fn=_ScriptedInput(["/exit"]), console=console,
     )
     out = buf.getvalue()
-    assert "Aura" in out
+
+    # Wordmark + mark + version
+    assert "AURA" in out
+    assert "✱" in out
+    assert f"v{__version__}" in out
+
+    # Info lines
+    assert "model:" in out
+    assert "cwd:" in out
+    assert "tip:" in out
+
+    # Footer still carries the quit hint
     assert "/help" in out
     assert "Ctrl+D" in out
     assert "exit" in out
-    assert "model:" in out
-    assert "cwd:" in out
+
+    # Cyan Panel border uses Unicode box-drawing glyphs — pick any of the
+    # four corner characters; if the Panel vanishes all four disappear.
+    assert any(glyph in out for glyph in ("╭", "╮", "╰", "╯"))
+
+    # Tip line matches one of the curated options (exact substring).
+    assert any(tip in out for tip in _STARTUP_TIPS)
+
+    agent.close()
+
+
+async def test_welcome_banner_renders_even_with_odd_version(
+    tmp_path: Path,
+) -> None:
+    # Banner must not crash when ``__version__`` drifts (e.g. a dev build
+    # sets it to "0.0.0+dev"). Poke the module dict (not attribute access)
+    # so mypy doesn't flag ``__version__`` as non-exported and ruff doesn't
+    # flag a constant setattr.
+    from aura.cli import repl as repl_mod
+
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+
+    mod_ns = vars(repl_mod)
+    original = mod_ns["__version__"]
+    mod_ns["__version__"] = "9.9.9+dev"
+    try:
+        await run_repl_async(
+            agent, input_fn=_ScriptedInput(["/exit"]), console=console,
+        )
+    finally:
+        mod_ns["__version__"] = original
+
+    out = buf.getvalue()
+    assert "v9.9.9+dev" in out
+    assert "AURA" in out
     agent.close()
 
 

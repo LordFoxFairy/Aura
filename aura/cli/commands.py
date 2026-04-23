@@ -18,6 +18,7 @@ from aura.core.commands.builtin import (
     HelpCommand,
     ModelCommand,
 )
+from aura.core.commands.export import ExportCommand
 from aura.core.commands.tasks import TaskGetCommand, TasksCommand, TaskStopCommand
 from aura.core.skills.command import SkillCommand
 
@@ -45,6 +46,7 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     r.register(ClearCommand())
     r.register(CompactCommand())
     r.register(ModelCommand())
+    r.register(ExportCommand())
     r.register(TasksCommand())
     r.register(TaskGetCommand())
     r.register(TaskStopCommand())

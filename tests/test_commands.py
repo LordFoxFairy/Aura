@@ -42,7 +42,7 @@ def test_default_registry_has_builtin_set() -> None:
     r = build_default_registry()
     names = {c.name for c in r.list()}
     assert names == {
-        "/help", "/exit", "/clear", "/compact", "/model",
+        "/help", "/exit", "/clear", "/compact", "/model", "/export",
         "/tasks", "/task-get", "/task-stop",
     }
 

@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from aura.config.schema import AuraConfigError
 from aura.core.mcp.adapter import add_aura_metadata, make_mcp_command
 from aura.core.mcp.types import MCPServerConfig
 
@@ -38,10 +39,41 @@ if TYPE_CHECKING:
     from aura.core.commands.types import Command
 
 
+def _supported_transports() -> set[str]:
+    """Transports the installed ``langchain-mcp-adapters`` understands.
+
+    We probe the sessions module rather than hardcoding the list — if the
+    user downgrades the library, we surface an actionable config error at
+    startup instead of letting ``create_session`` blow up mid-loop.
+    """
+    try:
+        from langchain_mcp_adapters import sessions  # noqa: PLC0415
+    except ImportError:
+        return {"stdio"}
+    supported = {"stdio"}
+    if hasattr(sessions, "SSEConnection"):
+        supported.add("sse")
+    if hasattr(sessions, "StreamableHttpConnection"):
+        supported.add("streamable_http")
+    return supported
+
+
 class MCPManager:
     def __init__(self, configs: list[MCPServerConfig]) -> None:
         self._configs = [c for c in configs if c.enabled]
         self._client: MultiServerMCPClient | None = None
+
+        supported = _supported_transports()
+        for cfg in self._configs:
+            if cfg.transport not in supported:
+                raise AuraConfigError(
+                    source=f"mcp_servers[{cfg.name!r}]",
+                    detail=(
+                        f"requested transport {cfg.transport!r} but "
+                        "langchain-mcp-adapters doesn't support it; "
+                        "upgrade the package or pin 'stdio'"
+                    ),
+                )
 
     @staticmethod
     async def _list_prompts(
@@ -139,15 +171,25 @@ class MCPManager:
     def _build_connections(self) -> dict[str, Any]:
         """Assemble the ``connections`` dict the library consumes.
 
-        Only stdio is wired here — other transports would add branches on
-        ``cfg.transport`` once the config schema grows.
+        Dispatches per ``cfg.transport``: stdio passes command/args/env; sse
+        and streamable_http pass url/headers. Field presence is already
+        enforced by :class:`MCPServerConfig` so we can index freely here.
         """
         connections: dict[str, Any] = {}
         for cfg in self._configs:
-            connections[cfg.name] = {
-                "transport": "stdio",
-                "command": cfg.command,
-                "args": list(cfg.args),
-                "env": dict(cfg.env) if cfg.env else None,
-            }
+            if cfg.transport == "stdio":
+                connections[cfg.name] = {
+                    "transport": "stdio",
+                    "command": cfg.command,
+                    "args": list(cfg.args),
+                    "env": dict(cfg.env) if cfg.env else None,
+                }
+            else:  # sse, streamable_http
+                conn: dict[str, Any] = {
+                    "transport": cfg.transport,
+                    "url": cfg.url,
+                }
+                if cfg.headers:
+                    conn["headers"] = dict(cfg.headers)
+                connections[cfg.name] = conn
         return connections

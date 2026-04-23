@@ -2,6 +2,29 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.8.2] — MCP HTTP/SSE + /export + ASCII welcome
+
+Three more subagents in parallel. Zero merge conflicts, 1248 tests green.
+
+### Shipped
+
+- **MCP HTTP/SSE transport** — `MCPServerConfig.transport` widens from `Literal["stdio"]` to `Literal["stdio", "sse", "streamable_http"]` (names verified against `langchain_mcp_adapters.sessions`). New `url: str | None` and `headers: dict[str, str]` fields. Pydantic validator enforces `stdio↔command` vs `sse|http↔url` mutual exclusivity. `MCPManager._build_connections` dispatches per transport; unsupported library versions raise a clear `AuraConfigError` at config-load (not runtime). Disabled servers skip the transport gate (backward compat).
+- **`/export` slash command** — saves the session transcript to a file. `/export` (no args) writes markdown to `~/.aura/exports/aura-session-<timestamp>.md`; `/export <path>` with extension-inferred format; `/export --format json` for structured output. Markdown includes envelope (session_id / timestamp / model / cwd / turns / total_tokens), `## Turn N (role)` sections, tool-call lists, fenced tool-result blocks with language hints. JSON preserves `role` / `content` / `tool_calls` / `tool_call_id`. Bad paths return error CommandResult (REPL never crashes).
+- **ASCII welcome banner** — panel-framed `✱ AURA` wordmark + version in cyan, followed by 3 dim info lines (`model:`, `cwd:`, `tip:`), footer with quit hints. Rotating tip pulled randomly from a curated list of 10 (all verified against current features — `/model`, `/export`, `/compact`, `/tasks`, Tab-to-amend, ctrl+e explain, shift+tab mode cycle, etc.). Renders cleanly in 80-col terminals.
+
+### Changed
+
+- `aura/config/schema.py:MCPServerConfig` — transport Literal widened, url/headers fields, validator.
+- `aura/core/mcp/manager.py` — `_supported_transports()` probe, per-transport connection building.
+- `aura/core/commands/export.py` (NEW) — ExportCommand implementation.
+- `aura/cli/commands.py` — registers /export.
+- `aura/cli/repl.py` — `_STARTUP_TIPS` tuple, banner rewrite with Panel + wordmark + rotating tip.
+- Tests: `tests/test_mcp_config.py` (17 new), `tests/test_export_command.py` (13 new), `tests/test_repl.py` (welcome banner reassertions + version-drift test).
+
+### Stats
+
+- 1248 tests pass (1217 + 31 new). Lint + mypy clean.
+
 ## [0.8.1] — Background bash + Plan mode tools + /model runtime switch
 
 3 parallel subagents again, merged zero conflicts. Each one closes a user-facing gap against claude-code.

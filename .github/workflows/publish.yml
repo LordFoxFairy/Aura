@@ -1,0 +1,65 @@
+# Publish aura-agent to PyPI on version tags (v*).
+#
+# PREREQUISITE — configure PyPI Trusted Publishing BEFORE pushing the first tag:
+#   1. Log in to https://pypi.org and open the `aura-agent` project
+#      (for the very first release, use "Publishing" under your account to
+#      pre-register a pending publisher instead).
+#   2. Go to: Publishing -> Add a new publisher -> GitHub.
+#   3. Fill in:
+#        Owner:            thefoxfairy
+#        Repository name:  Aura
+#        Workflow name:    publish.yml
+#        Environment name: pypi
+#   4. Save. No PyPI API token is needed — this workflow authenticates via
+#      OIDC (see the permissions block on the publish job below) against the
+#      trusted publisher config above.
+#
+# Release flow:
+#   git tag v0.9.1 && git push origin v0.9.1
+#   -> build job produces wheel+sdist
+#   -> publish job (gated by the `pypi` GitHub environment) uploads to PyPI
+
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1

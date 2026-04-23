@@ -1,5 +1,7 @@
 # Aura
 
+[![PyPI](https://img.shields.io/pypi/v/aura-agent.svg)](https://pypi.org/project/aura-agent/) [![Python Versions](https://img.shields.io/pypi/pyversions/aura-agent.svg)](https://pypi.org/project/aura-agent/) [![CI](https://github.com/thefoxfairy/Aura/actions/workflows/ci.yml/badge.svg)](https://github.com/thefoxfairy/Aura/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A lightweight Python agent with an explicit async loop, pluggable LLM providers, and a hook-based extension model. Built on LangChain as a client-only layer — no LangGraph, no LangChain agents, no LCEL.
 
 ## Design in one paragraph
@@ -8,9 +10,30 @@ Aura owns the agent loop. LangChain is used strictly as a uniform `BaseChatModel
 
 ## Install
 
+### From PyPI (end users)
+
 ```bash
-# clone, then
-uv sync --extra openai       # or --extra anthropic / --extra ollama / --extra all
+pip install aura-agent           # base install
+pip install "aura-agent[openai]" # + OpenAI provider
+pip install "aura-agent[all]"    # + all providers (OpenAI, Anthropic, Ollama, web search)
+```
+
+Or with uv:
+
+```bash
+uv add aura-agent
+uv add "aura-agent[all]"
+```
+
+After install, the `aura` command is on your PATH.
+
+### From source (contributors)
+
+```bash
+git clone https://github.com/thefoxfairy/Aura.git
+cd Aura
+uv sync --extra all --extra dev
+uv run aura --version
 ```
 
 ## Quickstart

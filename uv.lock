@@ -53,8 +53,8 @@ wheels = [
 ]
 
 [[package]]
-name = "aura"
-version = "0.8.3"
+name = "aura-agent"
+version = "0.9.1"
 source = { editable = "." }
 dependencies = [
     { name = "langchain-core" },

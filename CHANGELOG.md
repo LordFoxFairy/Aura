@@ -2,6 +2,33 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.9.1] — PyPI publishing readiness
+
+Parallel-subagent run of 5 tasks with `git worktree` isolation (directly addressing the v0.9.0 git-stash race). All 5 landed clean, integrated to main with zero conflicts (each track owned distinct files). This is the release that makes `pip install aura-agent` possible.
+
+### Shipped
+
+- **PyPI metadata** — `pyproject.toml` gains full publish surface: renamed `name = "aura-agent"` (the `aura` slug on PyPI is taken; Python import path stays `import aura`), plus `readme`, `authors`, `maintainers`, `keywords`, 12 `classifiers` (Python 3.11–3.13, OS-independent, Typed, Beta), and `[project.urls]` with Homepage / Repository / Issues / Changelog. Migrated `license = {text = "MIT"}` → PEP 639 form (`license = "MIT"` + `license-files = ["LICENSE"]`). `uv build` produces `aura_agent-0.9.1-py3-none-any.whl` with wheel `METADATA` containing all fields.
+- **LICENSE** — standard MIT license, Copyright © 2026 LordFoxFairy, referenced by `license-files`.
+- **GitHub Actions** — `.github/workflows/ci.yml` runs `make check` across Python 3.11/3.12/3.13 matrix on PR and push-to-main. `.github/workflows/publish.yml` triggers on `v*` tags, builds via `uv build`, uploads to PyPI via [trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC, no API token in secrets). Release job gated by GitHub `pypi` environment for manual review. Publish workflow includes setup instructions at the top for PyPI trusted-publisher configuration.
+- **E2E CLI smoke tests** — `tests/test_cli_smoke.py` (321 LOC, 6 tests) invokes `aura` as a real subprocess via `uv run aura ...`. Covers `--version` regex, `--help` exit cleanliness, presence of real flags (`--config`, `--verbose`, `--log`, `--bypass-permissions` — discovered via `_make_parser()`, not guessed), `/exit` via stdin, EOF/Ctrl-D handling, and graceful `AURA_CONFIG=/bad/path --version`. REPL-path tests (stdin `/exit` and EOF) auto-skip in bare dev envs without provider SDK + credentials and run fully under CI where `uv sync --extra all --extra dev` is applied. Closes the 8-release gap of "we've never dogfooded the actual installed entry point."
+- **README overhaul** — badges row under H1 (PyPI version · Python versions · CI status · License MIT). `## Install` rewritten into two tiers: end-user (`pip install aura-agent` / `pip install "aura-agent[all]"` / `uv add`), and contributor (clone + `uv sync --extra all --extra dev`). Makes the path to a working install explicit instead of buried.
+
+### Integration
+
+- Main worktree on `main`, 5 isolated worktrees under `.claude/worktrees/agent-*`. Each track touched disjoint files (pyproject.toml / LICENSE / .github/workflows/*.yml / tests/test_cli_smoke.py / README.md) so merge was a 5-way file copy with zero conflicts. Worktrees removed after integration.
+- `__version__` bumped to `0.9.1` in `aura/__init__.py` and `pyproject.toml`. `uv.lock` regenerated to reflect new dist name.
+
+### Stats
+
+- 1317 tests pass (1313 + 4 new smoke; 2 skipped in bare env without provider SDK). Lint + mypy clean on `aura/` + `tests/`.
+
+### Prereqs for first PyPI release (owner action, outside this release)
+
+1. Configure PyPI trusted publishing: on pypi.org, for project `aura-agent`, add publisher → repo `thefoxfairy/Aura`, workflow `publish.yml`, environment `pypi`. (For the first release, use a pending publisher under account settings since the project doesn't exist yet.)
+2. Push a remote: `git remote add origin git@github.com:thefoxfairy/Aura.git && git push -u origin main --tags`.
+3. Tag `v0.9.1` and push → `publish.yml` runs automatically.
+
 ## [0.9.0] — Multiline input + Skill tool
 
 Parallel-subagent run of 3 tasks. Two landed clean (multiline input + skill tool); the third (PyPI metadata polish) was lost to git-stash races between concurrent subagents and will be redone carefully in v0.9.1. Owner's note: session meta-feedback surfaced here about parallel-subagent turbulence — tightening cadence going forward.

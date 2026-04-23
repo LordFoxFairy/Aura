@@ -6,11 +6,30 @@ build-backend = "hatchling.build"
 packages = ["aura"]
 
 [project]
-name = "aura"
-version = "0.9.0"
+name = "aura-agent"
+version = "0.9.1"
 description = "A general-purpose Python agent with an explicit async loop and LangChain as the LLM client layer."
 requires-python = ">=3.11"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+authors = [{name = "LordFoxFairy", email = "1479852727@qq.com"}]
+maintainers = [{name = "LordFoxFairy", email = "1479852727@qq.com"}]
+keywords = ["agent", "ai", "llm", "langchain", "cli", "async", "repl", "tools", "claude"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Terminals",
+    "Typing :: Typed",
+]
 dependencies = [
     "langchain-core >= 1.2, < 2.0",
     "langchain-mcp-adapters >= 0.2, < 1.0",
@@ -40,6 +59,12 @@ dev = [
     "mypy >= 1.10",
     "types-PyYAML >= 6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/thefoxfairy/Aura"
+Repository = "https://github.com/thefoxfairy/Aura"
+Issues = "https://github.com/thefoxfairy/Aura/issues"
+Changelog = "https://github.com/thefoxfairy/Aura/blob/main/CHANGELOG.md"
 
 [project.scripts]
 aura = "aura.cli.__main__:main"

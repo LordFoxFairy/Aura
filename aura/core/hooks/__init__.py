@@ -179,10 +179,21 @@ class HookChain:
             await hook(ai_message=ai_message, history=history, state=state)
 
     async def run_pre_tool(
-        self, *, tool: BaseTool, args: dict[str, Any], state: LoopState,
+        self,
+        *,
+        tool: BaseTool,
+        args: dict[str, Any],
+        state: LoopState,
+        **kwargs: Any,
     ) -> ToolResult | None:
+        # ``**kwargs`` forwards per-call metadata to hooks. Today only
+        # ``tool_call_id`` flows through (G5 uses it to stamp
+        # PermissionDenial records); additional keys will land as more
+        # workstreams plumb data into the hook surface without having to
+        # revise every call site. PreToolHook accepts ``**kwargs`` by
+        # protocol so unchanged hooks silently ignore new keys.
         for hook in self.pre_tool:
-            decision = await hook(tool=tool, args=args, state=state)
+            decision = await hook(tool=tool, args=args, state=state, **kwargs)
             if decision is not None:
                 return decision
         return None

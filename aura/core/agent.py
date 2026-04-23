@@ -25,6 +25,7 @@ from aura.core.mcp import MCPManager
 from aura.core.memory import project_memory, rules
 from aura.core.memory.context import Context, _ReadRecord
 from aura.core.memory.system_prompt import build_system_prompt
+from aura.core.permissions.denials import DENIALS_SINK_KEY, PermissionDenial
 from aura.core.permissions.session import SessionRuleSet
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
@@ -108,6 +109,16 @@ class Agent:
         self._storage = storage
         self._hooks = hooks or HookChain()
         self._state = LoopState()
+        # G5: per-turn deny records. The permission hook appends to this
+        # list (via ``state.custom[DENIALS_SINK_KEY]`` which aliases the
+        # same object), Loop clears it at the start of each run_turn, and
+        # ``last_turn_denials()`` exposes an immutable tuple view. The
+        # sink MUST be seeded into state.custom BEFORE the hook runs the
+        # first time, so we wire it eagerly here. Shared-by-reference:
+        # when Loop ``.clear()``s the list at turn start, state.custom's
+        # value (same object) is cleared too — no re-seeding needed.
+        self._turn_denials: list[PermissionDenial] = []
+        self._state.custom[DENIALS_SINK_KEY] = self._turn_denials
         self._session_rules = session_rules
         # Permission mode — the CLI resolves the effective mode (config +
         # --bypass-permissions flag) and hands it in. Stored here so the
@@ -520,6 +531,14 @@ class Agent:
     def clear_session(self) -> None:
         self._storage.clear(self._session_id)
         self._state.reset()
+        # ``LoopState.reset`` wipes ``state.custom`` — the G5 denials sink
+        # lived there and just vanished. Re-seed the slot + drop any
+        # captured denials so the next turn opens clean. Pointing
+        # ``_turn_denials`` at the freshly-seeded list (rather than
+        # clearing in place) keeps the invariant "the list in state.custom
+        # is the SAME object Agent exposes" simple to reason about.
+        self._turn_denials = []
+        self._state.custom[DENIALS_SINK_KEY] = self._turn_denials
         # Drop any captured prior mode — /clear starts a fresh session so
         # a leftover "accept_edits" from a previous plan cycle shouldn't
         # bleed into the next one.
@@ -699,6 +718,27 @@ class Agent:
     @property
     def session_id(self) -> str:
         return self._session_id
+
+    def last_turn_denials(self) -> tuple[PermissionDenial, ...]:
+        """Immutable view of permission denials from the most recent turn.
+
+        Populated by the permission hook on every non-allow decision
+        (``safety_blocked`` / ``plan_mode_blocked`` / ``user_deny``).
+        Cleared at the start of each ``AgentLoop.run_turn`` so a turn
+        that denies zero tools opens with an empty tuple. Between turns
+        (after astream returns) the list holds the just-finished turn's
+        denials so SDK / plugin / UI code can inspect them without
+        parsing journal JSONL.
+
+        Returns a tuple — mutation attempts raise ``TypeError`` /
+        ``AttributeError``. The underlying list (``_turn_denials``) is
+        owned by the Agent and updated in-place; we return a snapshot
+        tuple so the caller never gets a reference that could racily
+        grow under them between turns.
+
+        Workstream G5 — ``docs/specs/2026-04-23-aura-main-channel-parity.md``.
+        """
+        return tuple(self._turn_denials)
 
     def _build_loop(self) -> AgentLoop:
         return AgentLoop(

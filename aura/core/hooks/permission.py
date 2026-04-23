@@ -48,6 +48,7 @@ from langchain_core.tools import BaseTool
 
 from aura.core.hooks import PreToolHook
 from aura.core.permissions.decision import Decision
+from aura.core.permissions.denials import DENIALS_SINK_KEY, PermissionDenial
 from aura.core.permissions.mode import DEFAULT_MODE, Mode
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.safety import DEFAULT_SAFETY, SafetyPolicy, is_protected
@@ -289,8 +290,16 @@ def make_permission_hook(
         tool: BaseTool,
         args: dict[str, Any],
         state: LoopState,
+        tool_call_id: str = "",
         **_: Any,
     ) -> ToolResult | None:
+        # ``tool_call_id`` flows in from ``AgentLoop._plan_tool_calls`` via
+        # run_pre_tool's ``**kwargs`` pass-through (see hooks/__init__.py).
+        # Defaulted to "" so unit tests that build the hook standalone
+        # (no Loop) still exercise the decision branches without having
+        # to synthesize a tool_call id. Populated end-to-end in real
+        # turns so ``PermissionDenial.tool_use_id`` matches the
+        # ToolMessage id downstream consumers index against.
         decision, feedback = await _decide(
             tool=tool,
             args=args,
@@ -328,6 +337,27 @@ def make_permission_hook(
         state.custom["_aura_pending_decision"] = decision
         if decision.allow:
             return None
+        # G5: append a structured record to the per-turn denials sink. The
+        # sink is a plain list owned by Agent and shared by reference
+        # through state.custom; absent key = hook invoked outside a full
+        # Loop (unit test path), in which case we silently skip rather
+        # than crash. ``_decide`` only reaches this branch for deny
+        # reasons, so every deny path is captured here (no need to
+        # sprinkle appends across _decide's branches).
+        sink_obj = state.custom.get(DENIALS_SINK_KEY)
+        if isinstance(sink_obj, list):
+            sink_obj.append(
+                PermissionDenial(
+                    tool_name=tool.name,
+                    tool_use_id=tool_call_id,
+                    # Shallow copy so a caller mutating ``args`` after
+                    # the hook returns cannot retroactively rewrite the
+                    # audit record (tests assert this snapshot semantics).
+                    tool_input=dict(args),
+                    reason=decision.reason,
+                    target=decision.target,
+                )
+            )
         if decision.reason == "plan_mode_blocked":
             # The plan-mode error needs tool name + args preview, which
             # aren't on Decision. Compose here where they're in scope.

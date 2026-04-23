@@ -23,6 +23,7 @@ from aura.config.schema import RetryConfig
 from aura.core.hooks import HookChain
 from aura.core.memory.context import Context
 from aura.core.permissions.decision import Decision
+from aura.core.permissions.denials import DENIALS_SINK_KEY
 from aura.core.persistence import journal
 from aura.core.registry import ToolRegistry
 from aura.core.retry import with_retry
@@ -185,6 +186,17 @@ class AgentLoop:
         # claude-code's QueryEngine boundary: the loop owns model rounds
         # + tool dispatch; transcript ownership lives one layer up so a
         # crash mid-turn cannot erase the user's input.
+        #
+        # G5: clear the per-turn denials sink at the turn boundary (once
+        # per astream call), NOT inside the while loop — multiple model
+        # rounds within the same user turn share one audit bucket. Using
+        # in-place ``.clear()`` keeps the object identity stable so the
+        # Agent's ``_turn_denials`` attribute (same reference) updates
+        # too. Absence / wrong type is defensively handled for unit
+        # tests that construct AgentLoop without an Agent-owned sink.
+        sink_obj = self._state.custom.get(DENIALS_SINK_KEY)
+        if isinstance(sink_obj, list):
+            sink_obj.clear()
         while True:
             journal.write("turn_begin", turn=self._state.turn_count + 1)
             ai = await self._invoke_model(history)
@@ -393,7 +405,10 @@ class AgentLoop:
                     continue
 
             decision = await self._hooks.run_pre_tool(
-                tool=tool, args=raw_args, state=self._state
+                tool=tool,
+                args=raw_args,
+                state=self._state,
+                tool_call_id=tc["id"],
             )
             # Read+pop the transient permission decision IMMEDIATELY after the
             # hook returns — same event-loop turn, no await in between, so the

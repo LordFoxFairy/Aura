@@ -235,7 +235,9 @@ async def scenario_write_project(tmp: Path) -> bool:
             {"id": "w3", "name": "write_file", "args": {
                 "path": "demo_project/test_main.py",
                 "content": (
-                    "from demo_project.main import greet\n\n"
+                    "# Sibling-import: test runs from inside demo_project/,\n"
+                    "# so main.py is on sys.path without needing a package.\n"
+                    "from main import greet\n\n"
                     "def test_greet() -> None:\n"
                     "    assert greet() == 'hello'\n"
                 ),

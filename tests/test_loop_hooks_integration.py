@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
@@ -78,7 +78,7 @@ async def test_pre_model_fires_before_each_ainvoke() -> None:
         model=model, registry=registry, context=make_minimal_context(), hooks=hooks,
     )
 
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     assert counter["n"] == 2
@@ -100,7 +100,7 @@ async def test_post_model_fires_after_each_ainvoke_with_ai_message() -> None:
         model=model, registry=registry, context=make_minimal_context(), hooks=hooks,
     )
 
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     assert len(seen) == 2
@@ -126,7 +126,7 @@ async def test_pre_tool_fires_before_invoke_and_can_deny() -> None:
     )
 
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="go", history=[]):
+    async for ev in loop.run_turn(history=[HumanMessage(content="go")]):
         events.append(ev)
 
     assert _invoke_counter == 0
@@ -151,7 +151,8 @@ async def test_post_tool_fires_after_invoke_and_can_rewrite_output() -> None:
     )
 
     history: list[BaseMessage] = []
-    async for _ in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for _ in loop.run_turn(history=history):
         pass
 
     raw = history[2].content
@@ -199,7 +200,7 @@ async def test_hooks_all_fire_in_order_for_tool_turn() -> None:
         model=model, registry=registry, context=make_minimal_context(), hooks=hooks,
     )
 
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     assert event_log[:4] == ["pre_model", "post_model", "pre_tool", "post_tool"]
@@ -227,7 +228,8 @@ async def test_hooks_see_monotonic_turn_count() -> None:
     )
 
     history: list[BaseMessage] = []
-    async for _ in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for _ in loop.run_turn(history=history):
         pass
 
     assert observed == [1, 2]
@@ -261,7 +263,7 @@ async def test_auto_allow_decision_emits_permission_audit_between_started_and_co
     )
 
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="go", history=[]):
+    async for ev in loop.run_turn(history=[HumanMessage(content="go")]):
         events.append(ev)
 
     tool_events = [
@@ -287,7 +289,7 @@ async def test_absent_permission_hook_emits_no_permission_audit() -> None:
     )
 
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="go", history=[]):
+    async for ev in loop.run_turn(history=[HumanMessage(content="go")]):
         events.append(ev)
 
     assert not any(isinstance(e, PermissionAudit) for e in events)
@@ -315,7 +317,7 @@ async def test_user_accept_decision_does_not_emit_permission_audit() -> None:
     )
 
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="go", history=[]):
+    async for ev in loop.run_turn(history=[HumanMessage(content="go")]):
         events.append(ev)
 
     assert not any(isinstance(e, PermissionAudit) for e in events)
@@ -358,7 +360,7 @@ async def test_decision_stash_popped_between_calls_no_leak() -> None:
         context=make_minimal_context(),
         hooks=hooks,
     )
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     assert len(seen_states) == 2
@@ -399,7 +401,8 @@ async def test_budget_hook_truncates_large_tool_output(tmp_path: Path) -> None:
     )
 
     history: list[BaseMessage] = []
-    async for _ in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for _ in loop.run_turn(history=history):
         pass
 
     tool_msgs = [m for m in history if isinstance(m, ToolMessage)]

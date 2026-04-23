@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
@@ -65,7 +65,8 @@ async def test_unknown_tool_name_emits_error_tool_message_and_continues() -> Non
 
     history: list[BaseMessage] = []
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     tool_msgs = [m for m in history if isinstance(m, ToolMessage)]
@@ -100,7 +101,8 @@ async def test_invalid_args_emit_error_tool_message_and_continues() -> None:
 
     history: list[BaseMessage] = []
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     tool_msgs = [m for m in history if isinstance(m, ToolMessage)]
@@ -126,7 +128,8 @@ async def test_invoke_exception_emits_error_tool_message_with_exception_info() -
 
     history: list[BaseMessage] = []
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     tool_msgs = [m for m in history if isinstance(m, ToolMessage)]
@@ -160,7 +163,7 @@ async def test_post_tool_sees_exception_result() -> None:
         context=make_minimal_context(), hooks=hooks,
     )
 
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     assert len(seen) == 1
@@ -191,7 +194,7 @@ async def test_pre_tool_not_fired_for_unknown_tool() -> None:
         context=make_minimal_context(), hooks=hooks,
     )
 
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     assert calls == []
@@ -213,7 +216,8 @@ async def test_mixed_tool_calls_each_produce_own_tool_message() -> None:
     )
 
     history: list[BaseMessage] = []
-    async for _ in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for _ in loop.run_turn(history=history):
         pass
 
     tool_msgs = [m for m in history if isinstance(m, ToolMessage)]

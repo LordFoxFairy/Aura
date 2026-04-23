@@ -343,17 +343,20 @@ class Agent:
         *,
         attachments: list[HumanMessage] | None = None,
     ) -> AsyncIterator[AgentEvent]:
-        # 事务性：history 只在 turn 正常完成才 save（else 分支）。
-        #   CancelledError → yield Final + re-raise → 跳过 else → 下次从 pre-turn 状态恢复
-        # max_turns 由 AgentLoop 直接 yield Final(reason="max_turns") 表示，走正常 save 路径。
-        # 保证：存储里永远不会出现半截 turn（AI tool_call 缺对应 tool result 等）。
+        # Persistence order (matches claude-code QueryEngine.ts:431+451):
+        #   1. Build history with attachments + user HumanMessage,
+        #   2. ``storage.save`` BEFORE any model.ainvoke call,
+        #   3. Run the turn; on success save again (tool results + assistant).
+        # Why: if the model call crashes / the process is killed / the user
+        # Ctrl-C's mid-stream, the user's input is ALREADY on disk. The next
+        # session-resume sees the interrupted turn, not a black hole. Closes
+        # the B2/G1 audit gap against claude-code.
         #
         # ``attachments``: optional HumanMessages to prepend BEFORE the user's
-        # HumanMessage on the next turn. CLI-layer @mention preprocessing
-        # (aura.cli.attachments) builds ``<mcp-resource>`` envelopes here —
-        # injected at the loop layer so they land in history in the right
-        # order (attachments BEFORE user turn) and are persisted along with
-        # the rest of the turn. Pass ``None`` / empty list for a normal turn.
+        # HumanMessage. CLI-layer @mention preprocessing (aura.cli.attachments)
+        # builds ``<mcp-resource>`` envelopes that land here. Persisted with
+        # the user turn so reactive-compact (and any retry) can read them
+        # from history without re-injection.
         #
         # The session_scope context routes every journal.write made on this
         # task — including ones emitted deep inside the loop / tools — to the
@@ -372,6 +375,31 @@ class Agent:
                 prompt_preview=prompt[:200],
             )
             history = self._storage.load(self._session_id)
+            # pre_user_prompt fires at the very entry — BEFORE attachments +
+            # user HumanMessage land in history — so hooks see the prompt
+            # exactly as the user typed it. Observational only; buggy hooks
+            # get journaled + swallowed so a broken observer can't block
+            # user turns.
+            if self._hooks.pre_user_prompt:
+                try:
+                    await self._hooks.run_pre_user_prompt(
+                        prompt=prompt, state=self._state,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    journal.write(
+                        "pre_user_prompt_hook_failed",
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+            # Attachments land BEFORE the user's HumanMessage so the model
+            # sees the injected context first (matching how claude-code
+            # prepends ``<attachment>`` blocks ahead of the user turn).
+            if attachments:
+                history.extend(attachments)
+            history.append(HumanMessage(content=prompt))
+            # Save BEFORE the first model call — crash / kill / Ctrl-C after
+            # this point still leaves the user turn on disk for resume.
+            self._storage.save(self._session_id, history)
+
             # Reactive recompact: if the model signals a context-length
             # overflow on this turn, run compact(source="reactive") and
             # retry the turn ONCE against the compacted history. Only the
@@ -380,11 +408,7 @@ class Agent:
             # prompt already too long) surface instead of looping forever.
             retry_exc: BaseException | None = None
             try:
-                async for event in self._loop.run_turn(
-                    user_prompt=prompt,
-                    history=history,
-                    attachments=attachments,
-                ):
+                async for event in self._loop.run_turn(history=history):
                     yield event
             except asyncio.CancelledError:
                 journal.write("astream_cancelled", session=self._session_id)
@@ -405,18 +429,19 @@ class Agent:
             if retry_exc is not None:
                 await self.compact(source="reactive")
                 # compact replaced history with [summary, *recent_files, *tail];
-                # the retry must see the new messages. Attachments are
-                # intentionally NOT replayed on the retry — the first attempt
-                # already persisted them into history if it got that far, and
-                # replaying would double-inject. Safe because run_turn appends
-                # attachments before the user HumanMessage; if history carries
-                # the originals they already landed there.
+                # the retry reads the already-persisted history (which contains
+                # the user turn + attachments from the pre-invoke save above).
+                # No need to re-pass attachments — they're durably in history.
                 history = self._storage.load(self._session_id)
-                async for event in self._loop.run_turn(
-                    user_prompt=prompt, history=history,
-                ):
+                async for event in self._loop.run_turn(history=history):
                     yield event
 
+            # Second save: captures tool results + assistant message that
+            # landed during run_turn. Not guarded by a success branch any
+            # more — the pre-invoke save already gave us the durability floor;
+            # this save is additive (final full state). Cancellation still
+            # skips this line via the raise above, which is fine — the user
+            # turn is already on disk from the pre-invoke save.
             self._storage.save(self._session_id, history)
             journal.write(
                 "astream_end",

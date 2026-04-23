@@ -14,7 +14,7 @@ import asyncio
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
@@ -80,7 +80,8 @@ async def test_slow_tool_with_timeout_raises_tool_error() -> None:
 
     loop, history = _make_loop_with_tool(slow)
     completed: list[ToolCallCompleted] = []
-    async for ev in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for ev in loop.run_turn(history=history):
         if isinstance(ev, ToolCallCompleted):
             completed.append(ev)
 
@@ -108,7 +109,8 @@ async def test_fast_tool_with_timeout_returns_normally() -> None:
 
     loop, history = _make_loop_with_tool(fast)
     completed: list[ToolCallCompleted] = []
-    async for ev in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for ev in loop.run_turn(history=history):
         if isinstance(ev, ToolCallCompleted):
             completed.append(ev)
 
@@ -139,7 +141,8 @@ async def test_timeout_sec_none_enforces_no_deadline() -> None:
 
     loop, history = _make_loop_with_tool(t)
     completed: list[ToolCallCompleted] = []
-    async for ev in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for ev in loop.run_turn(history=history):
         if isinstance(ev, ToolCallCompleted):
             completed.append(ev)
 

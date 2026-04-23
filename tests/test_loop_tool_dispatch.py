@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
@@ -64,7 +64,8 @@ async def test_run_turn_single_tool_call_roundtrip() -> None:
         model=model, registry=registry, context=make_minimal_context(),
         hooks=HookChain(),
     )
-    async for ev in loop.run_turn(user_prompt="call echo", history=history):
+    history.append(HumanMessage(content="call echo"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     key_events = [e for e in events if isinstance(e, (ToolCallStarted, ToolCallCompleted, Final))]
@@ -92,7 +93,8 @@ async def test_run_turn_two_ainvoke_calls_made() -> None:
         model=model, registry=registry, context=make_minimal_context(),
         hooks=HookChain(),
     )
-    async for _ in loop.run_turn(user_prompt="call echo", history=history):
+    history.append(HumanMessage(content="call echo"))
+    async for _ in loop.run_turn(history=history):
         pass
 
     assert model.ainvoke_calls == 2
@@ -108,7 +110,8 @@ async def test_run_turn_tool_call_event_contents() -> None:
         model=model, registry=registry, context=make_minimal_context(),
         hooks=HookChain(),
     )
-    async for ev in loop.run_turn(user_prompt="call echo", history=history):
+    history.append(HumanMessage(content="call echo"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     started = next(e for e in events if isinstance(e, ToolCallStarted))
@@ -131,7 +134,8 @@ async def test_run_turn_tool_call_output_serialized_as_json() -> None:
         model=model, registry=registry, context=make_minimal_context(),
         hooks=HookChain(),
     )
-    async for _ in loop.run_turn(user_prompt="call echo", history=history):
+    history.append(HumanMessage(content="call echo"))
+    async for _ in loop.run_turn(history=history):
         pass
 
     tool_msg_content = history[2].content
@@ -214,7 +218,8 @@ async def test_max_turns_caps_runaway_tool_loop(tmp_path: Path) -> None:
 
         history: list[BaseMessage] = []
         events: list[AgentEvent] = []
-        async for ev in loop.run_turn(user_prompt="go", history=history):
+        history.append(HumanMessage(content="go"))
+        async for ev in loop.run_turn(history=history):
             events.append(ev)
 
         completed = [e for e in events if isinstance(e, ToolCallCompleted)]
@@ -247,7 +252,8 @@ async def test_max_turns_none_disables_cap() -> None:
 
     history: list[BaseMessage] = []
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     completed = [e for e in events if isinstance(e, ToolCallCompleted)]
@@ -294,7 +300,8 @@ async def test_read_file_success_records_to_context(tmp_path: Path) -> None:
         hooks=HookChain(),
     )
     history: list[BaseMessage] = []
-    async for _ in loop.run_turn(user_prompt="read", history=history):
+    history.append(HumanMessage(content="read"))
+    async for _ in loop.run_turn(history=history):
         pass
 
     assert ctx.read_status(target) == "fresh"
@@ -347,7 +354,8 @@ async def test_loop_records_partial_flag_for_sliced_read(tmp_path: Path) -> None
         hooks=HookChain(),
     )
     history: list[BaseMessage] = []
-    async for _ in loop.run_turn(user_prompt="read", history=history):
+    history.append(HumanMessage(content="read"))
+    async for _ in loop.run_turn(history=history):
         pass
 
     assert ctx.read_status(target) == "partial"
@@ -373,7 +381,8 @@ async def test_default_budget_hooks_do_not_cap_before_loop_level() -> None:
 
     history: list[BaseMessage] = []
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     completed = [e for e in events if isinstance(e, ToolCallCompleted)]
@@ -418,7 +427,8 @@ async def test_max_turns_checked_after_tool_batch_not_mid_batch() -> None:
 
     history: list[BaseMessage] = []
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     completed = [e for e in events if isinstance(e, ToolCallCompleted)]

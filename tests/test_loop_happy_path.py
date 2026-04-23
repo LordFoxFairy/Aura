@@ -27,7 +27,8 @@ async def test_run_turn_happy_path_single_message() -> None:
     )
 
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="hi", history=history):
+    history.append(HumanMessage(content="hi"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     assert events == [AssistantDelta(text="hello world"), Final(message="hello world")]
@@ -47,7 +48,8 @@ async def test_run_turn_no_registry_skips_bind_tools() -> None:
         hooks=HookChain(),
     )
 
-    async for _ in loop.run_turn(user_prompt="hello", history=history):
+    history.append(HumanMessage(content="hello"))
+    async for _ in loop.run_turn(history=history):
         pass
 
     assert model.seen_bound_tools == []
@@ -81,7 +83,8 @@ async def test_run_turn_with_registry_calls_bind_tools_once() -> None:
         hooks=HookChain(),
     )
 
-    async for _ in loop.run_turn(user_prompt="echo me", history=history):
+    history.append(HumanMessage(content="echo me"))
+    async for _ in loop.run_turn(history=history):
         pass
 
     assert len(model.seen_bound_tools) == 1
@@ -100,7 +103,8 @@ async def test_run_turn_empty_content_still_emits_final() -> None:
     )
 
     events: list[AgentEvent] = []
-    async for ev in loop.run_turn(user_prompt="test", history=history):
+    history.append(HumanMessage(content="test"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     deltas = [e for e in events if isinstance(e, AssistantDelta)]

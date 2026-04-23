@@ -74,7 +74,19 @@ async def test_astream_yields_final_and_persists_on_success(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_astream_does_not_persist_on_cancellation(tmp_path: Path) -> None:
+async def test_astream_persists_user_turn_on_cancellation(tmp_path: Path) -> None:
+    """G1 contract: the user's HumanMessage persists BEFORE the model call.
+
+    Earlier contract (pre-G1) was "cancellation never persists" so the
+    post-turn save was the only persistence site. That lost the user's
+    input on Ctrl-C / kill mid-stream and broke ``resume`` semantics
+    (claude-code's QueryEngine saves the transcript pre-invoke; Aura
+    audit B2/G1 closed the gap). Now: cancellation preserves prior
+    history + the user's new turn, so the next session-resume sees
+    exactly what the user typed. The assistant response does NOT land
+    (the turn never reached a model reply), which is the correct
+    per-claude-code semantics for an interrupted round.
+    """
     storage = _storage(tmp_path)
     prior: list[BaseMessage] = [HumanMessage(content="prev"), AIMessage(content="prior")]
     storage.save("default", prior)
@@ -104,9 +116,13 @@ async def test_astream_does_not_persist_on_cancellation(tmp_path: Path) -> None:
         await task
 
     after = storage.load("default")
-    assert len(after) == 2
+    # prior (2 msgs) + user's new turn (1 msg). No AI reply — the model
+    # never completed.
+    assert len(after) == 3
     assert after[0].content == "prev"
     assert after[1].content == "prior"
+    assert isinstance(after[2], HumanMessage)
+    assert after[2].content == "new prompt"
 
 
 @pytest.mark.asyncio

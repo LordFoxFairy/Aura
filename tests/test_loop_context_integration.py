@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
@@ -106,7 +106,8 @@ async def test_successful_read_file_triggers_path_matching(tmp_path: Path) -> No
     )
 
     history: list[BaseMessage] = []
-    async for _ in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for _ in loop.run_turn(history=history):
         pass
 
     matched = [r.source_path for r in ctx._matched_rules]
@@ -148,7 +149,7 @@ async def test_parallel_tool_calls_all_paths_propagate(tmp_path: Path) -> None:
         context=ctx, hooks=HookChain(),
     )
 
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     matched_globs = {r.globs for r in ctx._matched_rules}
@@ -174,7 +175,7 @@ async def test_failed_tool_call_does_not_trigger(tmp_path: Path) -> None:
         context=ctx, hooks=HookChain(),
     )
 
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     assert ctx._matched_rules == []
@@ -192,7 +193,7 @@ async def test_bash_tool_success_does_not_trigger(tmp_path: Path) -> None:
     loop = AgentLoop(
         model=model, registry=ToolRegistry([bash]), context=ctx, hooks=HookChain(),
     )
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     assert ctx._matched_rules == []
@@ -209,7 +210,7 @@ async def test_web_fetch_tool_success_does_not_trigger(tmp_path: Path) -> None:
     loop = AgentLoop(
         model=model, registry=ToolRegistry([web]), context=ctx, hooks=HookChain(),
     )
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     assert ctx._matched_rules == []
@@ -236,7 +237,7 @@ async def test_short_circuited_tool_does_not_trigger(tmp_path: Path) -> None:
         context=ctx, hooks=HookChain(pre_tool=[deny]),
     )
 
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     assert ctx._matched_rules == []
@@ -275,7 +276,7 @@ async def test_matched_rule_injected_into_next_model_call(tmp_path: Path) -> Non
         model=model, registry=ToolRegistry([_ok_tool("read_file")]),
         context=ctx, hooks=HookChain(),
     )
-    async for _ in loop.run_turn(user_prompt="go", history=[]):
+    async for _ in loop.run_turn(history=[HumanMessage(content="go")]):
         pass
 
     assert len(captured) == 2

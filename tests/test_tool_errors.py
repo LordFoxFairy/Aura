@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
 from aura.core.hooks import HookChain
@@ -69,7 +69,8 @@ async def _run_one_turn_with_failure(tool: Any) -> list[BaseMessage]:
         hooks=HookChain(),
     )
     history: list[BaseMessage] = []
-    async for _ in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for _ in loop.run_turn(history=history):
         pass
     return history
 
@@ -154,7 +155,8 @@ async def test_bash_emits_progress_events_for_stdout() -> None:
 
     events: list[AgentEvent] = []
     history: list[BaseMessage] = []
-    async for ev in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     progress = [e for e in events if isinstance(e, ToolCallProgress)]
@@ -209,7 +211,8 @@ async def test_bash_emits_progress_events_for_stderr() -> None:
 
     events: list[AgentEvent] = []
     history: list[BaseMessage] = []
-    async for ev in loop.run_turn(user_prompt="go", history=history):
+    history.append(HumanMessage(content="go"))
+    async for ev in loop.run_turn(history=history):
         events.append(ev)
 
     stderr_chunks = [

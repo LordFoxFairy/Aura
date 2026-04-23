@@ -13,7 +13,6 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
-    HumanMessage,
     ToolCall,
     ToolMessage,
 )
@@ -177,35 +176,15 @@ class AgentLoop:
     async def run_turn(
         self,
         *,
-        user_prompt: str,
         history: list[BaseMessage],
-        attachments: list[HumanMessage] | None = None,
     ) -> AsyncIterator[AgentEvent]:
-        # pre_user_prompt fires at the very entry to the turn — BEFORE
-        # attachments + user HumanMessage land in history — so hooks see
-        # the prompt exactly as the user typed it. Observational only;
-        # buggy hooks get journaled + swallowed so a broken observer
-        # can't block user turns.
-        if self._hooks.pre_user_prompt:
-            try:
-                await self._hooks.run_pre_user_prompt(
-                    prompt=user_prompt, state=self._state,
-                )
-            except Exception as exc:  # noqa: BLE001
-                journal.write(
-                    "pre_user_prompt_hook_failed",
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-        # Attachments land BEFORE the user's HumanMessage so the model sees
-        # the injected context first (matching how claude-code prepends
-        # ``<attachment>`` blocks ahead of the user turn). Injected into
-        # history directly rather than via Context.build — they're
-        # turn-scoped and persisted in history, not part of the pinned
-        # prefix; stashing them in Context would bust its caching contract.
-        if attachments:
-            history.extend(attachments)
-        history.append(HumanMessage(content=user_prompt))
-
+        # Contract (G1): ``history`` already contains the user's
+        # HumanMessage (+ any attachments), appended by the caller BEFORE
+        # this coroutine is invoked. The caller is also expected to have
+        # persisted that state. See :meth:`Agent.astream`. Matches
+        # claude-code's QueryEngine boundary: the loop owns model rounds
+        # + tool dispatch; transcript ownership lives one layer up so a
+        # crash mid-turn cannot erase the user's input.
         while True:
             journal.write("turn_begin", turn=self._state.turn_count + 1)
             ai = await self._invoke_model(history)

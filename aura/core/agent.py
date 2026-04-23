@@ -198,6 +198,16 @@ class Agent:
                     mode_setter=self.set_mode,
                     mode_getter=lambda: self._mode,
                 )
+            elif name == "skill":
+                # LLM-invocable skill trigger. ``recorder`` closes over
+                # Agent.record_skill_invocation so the tool never holds
+                # a reference to Agent itself — same "one arrow" pattern
+                # as enter_plan_mode. Registry is handed in directly
+                # because name-lookup is pure read.
+                self._available_tools[name] = cls(
+                    recorder=self.record_skill_invocation,
+                    registry=self._skill_registry,
+                )
             else:  # pragma: no cover — guardrail for future additions
                 raise RuntimeError(f"unwired stateful tool: {name}")
         self._session_id = session_id

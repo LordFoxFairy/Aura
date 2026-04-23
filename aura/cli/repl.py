@@ -70,12 +70,34 @@ def _cycle_mode(current: str) -> str:
 
 
 def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
-    """Build a KeyBindings with shift+tab bound to cycle the agent's mode.
+    """Build a KeyBindings carrying Aura's prompt-level bindings.
 
-    Printed confirmation goes to ``console`` so the transcript records
-    the change (pt's bottom toolbar also re-reads ``agent.mode`` on the
-    next render via ``event.app.invalidate()``, so both surfaces update
-    in lockstep).
+    Printed confirmation for mode changes goes to ``console`` so the
+    transcript records the change (pt's bottom toolbar also re-reads
+    ``agent.mode`` on the next render via ``event.app.invalidate()``,
+    so both surfaces update in lockstep).
+
+    Bindings:
+
+    - ``s-tab`` → cycle permission mode (default → accept_edits → plan).
+    - ``escape`` → reset permission mode to default. **Non-eager** on
+      purpose: eager escape would swallow the ESC prefix of meta-key
+      sequences (Alt/Meta+Enter arrives as ESC then CR), breaking the
+      multi-line input bindings below. The cost is a ~0.5s wait before
+      a bare Esc resets the mode — acceptable UX.
+    - ``escape, enter`` → insert literal ``\\n`` in the buffer. This is
+      the universal Alt/Meta+Enter sequence: works on every terminal
+      including macOS Terminal.app (Option-Enter) and iTerm2.
+    - ``c-j`` → insert literal ``\\n`` in the buffer. Some terminals
+      (iTerm2 custom keymap, many Linux terminals) let users remap
+      Shift+Enter to send Ctrl+J; this binding makes that Just Work.
+      Shift+Enter itself is NOT directly bindable — most terminals
+      don't distinguish it from Enter by default.
+
+    Plain Enter keeps its pt default "accept-line" (submit). We
+    deliberately do NOT set ``multiline=True`` on the session because
+    that would invert Enter's meaning and force a non-standard submit
+    key (Esc-Enter / Ctrl+D).
     """
     kb = KeyBindings()
 
@@ -95,17 +117,23 @@ def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
         )
         event.app.invalidate()
 
-    @kb.add("escape", eager=True)
+    @kb.add("escape")
     def _(event: Any) -> None:
-        # Esc resets to default — matches claude-code's convention. Eager
-        # so the single-tap Esc doesn't have to wait for the meta-key
-        # timeout. Under bypass we leave the mode alone (bypass is sticky
-        # for the whole session by design).
+        # Non-eager so meta-key sequences (escape, enter) still match.
+        # Bypass mode is sticky for the whole session by design.
         if agent.mode == "bypass" or agent.mode == "default":
             return
         agent.set_mode("default")
         console.print("[dim]mode: default[/dim]")
         event.app.invalidate()
+
+    @kb.add("escape", "enter")
+    def _(event: Any) -> None:
+        event.current_buffer.insert_text("\n")
+
+    @kb.add("c-j")
+    def _(event: Any) -> None:
+        event.current_buffer.insert_text("\n")
 
     return kb
 

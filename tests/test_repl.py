@@ -297,6 +297,139 @@ def test_prompt_session_bottom_toolbar_shows_context_when_agent_passed(
     agent.close()
 
 
+async def test_alt_enter_inserts_newline_in_prompt_buffer(
+    tmp_path: Path,
+) -> None:
+    # Real-pt round-trip: drive a PromptSession built with the shared
+    # KeyBindings via create_pipe_input. Send Alt+Enter (ESC + CR) then
+    # Enter (CR). The Alt+Enter binding must insert a literal newline;
+    # only the final CR submits. Result should carry "\n" between the
+    # two halves of the typed text.
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from aura.cli.repl import _build_mode_key_bindings
+
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+    kb = _build_mode_key_bindings(agent, console)
+    with create_pipe_input() as inp:
+        # "line1" + ESC + CR (alt+enter) + "line2" + CR (enter/submit).
+        inp.send_text("line1\x1b\rline2\r")
+        session: PromptSession[str] = PromptSession(
+            key_bindings=kb, input=inp, output=DummyOutput(),
+        )
+        result = await session.prompt_async("> ")
+    assert result == "line1\nline2"
+    agent.close()
+
+
+async def test_ctrl_j_inserts_newline_in_prompt_buffer(
+    tmp_path: Path,
+) -> None:
+    # Ctrl+J (0x0a, "\n") is the universal fallback for terminals that
+    # remap Shift+Enter. Same contract as Alt+Enter: insert a literal
+    # newline, don't submit.
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from aura.cli.repl import _build_mode_key_bindings
+
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+    kb = _build_mode_key_bindings(agent, console)
+    with create_pipe_input() as inp:
+        inp.send_text("a\nb\r")
+        session: PromptSession[str] = PromptSession(
+            key_bindings=kb, input=inp, output=DummyOutput(),
+        )
+        result = await session.prompt_async("> ")
+    assert result == "a\nb"
+    agent.close()
+
+
+async def test_multiline_slash_command_uses_first_line_only(
+    tmp_path: Path,
+) -> None:
+    # If a user pastes a multi-line block whose first line is a slash
+    # command (e.g. ``/exit`` followed by stray paste lines), the REPL
+    # must still dispatch the command cleanly. Policy: first line is
+    # the command, remaining lines are ignored.
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["/exit\nleftover paste content"]),
+        console=console,
+    )
+    # Reached the exit path without hitting EOFError (i.e. /exit handled).
+    agent.close()
+
+
+async def test_multiline_non_slash_input_reaches_agent_intact(
+    tmp_path: Path,
+) -> None:
+    # Multi-line natural-language / pasted-code prompts must flow through
+    # to the agent with newlines preserved. Subclass FakeChatModel to
+    # snoop the HumanMessage seen by ``_agenerate``.
+    from langchain_core.messages import BaseMessage, HumanMessage
+
+    captured: list[str] = []
+
+    class _CaptureModel(FakeChatModel):
+        async def _agenerate(  # type: ignore[override]
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: object | None = None,
+            **kwargs: object,
+        ) -> object:
+            for msg in messages:
+                if isinstance(msg, HumanMessage) and isinstance(
+                    msg.content, str,
+                ):
+                    captured.append(msg.content)
+            return await super()._agenerate(
+                messages, stop, run_manager,  # type: ignore[arg-type]
+                **kwargs,
+            )
+
+    agent = Agent(
+        config=AuraConfig.model_validate({
+            "providers": [{"name": "openai", "protocol": "openai"}],
+            "router": {"default": "openai:gpt-4o-mini"},
+            "tools": {"enabled": []},
+        }),
+        model=_CaptureModel(
+            turns=[FakeTurn(message=AIMessage(content="ok"))],  # type: ignore[call-arg]
+        ),
+        storage=SessionStorage(tmp_path / "db"),
+    )
+    console, _buf = _capture_console()
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["first line\nsecond line", "/exit"]),
+        console=console,
+    )
+    assert any("first line\nsecond line" in c for c in captured)
+    agent.close()
+
+
+async def test_single_line_slash_command_unchanged(tmp_path: Path) -> None:
+    # Regression guard: the multi-line dispatch split must not break
+    # the overwhelmingly common single-line slash-command path.
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+    await run_repl_async(
+        agent, input_fn=_ScriptedInput(["/help", "/exit"]), console=console,
+    )
+    assert "/exit" in buf.getvalue()
+    agent.close()
+
+
 async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:
     # Real resilience: if Agent.astream raises (network error, client bug,
     # provider 500), the REPL must print an error and keep looping, NOT

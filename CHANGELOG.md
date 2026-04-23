@@ -2,6 +2,28 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.9.0] — Multiline input + Skill tool
+
+Parallel-subagent run of 3 tasks. Two landed clean (multiline input + skill tool); the third (PyPI metadata polish) was lost to git-stash races between concurrent subagents and will be redone carefully in v0.9.1. Owner's note: session meta-feedback surfaced here about parallel-subagent turbulence — tightening cadence going forward.
+
+### Shipped
+
+- **Multiline input** — `Alt/Meta+Enter` (universal) and `Ctrl+J` (terminal-remap catch-all) insert a literal `\n` in the buffer; plain `Enter` still submits. `PromptSession(multiline=False)` preserved so Enter keeps its default accept-line meaning. The existing `escape` binding (reset mode → default) loses `eager=True` so the ESC prefix of the `escape, enter` meta-key sequence still matches — ~0.5s delay on bare Esc is the tradeoff, documented in the binding. Multi-line prompts split on first `\n` for slash-command dispatch (`/exit\nextra` still exits cleanly); non-slash input flows to the agent with newlines intact.
+- **`skill` tool** — LLM can now invoke skills as a first-class tool. Schema `{name: str}`; looks up in `SkillRegistry.get(name)`, calls `agent.record_skill_invocation(skill)` (same path as `/skill-name` slash command). Unknown name raises `ToolError(f"no skill named {name!r}; available: [...]")`. Read-only, not destructive, concurrency-safe. Subagents inherit it (factory allowlist unchanged).
+
+### Changed
+
+- `aura/cli/repl.py` — three new key bindings (alt+enter, ctrl+j, escape non-eager).
+- `aura/cli/commands.py` / `aura/cli/repl.py` — first-line extraction for multi-line slash dispatch.
+- `aura/tools/skill.py` (NEW) — SkillTool stateful class.
+- `aura/tools/__init__.py` — registers SkillTool in `BUILTIN_STATEFUL_TOOLS`.
+- `aura/core/agent.py` — stateful-tool wiring branch for `skill`.
+- `aura/config/schema.py` — default `tools.enabled` gains `skill`.
+
+### Stats
+
+- 1313 tests pass (1300 + 13 new: 5 multiline + 8 skill). Lint + mypy clean.
+
 ## [0.8.3] — Markdown rendering + retry logic + git slash commands
 
 Three more subagents in parallel. 1300 tests green.

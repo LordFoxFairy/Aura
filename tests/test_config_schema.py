@@ -22,7 +22,7 @@ def test_defaults() -> None:
     assert cfg.tools.enabled == [
         "bash", "bash_background", "edit_file",
         "enter_plan_mode", "exit_plan_mode",
-        "glob", "grep", "read_file",
+        "glob", "grep", "read_file", "skill",
         "task_get", "task_list", "task_stop",
         "todo_write", "web_fetch", "write_file",
     ]

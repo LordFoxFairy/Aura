@@ -26,6 +26,7 @@ from aura.tools.exit_plan_mode import ExitPlanMode
 from aura.tools.glob import Glob, glob
 from aura.tools.grep import Grep, grep
 from aura.tools.read_file import ReadFile, read_file
+from aura.tools.skill import SkillTool
 from aura.tools.task_create import TaskCreate
 from aura.tools.task_get import TaskGet
 from aura.tools.task_list import TaskList
@@ -58,6 +59,7 @@ BUILTIN_STATEFUL_TOOLS: dict[str, type[BaseTool]] = {
     "enter_plan_mode": EnterPlanMode,
     "exit_plan_mode": ExitPlanMode,
     "bash_background": BashBackground,
+    "skill": SkillTool,
 }
 
 __all__ = [
@@ -72,6 +74,7 @@ __all__ = [
     "Glob",
     "Grep",
     "ReadFile",
+    "SkillTool",
     "TaskCreate",
     "TaskGet",
     "TaskList",

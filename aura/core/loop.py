@@ -181,6 +181,21 @@ class AgentLoop:
         history: list[BaseMessage],
         attachments: list[HumanMessage] | None = None,
     ) -> AsyncIterator[AgentEvent]:
+        # pre_user_prompt fires at the very entry to the turn — BEFORE
+        # attachments + user HumanMessage land in history — so hooks see
+        # the prompt exactly as the user typed it. Observational only;
+        # buggy hooks get journaled + swallowed so a broken observer
+        # can't block user turns.
+        if self._hooks.pre_user_prompt:
+            try:
+                await self._hooks.run_pre_user_prompt(
+                    prompt=user_prompt, state=self._state,
+                )
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "pre_user_prompt_hook_failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
         # Attachments land BEFORE the user's HumanMessage so the model sees
         # the injected context first (matching how claude-code prepends
         # ``<attachment>`` blocks ahead of the user turn). Injected into

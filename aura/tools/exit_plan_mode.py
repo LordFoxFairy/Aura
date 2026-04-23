@@ -22,6 +22,7 @@ plan-mode enforcement in ``aura.core.hooks.permission`` — the tool is
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
@@ -37,6 +38,12 @@ from aura.tools.enter_plan_mode import ModeGetter, ModeSetter
 # ``--bypass-permissions`` flag. ``plan`` itself is also excluded (would
 # be a no-op; use ``enter_plan_mode`` instead).
 ExitTarget = Literal["default", "accept_edits"]
+
+# Closure that returns the mode the user was in BEFORE entering plan, or
+# ``None`` if the tool is wired without prior-mode tracking (legacy tests /
+# programmatic paths that never called ``enter_plan_mode``). Kept as a bare
+# Callable for the same pydantic-friendliness reason as ``ModeGetter``.
+PriorModeGetter = Callable[[], str | None]
 
 # Approval prompt — concise, echoes claude-code's "Exit plan mode?". The
 # rendered plan is appended to the question text so the user sees WHAT
@@ -61,12 +68,19 @@ class ExitPlanModeParams(BaseModel):
             "tool result on approval so downstream turns can reference it."
         ),
     )
-    to_mode: ExitTarget = Field(
-        default="default",
+    # ``None`` default means "restore the pre-plan mode if tracked, else
+    # fall back to 'default'". An EXPLICIT ``to_mode="default"`` / ``"accept_edits"``
+    # from the LLM still wins — the Literal/None union lets the tool body
+    # distinguish the two cases (unset vs explicitly default).
+    to_mode: ExitTarget | None = Field(
+        default=None,
         description=(
-            "Which mode to switch to after approval. ``default`` (the "
-            "normal rule / ask gate) or ``accept_edits`` (auto-allow file "
-            "edits, prompt for everything else)."
+            "Which mode to switch to after approval. Omit (null) to restore "
+            "whichever mode the user was in BEFORE entering plan (the "
+            "claude-code prePlanMode behavior). Set explicitly to "
+            "``default`` (normal rule/ask gate) or ``accept_edits`` "
+            "(auto-allow file edits, prompt for everything else) to "
+            "override the restore."
         ),
     )
 
@@ -74,7 +88,8 @@ class ExitPlanModeParams(BaseModel):
 def _preview(args: dict[str, Any]) -> str:
     plan = args.get("plan", "")
     head = plan.splitlines()[0] if plan else ""
-    return f"exit plan -> {args.get('to_mode', 'default')}: {head[:40]}"
+    target = args.get("to_mode") or "default"
+    return f"exit plan -> {target}: {head[:40]}"
 
 
 def _render_prompt(plan: str) -> str:
@@ -110,6 +125,10 @@ class ExitPlanMode(BaseTool):
     _set_mode: ModeSetter = PrivateAttr()
     _get_mode: ModeGetter = PrivateAttr()
     _asker: QuestionAsker = PrivateAttr()
+    # Reads the mode the user was in BEFORE entering plan. Optional;
+    # when ``None`` the tool skips the restore path and falls back to
+    # its ``to_mode`` param (defaulting to ``"default"``).
+    _get_prior_mode: PriorModeGetter | None = PrivateAttr(default=None)
 
     def __init__(
         self,
@@ -117,15 +136,41 @@ class ExitPlanMode(BaseTool):
         mode_setter: ModeSetter,
         mode_getter: ModeGetter,
         asker: QuestionAsker,
+        get_prior_mode: PriorModeGetter | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._set_mode = mode_setter
         self._get_mode = mode_getter
         self._asker = asker
+        self._get_prior_mode = get_prior_mode
+
+    def _resolve_target(self, to_mode: ExitTarget | None) -> ExitTarget:
+        """Pick the mode to restore on approval.
+
+        Precedence (highest first):
+        1. Explicit ``to_mode`` from the LLM (not None) — the caller's
+           intent trumps prior-mode.
+        2. Prior mode (if tracked and not ``"bypass"`` / ``"plan"``) —
+           restore-to-prior default.
+        3. ``"default"`` — final fallback.
+
+        ``"bypass"`` is never restored INTO from plan: bypass can only be
+        entered via ``--bypass-permissions``; silently re-entering it on a
+        plan-mode exit would be a security surprise. Same clamp also
+        catches ``"plan"`` (should never actually be the prior mode, but
+        guards against future bugs that might save "plan" in there).
+        """
+        if to_mode is not None:
+            return to_mode
+        if self._get_prior_mode is not None:
+            prior = self._get_prior_mode()
+            if prior in ("default", "accept_edits"):
+                return prior  # type: ignore[return-value]
+        return "default"
 
     def _run(
-        self, plan: str, to_mode: ExitTarget = "default",
+        self, plan: str, to_mode: ExitTarget | None = None,
     ) -> dict[str, Any]:
         # BaseTool marks ``_run`` abstract; we cannot ask the user from a
         # sync context (the CLI asker awaits a prompt_toolkit Application).
@@ -134,7 +179,7 @@ class ExitPlanMode(BaseTool):
         raise NotImplementedError("exit_plan_mode is async-only; use ainvoke")
 
     async def _arun(
-        self, plan: str, to_mode: ExitTarget = "default",
+        self, plan: str, to_mode: ExitTarget | None = None,
     ) -> dict[str, Any]:
         previous = self._get_mode()
         if previous != "plan":
@@ -156,10 +201,11 @@ class ExitPlanMode(BaseTool):
                 "user rejected the plan; staying in plan mode — "
                 "revise the plan and call exit_plan_mode again"
             )
-        self._set_mode(to_mode)
+        target = self._resolve_target(to_mode)
+        self._set_mode(target)
         return {
             "previous_mode": "plan",
-            "new_mode": to_mode,
+            "new_mode": target,
             "plan": plan,
             "approved": True,
         }

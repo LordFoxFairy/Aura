@@ -164,3 +164,64 @@ def test_escape_under_bypass_is_noop(tmp_path: Path) -> None:
     binding.handler(event)
     assert agent.mode == "bypass"
     agent.close()
+
+
+# ---------- Agent._prior_mode (prePlanMode restoration) -------------------
+
+
+def _agent_with_plan_tools(tmp_path: Path, mode: str = "default") -> Agent:
+    # Need enter_plan_mode enabled to cover the wiring end-to-end.
+    return Agent(
+        config=_minimal_config(enabled=["enter_plan_mode"]),
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+        mode=mode,
+    )
+
+
+def test_prior_mode_starts_as_none(tmp_path: Path) -> None:
+    agent = _agent(tmp_path)
+    # Fresh agent has no plan entries yet — nothing to restore.
+    assert agent._prior_mode is None
+    agent.close()
+
+
+def test_enter_plan_mode_captures_prior_accept_edits(tmp_path: Path) -> None:
+    agent = _agent_with_plan_tools(tmp_path, mode="accept_edits")
+    tool = agent._available_tools["enter_plan_mode"]
+    tool.invoke({"plan": "1. thing"})
+    assert agent.mode == "plan"
+    assert agent._prior_mode == "accept_edits"
+    agent.close()
+
+
+def test_enter_plan_mode_captures_prior_default(tmp_path: Path) -> None:
+    agent = _agent_with_plan_tools(tmp_path, mode="default")
+    tool = agent._available_tools["enter_plan_mode"]
+    tool.invoke({"plan": "1. thing"})
+    assert agent._prior_mode == "default"
+    agent.close()
+
+
+def test_re_entering_plan_does_not_overwrite_prior(tmp_path: Path) -> None:
+    # Enter once from accept_edits → prior = accept_edits. Then re-enter
+    # from plan → prior MUST stay accept_edits, not become "plan".
+    agent = _agent_with_plan_tools(tmp_path, mode="accept_edits")
+    tool = agent._available_tools["enter_plan_mode"]
+    tool.invoke({"plan": "1. first"})
+    assert agent._prior_mode == "accept_edits"
+    tool.invoke({"plan": "1. refined"})  # already in plan — no-op
+    assert agent._prior_mode == "accept_edits"
+    agent.close()
+
+
+def test_clear_session_resets_prior_mode(tmp_path: Path) -> None:
+    # Regression guard: /clear must drop the captured prior so a stale
+    # value from the prior plan cycle doesn't bleed into the next one.
+    agent = _agent_with_plan_tools(tmp_path, mode="accept_edits")
+    tool = agent._available_tools["enter_plan_mode"]
+    tool.invoke({"plan": "1. thing"})
+    assert agent._prior_mode == "accept_edits"
+    agent.clear_session()
+    assert agent._prior_mode is None
+    agent.close()

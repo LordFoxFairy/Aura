@@ -241,6 +241,88 @@ class _HookSpy:
         )
 
 
+# ---------------------------------------------------------------------------
+# prePlanMode restoration — the tool restores whatever mode the user was
+# in BEFORE entering plan. Claude-code parity: ToolPermissionContext.prePlanMode.
+# ---------------------------------------------------------------------------
+
+
+def _tool_with_prior(
+    agent: _FakeAgent, asker: _RecordingAsker, *, prior: str | None,
+) -> ExitPlanMode:
+    return ExitPlanMode(
+        mode_setter=agent.set_mode,
+        mode_getter=lambda: agent.mode,
+        asker=asker,
+        get_prior_mode=lambda: prior,
+    )
+
+
+async def test_restores_accept_edits_when_prior_mode_tracked() -> None:
+    # User was in ``accept_edits`` → entered plan → approves exit without
+    # an explicit to_mode. Restore target must be ``accept_edits``, not
+    # ``"default"``.
+    agent = _FakeAgent(mode="plan")
+    asker = _RecordingAsker("Yes")
+    tool = _tool_with_prior(agent, asker, prior="accept_edits")
+    result = await tool.ainvoke({"plan": "1. thing"})
+    assert agent.mode == "accept_edits"
+    assert result["new_mode"] == "accept_edits"
+
+
+async def test_restores_default_when_prior_was_default() -> None:
+    # Baseline: prior == "default" still lands on "default" (identical
+    # behavior to the pre-restoration contract).
+    agent = _FakeAgent(mode="plan")
+    asker = _RecordingAsker("Yes")
+    tool = _tool_with_prior(agent, asker, prior="default")
+    result = await tool.ainvoke({"plan": "1. thing"})
+    assert agent.mode == "default"
+    assert result["new_mode"] == "default"
+
+
+async def test_explicit_to_mode_overrides_prior_restore() -> None:
+    # An explicit ``to_mode="accept_edits"`` from the LLM trumps the
+    # tracked prior "default". The tool's contract: caller intent wins.
+    agent = _FakeAgent(mode="plan")
+    asker = _RecordingAsker("Yes")
+    tool = _tool_with_prior(agent, asker, prior="default")
+    result = await tool.ainvoke(
+        {"plan": "1. thing", "to_mode": "accept_edits"},
+    )
+    assert agent.mode == "accept_edits"
+    assert result["new_mode"] == "accept_edits"
+
+
+async def test_falls_back_to_default_when_no_prior_tracked() -> None:
+    # Legacy wire-up without ``get_prior_mode`` (prior closure returns
+    # None) MUST still produce the pre-feature behavior.
+    agent = _FakeAgent(mode="plan")
+    asker = _RecordingAsker("Yes")
+    tool = _tool_with_prior(agent, asker, prior=None)
+    result = await tool.ainvoke({"plan": "1. thing"})
+    assert agent.mode == "default"
+    assert result["new_mode"] == "default"
+
+
+async def test_prior_bypass_is_clamped_to_default_on_restore() -> None:
+    # Bypass is never restored INTO from plan — security clamp. Even if
+    # the closure somehow reports "bypass" as the prior mode (unusual;
+    # shift+tab skips bypass so the only path is programmatic entry),
+    # the restore must fall through to "default".
+    agent = _FakeAgent(mode="plan")
+    asker = _RecordingAsker("Yes")
+    tool = _tool_with_prior(agent, asker, prior="bypass")
+    result = await tool.ainvoke({"plan": "1. thing"})
+    assert agent.mode == "default"
+    assert result["new_mode"] == "default"
+
+
+# ---------------------------------------------------------------------------
+# Permission-layer contract — tool still exempt from plan-mode enforcement.
+# ---------------------------------------------------------------------------
+
+
 async def test_exit_plan_mode_bypasses_plan_mode_blocklist_at_hook() -> None:
     # The permission hook must let exit_plan_mode through in plan mode
     # (otherwise the gate we added inside the tool is unreachable). A

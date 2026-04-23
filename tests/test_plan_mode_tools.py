@@ -101,6 +101,38 @@ def test_enter_plan_mode_from_plan_is_noop_with_note() -> None:
     assert "note" in result
 
 
+def test_enter_plan_mode_saves_prior_mode_via_closure() -> None:
+    # Entering plan from "accept_edits" stashes "accept_edits" via the
+    # injected save closure — that's the single-writer contract the
+    # Agent relies on to restore the mode on exit.
+    agent = _FakeAgent(mode="accept_edits")
+    saved: list[str] = []
+    tool = EnterPlanMode(
+        mode_setter=agent.set_mode,
+        mode_getter=lambda: agent.mode,
+        save_prior_mode=saved.append,
+    )
+    tool.invoke({"plan": "1. thing"})
+    assert agent.mode == "plan"
+    assert saved == ["accept_edits"]
+
+
+def test_enter_plan_mode_save_prior_is_noop_when_already_plan() -> None:
+    # Re-entering from plan mode is a no-op — the save closure must NOT
+    # be invoked, otherwise prior_mode would get overwritten with "plan"
+    # and exit_plan_mode would have nothing useful to restore.
+    agent = _FakeAgent(mode="plan")
+    saved: list[str] = []
+    tool = EnterPlanMode(
+        mode_setter=agent.set_mode,
+        mode_getter=lambda: agent.mode,
+        save_prior_mode=saved.append,
+    )
+    tool.invoke({"plan": "refined"})
+    assert saved == []
+    assert agent.mode == "plan"
+
+
 def test_enter_plan_mode_rejects_empty_plan() -> None:
     from pydantic import ValidationError
 

@@ -131,6 +131,14 @@ class Agent:
                 ),
             )
         self._mode = mode
+        # prePlanMode parity with claude-code: remember whichever mode the
+        # user was in BEFORE enter_plan_mode flipped them into ``plan``, so
+        # exit_plan_mode can restore it on approval instead of always
+        # landing on ``default``. Written exactly once per enter cycle via
+        # ``_capture_prior_mode``; cleared on ``clear_session`` so /clear
+        # doesn't leak a stale value into the next session. ``None`` =
+        # "no plan entry has happened yet on this session".
+        self._prior_mode: str | None = None
         # Auto-compact trigger. Non-zero = enabled. When a turn completes
         # successfully and total_tokens_used crosses the threshold, astream
         # calls self.compact(source="auto") before returning. 0 disables it.
@@ -184,10 +192,16 @@ class Agent:
                     asker=question_asker or _unavailable_question_asker,
                 )
             elif name == "task_create":
+                # ``parent_hooks=self._hooks`` threads the parent's live
+                # HookChain into run_task so post_subagent fires on each
+                # terminal transition. Passing the bound chain (not a
+                # copy) keeps the wire-up in sync with runtime hook
+                # installs (e.g. clear_session swap of must_read_first).
                 self._available_tools[name] = cls(
                     store=self._tasks_store,
                     factory=self._subagent_factory,
                     running=self._running_tasks,
+                    parent_hooks=self._hooks,
                 )
             elif name == "task_output" or name == "task_get" or name == "task_list":
                 self._available_tools[name] = cls(store=self._tasks_store)
@@ -214,9 +228,13 @@ class Agent:
                 # tool's reach into the Agent is exactly one arrow: flip
                 # the permission mode. Same "closure-over-method" pattern
                 # as QuestionAsker.
+                # ``save_prior_mode`` remembers the pre-plan mode so the
+                # companion exit_plan_mode can restore it on approval
+                # (claude-code prePlanMode parity).
                 self._available_tools[name] = cls(
                     mode_setter=self.set_mode,
                     mode_getter=lambda: self._mode,
+                    save_prior_mode=self._capture_prior_mode,
                 )
             elif name == "exit_plan_mode":
                 # Same mode_setter/mode_getter pattern as enter_plan_mode,
@@ -225,11 +243,13 @@ class Agent:
                 # ExitPlanModeV2Tool.checkPermissions ask-behavior). The
                 # same QuestionAsker that ask_user_question uses is wired
                 # through here — reusing the CLI's prompt_toolkit Yes/No
-                # picker for free.
+                # picker for free. ``get_prior_mode`` lets the tool
+                # restore to whatever mode was active before plan.
                 self._available_tools[name] = cls(
                     mode_setter=self.set_mode,
                     mode_getter=lambda: self._mode,
                     asker=question_asker or _unavailable_question_asker,
+                    get_prior_mode=lambda: self._prior_mode,
                 )
             elif name == "skill":
                 # LLM-invocable skill trigger. ``recorder`` closes over
@@ -446,9 +466,24 @@ class Agent:
             model=model_name,
         )
 
+    def _capture_prior_mode(self, mode: str) -> None:
+        """Stash the pre-plan mode for the companion exit_plan_mode to read.
+
+        Invoked ONLY by the ``enter_plan_mode`` tool via its injected
+        ``save_prior_mode`` closure — no other code path writes this
+        attribute. Single writer guarantees the prior-mode value is
+        exactly "the mode the user was in when they first entered plan
+        on this session" and never an intermediate state.
+        """
+        self._prior_mode = mode
+
     def clear_session(self) -> None:
         self._storage.clear(self._session_id)
         self._state.reset()
+        # Drop any captured prior mode — /clear starts a fresh session so
+        # a leftover "accept_edits" from a previous plan cycle shouldn't
+        # bleed into the next one.
+        self._prior_mode = None
         if self._session_rules is not None:
             self._session_rules.clear()
         # /clear 语义：同时 invalidate memory/rules caches + 重建 Context。
@@ -644,6 +679,59 @@ class Agent:
             skills=self._skill_registry.list(),
             todos_provider=lambda: self._state.custom.get("todos", []),
         )
+
+    async def bootstrap(self) -> None:
+        """Fire the ``pre_session`` hook chain — session-start signal.
+
+        The sibling to :meth:`shutdown`. Kept separate from ``__init__``
+        (which is sync) because hooks are async by contract and we don't
+        want to spin up a throwaway event loop just to fire a best-effort
+        signal. Cleanest separation: callers that want pre_session
+        delivered call ``bootstrap()`` after construction, mirroring the
+        existing ``aconnect()`` invocation in the CLI entry point.
+
+        Exceptions raised inside a hook are journaled and swallowed —
+        these are observational signals; a buggy hook must NOT abort the
+        session it's supposed to be announcing. No-op when no
+        pre_session hooks are registered.
+        """
+        if not self._hooks.pre_session:
+            return
+        try:
+            await self._hooks.run_pre_session(
+                session_id=self._session_id, cwd=self._cwd,
+            )
+        except Exception as exc:  # noqa: BLE001
+            journal.write(
+                "pre_session_hook_failed",
+                session=self._session_id,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+    async def shutdown(self) -> None:
+        """Fire ``post_session`` then tear down synchronously.
+
+        Symmetric with :meth:`bootstrap`. The sync ``close()`` path
+        stays untouched (callers that can't await — legacy SDK — keep
+        working) and deliberately does NOT fire post_session: firing an
+        async hook from a sync context would either block the event
+        loop or schedule a best-effort task that never gets awaited.
+        Cleaner contract: async consumers call ``shutdown()``; sync
+        consumers call ``close()`` and miss the signal — no surprise
+        semantics either way.
+        """
+        if self._hooks.post_session:
+            try:
+                await self._hooks.run_post_session(
+                    session_id=self._session_id, cwd=self._cwd,
+                )
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "post_session_hook_failed",
+                    session=self._session_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+        self.close()
 
     async def aconnect(self) -> None:
         """Establish MCP connections and register discovered tools / prompts.

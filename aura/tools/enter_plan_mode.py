@@ -34,6 +34,11 @@ ModeSetter = Callable[[str], None]
 # Companion reader — the tool records the previous mode in its envelope so
 # the model can see whether it was a no-op vs an actual transition.
 ModeGetter = Callable[[], str]
+# Save-the-pre-plan-mode closure — lets exit_plan_mode restore whatever mode
+# the user was in before enter_plan_mode flipped them into plan. Mirrors
+# claude-code's ``ToolPermissionContext.prePlanMode``. ``None`` when the
+# tool is wired without prior-mode capture (legacy tests).
+PriorModeSaver = Callable[[str], None]
 
 
 class EnterPlanModeParams(BaseModel):
@@ -83,27 +88,42 @@ class EnterPlanMode(BaseTool):
     # stash it behind the model instead and expose via __init__ kwarg.
     _set_mode: ModeSetter = PrivateAttr()
     _get_mode: ModeGetter = PrivateAttr()
+    # Optional — when wired, the Agent remembers the pre-plan mode so
+    # exit_plan_mode can restore it. Legacy tests that skip the kwarg get
+    # a None-valued attribute and the tool simply doesn't persist prior
+    # mode (exit_plan_mode then falls back to its explicit ``to_mode``).
+    _save_prior_mode: PriorModeSaver | None = PrivateAttr(default=None)
 
     def __init__(
         self,
         *,
         mode_setter: ModeSetter,
         mode_getter: ModeGetter,
+        save_prior_mode: PriorModeSaver | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._set_mode = mode_setter
         self._get_mode = mode_getter
+        self._save_prior_mode = save_prior_mode
 
     def _run(self, plan: str) -> dict[str, Any]:
         previous = self._get_mode()
         if previous == "plan":
+            # Re-enter from plan is a no-op AND must NOT overwrite prior
+            # mode — claude-code semantics: prePlanMode is captured the
+            # first time the user entered plan, not on every re-entry.
             return {
                 "previous_mode": previous,
                 "new_mode": "plan",
                 "plan": plan,
                 "note": "already in plan mode; no-op",
             }
+        # Capture prior mode BEFORE flipping. ``save_prior_mode`` is the
+        # only way the Agent learns about the transition; no other code
+        # path writes ``_prior_mode`` so the contract is single-sourced.
+        if self._save_prior_mode is not None:
+            self._save_prior_mode(previous)
         self._set_mode("plan")
         return {
             "previous_mode": previous,

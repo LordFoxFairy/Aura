@@ -26,6 +26,7 @@ object onto an Aura-native shape:
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool
@@ -41,6 +42,12 @@ if TYPE_CHECKING:
 
 _MCP_PREFIX = "mcp__"
 _MAX_MCP_RESULT_CHARS = 30_000
+# Default per-operation timeout for client-facing MCP calls made from the
+# slash-command surface. Must stay in sync with manager.py's
+# ``_DEFAULT_OP_TIMEOUT_SEC`` — duplicated here so that prompt commands
+# work even if somebody constructs ``make_mcp_command`` without passing
+# the manager-resolved value (back-compat with the old signature).
+_DEFAULT_OP_TIMEOUT_SEC = 30.0
 
 
 def _args_preview(args: dict[str, Any]) -> str:
@@ -114,10 +121,12 @@ class _MCPPromptCommand:
         client: MultiServerMCPClient,
         arg_names: tuple[str, ...] = (),
         required_args: frozenset[str] = frozenset(),
+        op_timeout_sec: float = _DEFAULT_OP_TIMEOUT_SEC,
     ) -> None:
         self._server = server_name
         self._prompt = prompt_name
         self._client = client
+        self._op_timeout_sec = op_timeout_sec
         self.name = f"/{server_name}__{prompt_name}"
         self.description = description
         # Argument schema captured at registration time (see
@@ -196,11 +205,37 @@ class _MCPPromptCommand:
             # ``get_prompt(server_name, prompt_name, *, arguments=None)``).
             # Passing an empty dict is equivalent to ``None`` for
             # zero-arg prompts, so we always forward it for a single
-            # code path.
-            messages = await self._client.get_prompt(
-                self._server,
-                self._prompt,
-                arguments=arguments,
+            # code path. Wrapped in ``wait_for`` so a wedged server can't
+            # hang the REPL indefinitely — on timeout we surface a
+            # descriptive user-facing error via the same CommandResult
+            # branch as any other server-side failure.
+            messages = await asyncio.wait_for(
+                self._client.get_prompt(
+                    self._server,
+                    self._prompt,
+                    arguments=arguments,
+                ),
+                timeout=self._op_timeout_sec,
+            )
+        except TimeoutError:
+            # ``asyncio.wait_for`` raises the stdlib :class:`TimeoutError`
+            # (since py3.11 ``asyncio.TimeoutError`` is an alias). We
+            # catch it here and convert to a CommandResult so the REPL
+            # prints an actionable message instead of crashing.
+            journal.write(
+                "mcp_prompt_fetch_timeout",
+                server=self._server,
+                prompt=self._prompt,
+                timeout_sec=self._op_timeout_sec,
+            )
+            return CommandResult(
+                handled=True,
+                kind="print",
+                text=(
+                    f"mcp prompt fetch timed out after "
+                    f"{self._op_timeout_sec}s "
+                    f"(server {self._server!r}, prompt {self._prompt!r})"
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             # Server may have died between startup discovery and now. Surface
@@ -234,6 +269,7 @@ def make_mcp_command(
     prompt_description: str,
     client: MultiServerMCPClient,
     prompt_arguments: list[Any] | None = None,
+    op_timeout_sec: float = _DEFAULT_OP_TIMEOUT_SEC,
 ) -> _MCPPromptCommand:
     """Build a :class:`Command` that fetches and renders an MCP prompt.
 
@@ -245,6 +281,14 @@ def make_mcp_command(
     Defaults to ``None`` for backward compatibility: existing call sites
     that haven't wired the arg schema through continue to work — the prompt
     will still fetch, it just won't carry user-provided arguments.
+
+    ``op_timeout_sec`` sets the :func:`asyncio.wait_for` cap applied to
+    the single ``client.get_prompt`` call inside
+    :meth:`_MCPPromptCommand.handle`. Defaults to 30s to match
+    ``MCPManager``'s default; callers constructing commands directly
+    (e.g. integration tests) can override. A stuck server produces a
+    readable user-facing error via :class:`CommandResult` rather than
+    wedging the REPL.
     """
     arg_names: tuple[str, ...] = ()
     required_args: frozenset[str] = frozenset()
@@ -270,6 +314,7 @@ def make_mcp_command(
         client=client,
         arg_names=arg_names,
         required_args=required_args,
+        op_timeout_sec=op_timeout_sec,
     )
 
 

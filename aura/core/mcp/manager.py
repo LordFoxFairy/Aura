@@ -34,13 +34,31 @@ The heavy lifting (transport, JSON-RPC, schema → pydantic) lives in
    returns a list so the ``/mcp`` list view can render even if every
    server failed.
 
+6. **Resilience: auto-reconnect + per-op timeout.**
+   - Remote transports (``sse`` / ``streamable_http``) schedule exponential-
+     backoff reconnect tasks when a connect fails mid-session. Backoff
+     schedule: 1s, 2s, 4s, 8s, 16s (capped at 60s), max 5 attempts —
+     mirrors ``useManageMCPConnections.ts`` in claude-code v2.1.88.
+     Stdio transports skip auto-reconnect: subprocess death is a
+     user-visible event that backoff can't heal.
+   - All client-facing operations (``get_tools`` / ``list_prompts`` /
+     ``list_resources`` / ``read_resource`` / ``get_prompt``) are wrapped
+     in :func:`asyncio.wait_for` with a configurable timeout (default
+     ``30s``, override via ``AURA_MCP_TIMEOUT_SEC`` env var or the
+     ``op_timeout_sec`` ctor kwarg). On timeout we raise a descriptive
+     :class:`RuntimeError` so the user gets an actionable message instead
+     of a silent hang.
+
 The library currently has no ``close()`` — each call spins a fresh stdio
 subprocess and tears it down immediately. :meth:`stop_all` is therefore a
-defensive no-op plus any aclose-shaped method the library may add later.
+defensive no-op plus any aclose-shaped method the library may add later,
+and also cancels any pending reconnect timer tasks.
 """
 
 from __future__ import annotations
 
+import asyncio
+import os
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
@@ -57,6 +75,23 @@ if TYPE_CHECKING:
 
 
 MCPServerState = Literal["connected", "disabled", "error", "never_started"]
+
+
+# Exponential-backoff reconnect constants. Schedule (seconds): 1, 2, 4, 8, 16
+# — capped at 60s (``_MAX_BACKOFF_SEC``), max 5 attempts. Matches
+# claude-code's ``useManageMCPConnections.ts`` pattern, only we use stdlib
+# ``asyncio.sleep`` instead of ``setTimeout`` + React refs.
+_INITIAL_BACKOFF_SEC = 1.0
+_MAX_BACKOFF_SEC = 60.0
+_MAX_RECONNECT_ATTEMPTS = 5
+
+# Per-operation timeout. Reads ``AURA_MCP_TIMEOUT_SEC`` from env at
+# MCPManager construction time; the ctor kwarg wins if supplied. Claude-code
+# uses effectively-infinite (~27.8h) — we prefer a hard 30s default so a
+# frozen server can't wedge the agent loop indefinitely. An env override
+# lets power users match claude-code's behaviour.
+_DEFAULT_OP_TIMEOUT_SEC = 30.0
+_OP_TIMEOUT_ENV_VAR = "AURA_MCP_TIMEOUT_SEC"
 
 
 @dataclass(frozen=True)
@@ -98,8 +133,39 @@ def _supported_transports() -> set[str]:
     return supported
 
 
+def _resolve_op_timeout(explicit: float | None) -> float:
+    """Resolve the per-op timeout: explicit kwarg > env > default.
+
+    Returns a positive float. Invalid env values (non-numeric, ≤0) are
+    silently ignored and we fall back to the default — we don't want a
+    typo in a shell-rc file to block MCP startup. Callers requesting a
+    non-positive explicit value get a :class:`ValueError` (programmer
+    error, not a config error).
+    """
+    if explicit is not None:
+        if explicit <= 0:
+            raise ValueError(
+                f"op_timeout_sec must be positive, got {explicit!r}"
+            )
+        return float(explicit)
+    env_val = os.environ.get(_OP_TIMEOUT_ENV_VAR)
+    if env_val:
+        try:
+            parsed = float(env_val)
+        except ValueError:
+            return _DEFAULT_OP_TIMEOUT_SEC
+        if parsed > 0:
+            return parsed
+    return _DEFAULT_OP_TIMEOUT_SEC
+
+
 class MCPManager:
-    def __init__(self, configs: list[MCPServerConfig]) -> None:
+    def __init__(
+        self,
+        configs: list[MCPServerConfig],
+        *,
+        op_timeout_sec: float | None = None,
+    ) -> None:
         # Keep ALL configs (enabled + disabled) so ``status()`` /
         # ``/mcp list`` can still show a disabled-by-config server as
         # "disabled" rather than hiding it entirely — matches claude-code's
@@ -128,6 +194,19 @@ class MCPManager:
         self._prompt_counts: dict[str, int] = {}
         self._resource_counts: dict[str, int] = {}
 
+        # Reconnect task handles, keyed by server name. Stored so
+        # ``stop_all`` / ``disable`` / ``reconnect`` / a subsequent
+        # ``_schedule_reconnect`` can cancel a pending attempt cleanly
+        # (claude-code stores timers in ``reconnectTimersRef``; we store
+        # the asyncio Task we spawned). Only remote-transport servers ever
+        # get an entry here — stdio never auto-reconnects.
+        self._reconnect_tasks: dict[str, asyncio.Task[None]] = {}
+
+        # Per-op timeout (seconds). Resolved once at ctor time so runtime
+        # changes to the env var don't cause inconsistent per-call
+        # behaviour within one session.
+        self._op_timeout_sec: float = _resolve_op_timeout(op_timeout_sec)
+
         for cfg in self._configs_all:
             # enabled=False in config is the "disabled" state from the
             # operator's perspective; enabled=True but not yet connected
@@ -150,6 +229,39 @@ class MCPManager:
                         "upgrade the package or pin 'stdio'"
                     ),
                 )
+
+    @property
+    def op_timeout_sec(self) -> float:
+        """Per-operation timeout in seconds (read-only).
+
+        Surfaced for tests + ``/mcp`` status rendering. Resolved once at
+        construction time; see :func:`_resolve_op_timeout`.
+        """
+        return self._op_timeout_sec
+
+    async def _run_with_timeout(
+        self, coro: Any, *, op_name: str, server: str,
+    ) -> Any:
+        """Run *coro* with :func:`asyncio.wait_for` using the manager timeout.
+
+        On :class:`asyncio.TimeoutError`, re-raises as :class:`RuntimeError`
+        with a user-actionable message naming the operation + server +
+        timeout. Any other exception is passed through unchanged so
+        existing error-handling paths keep working.
+        """
+        try:
+            return await asyncio.wait_for(coro, timeout=self._op_timeout_sec)
+        except TimeoutError as exc:
+            # ``asyncio.wait_for`` raises the stdlib :class:`TimeoutError`
+            # (since py3.11 ``asyncio.TimeoutError`` is an alias). We wrap
+            # it into a descriptive :class:`RuntimeError` so the surfacing
+            # layer doesn't have to decide whether an op-level timeout is
+            # "transient network hiccup" or "config is wrong" — the text
+            # names the op + server + cap so the operator can act.
+            raise RuntimeError(
+                f"MCP operation {op_name!r} on server {server!r} "
+                f"timed out after {self._op_timeout_sec}s"
+            ) from exc
 
     @staticmethod
     async def _list_prompts(
@@ -222,6 +334,11 @@ class MCPManager:
         raises — a failure flips state to ``"error"`` and returns empty
         lists so the caller can proceed with other servers / a fallback
         UI message.
+
+        Remote-transport (sse / streamable_http) failures additionally
+        schedule an exponential-backoff reconnect task. Stdio failures do
+        not — a dead subprocess is a user-visible event that retrying
+        won't fix.
         """
         from aura.core import journal
 
@@ -239,7 +356,11 @@ class MCPManager:
             )
 
         try:
-            tools = await self._client.get_tools(server_name=cfg.name)
+            tools = await self._run_with_timeout(
+                self._client.get_tools(server_name=cfg.name),
+                op_name="get_tools",
+                server=cfg.name,
+            )
         except Exception as exc:  # noqa: BLE001
             journal.write(
                 "mcp_connect_failed",
@@ -251,12 +372,33 @@ class MCPManager:
             self._tool_counts[cfg.name] = 0
             self._prompt_counts[cfg.name] = 0
             self._resource_counts[cfg.name] = 0
+            # Remote transports get auto-reconnect; stdio does not (see
+            # module docstring for rationale). Guard against double-
+            # scheduling: if an attempt is already pending for this
+            # server, leave it alone.
+            if cfg.transport in ("sse", "streamable_http"):
+                self._schedule_reconnect(cfg)
             return [], []
 
         for t in tools:
             add_aura_metadata(t, server_name=cfg.name)
 
-        prompts = await self._list_prompts(self._client, cfg.name)
+        try:
+            prompts = await self._run_with_timeout(
+                self._list_prompts(self._client, cfg.name),
+                op_name="list_prompts",
+                server=cfg.name,
+            )
+        except RuntimeError:
+            # Graceful-degrade on prompt-list timeout: the server is
+            # up (``get_tools`` succeeded); we just don't surface any
+            # prompts for this session. Journal so the operator sees why.
+            journal.write(
+                "mcp_list_prompts_timeout",
+                server=cfg.name,
+                timeout_sec=self._op_timeout_sec,
+            )
+            prompts = []
         commands: list[Command] = []
         for p in prompts:
             # mcp.types.Prompt has .name and .description (Optional).
@@ -276,10 +418,23 @@ class MCPManager:
                     # ``{arg0: "alpha", arg1: "beta"}`` instead of silently
                     # dropping user args. Defaults to [] for zero-arg prompts.
                     prompt_arguments=getattr(p, "arguments", None) or [],
+                    op_timeout_sec=self._op_timeout_sec,
                 )
             )
 
-        resources = await self._list_resources(self._client, cfg.name)
+        try:
+            resources = await self._run_with_timeout(
+                self._list_resources(self._client, cfg.name),
+                op_name="list_resources",
+                server=cfg.name,
+            )
+        except RuntimeError:
+            journal.write(
+                "mcp_list_resources_timeout",
+                server=cfg.name,
+                timeout_sec=self._op_timeout_sec,
+            )
+            resources = []
         # Clear any stale resource entries for this server before re-adding
         # — reconnect may legitimately have fewer resources than before.
         self._resources = {
@@ -304,7 +459,140 @@ class MCPManager:
         self._tool_counts[cfg.name] = len(tools)
         self._prompt_counts[cfg.name] = len(commands)
         self._resource_counts[cfg.name] = len(resources)
+        # If we got here, we're connected. Any prior reconnect task for
+        # this server is now stale — a subsequent disconnect will spawn a
+        # fresh one. Cancel the stale handle so ``stop_all`` has a clean
+        # map to iterate.
+        self._cancel_reconnect_task(cfg.name)
         return list(tools), commands
+
+    # ------------------------------------------------------------------
+    # Auto-reconnect
+    # ------------------------------------------------------------------
+
+    def _cancel_reconnect_task(self, name: str) -> None:
+        """Cancel any pending reconnect task for *name* (idempotent).
+
+        Safe to call even when no task is scheduled. We drop the handle
+        from the map regardless of whether ``.cancel()`` succeeded — the
+        task is about to go away one way or another.
+
+        **Self-safety.** If this is invoked from *inside* the reconnect
+        task itself (e.g. ``_connect_one`` → successful reconnect →
+        clear-the-handle), we only remove the handle from the map but
+        do NOT call ``.cancel()`` — cancelling the current task would
+        raise :class:`asyncio.CancelledError` at the next ``await`` and
+        bubble out of the loop. The task drops out of the map naturally
+        when it returns.
+        """
+        task = self._reconnect_tasks.pop(name, None)
+        if task is None or task.done():
+            return
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if task is current:
+            # Self-cancel suppression: let the task return naturally.
+            return
+        task.cancel()
+
+    def _schedule_reconnect(self, cfg: MCPServerConfig) -> None:
+        """Spawn a background reconnect task for *cfg*.
+
+        Guarded against double-scheduling: if a task is already live for
+        this server, we leave it alone so the in-flight backoff curve
+        isn't reset by a concurrent failure signal. Only called from
+        :meth:`_connect_one` on remote-transport failure, so stdio
+        servers never hit this path.
+        """
+        existing = self._reconnect_tasks.get(cfg.name)
+        if existing is not None and not existing.done():
+            return
+        # Spawn the loop and stash the handle. We intentionally don't
+        # await it — reconnect runs concurrently with normal agent work.
+        task = asyncio.create_task(
+            self._reconnect_loop(cfg),
+            name=f"mcp-reconnect:{cfg.name}",
+        )
+        self._reconnect_tasks[cfg.name] = task
+
+    async def _reconnect_loop(self, cfg: MCPServerConfig) -> None:
+        """Exponential-backoff reconnect loop for one remote-transport server.
+
+        Schedule (seconds per attempt sleep): 1, 2, 4, 8, 16 — capped at
+        60s (``_MAX_BACKOFF_SEC``). Max 5 attempts
+        (``_MAX_RECONNECT_ATTEMPTS``), matching claude-code's
+        ``useManageMCPConnections.ts`` constants. If the server is
+        disabled or reconnected out-of-band between attempts, we
+        short-circuit and return.
+
+        On success: state flips to ``"connected"`` (done inside
+        ``_connect_one`` on the successful call) and we return normally.
+
+        On max-attempts-exhausted: ``_state[name]`` stays ``"error"``
+        (last ``_connect_one`` call set it) until the operator runs
+        ``/mcp reconnect`` or restarts the session.
+        """
+        from aura.core import journal
+
+        for attempt in range(1, _MAX_RECONNECT_ATTEMPTS + 1):
+            # Sleep BEFORE each attempt — gives the remote side time to
+            # recover. Backoff grows 1s → 2s → 4s → 8s → 16s, capped at
+            # 60s. Expressed in terms of attempt number (1-indexed).
+            backoff = min(
+                _INITIAL_BACKOFF_SEC * (2 ** (attempt - 1)),
+                _MAX_BACKOFF_SEC,
+            )
+            try:
+                await asyncio.sleep(backoff)
+            except asyncio.CancelledError:
+                return
+
+            # Bail if the server got disabled / reconnected out-of-band
+            # while we were sleeping. Race-safe: we read the current
+            # state, and ``disable`` / ``reconnect`` cancel us explicitly.
+            current_state = self._state.get(cfg.name)
+            if current_state in ("disabled", "connected"):
+                return
+
+            journal.write(
+                "mcp_reconnect_attempt",
+                server=cfg.name,
+                attempt=attempt,
+                max_attempts=_MAX_RECONNECT_ATTEMPTS,
+                backoff_sec=backoff,
+            )
+
+            # ``_connect_one`` fully updates state + counts + journal on
+            # both success and failure. It also re-calls
+            # ``_schedule_reconnect`` on failure — but the guard at the
+            # top of that method prevents us from re-spawning ourselves
+            # (we're still live in ``_reconnect_tasks[name]`` until this
+            # coroutine returns).
+            await self._connect_one(cfg)
+
+            if self._state.get(cfg.name) == "connected":
+                journal.write(
+                    "mcp_reconnect_succeeded",
+                    server=cfg.name,
+                    attempt=attempt,
+                )
+                return
+
+        # Exhausted the attempt budget. ``_connect_one`` already set state
+        # back to ``"error"`` on the last failure; we just journal the
+        # give-up event so operators see "we tried 5x, you're on your
+        # own now".
+        journal.write(
+            "mcp_reconnect_exhausted",
+            server=cfg.name,
+            max_attempts=_MAX_RECONNECT_ATTEMPTS,
+        )
+        # Drop our own handle out of the map so a future /mcp reconnect
+        # (or a new failure signal on a re-enabled server) can cleanly
+        # spawn a fresh loop.
+        self._reconnect_tasks.pop(cfg.name, None)
 
     def resources_catalogue(
         self,
@@ -347,6 +635,10 @@ class MCPManager:
         the caller (``mcp_read_resource`` tool) converts this into a
         ``ToolError`` so the LLM sees an actionable message listing the
         known URIs.
+
+        Raises :class:`RuntimeError` if the underlying MCP read stalls
+        past :attr:`op_timeout_sec` — converted from
+        :class:`asyncio.TimeoutError` for a readable, user-facing shape.
         """
         if self._client is None:
             raise ValueError(
@@ -373,8 +665,20 @@ class MCPManager:
         # without forcing every caller into pydantic-land.
         from pydantic import AnyUrl
 
-        async with self._client.session(owning_server) as session:
-            result = await session.read_resource(AnyUrl(uri_str))
+        async def _do_read() -> Any:
+            # Wrap the full session+read in a single awaitable so
+            # ``wait_for`` cancels both if the read hangs. The session
+            # context manager honours the cancellation and tears the
+            # underlying transport down.
+            assert self._client is not None  # for mypy — guarded above
+            async with self._client.session(owning_server) as session:
+                return await session.read_resource(AnyUrl(uri_str))
+
+        result = await self._run_with_timeout(
+            _do_read(),
+            op_name="read_resource",
+            server=owning_server,
+        )
         contents = [
             normalize_resource_contents(c) for c in result.contents
         ]
@@ -385,10 +689,31 @@ class MCPManager:
         }
 
     async def stop_all(self) -> None:
-        """Tear down the client. The current library has no close(); this
-        is a defensive shim that tries any aclose-shaped attribute and
-        swallows errors so shutdown never raises.
+        """Tear down the client + cancel pending reconnect tasks.
+
+        The current library has no close(); this is a defensive shim that
+        tries any aclose-shaped attribute and swallows errors so shutdown
+        never raises. All scheduled reconnect tasks are cancelled first
+        so we don't leak pending work past shutdown.
         """
+        # Cancel reconnect timers first — they hold strong refs to ``self``
+        # and would otherwise keep firing after teardown. ``.cancel()``
+        # is best-effort; the task may be already-finished, in which case
+        # cancel is a no-op.
+        for task in list(self._reconnect_tasks.values()):
+            if not task.done():
+                task.cancel()
+        # Drain cancelled tasks so tests can assert a clean shutdown.
+        # ``gather(..., return_exceptions=True)`` suppresses the
+        # CancelledError we just injected.
+        if self._reconnect_tasks:
+            with suppress(Exception):
+                await asyncio.gather(
+                    *self._reconnect_tasks.values(),
+                    return_exceptions=True,
+                )
+        self._reconnect_tasks.clear()
+
         if self._client is None:
             return
         for attr in ("aclose", "close"):
@@ -481,6 +806,10 @@ class MCPManager:
         # was dropped by a prior ``disable`` call.
         if cfg not in self._configs:
             self._configs.append(cfg)
+        # Cancel any in-flight auto-reconnect loop for this server — the
+        # operator is explicitly taking over, so a parallel background
+        # attempt would just race with us.
+        self._cancel_reconnect_task(name)
         await self._connect_one(cfg)
         new_state = self._state.get(name, "error")
         if new_state == "connected":
@@ -516,6 +845,9 @@ class MCPManager:
         self._resources = {
             k: v for k, v in self._resources.items() if k[0] != name
         }
+        # Cancel any pending reconnect — the operator has explicitly
+        # disabled this server, so backoff retries would un-disable it.
+        self._cancel_reconnect_task(name)
         self._state[name] = "disabled"
         self._errors.pop(name, None)
         self._tool_counts[name] = 0
@@ -542,6 +874,9 @@ class MCPManager:
         self._resources = {
             k: v for k, v in self._resources.items() if k[0] != name
         }
+        # Cancel any pending auto-reconnect — the operator is driving
+        # the reconnect themselves, no background retries need to race.
+        self._cancel_reconnect_task(name)
         self._state[name] = "never_started"
         self._errors.pop(name, None)
         self._tool_counts[name] = 0

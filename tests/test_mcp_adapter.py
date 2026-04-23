@@ -291,3 +291,45 @@ async def test_prompt_command_fetch_failure_is_surfaced_not_raised() -> None:
     assert result.handled is True
     assert result.kind == "print"
     assert "server gone" in result.text
+
+
+# ---------------------------------------------------------------------------
+# Per-op timeout — handle() must convert hang → user-readable CommandResult
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_prompt_command_handle_surfaces_timeout_as_user_error() -> None:
+    """A hanging ``get_prompt`` call must produce a readable timeout note.
+
+    We pass a very short ``op_timeout_sec`` and a ``get_prompt`` mock
+    that never resolves. The ``handle()`` method must catch the
+    :class:`asyncio.TimeoutError` raised by :func:`asyncio.wait_for`
+    and return a ``CommandResult`` whose text names the server + prompt
+    + timeout — not raise, not leak the exception, not hang the REPL.
+    """
+    import asyncio as _aio
+
+    client = MagicMock()
+
+    async def _hang(*args: Any, **kwargs: Any) -> Any:
+        # Simulate a wedged server — never yields a response.
+        await _aio.Event().wait()
+
+    client.get_prompt = AsyncMock(side_effect=_hang)
+    cmd = make_mcp_command(
+        server_name="gh",
+        prompt_name="slow_prompt",
+        prompt_description="slow",
+        client=client,
+        # 50ms is well below any reasonable real MCP latency; plenty of
+        # margin for the wait_for cancel to propagate.
+        op_timeout_sec=0.05,
+    )
+    agent = MagicMock()
+    result = await cmd.handle("", agent)
+    assert result.handled is True
+    assert result.kind == "print"
+    assert "timed out" in result.text
+    assert "gh" in result.text
+    assert "slow_prompt" in result.text

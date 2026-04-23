@@ -185,10 +185,10 @@ async def test_non_bypass_mode_uses_plain_prompt(tmp_path: Path) -> None:
 
 
 async def test_welcome_banner_shows_core_info_compactly(tmp_path: Path) -> None:
-    # Welcome is now a panel-framed logo + 3 dim info lines (model, cwd,
-    # rotating tip) + a dim footer. Branding / entry hints / quit binding
-    # all preserved; added: wordmark (AURA), explicit version, and a
-    # rotating tip line. Cyan border is drawn with box-drawing glyphs.
+    # Single compact cyan Panel (v0.8.0 shape restored after operator
+    # feedback). Branding line + keybinding hints + model + cwd + tip, all
+    # inside ONE Panel. ``expand=False`` so the panel is content-sized,
+    # not terminal-sized. Cyan border drawn with box-drawing glyphs.
     from aura import __version__
     from aura.cli.repl import _STARTUP_TIPS
 
@@ -200,17 +200,16 @@ async def test_welcome_banner_shows_core_info_compactly(tmp_path: Path) -> None:
     )
     out = buf.getvalue()
 
-    # Wordmark + mark + version
-    assert "AURA" in out
-    assert "✱" in out
+    # Branding line — mark + wordmark + version all in one place.
+    assert "✱ Aura" in out
     assert f"v{__version__}" in out
 
-    # Info lines
+    # Info lines inside the same Panel.
     assert "model:" in out
     assert "cwd:" in out
     assert "tip:" in out
 
-    # Footer still carries the quit hint
+    # Keybinding hints still on the branding line.
     assert "/help" in out
     assert "Ctrl+D" in out
     assert "exit" in out
@@ -249,7 +248,7 @@ async def test_welcome_banner_renders_even_with_odd_version(
 
     out = buf.getvalue()
     assert "v9.9.9+dev" in out
-    assert "AURA" in out
+    assert "✱ Aura" in out
     agent.close()
 
 

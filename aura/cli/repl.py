@@ -447,39 +447,31 @@ async def run_repl_async(
 
 
 def _print_welcome(agent: Agent, console: Console) -> None:
-    # Two-surface banner, modelled on claude-code's WelcomeV2 but shrunk
-    # to CLI scale — a narrow terminal doesn't have room for multi-line
-    # ASCII art, and every extra line costs scrollback on every startup.
-    #
-    # Layer 1: a cyan-bordered Panel carrying the mark + wordmark + version.
-    #   This is the "logo surface" — all colour lives here so the banner
-    #   reads as a single unit even when the info lines below wrap.
-    # Layer 2: three dim info lines (model / cwd / rotating tip) + the
-    #   existing quit hint. Dim so they recede behind prompt output.
-    logo = Text()
-    logo.append("✱", style="bold cyan")
-    logo.append("   ", style="")
-    logo.append("AURA", style="bold")
-    logo.append(f"  v{__version__}", style="dim")
-    console.print(
-        Panel(logo, border_style="cyan", padding=(1, 2), expand=False)
-    )
+    # Single compact Panel (v0.8.0 shape restored after operator feedback
+    # "之前的不错, 只是横向长度少 1/3"). ``expand=False`` sizes the panel
+    # to its widest line instead of stretching to the full terminal —
+    # that alone buys back ~1/3 width on typical 120-col terminals.
+    # ``~`` substitution on ``cwd`` further shortens the longest line.
+    cwd_display = str(Path.cwd())
+    home = str(Path.home())
+    if cwd_display == home or cwd_display.startswith(home + "/"):
+        cwd_display = "~" + cwd_display[len(home):]
 
     tip = random.choice(_STARTUP_TIPS)
-    info = Text()
-    info.append("  model: ", style="dim")
-    info.append(f"{agent.current_model}\n", style="dim")
-    info.append("  cwd:   ", style="dim")
-    info.append(f"{Path.cwd()}\n", style="dim")
-    info.append("  tip:   ", style="dim")
-    info.append(tip, style="dim")
-    console.print(info)
 
-    footer = Text()
-    footer.append("  ", style="dim")
-    footer.append("/help", style="cyan")
-    footer.append("  ·  Ctrl+D to exit", style="dim")
-    console.print(footer)
+    body = Text()
+    body.append("✱ Aura", style="bold")
+    body.append(f" v{__version__}  ·  ", style="dim")
+    body.append("/help", style="cyan")
+    body.append("  ·  Ctrl+D to exit  ·  ", style="dim")
+    body.append("shift+tab cycles mode\n", style="dim")
+    body.append("model: ", style="dim")
+    body.append(f"{agent.current_model}\n", style="")
+    body.append("cwd:   ", style="dim")
+    body.append(f"{cwd_display}\n", style="")
+    body.append("tip:   ", style="dim")
+    body.append(tip, style="dim")
+    console.print(Panel(body, border_style="cyan", padding=(0, 2), expand=False))
 
 
 def _print_verbose_summary(agent: Agent, console: Console) -> None:

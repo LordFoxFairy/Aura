@@ -59,10 +59,7 @@ class WebSearchConfig(BaseModel):
     """Backend selection for the ``web_search`` tool.
 
     ``provider`` picks the backend; ``duckduckgo`` is the zero-config default
-    and the only one actually implemented in this release. ``tavily`` and
-    ``serper`` slots exist so config validates (and users can pin a future
-    backend without a schema migration) — invoking them raises a clear
-    ``ToolError`` telling the user the backend is not yet implemented.
+    and the only backend this release supports.
 
     ``api_key_env`` names the env var that holds the key (the key itself is
     never stored in config). Ignored for the DuckDuckGo backend.
@@ -74,7 +71,7 @@ class WebSearchConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["duckduckgo", "tavily", "serper"] = "duckduckgo"
+    provider: Literal["duckduckgo"] = "duckduckgo"
     api_key_env: str | None = None
     max_results: int = Field(default=5, ge=1, le=20)
 

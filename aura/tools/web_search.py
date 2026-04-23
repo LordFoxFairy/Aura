@@ -1,10 +1,7 @@
 """web_search tool — query → list of hits.
 
-Default backend is DuckDuckGo (no API key, zero-config) via the ``ddgs``
-package (the maintained fork of ``duckduckgo-search``). ``tavily`` and
-``serper`` are reserved in the config schema so future backends slot in
-without a schema migration; for this release they raise a clear
-``ToolError`` at invocation time.
+Backend is DuckDuckGo (no API key, zero-config) via the ``ddgs`` package
+(the maintained fork of ``duckduckgo-search``).
 
 ``ddgs`` is declared under the ``web`` extras group. If the package is
 absent, the tool stays visible to the LLM but invocation raises a
@@ -129,8 +126,6 @@ class WebSearch(BaseTool):
         query: str,
         max_results: int = 5,
     ) -> dict[str, Any]:
-        provider = self.config.provider if self.config is not None else "duckduckgo"
-
         # The schema default for ``max_results`` is 5. If the caller did NOT
         # pass an explicit value (i.e. we see the default) AND the config
         # declares a different default, the config wins. Explicit argument
@@ -143,22 +138,9 @@ class WebSearch(BaseTool):
         ):
             effective_max = self.config.max_results
 
-        if provider == "duckduckgo":
-            return await self._search_duckduckgo(query, effective_max)
-        if provider == "tavily":
-            raise ToolError(
-                "tavily backend not yet implemented; set "
-                "web_search.provider to 'duckduckgo' or wait for a future release.",
-            )
-        if provider == "serper":
-            raise ToolError(
-                "serper backend not yet implemented; set "
-                "web_search.provider to 'duckduckgo' or wait for a future release.",
-            )
-        # Literal narrows provider to the three above; this branch is
-        # unreachable under a valid config but we guard it so a future
-        # schema bug can't silently return empty results.
-        raise ToolError(f"unknown web_search provider: {provider!r}")  # pragma: no cover
+        # The Literal on WebSearchConfig.provider narrows the only valid value
+        # to "duckduckgo"; no branching needed.
+        return await self._search_duckduckgo(query, effective_max)
 
     async def _search_duckduckgo(
         self, query: str, max_results: int,

@@ -2,6 +2,102 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.7.4] — Inline permission prompts + leftover closure
+
+Closing round: owner wanted "不要遗留" — everything half-finished audited and either shipped or removed. Nothing new, just no more stubs.
+
+### Headlines
+
+- Permission prompts and `ask_user_question` prompts both switched from `prompt_toolkit`'s bordered `radiolist_dialog` / `input_dialog` to inline numbered blocks rendered with rich. Matches claude-code's in-scrollback UX; owner: "我不喜欢这种形式的，还是喜欢 CLI 这种交互，claudecode 的".
+- `web_search` collapsed to DuckDuckGo-only. `tavily` and `serper` were `Literal` slots that raised `ToolError("not yet implemented")` — removed from the schema entirely. Audit flagged them as dead code; they are.
+- `edit_file` had a stub assignment `original_newline = "\n"  # unused on this branch; stub for type-check` — removed.
+
+### Changed
+
+- `aura/cli/permission.py` — full rewrite: no `radiolist_dialog`, no `HTML` formatted text, no `_build_dialog_text`. Renders a rich block (tag glyph + tool + preview + 3 numbered options + "Enter = default · Ctrl+C to cancel" hint), reads the answer via a transient `PromptSession.prompt_async`. Accepts `1`/`y`/`yes`, `2`/`a`/`always`, `3`/`n`/`no`, bare Enter (default: 1 for safe tools, 3 for destructive). Invalid tokens reprompt rather than silently defaulting — safety invariant.
+- `aura/cli/user_question.py` — same treatment for the `ask_user_question` tool's CLI asker.
+- `aura/config/schema.py` — `WebSearchConfig.provider` narrowed to `Literal["duckduckgo"]`.
+- `aura/tools/web_search.py` — dispatch collapsed; module docstring trimmed.
+- `aura/tools/edit_file.py` — unused `original_newline` stub deleted.
+
+### Removed
+
+- `tests/test_permission_dialog_polish.py` — every test targeted `_build_dialog_text`, which no longer exists.
+- `test_tavily_backend_returns_not_implemented`, `test_serper_backend_returns_not_implemented` — behaviors that no longer exist.
+
+### Stats
+
+- 1107 tests pass (down from 1109 as 2 "not implemented" assertions were removed — the features they asserted on are gone). Lint + mypy clean.
+
+## [0.7.3] — Dogfooded UX polish
+
+Owner ran v0.7.2 and found three real UX problems that tests didn't catch. Fixed all three plus a post-turn checkpoint for when pt's bottom toolbar is hidden during streaming.
+
+### Changed
+
+- **Bottom bar monochrome.** Stripped `_pct_color_tag`; red/yellow/green context-pressure gradient felt noisy against dim surroundings. Uniform `ansigray`.
+- **Bottom bar no-reverse.** `Style.from_dict({"bottom-toolbar": "noreverse"})` — pt's default `reverse` produced a two-tone inverted bar on most terminals. Now blends with terminal bg.
+- **Welcome banner: 7 → 3 lines.** Branding + `/help` accent + Ctrl+D hint on one line; `model:` and `cwd:` each on their own. Tab / Ctrl+R hints dropped (learned from `/help`).
+- **Plaintext api_key warning gated behind `--verbose`.** Was spamming every startup; operators tuned it out. Journal still fires unconditionally so the audit trail is intact.
+
+### Added
+
+- **`Agent.pinned_tokens_estimate`.** Char-count / 4 estimate over the pinned prefix (system msg + memory + rules + skill catalogue + tool schemas). Status bar shows `~Xk pinned` when the provider's `cache_read_input_tokens` is 0 (deepseek, ollama, etc.); real `+Xk cached` when available. No more zero-pinned on first paint.
+- **Post-turn status checkpoint.** `_print_post_turn_status` prints a dim `render_status_bar` line after every turn. pt's `bottom_toolbar` only renders while pt owns the screen — during streaming it disappears. This checkpoint keeps the last-turn stats visible mid-conversation.
+
+### Stats
+
+- 1077 tests. Lint + mypy clean.
+
+## [0.7.2] — CLI mode plumbing + 512k default window
+
+- `Agent.__init__` takes a `mode` kwarg; CLI passes the resolved permission mode (config + `--bypass-permissions`) through `build_agent(..., mode=mode)`. Bottom bar reads `agent.mode` instead of a hardcoded `"default"`.
+- New `AuraConfig.context_window: int | None` override. `Agent.context_window` honors it; otherwise falls back to `llm.get_context_window`. Useful for 1M extended-context deployments and frontier models not yet in the static table.
+- Unknown-model fallback bumped 128k → 512k. Frontier models increasingly ship 400k-1M windows; 128k under-reported and made the %-bar alarmist.
+- `test_package.py` switched from literal version pin to SemVer regex — bumps don't cost a test edit.
+
+### Stats
+
+- 1076 tests. Lint + mypy clean.
+
+## [0.7.1] — Context-aware bottom bar + refined token display
+
+- `render_bottom_toolbar_html` — new HTML renderer for pt's bottom bar. Color-coded context-pressure block bar + token counts + pinned/cached separator + mode + cwd. Callable closed over Agent so numbers track live state without polling.
+- Split cumulative `total_tokens_used` into `last_input_tokens` (dynamic per-turn prompt size) + `last_cache_read_tokens` (pinned prefix hit rate). Operators saw the old running total climb monotonically regardless of what this turn actually cost — misleading.
+- Bottom toolbar callable moved from a no-op footer to a live status surface.
+
+### Stats
+
+- ≈1000 tests.
+
+## [0.7.0] — REPL + rendering polish aligned with claude-code
+
+Multi-subagent parallel polish across REPL, render, and status surfaces. Two subagents stalled on watchdog; main thread completed the missing pieces (`aura/cli/status_bar.py` scaffold, `_render_tool_error` / `_hint_for_error` helpers in `render.py`).
+
+### Added
+
+- Tool-error display: highlighted `●` marker + one-line hint (`_hint_for_error`) mapped from common error substrings (not found, permission denied, ripgrep missing, etc.). Hints ordered most-specific-first so "ripgrep" isn't preempted by "not found".
+- Keybinding hints on the welcome banner (moved from an ugly prompt-line footer).
+
+### Changed
+
+- `SlashCommandCompleter` takes a **live** registry getter so skills / MCP commands registered after `PromptSession` construction still tab-complete.
+- `complete_while_typing=False` — menu only on Tab, never while typing. The OLD behavior was noisy.
+- Welcome banner: `rich.Panel` with cyan border, dim inline keybinding line.
+
+## [0.6.0] — Close the remaining claude-code parity gaps
+
+- **Per-subagent permission inheritance**: subagents inherit the parent's SessionRuleSet and SafetyPolicy.
+- **Full transcript accumulation**: subagents record every event (not just `Final`) so `task_output` can replay the run.
+- **Skill / MCP sharing with parent**: subagents now get the parent's `SkillRegistry` and `mcp_servers` list — they were empty in v0.5.0. Deleted the v0.5.1 test pinning the (wrong) old contract.
+- **Recursion guard only strips `task_create` + `task_output`** from the child's tool list. Child can still use every other tool + skill + MCP service the parent has.
+
+## [0.5.1] — Audit fixes, auto-compact, session-scoped journal, docs
+
+- **Auto-compact triggers**: `Agent.astream` checks `total_tokens_used` against `auto_compact_threshold` after each turn; if over, invokes `compact(source="auto")` inline.
+- **Session-scoped journal**: `journal.write` routes to a per-session JSONL via `contextvars` when `session_log_dir` is configured. Two concurrent Agents (subagents, server workers) in the same process get fully separate audit trails.
+- **claude-code design principles study** (`docs/research/claude-code-design-principles.md`) — 282 lines of dense notes with file:line citations across the five subsystems (tool, hook/permission, query loop, context/memory, rendering) that shaped Aura's design.
+
 ## [0.5.0] — Task tool (scoped Phase E)
 
 Fire-and-forget subagent dispatch. Parent returns immediately with a `task_id`; child runs detached on the event loop; transcripts fetched later via `task_output`. Matches claude-code's `shouldDefer: true` pattern (`TaskCreateTool.ts:67`).

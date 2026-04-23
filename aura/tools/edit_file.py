@@ -99,7 +99,6 @@ class EditFile(BaseTool):
             content = raw
             old_str_n = old_str
             new_str_n = new_str
-            original_newline = "\n"  # unused on this branch; stub for type-check
         else:
             # Uniform file: detect the single style, normalize to LF for
             # matching, restore on write.

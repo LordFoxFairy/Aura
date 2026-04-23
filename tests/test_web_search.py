@@ -192,20 +192,6 @@ async def test_web_search_ddgs_not_installed_returns_friendly_error(
         await tool._arun(query="python", max_results=3)
 
 
-async def test_tavily_backend_returns_not_implemented() -> None:
-    cfg = WebSearchConfig(provider="tavily", api_key_env="TAVILY_API_KEY")
-    tool = WebSearch(config=cfg)
-    with pytest.raises(ToolError, match="tavily backend not yet implemented"):
-        await tool._arun(query="python", max_results=3)
-
-
-async def test_serper_backend_returns_not_implemented() -> None:
-    cfg = WebSearchConfig(provider="serper", api_key_env="SERPER_API_KEY")
-    tool = WebSearch(config=cfg)
-    with pytest.raises(ToolError, match="serper backend not yet implemented"):
-        await tool._arun(query="python", max_results=3)
-
-
 # ---------------------------------------------------------------------------
 # Config schema
 # ---------------------------------------------------------------------------

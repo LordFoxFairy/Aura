@@ -271,14 +271,14 @@ agent = build_agent(load_config(), hooks=hooks)
 
 - Spec: `docs/specs/2026-04-17-aura-mvp-design.md`
 - Plan: `docs/plans/2026-04-17-aura-mvp.md`
-- Phase E design (rendering channel deferred to 0.6.0): `docs/specs/2026-04-21-phase-e-subagent.md`
+- Phase E design: `docs/specs/2026-04-21-phase-e-subagent.md`
 - Research — claude-code design principles: `docs/research/claude-code-design-principles.md`
 - Manual: `docs/manual/` (per-module how-tos)
-- Changelog: `CHANGELOG.md` (v0.1.0 → v0.5.0)
+- Changelog: `CHANGELOG.md` (v0.1.0 → v0.7.4)
 
 ## Status
 
-**0.5.0 — six incremental releases since the walking-skeleton MVP.** Own-loop, JSON config, 11 built-in tools, hook-based extensibility, end-to-end permissions + safety, skills, MCP, compact, subagents. LangChain client-layer only. 921 tests green.
+**0.7.4 — eleven incremental releases since the walking-skeleton MVP.** Own-loop, JSON config, 11 built-in tools, hook-based extensibility, end-to-end permissions + safety (4 modes), skills, MCP, compact + auto-compact, fire-and-forget subagents with full inheritance, live status bar with context-pressure indicator, inline permission prompts. LangChain client-layer only. 1107 tests green.
 
 | Tag | Theme |
 |---|---|
@@ -288,15 +288,18 @@ agent = build_agent(load_config(), hooks=hooks)
 | `v0.3.0` | MCP via `langchain-mcp-adapters` — stdio transport, `mcp__<server>__<tool>` namespace, dynamic tool registry |
 | `v0.4.0` | Compact — `Agent.compact()` summarizes history; `_read_records` / skills / todos / session rules survive |
 | `v0.5.0` | Task tool — fire-and-forget subagent via `asyncio.create_task`; `task_create` / `task_output` / `/tasks` |
+| `v0.5.1` | Auto-compact trigger, session-scoped journal, claude-code design study |
+| `v0.6.0` | Close parity gaps — subagent skill/MCP inheritance, permission inheritance, full transcript accumulation |
+| `v0.7.0` | REPL + render polish — tool-error hints, SlashCommandCompleter, welcome banner |
+| `v0.7.1` | Context-aware bottom bar — live token display, cached/pinned split, color-coded pressure |
+| `v0.7.2` | Mode plumbing to status bar, `AuraConfig.context_window` override, 512k unknown-model default |
+| `v0.7.3` | Monochrome bottom bar, noreverse footer, compact 3-line welcome, post-turn status checkpoint |
+| `v0.7.4` | Inline permission prompts (no more bordered dialogs), web_search DuckDuckGo-only, leftover closure |
 
-**Deferred to later phases:**
-- Unified prompt-toolkit rendering channel (foldable regions, dialog queue) — the other half of original Phase E, see `docs/specs/2026-04-21-phase-e-subagent.md` — 0.6.0
-- Auto-compact trigger, selective file re-injection, reactive recompact — 0.4.1
-- Skills: directory form, file-pattern triggers, LLM-invokable `SkillTool`, hot reload — 0.2.x
-- MCP: HTTP/SSE transport, skill/MCP inheritance by subagents — 0.3.x / 0.5.x
-- Subagents: recursion, permission inheritance, full transcript accumulation — 0.5.x
-- Tauri desktop — not scheduled
-- Token-budget diminishing-returns detection (advisory; `max_turns=50` is the hard floor today)
+**Deferred to future phases:**
+- Full-screen prompt-toolkit `Application` mode — persistent status bar that doesn't disappear during response streaming. Today's post-turn checkpoint is the pragmatic middle ground.
+- Tauri desktop wrapper — not scheduled.
+- Additional web-search backends (Tavily / Serper) — removed in v0.7.4. DuckDuckGo is zero-config and covers the general-purpose search need.
 
 ## License
 

@@ -43,7 +43,7 @@ transcript doesn't pollute the parent's on-disk session DB. Tests inject a
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -51,6 +51,7 @@ from langchain_core.language_models import BaseChatModel
 
 from aura.config.schema import AuraConfig, ToolsConfig
 from aura.core import llm
+from aura.core.memory.context import _ReadRecord
 from aura.core.persistence.storage import SessionStorage
 from aura.core.skills import SkillRegistry
 from aura.core.tasks.agent_types import get_agent_type
@@ -74,12 +75,24 @@ class SubagentFactory:
         parent_model_spec: str,
         *,
         parent_skills: SkillRegistry | None = None,
+        parent_read_records_provider: (
+            Callable[[], Mapping[Path, _ReadRecord]] | None
+        ) = None,
         model_factory: Callable[[], BaseChatModel] | None = None,
         storage_factory: Callable[[], SessionStorage] | None = None,
     ) -> None:
+        # ``parent_read_records_provider`` — called at each ``spawn`` to
+        # snapshot the parent Agent's live ``Context._read_records`` map.
+        # Threaded through to the child's :class:`Context` as
+        # ``inherited_reads`` so files the parent already read show up as
+        # ``read_status == "fresh"`` in the child (Workstream G8). ``None``
+        # disables inheritance — child starts with an empty read map
+        # (legacy behavior, kept for the handful of tests that build a
+        # factory without a parent Agent reference).
         self._parent_config = parent_config
         self._parent_model_spec = parent_model_spec
         self._parent_skills = parent_skills
+        self._parent_read_records_provider = parent_read_records_provider
         self._model_factory = model_factory
         self._storage_factory = storage_factory or _default_storage
 
@@ -145,6 +158,18 @@ class SubagentFactory:
             )
             model = llm.create(provider, model_name)
         storage = self._storage_factory()
+        # Snapshot the parent's read records RIGHT NOW. ``dict(...)`` over
+        # whatever the provider returns pins a shallow copy at spawn time so
+        # subsequent parent reads don't retroactively enter the child's map
+        # (and child record_read calls don't write back into the parent's
+        # live dict). _ReadRecord is frozen, so value-level sharing is
+        # harmless. None provider → None passed through → child starts
+        # empty, matching prior behavior.
+        inherited_reads: dict[Path, _ReadRecord] | None
+        if self._parent_read_records_provider is not None:
+            inherited_reads = dict(self._parent_read_records_provider())
+        else:
+            inherited_reads = None
         return Agent(
             config=child_cfg,
             model=model,
@@ -152,4 +177,5 @@ class SubagentFactory:
             session_id="subagent",
             pre_loaded_skills=self._parent_skills,
             system_prompt_suffix=type_def.system_prompt_suffix,
+            inherited_reads=inherited_reads,
         )

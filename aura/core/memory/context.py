@@ -17,7 +17,7 @@ Provider 注入的 section（如 `<todos>`）不计入上述不变量 —— 它
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -60,6 +60,7 @@ class Context:
         rules: RulesBundle,
         skills: list[Skill] | None = None,
         todos_provider: Callable[[], list[TodoItem]] | None = None,
+        inherited_reads: Mapping[Path, _ReadRecord] | None = None,
     ) -> None:
         self._cwd = cwd.resolve()
         self._system_prompt = system_prompt
@@ -84,7 +85,17 @@ class Context:
         # AgentLoop after a successful read_file call; staleness compared via
         # (mtime, size) — lighter than claude-code's content hash but
         # equivalent in practice for real edits.
-        self._read_records: dict[Path, _ReadRecord] = {}
+        #
+        # ``inherited_reads`` carries the parent Agent's ``_read_records``
+        # snapshot across the subagent boundary (Workstream G8). Shallow
+        # copy — _ReadRecord is a frozen dataclass so value-level sharing is
+        # safe, and dict-level isolation guarantees child ``record_read``
+        # calls DON'T retroactively pollute the parent's map. The snapshot
+        # is taken at spawn time (see ``SubagentFactory.spawn``) so later
+        # parent reads don't leak into an already-running child either.
+        self._read_records: dict[Path, _ReadRecord] = (
+            dict(inherited_reads) if inherited_reads else {}
+        )
         # Provider snapshot each build (mutability lives in LoopState, not here).
         self._todos_provider = todos_provider
 

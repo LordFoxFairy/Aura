@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -23,7 +23,7 @@ from aura.core.hooks.must_read_first import make_must_read_first_hook
 from aura.core.loop import AgentLoop
 from aura.core.mcp import MCPManager
 from aura.core.memory import project_memory, rules
-from aura.core.memory.context import Context
+from aura.core.memory.context import Context, _ReadRecord
 from aura.core.memory.system_prompt import build_system_prompt
 from aura.core.permissions.session import SessionRuleSet
 from aura.core.persistence import journal
@@ -92,6 +92,7 @@ class Agent:
         mode: str = "default",
         system_prompt_suffix: str = "",
         disable_bypass: bool = False,
+        inherited_reads: Mapping[Path, _ReadRecord] | None = None,
     ) -> None:
         # ``session_rules``: CLI hands in the same SessionRuleSet that was used
         # to build the permission hook; Agent.clear_session drops its runtime
@@ -159,10 +160,19 @@ class Agent:
         # child Agent it spawns — matches claude-code's "subagent inherits
         # parent tool set" semantics.
         self._tasks_store = TasksStore()
+        # ``parent_read_records_provider`` — a live view into this Agent's
+        # Context._read_records. Factory calls it at each ``spawn`` to
+        # snapshot the LATEST parent reads (not the startup state), so
+        # files the parent read mid-session before calling task_create
+        # still show as fresh in the child (Workstream G8). Closes over
+        # ``self`` so ``clear_session`` (which swaps _context) is tracked
+        # automatically — the next spawn reads through the refreshed
+        # attribute rather than a stale Context reference.
         self._subagent_factory = SubagentFactory(
             parent_config=self._config,
             parent_model_spec=self._config.router.get("default", ""),
             parent_skills=self._skill_registry,
+            parent_read_records_provider=lambda: self._context._read_records,
         )
         # Map: task_id -> the detached asyncio.Task handle. Shared with the
         # ``task_create`` tool so Agent.close() can cancel still-running
@@ -305,7 +315,12 @@ class Agent:
         self._system_prompt = build_system_prompt() + system_prompt_suffix
         self._primary_memory = project_memory.load_project_memory(self._cwd)
         self._rules = rules.load_rules(self._cwd)
-        self._context = self._build_context()
+        # ``inherited_reads`` (Workstream G8) only flows into the FIRST
+        # Context construction — /clear and /compact build their own fresh
+        # Contexts and must NOT resurrect a long-gone parent's read
+        # fingerprints, so we do NOT store this on self. Subagent spawn
+        # re-snapshots the parent at each ``SubagentFactory.spawn`` call.
+        self._context = self._build_context(inherited_reads=inherited_reads)
         # Hard-floor bash safety — Tier A shell attacks (zsh builtins, CR
         # parser differential, malformed+separator, cd+git compound). Inserted
         # at pre_tool[0] so it precedes any caller-supplied permission hook —
@@ -695,7 +710,11 @@ class Agent:
             retry_config=self._config.retry,
         )
 
-    def _build_context(self) -> Context:
+    def _build_context(
+        self,
+        *,
+        inherited_reads: Mapping[Path, _ReadRecord] | None = None,
+    ) -> Context:
         return Context(
             cwd=self._cwd,
             system_prompt=self._system_prompt,
@@ -703,6 +722,7 @@ class Agent:
             rules=self._rules,
             skills=self._skill_registry.list(),
             todos_provider=lambda: self._state.custom.get("todos", []),
+            inherited_reads=inherited_reads,
         )
 
     async def bootstrap(self) -> None:

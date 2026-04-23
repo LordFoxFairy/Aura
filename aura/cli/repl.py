@@ -38,6 +38,42 @@ InputFn = Callable[[str], Awaitable[str]]
 _MODE_CYCLE: tuple[str, ...] = ("default", "accept_edits", "plan")
 
 
+#: Window during which a second Ctrl+C is treated as "confirm exit".
+#: Mirrors claude-code's ``DOUBLE_PRESS_TIMEOUT_MS = 800`` in
+#: ``src/hooks/useDoublePress.ts`` — fast enough that accidental double-
+#: presses don't exit, slow enough that intentional double-taps succeed.
+_CTRL_C_DOUBLE_PRESS_SECONDS: float = 0.8
+
+
+class _CtrlCState:
+    """Shared mutable state for the Ctrl+C double-press handler.
+
+    Tracks the wall-clock time of the last bare Ctrl+C so the *second*
+    press within :data:`_CTRL_C_DOUBLE_PRESS_SECONDS` can escalate to
+    exit. Also stashes the last hint text so the bottom toolbar can
+    render "Press Ctrl+C again to exit" while the window is open.
+
+    Used as a module-private helper; callers do not construct it
+    directly — :func:`_build_mode_key_bindings` allocates one per REPL
+    session and shares it with :func:`_make_bottom_toolbar`.
+    """
+
+    __slots__ = ("last_press_at",)
+
+    def __init__(self) -> None:
+        # Seconds since epoch. 0.0 means "no prior press", so the first
+        # comparison against ``now - last_press_at > window`` always
+        # treats the initial press as "first".
+        self.last_press_at: float = 0.0
+
+    def hint_active(self, now: float) -> bool:
+        """True iff the prior Ctrl+C landed within the double-press window."""
+        return (
+            self.last_press_at > 0.0
+            and (now - self.last_press_at) <= _CTRL_C_DOUBLE_PRESS_SECONDS
+        )
+
+
 #: Startup tips rotated on each welcome banner render. Kept as a stable
 #: module-level tuple so tests can assert membership without pulling in
 #: the random pick. Only mention features that exist today — adding dead
@@ -69,7 +105,11 @@ def _cycle_mode(current: str) -> str:
     return _MODE_CYCLE[(idx + 1) % len(_MODE_CYCLE)]
 
 
-def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
+def _build_mode_key_bindings(
+    agent: Agent,
+    console: Console,
+    ctrl_c_state: _CtrlCState | None = None,
+) -> KeyBindings:
     """Build a KeyBindings carrying Aura's prompt-level bindings.
 
     Mode-change feedback is **visual only** — ``event.app.invalidate()``
@@ -96,6 +136,22 @@ def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
       Shift+Enter to send Ctrl+J; this binding makes that Just Work.
       Shift+Enter itself is NOT directly bindable — most terminals
       don't distinguish it from Enter by default.
+    - ``c-c`` → three-state handler mirroring claude-code
+      ``src/hooks/useExitOnCtrlCD.ts`` + ``useDoublePress.ts``:
+
+      1. Buffer has text → clear it (no exit).
+      2. Buffer is empty, first press → arm the "press again to exit"
+         state; bottom toolbar hint is rendered for
+         :data:`_CTRL_C_DOUBLE_PRESS_SECONDS`.
+      3. Buffer is empty, second press within the window → raise
+         ``KeyboardInterrupt`` via pt's ``app.exit(exception=...)`` so
+         the outer REPL loop takes the exit path.
+
+      Cancelling an in-flight turn is NOT this binding's concern —
+      during a turn, pt's ``prompt_async`` is NOT running; Ctrl+C goes
+      to Python's default SIGINT handler and reaches
+      :func:`_run_turn`'s inner try/except which cancels the stream
+      task cleanly. See the ``_run_turn`` docstring.
 
     Plain Enter keeps its pt default "accept-line" (submit). We
     deliberately do NOT set ``multiline=True`` on the session because
@@ -105,9 +161,17 @@ def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
     ``console`` is retained in the signature (not currently used in any
     binding) so future bindings that legitimately need to print out-of-band
     can reuse the same wiring without another constructor churn.
+
+    ``ctrl_c_state`` is shared with :func:`_make_bottom_toolbar` so the
+    toolbar renders a live "Press Ctrl+C again to exit" hint during the
+    double-press window. A ``None`` state (the common test path) falls
+    back to allocating a fresh per-binding state — the hint still works
+    inside pt's own surface; only cross-surface toolbar visibility
+    requires sharing.
     """
     kb = KeyBindings()
     del console  # reserved in signature for future bindings; see docstring.
+    state = ctrl_c_state if ctrl_c_state is not None else _CtrlCState()
 
     @kb.add("s-tab")
     def _(event: Any) -> None:
@@ -133,6 +197,31 @@ def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
     @kb.add("c-j")
     def _(event: Any) -> None:
         event.current_buffer.insert_text("\n")
+
+    @kb.add("c-c")
+    def _(event: Any) -> None:
+        """Claude-code-style Ctrl+C: clear / arm / exit (no data loss)."""
+        buffer = event.current_buffer
+        now = time.monotonic()
+        if buffer.text:
+            # Case 1: text present → discard it. Don't reset the
+            # double-press timer — clearing input IS a deliberate
+            # use of Ctrl+C, not a bid to exit.
+            buffer.reset()
+            event.app.invalidate()
+            return
+        if state.hint_active(now):
+            # Case 3: second bare Ctrl+C within the window → EXIT.
+            # Signalling via app.exit(exception=...) hands control back
+            # to prompt_async which re-raises. Outer REPL loop catches
+            # it and takes the clean-exit path.
+            state.last_press_at = 0.0
+            event.app.exit(exception=KeyboardInterrupt())
+            return
+        # Case 2: first bare Ctrl+C. Arm the double-press window and
+        # invalidate so the bottom toolbar can paint the hint.
+        state.last_press_at = now
+        event.app.invalidate()
 
     return kb
 
@@ -170,8 +259,14 @@ def _build_prompt_session(
     """
     history = FileHistory(str(resolve_history_path()))
     completer = SlashCommandCompleter(lambda: registry)
+    # Ctrl+C double-press state is shared between the key binding and
+    # the bottom-toolbar renderer so the "Press Ctrl+C again to exit"
+    # hint is live-visible exactly while the window is armed.
+    ctrl_c_state = _CtrlCState() if agent is not None else None
     bottom_toolbar = (
-        _make_bottom_toolbar(agent, last_turn_seconds_getter, statusline)
+        _make_bottom_toolbar(
+            agent, last_turn_seconds_getter, statusline, ctrl_c_state,
+        )
         if agent is not None
         else None
     )
@@ -184,7 +279,7 @@ def _build_prompt_session(
     # (to print confirmation). Missing either falls back to pt's default
     # bindings (tests that only exercise history/completion won't trip).
     key_bindings = (
-        _build_mode_key_bindings(agent, console)
+        _build_mode_key_bindings(agent, console, ctrl_c_state)
         if agent is not None and console is not None
         else None
     )
@@ -203,6 +298,7 @@ def _make_bottom_toolbar(
     agent: Agent,
     last_turn_seconds_getter: Callable[[], float] | None = None,
     statusline: StatusLineConfig | None = None,
+    ctrl_c_state: _CtrlCState | None = None,
 ) -> Callable[[], Any]:
     """Build a pt-compatible bottom_toolbar callable that reads live agent
     state on each render. Closing over ``agent`` rather than snapshotting
@@ -260,7 +356,29 @@ def _make_bottom_toolbar(
 
     hook_active = statusline is not None and statusline.is_active
 
+    def _ctrl_c_hint_html() -> Any | None:
+        """Return a pt ``HTML`` carrying the double-press hint, or None.
+
+        When the Ctrl+C double-press window is armed, the hint
+        REPLACES the normal status bar — claude-code shows the same
+        pattern on its bottom slot (``PromptInputFooterLeftSide.tsx``
+        line 150: ``Press {exitMessage.key} again to exit``). Using
+        the toolbar slot keeps the hint inside pt's live surface
+        (no scrollback pollution) and it vanishes automatically when
+        the window elapses (pt re-renders and ``hint_active`` returns
+        False).
+        """
+        if ctrl_c_state is None:
+            return None
+        if not ctrl_c_state.hint_active(time.monotonic()):
+            return None
+        from prompt_toolkit.formatted_text import HTML
+        return HTML("<ansiyellow>Press Ctrl+C again to exit</ansiyellow>")
+
     def _render() -> Any:
+        hint = _ctrl_c_hint_html()
+        if hint is not None:
+            return hint
         snap = _snapshot()
         if not hook_active or statusline is None:
             return _render_default(snap)

@@ -534,6 +534,157 @@ async def test_shift_tab_cycles_mode_silently_no_scrollback_spam(
     agent.close()
 
 
+async def test_ctrl_c_with_text_clears_buffer_and_does_not_exit(
+    tmp_path: Path,
+) -> None:
+    # U1: claude-code parity (src/hooks/useExitOnCtrlCD.ts + PromptInput's
+    # onBufferReset). When the buffer has text, Ctrl+C discards it and
+    # leaves the session alive — never an exit on first press with content.
+    # Typed "abc" then Ctrl+C; the session stays open until we send "\r".
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from aura.cli.repl import _build_mode_key_bindings
+
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+    kb = _build_mode_key_bindings(agent, console)
+    with create_pipe_input() as inp:
+        # "abc" + Ctrl+C (clears) + "q" + CR (submits the "q").
+        inp.send_text("abc\x03q\r")
+        session: PromptSession[str] = PromptSession(
+            key_bindings=kb, input=inp, output=DummyOutput(),
+        )
+        result = await session.prompt_async("> ")
+    # Ctrl+C cleared the "abc" — result only carries post-Ctrl-C typing.
+    assert result == "q"
+    agent.close()
+
+
+async def test_ctrl_c_empty_buffer_single_press_does_not_exit(
+    tmp_path: Path,
+) -> None:
+    # U1: empty-buffer first Ctrl+C must NOT exit — it arms a "press
+    # again to exit" state. Mirror of useExitOnCtrlCD's pending state.
+    # Send Ctrl+C then "hi\r"; prompt should return "hi", not raise
+    # KeyboardInterrupt. (Exit on double-press is tested separately.)
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from aura.cli.repl import _build_mode_key_bindings
+
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+    kb = _build_mode_key_bindings(agent, console)
+    with create_pipe_input() as inp:
+        # Bare Ctrl+C, then "hi" + CR (wait long enough the window closes
+        # is NOT needed — the next typing keystroke happens immediately
+        # and doesn't re-trigger the double-press path).
+        inp.send_text("\x03hi\r")
+        session: PromptSession[str] = PromptSession(
+            key_bindings=kb, input=inp, output=DummyOutput(),
+        )
+        result = await session.prompt_async("> ")
+    assert result == "hi"
+    agent.close()
+
+
+async def test_ctrl_c_double_press_empty_buffer_raises_keyboard_interrupt(
+    tmp_path: Path,
+) -> None:
+    # U1: TWO bare Ctrl+C within the window raises KeyboardInterrupt,
+    # which the outer REPL loop treats as the exit signal. Parity with
+    # claude-code's useDoublePress.
+    import pytest
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from aura.cli.repl import _build_mode_key_bindings
+
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+    kb = _build_mode_key_bindings(agent, console)
+    with create_pipe_input() as inp:
+        inp.send_text("\x03\x03")  # Ctrl+C, Ctrl+C (back-to-back).
+        session: PromptSession[str] = PromptSession(
+            key_bindings=kb, input=inp, output=DummyOutput(),
+        )
+        with pytest.raises(KeyboardInterrupt):
+            await session.prompt_async("> ")
+    agent.close()
+
+
+async def test_ctrl_c_second_press_outside_window_does_not_exit(
+    tmp_path: Path,
+) -> None:
+    # U1: if the second Ctrl+C arrives AFTER the 800ms window, it
+    # restarts the arm — does not exit. This guards against a
+    # forgotten-but-never-cleared state.
+    import time as _time
+
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from aura.cli.repl import _build_mode_key_bindings, _CtrlCState
+
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+    state = _CtrlCState()
+    kb = _build_mode_key_bindings(agent, console, state)
+    # Prime: simulate a Ctrl+C that happened LONG ago (outside window).
+    state.last_press_at = _time.monotonic() - 5.0
+    assert not state.hint_active(_time.monotonic())
+
+    with create_pipe_input() as inp:
+        # Single Ctrl+C — should arm, not exit (previous press stale).
+        inp.send_text("\x03ok\r")
+        session: PromptSession[str] = PromptSession(
+            key_bindings=kb, input=inp, output=DummyOutput(),
+        )
+        result = await session.prompt_async("> ")
+    assert result == "ok"
+    agent.close()
+
+
+async def test_ctrl_c_text_present_does_not_arm_double_press(
+    tmp_path: Path,
+) -> None:
+    # U1: Ctrl+C on a non-empty buffer clears the text but MUST NOT arm
+    # the exit window — otherwise "Ctrl+C clear input, then Ctrl+C
+    # clear-again-accidentally-discovers-empty-buffer" would exit.
+    # Contract: only BARE Ctrl+C (empty buffer) advances the exit state
+    # machine.
+    import time as _time
+
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from aura.cli.repl import _build_mode_key_bindings, _CtrlCState
+
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+    state = _CtrlCState()
+    kb = _build_mode_key_bindings(agent, console, state)
+
+    with create_pipe_input() as inp:
+        inp.send_text("xyz\x03q\r")  # type, clear via Ctrl+C, type "q", submit.
+        session: PromptSession[str] = PromptSession(
+            key_bindings=kb, input=inp, output=DummyOutput(),
+        )
+        result = await session.prompt_async("> ")
+    assert result == "q"
+    # Buffer-clearing Ctrl+C does NOT advance the double-press state —
+    # exit window remains inactive.
+    assert state.last_press_at == 0.0
+    assert not state.hint_active(_time.monotonic())
+    agent.close()
+
+
 async def test_escape_resets_mode_silently_no_scrollback_spam(
     tmp_path: Path,
 ) -> None:

@@ -61,10 +61,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/thefoxfairy/Aura"
-Repository = "https://github.com/thefoxfairy/Aura"
-Issues = "https://github.com/thefoxfairy/Aura/issues"
-Changelog = "https://github.com/thefoxfairy/Aura/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/LordFoxFairy/Aura"
+Repository = "https://github.com/LordFoxFairy/Aura"
+Issues = "https://github.com/LordFoxFairy/Aura/issues"
+Changelog = "https://github.com/LordFoxFairy/Aura/blob/main/CHANGELOG.md"
 
 [project.scripts]
 aura = "aura.cli.__main__:main"

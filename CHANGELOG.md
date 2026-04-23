@@ -25,8 +25,8 @@ Parallel-subagent run of 5 tasks with `git worktree` isolation (directly address
 
 ### Prereqs for first PyPI release (owner action, outside this release)
 
-1. Configure PyPI trusted publishing: on pypi.org, for project `aura-agent`, add publisher → repo `thefoxfairy/Aura`, workflow `publish.yml`, environment `pypi`. (For the first release, use a pending publisher under account settings since the project doesn't exist yet.)
-2. Push a remote: `git remote add origin git@github.com:thefoxfairy/Aura.git && git push -u origin main --tags`.
+1. Configure PyPI trusted publishing: on pypi.org, for project `aura-agent`, add publisher → repo `LordFoxFairy/Aura`, workflow `publish.yml`, environment `pypi`. (For the first release, use a pending publisher under account settings since the project doesn't exist yet.)
+2. Push a remote: `git remote add origin git@github.com:LordFoxFairy/Aura.git && git push -u origin main --tags`.
 3. Tag `v0.9.1` and push → `publish.yml` runs automatically.
 
 ## [0.9.0] — Multiline input + Skill tool

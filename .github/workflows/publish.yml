@@ -6,7 +6,7 @@
 #      pre-register a pending publisher instead).
 #   2. Go to: Publishing -> Add a new publisher -> GitHub.
 #   3. Fill in:
-#        Owner:            thefoxfairy
+#        Owner:            LordFoxFairy
 #        Repository name:  Aura
 #        Workflow name:    publish.yml
 #        Environment name: pypi

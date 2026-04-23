@@ -1,6 +1,6 @@
 # Aura
 
-[![PyPI](https://img.shields.io/pypi/v/aura-agent.svg)](https://pypi.org/project/aura-agent/) [![Python Versions](https://img.shields.io/pypi/pyversions/aura-agent.svg)](https://pypi.org/project/aura-agent/) [![CI](https://github.com/thefoxfairy/Aura/actions/workflows/ci.yml/badge.svg)](https://github.com/thefoxfairy/Aura/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PyPI](https://img.shields.io/pypi/v/aura-agent.svg)](https://pypi.org/project/aura-agent/) [![Python Versions](https://img.shields.io/pypi/pyversions/aura-agent.svg)](https://pypi.org/project/aura-agent/) [![CI](https://github.com/LordFoxFairy/Aura/actions/workflows/ci.yml/badge.svg)](https://github.com/LordFoxFairy/Aura/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A lightweight Python agent with an explicit async loop, pluggable LLM providers, and a hook-based extension model. Built on LangChain as a client-only layer — no LangGraph, no LangChain agents, no LCEL.
 
@@ -30,7 +30,7 @@ After install, the `aura` command is on your PATH.
 ### From source (contributors)
 
 ```bash
-git clone https://github.com/thefoxfairy/Aura.git
+git clone https://github.com/LordFoxFairy/Aura.git
 cd Aura
 uv sync --extra all --extra dev
 uv run aura --version

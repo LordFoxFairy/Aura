@@ -497,18 +497,14 @@ def test_post_turn_status_uses_integer_seconds_at_or_above_60s(
     agent.close()
 
 
-async def test_shift_tab_mode_cycle_confirmation_deferred_to_terminal(
+async def test_shift_tab_cycles_mode_silently_no_scrollback_spam(
     tmp_path: Path,
 ) -> None:
-    # Bug fix — key-binding handlers must NOT call ``console.print``
-    # directly; they must defer via ``run_in_terminal`` or they race
-    # pt's renderer and pollute the redraw.
-    #
-    # End-to-end proof: drive a real PromptSession through pt's pipe
-    # input, send ESC+[+Z (shift+tab) then a single char "q" and CR,
-    # and assert (a) the mode actually flipped and (b) the confirmation
-    # text reached the captured console buffer via run_in_terminal's
-    # deferred invocation.
+    # Regression — rapid shift+tab presses used to spam the scrollback
+    # with dozens of "mode: X (press shift+tab to cycle …)" lines
+    # (operator report + tmp/img_2.png). Fix: bindings only flip state
+    # + call ``event.app.invalidate()`` so the bottom_toolbar redraws
+    # with the new mode. Zero scrollback output.
     from prompt_toolkit import PromptSession
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
@@ -528,19 +524,20 @@ async def test_shift_tab_mode_cycle_confirmation_deferred_to_terminal(
         )
         await session.prompt_async("> ")
 
-    # Mode cycled default → accept_edits.
+    # State changed: default → accept_edits.
     assert agent.mode == "accept_edits"
-    # Confirmation line made it out via run_in_terminal (the lambda
-    # fires once pt yields, which happens inline in the test loop).
-    assert "mode: accept_edits" in buf.getvalue()
+    # Nothing printed — bottom_toolbar is the sole feedback surface.
+    out = buf.getvalue()
+    assert "mode:" not in out
+    assert "shift+tab to cycle" not in out
     agent.close()
 
 
-async def test_escape_resets_mode_confirmation_deferred_to_terminal(
+async def test_escape_resets_mode_silently_no_scrollback_spam(
     tmp_path: Path,
 ) -> None:
-    # Same guarantee as shift+tab: escape must go through run_in_terminal
-    # so the reset confirmation doesn't race pt's renderer.
+    # Same silent-feedback contract as shift+tab: escape must flip
+    # mode and invalidate the toolbar, without printing to stdout.
     from prompt_toolkit import PromptSession
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
@@ -553,8 +550,6 @@ async def test_escape_resets_mode_confirmation_deferred_to_terminal(
     kb = _build_mode_key_bindings(agent, console)
 
     with create_pipe_input() as inp:
-        # Escape, then (after the non-eager timeout resolves on its own
-        # via the pipe draining) a plain Enter to submit.
         inp.send_text("\x1b")
         inp.send_text("q\r")
         session: PromptSession[str] = PromptSession(
@@ -563,7 +558,8 @@ async def test_escape_resets_mode_confirmation_deferred_to_terminal(
         await session.prompt_async("> ")
 
     assert agent.mode == "default"
-    assert "mode: default" in buf.getvalue()
+    out = buf.getvalue()
+    assert "mode:" not in out
     agent.close()
 
 

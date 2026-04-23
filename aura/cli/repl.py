@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.application.run_in_terminal import run_in_terminal
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
@@ -73,14 +72,17 @@ def _cycle_mode(current: str) -> str:
 def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
     """Build a KeyBindings carrying Aura's prompt-level bindings.
 
-    Printed confirmation for mode changes goes to ``console`` so the
-    transcript records the change (pt's bottom toolbar also re-reads
-    ``agent.mode`` on the next render via ``event.app.invalidate()``,
-    so both surfaces update in lockstep).
+    Mode-change feedback is **visual only** — ``event.app.invalidate()``
+    redraws pt's ``bottom_toolbar`` whose ``mode:`` field reflects the
+    new mode. Printing a confirmation line on every press spams the
+    scrollback on rapid/repeated cycling (operator report + img_2.png:
+    dozens of stacked ``mode: X (press shift+tab ...)`` lines).
 
     Bindings:
 
     - ``s-tab`` → cycle permission mode (default → accept_edits → plan).
+      Under bypass: silently no-op (bypass is sticky; the startup banner
+      already warns once).
     - ``escape`` → reset permission mode to default. **Non-eager** on
       purpose: eager escape would swallow the ESC prefix of meta-key
       sequences (Alt/Meta+Enter arrives as ESC then CR), breaking the
@@ -99,32 +101,20 @@ def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
     deliberately do NOT set ``multiline=True`` on the session because
     that would invert Enter's meaning and force a non-standard submit
     key (Esc-Enter / Ctrl+D).
+
+    ``console`` is retained in the signature (not currently used in any
+    binding) so future bindings that legitimately need to print out-of-band
+    can reuse the same wiring without another constructor churn.
     """
     kb = KeyBindings()
+    del console  # reserved in signature for future bindings; see docstring.
 
     @kb.add("s-tab")
     def _(event: Any) -> None:
         current = agent.mode
         if current == "bypass":
-            # ``run_in_terminal`` defers the print until pt yields the
-            # screen — writing to stdout from inside a key-binding
-            # callback otherwise races pt's renderer and corrupts the
-            # redraw.
-            run_in_terminal(
-                lambda: console.print(
-                    "[dim]shift+tab disabled under "
-                    "--bypass-permissions[/dim]"
-                )
-            )
             return
-        new_mode = _cycle_mode(current)
-        agent.set_mode(new_mode)
-        run_in_terminal(
-            lambda: console.print(
-                f"[dim]mode: {new_mode}  "
-                f"(press shift+tab to cycle · esc to reset to default)[/dim]"
-            )
-        )
+        agent.set_mode(_cycle_mode(current))
         event.app.invalidate()
 
     @kb.add("escape")
@@ -134,7 +124,6 @@ def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
         if agent.mode == "bypass" or agent.mode == "default":
             return
         agent.set_mode("default")
-        run_in_terminal(lambda: console.print("[dim]mode: default[/dim]"))
         event.app.invalidate()
 
     @kb.add("escape", "enter")

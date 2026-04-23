@@ -116,16 +116,14 @@ def test_shift_tab_cycles_and_invalidates(tmp_path: Path) -> None:
     binding.handler(event)
     assert agent.mode == "default"
     assert event.app.invalidated == 3
-    # NOTE: confirmation text is now routed through
-    # ``prompt_toolkit.application.run_in_terminal`` to avoid racing
-    # pt's renderer. Under a fake event without a running pt loop the
-    # deferred lambda never fires — that's fine; the state transition
-    # and invalidate contract are what this test guards. End-to-end
-    # output is verified by ``test_repl.py`` via a real pipe input.
+    # Zero scrollback output — feedback lives only in the bottom_toolbar
+    # (which re-reads agent.mode on each invalidate). Rapid cycling used
+    # to spam dozens of "mode: X (press shift+tab …)" lines; that's gone.
+    assert buf.getvalue() == ""
     agent.close()
 
 
-def test_shift_tab_under_bypass_is_a_noop_with_message(tmp_path: Path) -> None:
+def test_shift_tab_under_bypass_is_a_noop(tmp_path: Path) -> None:
     agent = _agent(tmp_path, mode="bypass")
     buf = io.StringIO()
     console = Console(file=buf, force_terminal=False, width=200)
@@ -136,9 +134,7 @@ def test_shift_tab_under_bypass_is_a_noop_with_message(tmp_path: Path) -> None:
     binding.handler(event)
 
     assert agent.mode == "bypass"  # unchanged — bypass is sticky
-    # Confirmation line is deferred via run_in_terminal; see note on
-    # test_shift_tab_cycles_and_invalidates. The invariant here is
-    # "state is sticky under bypass" — that's what matters.
+    assert buf.getvalue() == ""    # silent no-op; startup banner warns once
     agent.close()
 
 
@@ -153,8 +149,7 @@ def test_escape_resets_to_default(tmp_path: Path) -> None:
     binding.handler(event)
 
     assert agent.mode == "default"
-    # Confirmation line is deferred via run_in_terminal; see note on
-    # test_shift_tab_cycles_and_invalidates.
+    assert buf.getvalue() == ""
     agent.close()
 
 

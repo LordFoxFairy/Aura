@@ -563,12 +563,35 @@ async def run_repl_async(
             _print_verbose_summary(agent, _console)
 
 
-def _print_welcome(agent: Agent, console: Console) -> None:
-    # Single compact Panel (v0.8.0 shape restored after operator feedback
-    # "之前的不错, 只是横向长度少 1/3"). ``expand=False`` sizes the panel
-    # to its widest line instead of stretching to the full terminal —
-    # that alone buys back ~1/3 width on typical 120-col terminals.
-    # ``~`` substitution on ``cwd`` further shortens the longest line.
+#: Frame set for the leading glyph on the welcome banner — same characters
+#: the in-turn :class:`ThinkingSpinner` uses (see ``aura/cli/spinner.py``),
+#: palindromic so the animation bounces rather than resets. Matches
+#: claude-code ``src/components/Spinner/utils.ts::getDefaultCharacters``
+#: (darwin set: ``['·', '✢', '✳', '✶', '✻', '✽']``). Using the SAME set
+#: as the thinking spinner sells the continuity: welcome banner glyph at
+#: startup, same-family glyph spinning during a turn.
+_BANNER_SPINNER_FRAMES: tuple[str, ...] = (
+    "·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢",
+)
+#: Total on-screen time for the welcome animation. Short enough that a
+#: fast startup doesn't feel gated; long enough to signal "this is a
+#: live UI" (~10 frames at 120ms = 1.2s).
+_BANNER_ANIMATION_SECONDS: float = 1.2
+_BANNER_FRAME_INTERVAL: float = 0.12
+#: The glyph the banner SETTLES on after animation — the final ``✱``
+#: matches the wordmark we've shipped since v0.1 and renders cleanly in
+#: every terminal we support (braille glyphs like ``⏺`` are missing on
+#: older Linux fonts).
+_BANNER_SETTLE_GLYPH: str = "✱"
+
+
+def _render_welcome_panel(agent: Agent, glyph: str) -> Panel:
+    """Build the welcome Panel with the given leading glyph.
+
+    Factored out of :func:`_print_welcome` so the startup animation can
+    re-render the same panel with a different frame on each tick without
+    duplicating the layout code.
+    """
     cwd_display = str(Path.cwd())
     home = str(Path.home())
     if cwd_display == home or cwd_display.startswith(home + "/"):
@@ -577,7 +600,7 @@ def _print_welcome(agent: Agent, console: Console) -> None:
     tip = random.choice(_STARTUP_TIPS)
 
     body = Text()
-    body.append("✱ Aura", style="bold")
+    body.append(f"{glyph} Aura", style="bold")
     body.append(f" v{__version__}  ·  ", style="dim")
     body.append("/help", style="cyan")
     body.append("  ·  Ctrl+D to exit  ·  ", style="dim")
@@ -588,7 +611,57 @@ def _print_welcome(agent: Agent, console: Console) -> None:
     body.append(f"{cwd_display}\n", style="")
     body.append("tip:   ", style="dim")
     body.append(tip, style="dim")
-    console.print(Panel(body, border_style="cyan", padding=(0, 2), expand=False))
+    return Panel(body, border_style="cyan", padding=(0, 2), expand=False)
+
+
+def _print_welcome(agent: Agent, console: Console) -> None:
+    """Print the startup welcome panel.
+
+    Visual parity with claude-code's ``REPL.tsx`` header spinner: the
+    leading glyph animates through the spinner frame set for a brief
+    window after launch (signalling "live UI"), then settles on a
+    stable glyph — ``✱``, the Aura wordmark. During a turn the same
+    family of glyphs drives :class:`ThinkingSpinner`, so the visual
+    language carries through consistently.
+
+    The animation uses ``rich.live.Live(transient=False)`` so the final
+    frame stays in scrollback (tests + screenshots preserve the banner).
+    Non-TTY callers (``console.is_terminal == False``) short-circuit the
+    animation and print the settled banner directly — StringIO tests
+    asserting ``"✱ Aura"`` in the captured output still pass.
+    """
+    # Tests and piped/dumb terminals don't render Live frames — drop
+    # straight to the final banner. ``console.is_terminal`` is False
+    # for StringIO-backed consoles (the test harness default).
+    if not console.is_terminal:
+        console.print(_render_welcome_panel(agent, _BANNER_SETTLE_GLYPH))
+        return
+
+    import time as _time
+
+    from rich.live import Live
+
+    total_frames = max(
+        1, int(_BANNER_ANIMATION_SECONDS / _BANNER_FRAME_INTERVAL),
+    )
+    # Live.update with transient=False leaves the LAST rendered frame
+    # in scrollback when stopped. The last frame we update to is the
+    # settled ✱, so the final on-screen state exactly matches what
+    # ``_render_welcome_panel(agent, "✱")`` would print.
+    with Live(
+        _render_welcome_panel(agent, _BANNER_SPINNER_FRAMES[0]),
+        console=console,
+        refresh_per_second=1 / _BANNER_FRAME_INTERVAL,
+        transient=False,
+    ) as live:
+        for i in range(1, total_frames):
+            _time.sleep(_BANNER_FRAME_INTERVAL)
+            frame = _BANNER_SPINNER_FRAMES[i % len(_BANNER_SPINNER_FRAMES)]
+            live.update(_render_welcome_panel(agent, frame))
+        # Final settle frame: wordmark ✱. Users who eyeball the banner
+        # post-startup see a stable, readable glyph.
+        _time.sleep(_BANNER_FRAME_INTERVAL)
+        live.update(_render_welcome_panel(agent, _BANNER_SETTLE_GLYPH))
 
 
 def _print_verbose_summary(agent: Agent, console: Console) -> None:

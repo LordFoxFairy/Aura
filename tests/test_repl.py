@@ -225,6 +225,153 @@ async def test_welcome_banner_shows_core_info_compactly(tmp_path: Path) -> None:
     agent.close()
 
 
+def test_welcome_banner_spinner_frames_are_non_empty_and_include_settle_glyph(
+    tmp_path: Path,
+) -> None:
+    # U2: the animated welcome banner rotates through the same glyph
+    # family the in-turn ThinkingSpinner uses, then settles on ``✱``.
+    # Guard the constants so the animation is never silently de-armed
+    # (e.g. an empty tuple would make the Live loop a no-op).
+    from aura.cli.repl import (
+        _BANNER_ANIMATION_SECONDS,
+        _BANNER_SETTLE_GLYPH,
+        _BANNER_SPINNER_FRAMES,
+    )
+    assert _BANNER_SPINNER_FRAMES
+    assert _BANNER_SETTLE_GLYPH == "✱"
+    # Frame set must overlap with the ThinkingSpinner's glyphs (visual
+    # continuity between startup and in-flight). At least one common
+    # character is required — catches accidental typo drift.
+    from aura.cli.spinner import _GLYPHS as _THINKING_GLYPHS
+    assert set(_BANNER_SPINNER_FRAMES) & set(_THINKING_GLYPHS)
+    # Animation duration must be user-perceptible (>=0.4s) but not
+    # obstructive (<=3s).
+    assert 0.4 <= _BANNER_ANIMATION_SECONDS <= 3.0
+
+
+def test_welcome_banner_static_path_renders_settled_glyph_for_non_tty(
+    tmp_path: Path,
+) -> None:
+    # StringIO-backed Console reports ``is_terminal=False``; the welcome
+    # helper MUST take the short-circuit path and print the settled
+    # banner WITHOUT running a Live animation. Dogfood check: the
+    # captured output carries the settled ``✱`` glyph AND none of the
+    # intermediate spinner frames (the animation never ran).
+    from aura.cli.repl import _BANNER_SPINNER_FRAMES, _print_welcome
+
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+    assert not console.is_terminal  # precondition for the short-circuit
+    _print_welcome(agent, console)
+    out = buf.getvalue()
+    assert "✱ Aura" in out
+    # None of the transient animation frames should leak into scrollback
+    # (each frame would have rendered ``<frame> Aura``). The settle ``✱``
+    # is in the list too — exclude it from the check.
+    for frame in _BANNER_SPINNER_FRAMES:
+        if frame == "✱":
+            continue
+        assert f"{frame} Aura" not in out, (
+            f"intermediate frame {frame!r} leaked into non-TTY banner"
+        )
+    agent.close()
+
+
+def test_welcome_banner_animated_path_runs_in_real_tty(
+    tmp_path: Path,
+) -> None:
+    # U2 dogfood: drive a REAL pty + Aura subprocess and confirm the
+    # welcome banner scrolls with an animated leading glyph ending in
+    # ``✱``. This is the ground truth that a StringIO test can't give.
+    # Uses Python's ``pty`` module — no external deps.
+    import os
+    import pty
+    import select
+    import sys
+    import time as _time
+
+    # Spawn a tiny driver that imports the helper and prints the banner
+    # with a REAL Rich Console attached to the pty (is_terminal=True).
+    # The driver exits when the banner finishes so the test doesn't hang.
+    driver = (
+        "from pathlib import Path\n"
+        "from rich.console import Console\n"
+        "from aura.cli.repl import _print_welcome\n"
+        "from aura.core.agent import Agent\n"
+        "from aura.config.schema import AuraConfig\n"
+        "from aura.core.persistence.storage import SessionStorage\n"
+        "from tests.conftest import FakeChatModel\n"
+        "cfg = AuraConfig.model_validate({\n"
+        "    'providers': [{'name': 'openai', 'protocol': 'openai'}],\n"
+        "    'router': {'default': 'openai:gpt-4o-mini'},\n"
+        "    'tools': {'enabled': []},\n"
+        "})\n"
+        "import tempfile\n"
+        "d = Path(tempfile.mkdtemp())\n"
+        "agent = Agent(config=cfg, model=FakeChatModel(turns=[]),\n"
+        "              storage=SessionStorage(d / 'db'))\n"
+        "_print_welcome(agent, Console(force_terminal=True))\n"
+        "agent.close()\n"
+    )
+    pid, fd = pty.fork()
+    if pid == 0:
+        # Child process — exec Python with the driver script.
+        os.execvp(
+            sys.executable, [sys.executable, "-c", driver],
+        )
+    captured = bytearray()
+    deadline = _time.monotonic() + 10.0
+    try:
+        while _time.monotonic() < deadline:
+            rlist, _, _ = select.select([fd], [], [], 0.5)
+            if rlist:
+                try:
+                    chunk = os.read(fd, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                captured.extend(chunk)
+            # Non-blocking wait — exit the read loop as soon as the
+            # child is done AND the pipe has drained.
+            done_pid, _status = os.waitpid(pid, os.WNOHANG)
+            if done_pid == pid:
+                # Drain any remaining bytes.
+                while True:
+                    rlist, _, _ = select.select([fd], [], [], 0.1)
+                    if not rlist:
+                        break
+                    try:
+                        chunk = os.read(fd, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    captured.extend(chunk)
+                break
+    finally:
+        import contextlib
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        with contextlib.suppress(OSError, ChildProcessError):
+            os.waitpid(pid, 0)
+
+    text = captured.decode("utf-8", errors="replace")
+    # The final settle frame MUST be ``✱ Aura`` — proves the animation
+    # landed on the stable glyph.
+    assert "✱ Aura" in text, f"settle glyph missing from pty output: {text!r}"
+    # And at least one INTERMEDIATE frame leaked — proves the animation
+    # actually ran (StringIO path would lack these entirely).
+    intermediate_seen = any(
+        f"{f} Aura" in text for f in ("✻", "✶", "✳", "✢")
+    )
+    assert intermediate_seen, (
+        "no intermediate banner spinner frame observed — "
+        "animation never ran in pty path: "
+        f"{text!r}"
+    )
+
+
 async def test_welcome_banner_renders_even_with_odd_version(
     tmp_path: Path,
 ) -> None:

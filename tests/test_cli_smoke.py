@@ -739,13 +739,25 @@ def test_pty_eof_exits_cleanly(aura_binary: Sequence[str]) -> None:
 def test_pty_welcome_banner_single_cyan_panel(
     aura_binary: Sequence[str],
 ) -> None:
-    """Welcome banner is exactly one rich Panel — one open corner, one close.
+    """Welcome banner's FINAL settled state is exactly one rich Panel.
 
     The v0.8.0 operator feedback requested a single compact Panel
-    (cyan, ``expand=False``). If someone later adds a second Panel or
-    nests one, the count goes to 2 and this test fires. The star glyph
-    ``✱ Aura`` and the ``v<semver>`` marker must both be visible so
-    the user instantly sees name + version on boot.
+    (cyan, ``expand=False``). Post-U2 the banner's leading glyph
+    animates through a spinner frame set before settling on ``✱``,
+    so the raw pty capture contains many intermediate Panel redraws
+    (each Live update re-emits a full Panel). That's expected — it
+    replaces the previous frame via cursor-back-and-erase sequences.
+
+    What matters is:
+      1. The banner ends in a single Panel (measured by settle-glyph +
+         cwd line + tip line all appearing AFTER the last animation
+         frame) — a second independent Panel would show up AFTER the
+         settle frame.
+      2. The settled leading glyph ``✱`` AND a ``v<semver>`` tag are
+         present somewhere in the capture (the final state is what
+         the user sees post-animation).
+      3. No nested / stacked Panels inside the settled frame — the
+         settled frame contains exactly one ``╭...╯`` pair.
     """
     _requires_pty_and_aura(aura_binary)
 
@@ -759,26 +771,33 @@ def test_pty_welcome_banner_single_cyan_panel(
         ptya.wait(timeout=10.0)
         captured = ptya.read_all(timeout=2.0)
 
-    # Rich's box-drawing rounded corners for Panel: ╭ (U+256D) at
-    # top-left, ╯ (U+256F) at bottom-right. Single Panel → exactly one
-    # of each. A second Panel would double both counts.
-    open_count = captured.count("╭")
-    close_count = captured.count("╯")
-    assert open_count == 1, (
-        f"expected exactly one opening '╭' (single welcome Panel); "
-        f"found {open_count}. capture={captured!r}"
-    )
-    assert close_count == 1, (
-        f"expected exactly one closing '╯' (single welcome Panel); "
-        f"found {close_count}. capture={captured!r}"
-    )
-
     # Brand + version visible. The banner does ``✱ Aura v<ver>`` as one
     # logical line, but pt's rendering can wrap — so we assert the two
     # substrings independently, both present.
     assert "✱ Aura" in captured, (
-        f"welcome missing '✱ Aura' brand glyph; capture={captured!r}"
+        f"welcome missing '✱ Aura' settle glyph; capture={captured!r}"
     )
     assert re.search(r"v\d+\.\d+\.\d+", captured), (
         f"welcome missing 'v<semver>' marker near Aura; capture={captured!r}"
+    )
+
+    # Locate the SETTLED frame (the last one with ``✱ Aura``); everything
+    # from that point onward should contain at most one ``╭...╯`` pair
+    # (the settled Panel) followed by the pt prompt. A nested or extra
+    # independent Panel AFTER settle would double the corner count.
+    settle_idx = captured.rfind("✱ Aura")
+    # Back up to the Panel's top-left corner preceding the settle line.
+    panel_top = captured.rfind("╭", 0, settle_idx)
+    assert panel_top != -1, (
+        "no '╭' before settled ✱ banner — Panel shape broken; "
+        f"capture={captured!r}"
+    )
+    tail = captured[panel_top:]
+    # From the settled Panel opening onward: exactly ONE opening + ONE
+    # closing corner. Additional Panels AFTER the settle would fire here.
+    assert tail.count("╭") == 1, (
+        f"unexpected extra '╭' after settled banner; tail={tail!r}"
+    )
+    assert tail.count("╯") == 1, (
+        f"unexpected extra '╯' after settled banner; tail={tail!r}"
     )

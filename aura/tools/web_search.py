@@ -112,6 +112,10 @@ class WebSearch(BaseTool):
         max_result_size_chars=8_000,
         rule_matcher=exact_match_on("query"),
         args_preview=_preview,
+        # DDGS has no explicit timeout knob; a 30s outer deadline stops a
+        # throttled / hung query from freezing the turn.
+        timeout_sec=30.0,
+        is_search_command=True,
     )
     # Injected at Agent construction. None means "use defaults" (DuckDuckGo,
     # max_results=5). A non-None config pins the provider and may override

@@ -160,6 +160,11 @@ class Grep(BaseTool):
         max_result_size_chars=80_000,
         rule_matcher=exact_match_on("pattern"),
         args_preview=_preview,
+        # 30s matches the internal subprocess.run timeout we pass to ripgrep;
+        # the outer loop wrapper is a belt-and-braces guard in case the rg
+        # process ignores SIGALRM or Python's timeout plumbing is bypassed.
+        timeout_sec=30.0,
+        is_search_command=True,
     )
 
     def _run(self, **kwargs: Any) -> dict[str, Any]:

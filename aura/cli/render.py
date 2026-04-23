@@ -24,6 +24,15 @@ from aura.schemas.events import (
 )
 from aura.tools.errors import hint_for_error
 
+# Fold threshold for search/read tool output. Below this, render as usual
+# (no fold). At/above, the renderer shows head + "…" + tail + footer.
+# 20 lines is a sweet spot: a typical grep hit for a targeted pattern fits
+# below the fold; a broad codebase sweep (hundreds of matches) gets
+# collapsed so the REPL doesn't flood.
+_FOLD_THRESHOLD = 20
+_FOLD_HEAD_LINES = 10
+_FOLD_TAIL_LINES = 5
+
 
 # Re-exported so existing callers / tests can continue to do
 # ``from aura.cli.render import _hint_for_error``; the real table
@@ -125,6 +134,17 @@ class Renderer:
                 self._console.print(f"[green]✓[/green] [dim]{summary}[/dim]")
             else:
                 self._console.print("[green]✓[/green]")
+            # Fold step: only for tools whose metadata declares
+            # ``is_search_command=True`` AND output line count >
+            # _FOLD_THRESHOLD. Fold follows the ✓ summary so the user
+            # still sees the one-line result signal; the folded body is
+            # a dim aid below it.
+            if event.name in _SEARCH_COMMAND_TOOLS:
+                fold_text = _extract_text(event.output)
+                if fold_text is not None:
+                    total_lines = len(fold_text.splitlines())
+                    if total_lines > _FOLD_THRESHOLD:
+                        _render_folded(self._console, fold_text)
             return
         if isinstance(event, Final):
             # Final carries no new text under normal (natural) stops — the
@@ -269,6 +289,90 @@ _TOOL_RESULT_FORMATTERS: dict[str, Callable[[Any], str]] = {
     "bash": _format_bash_result,
     "task_create": _format_task_create_result,
 }
+
+
+# Tools whose output is search/read-like — the renderer folds long output
+# (head + "…" + tail) so a 1000-line grep doesn't flood the REPL. Mirrors
+# ``tool_metadata(is_search_command=True)`` on the tool object. Kept as a
+# static set to avoid a render → registry dependency (same pattern as
+# ``_TOOL_RESULT_FORMATTERS`` above); tests assert the set matches the
+# actual metadata on each tool so drift is caught.
+_SEARCH_COMMAND_TOOLS: frozenset[str] = frozenset({
+    "grep", "glob", "read_file", "web_search",
+})
+
+
+def _extract_text(output: Any) -> str | None:
+    """Pull a renderable string out of a tool's output, if any.
+
+    Search tools return dicts with the interesting text under known keys
+    (``matches`` for grep content mode, ``files`` for files_with_matches /
+    glob, ``content`` for read_file, ``results`` for web_search). Returns
+    ``None`` when there's nothing text-shaped to fold — the caller falls
+    back to the standard ✓-summary path.
+    """
+    if isinstance(output, str):
+        return output
+    if not isinstance(output, dict):
+        return None
+    # grep content mode: matches is a list of {path, line, text, ...}
+    matches = output.get("matches")
+    if isinstance(matches, list) and matches:
+        lines: list[str] = []
+        for m in matches:
+            if isinstance(m, dict):
+                path = m.get("path", "")
+                line_no = m.get("line", "")
+                text = m.get("text", "")
+                lines.append(f"{path}:{line_no}:{text}")
+            else:
+                lines.append(str(m))
+        return "\n".join(lines)
+    # grep files_with_matches / glob: list of paths.
+    files = output.get("files")
+    if isinstance(files, list) and files:
+        return "\n".join(str(f) for f in files)
+    # read_file: ``content`` string.
+    content = output.get("content")
+    if isinstance(content, str) and content:
+        return content
+    # web_search: ``results`` is a list of {title, url, snippet}.
+    results = output.get("results")
+    if isinstance(results, list) and results:
+        lines = []
+        for r in results:
+            if isinstance(r, dict):
+                title = r.get("title", "")
+                url = r.get("url", "")
+                lines.append(f"{title} — {url}")
+            else:
+                lines.append(str(r))
+        return "\n".join(lines)
+    return None
+
+
+def _render_folded(console: Console, text: str) -> None:
+    """Render ``text`` in fold mode: head + ``…`` + tail + footer.
+
+    Only called when the caller has already verified fold applies (search
+    tool + line count above threshold). Keeps the fold purely a rendering
+    concern — no truncation of the underlying tool output or model-facing
+    history.
+    """
+    lines = text.splitlines()
+    total = len(lines)
+    head = lines[:_FOLD_HEAD_LINES]
+    tail = lines[-_FOLD_TAIL_LINES:]
+    for line in head:
+        console.print(f"[dim]│ {rich_escape(line)}[/dim]", highlight=False)
+    console.print("[dim]…[/dim]", highlight=False)
+    for line in tail:
+        console.print(f"[dim]│ {rich_escape(line)}[/dim]", highlight=False)
+    shown = len(head) + len(tail)
+    console.print(
+        f"[dim][{total} lines total, {shown} shown][/dim]",
+        highlight=False,
+    )
 
 
 # ---------------------------------------------------------------------------

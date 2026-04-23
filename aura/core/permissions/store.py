@@ -160,6 +160,23 @@ def load(project_root: Path) -> PermissionsConfig:
     statusline = local_raw.get("statusline") or project_raw.get("statusline")
     if statusline is not None:
         merged["statusline"] = statusline
+    # disable_bypass: OR-together. Either layer setting it to ``true`` wins;
+    # local CANNOT relax a project-level org kill switch. That asymmetry
+    # is deliberate — ``settings.local.json`` is the per-machine override
+    # surface, but for a compliance flag the project (committed) setting
+    # must be the ceiling, not the floor.
+    if "disable_bypass" in local_raw or "disable_bypass" in project_raw:
+        merged["disable_bypass"] = bool(
+            project_raw.get("disable_bypass") or local_raw.get("disable_bypass")
+        )
+    # prompt_timeout_sec: local wins when explicitly set (same "per-machine
+    # override" semantics as ``mode``). An operator on a slow-to-respond
+    # machine can bump the timeout up locally without editing the
+    # committed project config.
+    if "prompt_timeout_sec" in local_raw:
+        merged["prompt_timeout_sec"] = local_raw["prompt_timeout_sec"]
+    elif "prompt_timeout_sec" in project_raw:
+        merged["prompt_timeout_sec"] = project_raw["prompt_timeout_sec"]
     return PermissionsConfig.model_validate(merged)
 
 

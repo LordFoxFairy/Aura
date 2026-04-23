@@ -47,6 +47,14 @@ class ReadFile(BaseTool):
         is_read_only=True, is_concurrency_safe=True,
         rule_matcher=path_prefix_on("path"),
         args_preview=_preview,
+        # Plain filesystem I/O up to 1 MB. 10s is generous — anything slower
+        # is a stuck NFS mount or a dying disk; surface the error rather
+        # than hang.
+        timeout_sec=10.0,
+        # Partial reads (offset/limit) benefit from UI fold: they're
+        # search-like slices. Full reads also fold — the renderer's
+        # threshold (>20 lines) protects short reads.
+        is_search_command=True,
     )
 
     def _run(

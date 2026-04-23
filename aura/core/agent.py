@@ -89,6 +89,8 @@ class Agent:
         session_log_dir: Path | None = None,
         pre_loaded_skills: SkillRegistry | None = None,
         mode: str = "default",
+        system_prompt_suffix: str = "",
+        disable_bypass: bool = False,
     ) -> None:
         # ``session_rules``: CLI hands in the same SessionRuleSet that was used
         # to build the permission hook; Agent.clear_session drops its runtime
@@ -110,6 +112,23 @@ class Agent:
         # status bar can surface it without reaching back into the store
         # each render. Valid values: "default" / "accept_edits" / "plan" /
         # "bypass"; enforcement still happens in the permission hook.
+        # Org-level kill switch for bypass mode. When true, any attempt
+        # to enter ``mode="bypass"`` (at construction time OR via
+        # ``set_mode``) is refused with ``AuraConfigError``. Threaded in
+        # from ``PermissionsConfig.disable_bypass`` by the CLI so a single
+        # config flag can centrally refuse bypass in shared / CI /
+        # compliance environments. Set BEFORE the mode assignment so the
+        # same guard fires on both paths.
+        self._disable_bypass = disable_bypass
+        if disable_bypass and mode == "bypass":
+            raise AuraConfigError(
+                source="PermissionsConfig",
+                detail=(
+                    "bypass mode is disabled by config "
+                    "(permissions.disable_bypass=true); "
+                    "refusing to construct Agent(mode='bypass')"
+                ),
+            )
         self._mode = mode
         # Auto-compact trigger. Non-zero = enabled. When a turn completes
         # successfully and total_tokens_used crosses the threshold, astream
@@ -246,7 +265,12 @@ class Agent:
                 )
             tools.append(tool)
         self._registry = ToolRegistry(tools)
-        self._system_prompt = build_system_prompt()
+        # ``system_prompt_suffix`` is appended verbatim to the base system
+        # prompt. Populated only by the subagent factory today (per the
+        # selected agent_type); always empty for top-level Agents. Stored on
+        # self so ``clear_session`` can rebuild the prompt identically.
+        self._system_prompt_suffix = system_prompt_suffix
+        self._system_prompt = build_system_prompt() + system_prompt_suffix
         self._primary_memory = project_memory.load_project_memory(self._cwd)
         self._rules = rules.load_rules(self._cwd)
         self._context = self._build_context()
@@ -463,11 +487,25 @@ class Agent:
         settable programmatically (CLI entry point uses it) but is
         deliberately excluded from the interactive cycle — it can only
         be enabled via ``--bypass-permissions``.
+
+        When the Agent was constructed with ``disable_bypass=True``
+        (from ``PermissionsConfig.disable_bypass``), switching to
+        ``bypass`` raises ``AuraConfigError`` — same kill switch as the
+        CLI flag path, just at a different entry point.
         """
         valid = {"default", "accept_edits", "plan", "bypass"}
         if mode not in valid:
             raise ValueError(
                 f"invalid mode {mode!r}; expected one of {sorted(valid)}"
+            )
+        if mode == "bypass" and self._disable_bypass:
+            raise AuraConfigError(
+                source="PermissionsConfig",
+                detail=(
+                    "bypass mode is disabled by config "
+                    "(permissions.disable_bypass=true); "
+                    "refusing set_mode('bypass')"
+                ),
             )
         self._mode = mode
         journal.write("mode_changed", session=self._session_id, mode=mode)
@@ -665,6 +703,7 @@ def build_agent(
     session_rules: SessionRuleSet | None = None,
     question_asker: QuestionAsker | None = None,
     mode: str = "default",
+    disable_bypass: bool = False,
 ) -> Agent:
     # 生产便利工厂：自动解析 model + storage；Agent 构造器保持 DI 注入以便测试替换。
     provider, model_name = llm.resolve(config.router["default"], cfg=config)
@@ -680,4 +719,5 @@ def build_agent(
         session_rules=session_rules,
         question_asker=question_asker,
         mode=mode,
+        disable_bypass=disable_bypass,
     )

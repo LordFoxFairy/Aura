@@ -53,6 +53,7 @@ from aura.config.schema import AuraConfig, ToolsConfig
 from aura.core import llm
 from aura.core.persistence.storage import SessionStorage
 from aura.core.skills import SkillRegistry
+from aura.core.tasks.agent_types import get_agent_type
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
@@ -83,21 +84,54 @@ class SubagentFactory:
         self._storage_factory = storage_factory or _default_storage
 
     def spawn(
-        self, prompt: str, allowed_tools: list[str] | None = None,
+        self,
+        prompt: str,
+        allowed_tools: list[str] | None = None,
+        *,
+        agent_type: str = "general-purpose",
     ) -> Agent:
         # Import locally to avoid a circular import: Agent's module pulls in
         # aura.tools.task_create, which pulls in this factory.
         from aura.core.agent import Agent
 
+        # Resolve the subagent flavor first — any unknown name raises
+        # ValueError with the valid set, which the calling tool
+        # (``task_create``) surfaces to the LLM as a ToolError.
+        type_def = get_agent_type(agent_type)
+
+        # Build the effective allowlist. Layered precedence:
+        #   1. general-purpose (empty ``type_def.tools``) → inherit parent
+        #      tool set unchanged, just strip the recursion-guard tools.
+        #   2. Restricted type → intersect with parent's enabled set. If any
+        #      declared allowed-tool is missing from the parent, raise —
+        #      silently dropping would hand the subagent a broken prompt
+        #      (the suffix promises tools the child can't see).
+        parent_enabled = list(self._parent_config.tools.enabled)
+        if type_def.tools:
+            missing = type_def.tools - set(parent_enabled)
+            if missing:
+                raise ValueError(
+                    f"agent_type {agent_type!r} requires tools "
+                    f"{sorted(missing)} but parent has not enabled them; "
+                    "enable them on the parent config or pick a different "
+                    "agent_type."
+                )
+            effective_allow: set[str] | None = set(type_def.tools)
+        else:
+            effective_allow = None  # inherit-all sentinel
+
         # Clone the parent config but strip subagent-forbidden tools — a
         # subagent can't spawn further subagents in 0.5.x (dispatch not
         # wired into child Agents yet). MCP servers ARE inherited so the
         # subagent has parity with parent's external tool set.
+        # ``allowed_tools`` (legacy kwarg) and ``effective_allow`` (derived
+        # from agent_type) both act as narrowing filters; both must pass.
         child_tools = ToolsConfig(
             enabled=[
-                name for name in self._parent_config.tools.enabled
+                name for name in parent_enabled
                 if name not in {"task_create", "task_output"}
                 and (allowed_tools is None or name in allowed_tools)
+                and (effective_allow is None or name in effective_allow)
             ]
         )
         child_cfg = self._parent_config.model_copy(
@@ -117,4 +151,5 @@ class SubagentFactory:
             storage=storage,
             session_id="subagent",
             pre_loaded_skills=self._parent_skills,
+            system_prompt_suffix=type_def.system_prompt_suffix,
         )

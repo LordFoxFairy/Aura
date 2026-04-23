@@ -28,6 +28,14 @@ Keys:
 - ``args_preview``        — ``(args) -> str`` — one-line preview of this call's
                              arguments, rendered by the CLI permission prompt.
                              ``None`` falls back to the tool name.
+- ``timeout_sec``         — ``float | None`` — hard deadline (seconds) the loop
+                             wraps around ``tool.ainvoke``. ``None`` = no
+                             deadline (tools with their own internal timeout
+                             ladder, e.g. bash, set this to ``None`` so the
+                             outer wrapper doesn't stack).
+- ``is_search_command``   — ``bool`` — renderer folds long output for
+                             search/read tools so the REPL isn't flooded by a
+                             1000-line grep. False = render as usual.
 """
 
 from __future__ import annotations
@@ -60,6 +68,8 @@ def tool_metadata(
     max_result_size_chars: int | None = None,
     rule_matcher: ToolRuleMatcher | None = None,
     args_preview: ToolArgsPreview | None = None,
+    timeout_sec: float | None = None,
+    is_search_command: bool = False,
 ) -> dict[str, Any]:
     """Build the metadata dict every Aura tool carries on ``metadata``."""
     return {
@@ -69,4 +79,6 @@ def tool_metadata(
         "max_result_size_chars": max_result_size_chars,
         "rule_matcher": rule_matcher,
         "args_preview": args_preview,
+        "timeout_sec": timeout_sec,
+        "is_search_command": is_search_command,
     }

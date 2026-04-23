@@ -57,6 +57,11 @@ class Glob(BaseTool):
         is_read_only=True, is_concurrency_safe=True, max_result_size_chars=40_000,
         rule_matcher=exact_match_on("pattern"),
         args_preview=_preview,
+        # Glob is pathlib-only (no subprocess). 10s already indicates a
+        # pathological repo (10M+ entries or NFS stall); bail rather than
+        # freeze the turn.
+        timeout_sec=10.0,
+        is_search_command=True,
     )
 
     def _run(

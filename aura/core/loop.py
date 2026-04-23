@@ -405,8 +405,24 @@ class AgentLoop:
             return step.decision
         assert step.tool is not None
         assert step.args is not None
+        # Per-tool hard deadline. ``timeout_sec`` in metadata wraps the tool
+        # invocation with ``asyncio.wait_for`` so a pathological grep on a
+        # 10 GB repo or a hung web_fetch cannot freeze the turn forever.
+        # Tools that own their own internal timeout ladder (bash) set this
+        # to ``None`` so the outer wrapper doesn't stack on top.
+        timeout: float | None = (step.tool.metadata or {}).get("timeout_sec")
         try:
-            output = await step.tool.ainvoke(step.args)
+            if timeout is not None:
+                try:
+                    output = await asyncio.wait_for(
+                        step.tool.ainvoke(step.args), timeout=timeout,
+                    )
+                except TimeoutError as exc:
+                    raise ToolError(
+                        f"tool {step.tool.name!r} timed out after {timeout}s"
+                    ) from exc
+            else:
+                output = await step.tool.ainvoke(step.args)
             result = ToolResult(ok=True, output=output)
             self._maybe_trigger_path(step, result)
         except ToolError as exc:

@@ -23,6 +23,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
 
 from aura.config.schema import AuraConfig
+from aura.core.agent import Agent
 from aura.core.persistence.storage import SessionStorage
 from aura.core.skills.registry import SkillRegistry
 from aura.core.skills.types import Skill
@@ -258,6 +259,205 @@ def test_subagent_inherits_allowed_tools_excluding_task_tools() -> None:
     child_agent = factory.spawn("sub-prompt")
     assert child_agent._config.tools.enabled == ["bash", "read_file"]
     child_agent.close()
+
+
+@pytest.mark.asyncio
+async def test_task_create_default_agent_type_is_general_purpose(
+    tmp_path: Path,
+) -> None:
+    # No agent_type arg → default "general-purpose" flavor, inherits all
+    # parent tools and adds no system-prompt suffix.
+    store, factory = _make_factory(tmp_path)
+    tasks: dict[str, asyncio.Task[None]] = {}
+    tool = TaskCreate(store=store, factory=factory, running=tasks)
+    out = await tool.ainvoke({"description": "d", "prompt": "p"})
+    rec = store.get(out["task_id"])
+    assert rec is not None
+    assert rec.agent_type == "general-purpose"
+    assert out["agent_type"] == "general-purpose"
+    # Drain the fire-and-forget task so pytest doesn't warn.
+    for _ in range(10):
+        if tasks.get(out["task_id"]) is None:
+            break
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_task_create_unknown_agent_type_returns_tool_error(
+    tmp_path: Path,
+) -> None:
+    store, factory = _make_factory(tmp_path)
+    tool = TaskCreate(store=store, factory=factory, running={})
+    with pytest.raises(ToolError) as ei:
+        await tool.ainvoke(
+            {"description": "d", "prompt": "p", "agent_type": "bogus"},
+        )
+    msg = str(ei.value)
+    # Error surfaces the full valid-name list so the LLM can self-correct.
+    for name in ("general-purpose", "explore", "verify", "plan"):
+        assert name in msg
+    # No orphan record left behind by a failed validation.
+    assert store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_task_create_explore_restricts_child_tools(tmp_path: Path) -> None:
+    # Parent has a superset of tools; explore child must end up with only
+    # the read-only allowlist.
+    store = TasksStore()
+    parent_config = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {
+            "enabled": [
+                "bash", "read_file", "grep", "glob", "write_file",
+                "web_fetch", "web_search", "task_create", "task_output",
+            ],
+        },
+    })
+    captured: list[Agent] = []
+
+    def _cap_model_factory() -> FakeChatModel:
+        return FakeChatModel(turns=[FakeTurn(AIMessage(content="done"))])
+
+    class _ProbeFactory(SubagentFactory):
+        def spawn(
+            self,
+            prompt: str,
+            allowed_tools: list[str] | None = None,
+            *,
+            agent_type: str = "general-purpose",
+        ) -> Agent:
+            child = super().spawn(
+                prompt, allowed_tools, agent_type=agent_type,
+            )
+            captured.append(child)
+            return child
+
+    factory = _ProbeFactory(
+        parent_config=parent_config,
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=_cap_model_factory,
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+    tasks: dict[str, asyncio.Task[None]] = {}
+    tool = TaskCreate(store=store, factory=factory, running=tasks)
+    out = await tool.ainvoke({
+        "description": "scan",
+        "prompt": "find TODOs",
+        "agent_type": "explore",
+    })
+    task_id = out["task_id"]
+    # Wait for spawn to happen (run_task calls it on first event-loop tick).
+    for _ in range(20):
+        if captured:
+            break
+        await asyncio.sleep(0.01)
+    assert captured, "factory.spawn was never called"
+    child = captured[0]
+    enabled = set(child._config.tools.enabled)
+    # Only read-only tools must remain; writes and shell stripped.
+    assert enabled == {"read_file", "grep", "glob", "web_fetch", "web_search"}
+    assert "bash" not in enabled
+    assert "write_file" not in enabled
+    # System prompt suffix landed on the child.
+    assert "Explore" in child._system_prompt
+    # Agent_type persisted on the record for later task_get / task_list.
+    rec = store.get(task_id)
+    assert rec is not None
+    assert rec.agent_type == "explore"
+    child.close()
+
+
+def test_factory_spawn_verify_appends_verdict_system_prompt() -> None:
+    # Verify type's distinguishing feature: its suffix carries the strict
+    # VERDICT: output contract. Must survive the factory → Agent wiring.
+    parent_config = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["read_file", "grep", "glob", "web_fetch", "web_search"]},
+    })
+    factory = SubagentFactory(
+        parent_config=parent_config,
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(turns=[]),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+    child = factory.spawn("audit claim X", agent_type="verify")
+    assert "VERDICT:" in child._system_prompt
+    assert "Verify" in child._system_prompt
+    child.close()
+
+
+def test_factory_spawn_plan_includes_plan_mode_tools() -> None:
+    parent_config = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {
+            "enabled": [
+                "read_file", "grep", "glob", "web_fetch", "web_search",
+                "enter_plan_mode", "exit_plan_mode", "bash",
+            ],
+        },
+    })
+    factory = SubagentFactory(
+        parent_config=parent_config,
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(turns=[]),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+    child = factory.spawn("plan something", agent_type="plan")
+    enabled = set(child._config.tools.enabled)
+    assert "enter_plan_mode" in enabled
+    assert "exit_plan_mode" in enabled
+    # bash is on the parent but must be stripped for plan type.
+    assert "bash" not in enabled
+    child.close()
+
+
+def test_factory_spawn_rejects_type_requiring_missing_parent_tools() -> None:
+    # If an explore subagent asks for read_file but the parent doesn't have
+    # read_file enabled, the factory must REFUSE rather than hand the child
+    # a broken prompt (the suffix promises tools that don't exist).
+    parent_config = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        # Deliberately missing read_file / grep / glob / web_*.
+        "tools": {"enabled": ["bash"]},
+    })
+    factory = SubagentFactory(
+        parent_config=parent_config,
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(turns=[]),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+    with pytest.raises(ValueError, match="requires tools"):
+        factory.spawn("p", agent_type="explore")
+
+
+def test_factory_spawn_general_purpose_does_not_filter_tools() -> None:
+    # General-purpose sentinel → inherit all parent tools (minus the
+    # recursion-guard trio). Explicit regression guard against the
+    # "empty frozenset = deny-all" misread.
+    parent_config = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["bash", "read_file", "write_file", "task_create"]},
+    })
+    factory = SubagentFactory(
+        parent_config=parent_config,
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(turns=[]),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+    child = factory.spawn("p", agent_type="general-purpose")
+    enabled = set(child._config.tools.enabled)
+    # bash + read_file + write_file inherited; task_create stripped by the
+    # recursion guard.
+    assert enabled == {"bash", "read_file", "write_file"}
+    # No suffix added to the prompt.
+    assert "Subagent context" not in child._system_prompt
+    child.close()
 
 
 @pytest.mark.asyncio

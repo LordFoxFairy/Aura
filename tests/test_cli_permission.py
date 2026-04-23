@@ -750,3 +750,138 @@ def test_print_bypass_banner_writes_warning() -> None:
     print_bypass_banner(console)
     out = buffer.getvalue()
     assert "PERMISSION CHECKS DISABLED" in out
+
+
+# ---------------------------------------------------------------------------
+# Timeout — audit Finding A: unattended / stale sessions must not hang the
+# turn forever. A non-response resolves to the existing deny shape and the
+# journal records a ``permission_prompt_timeout`` event so the audit trail
+# distinguishes "user said no" from "user never answered".
+# ---------------------------------------------------------------------------
+async def test_timeout_resolves_to_deny(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+
+    monkeypatch.setattr(
+        "aura.cli.permission._pick_choice_interactive",
+        _stub_picker_raises(TimeoutError()),
+    )
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console, timeout=0.1)
+    resp = await asker(
+        tool=_bash_like(), args={"command": "npm test"}, rule_hint=_HINT,
+    )
+    assert isinstance(resp, AskerResponse)
+    assert resp.choice == "deny"
+
+
+async def test_timeout_writes_journal_entry(
+    monkeypatch: pytest.MonkeyPatch, _journal_capture: Path,
+) -> None:
+
+    monkeypatch.setattr(
+        "aura.cli.permission._pick_choice_interactive",
+        _stub_picker_raises(TimeoutError()),
+    )
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console, timeout=0.1)
+    await asker(tool=_bash_like(), args={"command": "npm test"}, rule_hint=_HINT)
+    events = _events(_journal_capture)
+    timeout_events = [e for e in events if e["event"] == "permission_prompt_timeout"]
+    assert len(timeout_events) == 1
+    assert timeout_events[0]["tool"] == "bash"
+    assert timeout_events[0]["timeout_sec"] == 0.1
+    # A permission_answered=deny with reason=timeout must also fire so
+    # downstream audit consumers see a single "decision" event stream
+    # rather than having to special-case the timeout surface.
+    answered = [e for e in events if e["event"] == "permission_answered"]
+    assert len(answered) == 1
+    assert answered[0]["choice"] == "deny"
+    assert answered[0]["reason"] == "timeout"
+
+
+async def test_timeout_none_preserves_legacy_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # timeout=None means "wait forever" — the picker runs normally and
+    # its preset answer propagates through. No wait_for wrapping fires.
+    picker, captured = _stub_picker(1)
+    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console, timeout=None)
+    resp = await asker(
+        tool=_bash_like(), args={"command": "ls"}, rule_hint=_HINT,
+    )
+    assert resp.choice == "accept"
+    assert captured.get("timeout") is None
+
+
+async def test_timeout_plumbed_through_to_picker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    picker, captured = _stub_picker(1)
+    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console, timeout=5.0)
+    await asker(tool=_bash_like(), args={"command": "ls"}, rule_hint=_HINT)
+    assert captured["timeout"] == 5.0
+
+
+async def test_fast_response_not_affected_by_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # User responds quickly; timeout=5.0 is plenty. The picker returns
+    # its preset value and no TimeoutError fires — the asker resolves
+    # normally.
+    picker, _ = _stub_picker(1)
+    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console, timeout=5.0)
+    resp = await asker(
+        tool=_bash_like(), args={"command": "ls"}, rule_hint=_HINT,
+    )
+    assert resp.choice == "accept"
+
+
+async def test_real_timeout_via_wait_for() -> None:
+    # End-to-end: _pick_choice_interactive wraps pt.Application.run_async
+    # with asyncio.wait_for(timeout=...). Stub run_async with a coroutine
+    # that sleeps longer than the timeout; confirm TimeoutError bubbles.
+    import asyncio
+
+    from aura.cli import permission as permission_module
+
+    class _FakeApp:
+        is_running = True
+
+        async def run_async(self) -> None:
+            await asyncio.sleep(10.0)
+
+        def exit(self) -> None:
+            self.is_running = False
+
+    fake_app = _FakeApp()
+
+    class _FakeApplicationCls:
+        def __init__(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
+        def __new__(cls, *_a: Any, **_kw: Any) -> Any:
+            return fake_app
+
+    import pytest as _pytest
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(permission_module, "Application", _FakeApplicationCls)
+        with _pytest.raises(asyncio.TimeoutError):
+            await permission_module._pick_choice_interactive(
+                tool=_bash_like(),
+                preview="ls",
+                tag="safe",
+                option_two_label="always",
+                default_choice=1,
+                args={"command": "ls"},
+                timeout=0.05,
+            )
+    # pt Application.exit() was called to unwind its render loop.
+    assert fake_app.is_running is False

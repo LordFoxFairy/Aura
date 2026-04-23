@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def test_version_flag_fast_path() -> None:
     result = subprocess.run(
@@ -160,3 +162,81 @@ def test_resolve_mode_cli_flag_wins_even_over_settings_bypass() -> None:
     perm_cfg = PermissionsConfig(mode="bypass")
     args = _ns(bypass_permissions=True)
     assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# disable_bypass — audit Finding B: org-level kill switch for
+# --bypass-permissions. Two entry points need enforcement:
+#   1. CLI flag path (this file's subprocess tests).
+#   2. Programmatic Agent/set_mode path (tests/test_agent.py).
+# ---------------------------------------------------------------------------
+def test_bypass_refused_message_is_stable() -> None:
+    # The error message is the single piece of text the operator sees
+    # when their --bypass-permissions attempt gets refused. Lock its
+    # shape so docs / support runbooks can reference it.
+    from aura.cli.__main__ import _bypass_refused_message
+
+    msg = _bypass_refused_message()
+    assert "--bypass-permissions is disabled" in msg
+    assert "disable_bypass=true" in msg
+
+
+def test_bypass_refused_end_to_end_via_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Finding B acceptance: --bypass-permissions + disable_bypass=true
+    # must exit 2 (config error) and print the refused message to
+    # stderr. We exercise main() in-process (subprocess-based tests
+    # misroute to a stale parent venv in editable-install setups)
+    # with HOME + cwd scoped to tmp_path and the LLM factory
+    # monkeypatched out so startup never touches real providers.
+    from aura.cli.__main__ import main
+
+    # Minimal user config so load_config succeeds.
+    user_aura_dir = tmp_path / ".aura"
+    user_aura_dir.mkdir()
+    (user_aura_dir / "config.json").write_text(json.dumps({
+        "providers": [{
+            "name": "p1",
+            "protocol": "openai",
+            "api_key_env": "FAKE_API_KEY",
+        }],
+        "router": {"default": "p1:fake-model"},
+    }))
+    # Project settings.json sets the kill switch.
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    (project_dir / ".aura").mkdir()
+    (project_dir / ".aura" / "settings.json").write_text(json.dumps({
+        "permissions": {"disable_bypass": True},
+    }))
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FAKE_API_KEY", "dummy")
+    monkeypatch.setattr(sys, "argv", ["aura", "--bypass-permissions"])
+
+    rc = main()
+    captured = capsys.readouterr()
+    assert rc == 2, (
+        f"expected exit 2, got {rc}; "
+        f"stdout={captured.out!r} stderr={captured.err!r}"
+    )
+    assert "--bypass-permissions is disabled" in captured.err
+    assert "disable_bypass=true" in captured.err
+
+
+def test_disable_bypass_false_allows_bypass_flag() -> None:
+    # Regression lock: when disable_bypass is false (the default), the
+    # --bypass-permissions flag still yields mode="bypass" via
+    # _resolve_mode. We exercise the resolver directly because the full
+    # main() path requires an LLM client; the kill-switch check lives
+    # AFTER _resolve_mode in main() and is covered by the subprocess
+    # test above.
+    from aura.cli.__main__ import _resolve_mode
+    from aura.schemas.permissions import PermissionsConfig
+
+    perm_cfg = PermissionsConfig(disable_bypass=False)
+    args = _ns(bypass_permissions=True)
+    assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
+    assert perm_cfg.disable_bypass is False

@@ -1327,6 +1327,132 @@ def test_build_agent_plumbs_mode_through(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 # --------------------------------------------------------------------------
+# Agent.disable_bypass — Finding B: programmatic kill switch for bypass
+# mode. Must refuse at BOTH construction (Agent(mode="bypass")) AND at
+# runtime (set_mode("bypass")). A clean AuraConfigError carries the same
+# wording as the CLI-flag path so the operator sees one consistent message.
+# --------------------------------------------------------------------------
+def test_agent_construct_bypass_refused_when_disable_bypass_true(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(AuraConfigError) as exc_info:
+        Agent(
+            config=_minimal_config(),
+            model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
+            storage=_storage(tmp_path),
+            mode="bypass",
+            disable_bypass=True,
+        )
+    assert "bypass mode is disabled" in str(exc_info.value)
+    assert "disable_bypass" in str(exc_info.value)
+
+
+def test_agent_construct_non_bypass_mode_unaffected_by_disable_bypass(
+    tmp_path: Path,
+) -> None:
+    # disable_bypass=True only blocks the "bypass" mode; every other
+    # mode must still construct cleanly (regression guard — a bug that
+    # raised for all modes would make disable_bypass unusable in
+    # practice).
+    for mode in ("default", "plan", "accept_edits"):
+        agent = Agent(
+            config=_minimal_config(),
+            model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
+            storage=_storage(tmp_path),
+            mode=mode,
+            disable_bypass=True,
+        )
+        try:
+            assert agent.mode == mode
+        finally:
+            agent.close()
+
+
+def test_agent_set_mode_bypass_refused_when_disable_bypass_true(
+    tmp_path: Path,
+) -> None:
+    agent = Agent(
+        config=_minimal_config(),
+        model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
+        storage=_storage(tmp_path),
+        mode="default",
+        disable_bypass=True,
+    )
+    try:
+        with pytest.raises(AuraConfigError) as exc_info:
+            agent.set_mode("bypass")
+        assert "bypass mode is disabled" in str(exc_info.value)
+        # Mode unchanged after refusal.
+        assert agent.mode == "default"
+    finally:
+        agent.close()
+
+
+def test_agent_set_mode_non_bypass_allowed_with_disable_bypass(
+    tmp_path: Path,
+) -> None:
+    # Regression guard: disable_bypass must not break the shift+tab
+    # cycle through default/plan/accept_edits.
+    agent = Agent(
+        config=_minimal_config(),
+        model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
+        storage=_storage(tmp_path),
+        mode="default",
+        disable_bypass=True,
+    )
+    try:
+        agent.set_mode("plan")
+        assert agent.mode == "plan"
+        agent.set_mode("accept_edits")
+        assert agent.mode == "accept_edits"
+        agent.set_mode("default")
+        assert agent.mode == "default"
+    finally:
+        agent.close()
+
+
+def test_agent_set_mode_bypass_allowed_when_disable_bypass_false(
+    tmp_path: Path,
+) -> None:
+    # Default — disable_bypass=False — must allow runtime switch to
+    # bypass (this is what the --bypass-permissions-via-set_mode path
+    # relies on).
+    agent = Agent(
+        config=_minimal_config(),
+        model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
+        storage=_storage(tmp_path),
+        mode="default",
+        disable_bypass=False,
+    )
+    try:
+        agent.set_mode("bypass")
+        assert agent.mode == "bypass"
+    finally:
+        agent.close()
+
+
+def test_build_agent_plumbs_disable_bypass_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # build_agent is the CLI's entry point — disable_bypass must make
+    # it through to Agent or the CLI-level guard is the only defense.
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "storage": {"path": str(tmp_path / "s.db")},
+    })
+
+    def _fake_create(provider: Any, model_name: str) -> Any:  # noqa: ARG001
+        return FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))])
+
+    monkeypatch.setattr("aura.core.agent.llm.create", _fake_create)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    with pytest.raises(AuraConfigError):
+        build_agent(cfg, mode="bypass", disable_bypass=True)
+
+
+# --------------------------------------------------------------------------
 # Agent.context_window — override takes precedence over llm lookup
 # --------------------------------------------------------------------------
 def test_agent_context_window_falls_back_to_llm_lookup(tmp_path: Path) -> None:

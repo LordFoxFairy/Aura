@@ -60,3 +60,20 @@ class PermissionsConfig(BaseModel):
     allow: list[str] = Field(default_factory=list)
     safety_exempt: list[str] = Field(default_factory=list)
     statusline: StatusLineConfig | None = None
+    prompt_timeout_sec: float | None = Field(
+        default=300.0,
+        description=(
+            "Seconds to wait for user response on permission prompts "
+            "and user_question widgets before treating the non-response "
+            "as a denial. None = wait forever (legacy behavior). Default 300 "
+            "(5 minutes)."
+        ),
+    )
+    disable_bypass: bool = Field(
+        default=False,
+        description=(
+            "Org-level kill switch for --bypass-permissions / bypass mode. "
+            "When true, any attempt to enter bypass mode is refused with a "
+            "loud error at startup. Use in shared / CI / compliance environments."
+        ),
+    )

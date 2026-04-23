@@ -67,6 +67,13 @@ class TaskRecord:
     prompt: str
     status: TaskStatus = "running"
     kind: TaskKind = "subagent"
+    # Orthogonal to ``kind``: ``kind`` distinguishes subagent-vs-shell, while
+    # ``agent_type`` selects the flavor of subagent (general-purpose / explore
+    # / verify / plan). Only meaningful when ``kind == "subagent"``; shell
+    # tasks leave it ``None``. Stored as a free-form ``str`` (not the
+    # Literal) so the store layer doesn't have to re-import the registry
+    # just to persist a known-valid name.
+    agent_type: str | None = None
     messages: list[BaseMessage] = field(default_factory=list)
     final_result: str | None = None
     error: str | None = None

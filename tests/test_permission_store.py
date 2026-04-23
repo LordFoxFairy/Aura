@@ -26,6 +26,47 @@ def test_load_on_nonexistent_file_returns_defaults(tmp_path: Path) -> None:
     assert cfg.mode == "default"
     assert cfg.allow == []
     assert cfg.safety_exempt == []
+    # Findings A + B defaults: 5-minute prompt timeout, disable_bypass off.
+    assert cfg.prompt_timeout_sec == 300.0
+    assert cfg.disable_bypass is False
+
+
+def test_permissions_config_default_fields() -> None:
+    # Sanity check the schema defaults directly (without going through
+    # the store loader) so a drift on either side surfaces in the
+    # right test.
+    cfg = PermissionsConfig()
+    assert cfg.prompt_timeout_sec == 300.0
+    assert cfg.disable_bypass is False
+
+
+def test_permissions_config_accepts_none_timeout() -> None:
+    # ``None`` → "wait forever" (legacy). Lock both that it's accepted
+    # and that round-trip keeps the value.
+    cfg = PermissionsConfig(prompt_timeout_sec=None)
+    assert cfg.prompt_timeout_sec is None
+
+
+def test_permissions_config_accepts_custom_timeout_and_disable_bypass() -> None:
+    cfg = PermissionsConfig(prompt_timeout_sec=30.0, disable_bypass=True)
+    assert cfg.prompt_timeout_sec == 30.0
+    assert cfg.disable_bypass is True
+
+
+def test_load_parses_disable_bypass_and_timeout(tmp_path: Path) -> None:
+    # End-to-end round trip through the store loader. Confirms
+    # settings.json -> PermissionsConfig for the new fields.
+    settings = tmp_path / ".aura" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(json.dumps({
+        "permissions": {
+            "disable_bypass": True,
+            "prompt_timeout_sec": 45.5,
+        },
+    }))
+    cfg = load(tmp_path)
+    assert cfg.disable_bypass is True
+    assert cfg.prompt_timeout_sec == 45.5
 
 
 def test_load_round_trips_three_rules(tmp_path: Path) -> None:

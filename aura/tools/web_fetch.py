@@ -114,6 +114,13 @@ class WebFetch(BaseTool):
         max_result_size_chars=60_000,
         rule_matcher=exact_match_on("url"),
         args_preview=_preview,
+        # 30s outer deadline. ``WebFetchParams.timeout`` still caps the
+        # inner urlopen at its own value (default 30s) — the wait_for wrap
+        # covers the socket-hang case where the internal timeout is
+        # bypassed (DNS resolver stalls, TLS handshake stuck, etc.).
+        timeout_sec=30.0,
+        # Fetched documents are user-requested; do NOT fold.
+        is_search_command=False,
     )
 
     def _run(self, url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:

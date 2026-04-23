@@ -15,6 +15,7 @@ always gets a well-typed ``{"answer": ""}`` result.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from prompt_toolkit import PromptSession
@@ -26,6 +27,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from rich.console import Console
 
 from aura.cli._coordination import pause_spinner_if_active, prompt_mutex
+from aura.core.persistence import journal
 from aura.tools.ask_user import QuestionAsker
 
 _SEPARATOR = "─" * 78
@@ -35,6 +37,7 @@ async def _pick_choice_interactive(
     question: str,
     options: list[str],
     default: str | None,
+    timeout: float | None = None,
 ) -> str | None:
     """Interactive arrow-key picker for multi-option questions.
 
@@ -130,12 +133,28 @@ async def _pick_choice_interactive(
         mouse_support=False,
         erase_when_done=True,
     )
+    # ``timeout`` — wraps pt's render loop with ``asyncio.wait_for`` so a
+    # stale / unattended session doesn't block the agent turn forever.
+    # On timeout we raise ``asyncio.TimeoutError`` so the caller can treat
+    # it as "user gave no answer" (empty string, per contract).
     async with prompt_mutex():
-        await app.run_async()
+        if timeout is not None:
+            try:
+                await asyncio.wait_for(app.run_async(), timeout=timeout)
+            except TimeoutError:
+                if app.is_running:
+                    app.exit()
+                raise
+        else:
+            await app.run_async()
     return committed[0]
 
 
-async def _read_free_text(question: str, default: str | None) -> str | None:
+async def _read_free_text(
+    question: str,
+    default: str | None,
+    timeout: float | None = None,
+) -> str | None:
     """Prompt the user for free-text input inline.
 
     Uses a transient ``PromptSession`` — simpler than a full pt
@@ -161,7 +180,18 @@ async def _read_free_text(question: str, default: str | None) -> str | None:
     session: PromptSession[str] = PromptSession()
     try:
         async with prompt_mutex():
-            raw = await session.prompt_async("  ❯ ")
+            if timeout is not None:
+                raw = await asyncio.wait_for(
+                    session.prompt_async("  ❯ "), timeout=timeout,
+                )
+            else:
+                raw = await session.prompt_async("  ❯ ")
+    except TimeoutError:
+        # Fail-safe: bubble up so the caller can log and return the
+        # empty-string no-answer shape. Propagated (not swallowed) so
+        # ``make_cli_user_asker`` can write a single journal entry with
+        # the tool context instead of duplicating that here.
+        raise
     except (KeyboardInterrupt, SystemExit, EOFError):
         return None
     except Exception:  # noqa: BLE001 — no-TTY / prompt failures
@@ -172,7 +202,11 @@ async def _read_free_text(question: str, default: str | None) -> str | None:
     return tok
 
 
-def make_cli_user_asker(console: Console | None = None) -> QuestionAsker:  # noqa: ARG001 — kept for test compat
+def make_cli_user_asker(
+    console: Console | None = None,  # noqa: ARG001 — kept for test compat
+    *,
+    timeout: float | None = None,
+) -> QuestionAsker:
     """Return an async callable the ``ask_user_question`` tool delegates to.
 
     ``console`` — accepted for backwards compatibility with tests and
@@ -180,6 +214,12 @@ def make_cli_user_asker(console: Console | None = None) -> QuestionAsker:  # noq
     now renders via pt directly, so the parameter is unused. A
     deprecation nudge would land too late — we already committed to a
     stable PermissionAsker signature — so the slot just stays.
+
+    ``timeout`` — seconds to wait for the user to respond before
+    treating the non-response as a "no answer" (returns ``""``, the
+    existing contract for "user didn't answer"). ``None`` preserves
+    legacy "wait forever" behavior. Threaded in from
+    ``PermissionsConfig.prompt_timeout_sec`` by the CLI entry point.
     """
 
     async def _ask(
@@ -187,7 +227,16 @@ def make_cli_user_asker(console: Console | None = None) -> QuestionAsker:  # noq
     ) -> str:
         if options:
             try:
-                chosen = await _pick_choice_interactive(question, options, default)
+                chosen = await _pick_choice_interactive(
+                    question, options, default, timeout=timeout,
+                )
+            except TimeoutError:
+                journal.write(
+                    "user_question_timeout",
+                    timeout_sec=timeout,
+                    kind="choice",
+                )
+                return ""
             except (KeyboardInterrupt, SystemExit):
                 return ""
             except Exception:  # noqa: BLE001
@@ -195,7 +244,15 @@ def make_cli_user_asker(console: Console | None = None) -> QuestionAsker:  # noq
             return chosen if chosen is not None else ""
 
         # Free-text path
-        raw = await _read_free_text(question, default)
+        try:
+            raw = await _read_free_text(question, default, timeout=timeout)
+        except TimeoutError:
+            journal.write(
+                "user_question_timeout",
+                timeout_sec=timeout,
+                kind="free_text",
+            )
+            return ""
         return raw if raw is not None else ""
 
     return _ask

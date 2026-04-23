@@ -30,7 +30,14 @@ async def run_task(
     record = store.get(task_id)
     if record is None:
         return
-    agent = factory.spawn(record.prompt)
+    # ``record.agent_type`` is None only for shell-kind tasks (which don't
+    # run through this path) or for legacy records created before the
+    # agent_type field existed. Fall back to general-purpose so inherited
+    # behavior is identical to pre-registry dispatch.
+    agent = factory.spawn(
+        record.prompt,
+        agent_type=record.agent_type or "general-purpose",
+    )
     try:
         final_text = ""
         async for event in agent.astream(record.prompt):

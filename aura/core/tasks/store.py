@@ -33,6 +33,7 @@ class TasksStore:
         parent_id: str | None = None,
         *,
         kind: TaskKind = "subagent",
+        agent_type: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> TaskRecord:
         task_id = uuid.uuid4().hex
@@ -42,6 +43,7 @@ class TasksStore:
             description=description,
             prompt=prompt,
             kind=kind,
+            agent_type=agent_type,
             metadata=dict(metadata) if metadata is not None else {},
         )
         self._records[task_id] = rec

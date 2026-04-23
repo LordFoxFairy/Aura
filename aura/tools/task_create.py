@@ -17,10 +17,29 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from aura.core.tasks.agent_types import all_agent_types, get_agent_type
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.run import run_task
 from aura.core.tasks.store import TasksStore
-from aura.schemas.tool import tool_metadata
+from aura.schemas.tool import ToolError, tool_metadata
+
+
+def _agent_type_field_description() -> str:
+    """Human-readable catalogue of available agent types.
+
+    Rendered once at module import and embedded in the ``agent_type``
+    pydantic field description so the LLM sees the options + selection
+    guidance inside the tool schema — no separate introspection call
+    needed.
+    """
+    lines = [
+        "Subagent flavor to dispatch. Each flavor has a different tool "
+        "allowlist + system prompt. Pick the most restrictive type that "
+        "still accomplishes the task. Options:",
+    ]
+    for type_def in all_agent_types():
+        lines.append(f"- {type_def.name!r}: {type_def.description}")
+    return "\n".join(lines)
 
 
 class TaskCreateParams(BaseModel):
@@ -31,6 +50,10 @@ class TaskCreateParams(BaseModel):
     prompt: str = Field(
         ..., min_length=1,
         description="The prompt the subagent should work on.",
+    )
+    agent_type: str = Field(
+        default="general-purpose",
+        description=_agent_type_field_description(),
     )
 
 
@@ -83,11 +106,33 @@ class TaskCreate(BaseTool):
     def running(self) -> dict[str, asyncio.Task[None]]:
         return self._running
 
-    def _run(self, description: str, prompt: str) -> dict[str, Any]:
+    def _run(
+        self,
+        description: str,
+        prompt: str,
+        agent_type: str = "general-purpose",
+    ) -> dict[str, Any]:
         raise NotImplementedError("task_create is async-only; use ainvoke")
 
-    async def _arun(self, description: str, prompt: str) -> dict[str, Any]:
-        record = self.store.create(description=description, prompt=prompt)
+    async def _arun(
+        self,
+        description: str,
+        prompt: str,
+        agent_type: str = "general-purpose",
+    ) -> dict[str, Any]:
+        # Validate the flavor BEFORE touching the store so a typo can't
+        # leave an orphan record. ``get_agent_type`` raises ValueError with
+        # the full list of valid names — we lift it into ToolError so the
+        # LLM sees the message in the tool result and can self-correct.
+        try:
+            get_agent_type(agent_type)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
+        record = self.store.create(
+            description=description,
+            prompt=prompt,
+            agent_type=agent_type,
+        )
         # Fire-and-forget. The handle is kept in ``self._running`` so the
         # parent Agent can cancel it on close / Ctrl+C. We also attach a
         # done-callback to clean the map on natural completion so the
@@ -111,4 +156,5 @@ class TaskCreate(BaseTool):
             "task_id": record.id,
             "description": record.description,
             "status": "running",
+            "agent_type": agent_type,
         }

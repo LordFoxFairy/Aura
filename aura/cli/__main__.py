@@ -65,6 +65,21 @@ def _resolve_mode(
     return perm_cfg.mode
 
 
+def _bypass_refused_message() -> str:
+    """Error message shown when ``--bypass-permissions`` hits the
+    ``disable_bypass`` kill switch.
+
+    Factored out so the CLI check and the programmatic (Agent-level)
+    guard share the exact same user-facing wording — an operator grepping
+    logs for either surface finds the same string.
+    """
+    return (
+        "error: --bypass-permissions is disabled by config "
+        "(permissions.disable_bypass=true). Remove the flag or update "
+        "permissions settings."
+    )
+
+
 def _warn_plaintext_api_keys(
     config: AuraConfig, console: Console, *, verbose: bool = False,
 ) -> None:
@@ -191,11 +206,29 @@ def main() -> int:
             exempt=tuple(perm_cfg.safety_exempt),
         )
         mode = _resolve_mode(args, perm_cfg)
+        # Kill switch — enforced at the SAME layer as the CLI flag
+        # decision, before any agent-level state spins up, so that an
+        # operator can never enter bypass mode via any path when the
+        # org config forbids it. Exits with code 2 (config error) to
+        # distinguish from code 1 (runtime error) and 130 (SIGINT).
+        if args.bypass_permissions and perm_cfg.disable_bypass:
+            print(_bypass_refused_message(), file=sys.stderr)
+            journal.write(
+                "bypass_refused",
+                reason="disable_bypass",
+                source="cli_flag",
+            )
+            return 2
         if mode == "bypass":
             print_bypass_banner(console)
             journal.write("permission_bypass_active")
         session = SessionRuleSet()
-        asker = make_cli_asker()
+        # Prompt timeout: plumb ``PermissionsConfig.prompt_timeout_sec``
+        # (default 300s = 5 min, ``None`` = wait forever) through to both
+        # the permission asker and the ask_user_question asker. Fail-safe
+        # on unattended / stale sessions — a hung prompt would otherwise
+        # block the whole turn forever.
+        asker = make_cli_asker(timeout=perm_cfg.prompt_timeout_sec)
         hooks = HookChain(
             pre_tool=[
                 make_permission_hook(
@@ -214,11 +247,18 @@ def main() -> int:
             config,
             hooks=hooks,
             session_rules=session,
-            question_asker=make_cli_user_asker(),
+            question_asker=make_cli_user_asker(
+                timeout=perm_cfg.prompt_timeout_sec,
+            ),
             # Hand the resolved mode in so the bottom bar + any future
             # agent-level consumer can read it without re-consulting the
             # permission store.
             mode=mode,
+            # Propagate disable_bypass to the Agent layer so a
+            # programmatic ``set_mode("bypass")`` can't sneak past the
+            # CLI-level guard (same enforcement layer, different entry
+            # point).
+            disable_bypass=perm_cfg.disable_bypass,
         )
         journal.write("agent_built")
     except Exception as exc:  # noqa: BLE001

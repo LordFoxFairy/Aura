@@ -24,6 +24,7 @@ NOT emit domain events beyond the two I/O-boundary journal lines
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
@@ -258,6 +259,7 @@ async def _pick_choice_interactive(
     option_two_label: str,
     default_choice: int,
     args: dict[str, Any] | None = None,
+    timeout: float | None = None,
 ) -> tuple[int | None, str]:
     """Run an inline ``prompt_toolkit.Application`` that lets the user
     arrow-key through three options and commits on Enter.
@@ -519,8 +521,27 @@ async def _pick_choice_interactive(
     # FIFO-fair so a queue of prompts resolves in arrival order — one
     # widget at a time, just like claude-code's promptQueue popping
     # queue[0] at a time.
+    #
+    # ``timeout`` wraps the pt Application with ``asyncio.wait_for``: if
+    # the user doesn't answer within N seconds the coroutine raises
+    # ``asyncio.TimeoutError``, which the caller resolves to a denial
+    # (fail-safe — unattended prompts must NOT hang the turn forever).
+    # ``None`` preserves legacy "wait forever" behavior. The pt Application
+    # is explicitly cancelled on timeout so its render loop tears down
+    # cleanly before we return.
     async with prompt_mutex():
-        await app.run_async()
+        if timeout is not None:
+            try:
+                await asyncio.wait_for(app.run_async(), timeout=timeout)
+            except TimeoutError:
+                # pt may still own the terminal; exit the app so the
+                # render loop unwinds and the cursor returns to a sane
+                # position before the caller prints the deny line.
+                if app.is_running:
+                    app.exit()
+                raise
+        else:
+            await app.run_async()
     return committed[0], feedback_returned[0]
 
 
@@ -556,11 +577,21 @@ def _render_decision_audit_line(
     )
 
 
-def make_cli_asker(console: Console | None = None) -> PermissionAsker:
+def make_cli_asker(
+    console: Console | None = None,
+    *,
+    timeout: float | None = None,
+) -> PermissionAsker:
     """Return a ``PermissionAsker`` backed by an inline interactive widget.
 
     ``console`` — optional rich Console for tests (StringIO-backed for
     capture). Production path creates a fresh one.
+
+    ``timeout`` — seconds to wait for the user to respond before
+    treating the non-response as a denial (fail-safe for unattended /
+    headless sessions). ``None`` preserves legacy "wait forever"
+    behavior. The CLI threads ``PermissionsConfig.prompt_timeout_sec``
+    (default 300s = 5 min) through to this kwarg.
     """
     _console = console or Console()
 
@@ -592,7 +623,26 @@ def make_cli_asker(console: Console | None = None) -> PermissionAsker:
                 option_two_label=option_two_label,
                 default_choice=default_choice,
                 args=args,
+                timeout=timeout,
             )
+        except TimeoutError:
+            # Fail-safe: unattended / stale sessions MUST NOT hang the
+            # turn forever. Resolve a non-response to deny and annotate
+            # the journal so the audit trail records *why* the tool was
+            # blocked (matters for headless / CI runs where no human
+            # sees the prompt).
+            journal.write(
+                "permission_prompt_timeout",
+                tool=tool.name,
+                timeout_sec=timeout,
+            )
+            journal.write(
+                "permission_answered",
+                tool=tool.name,
+                choice="deny",
+                reason="timeout",
+            )
+            return AskerResponse(choice="deny")
         except (KeyboardInterrupt, SystemExit):
             # Defensive — pt normally consumes these via the c-c /
             # escape bindings, but an outer Ctrl+C that propagates

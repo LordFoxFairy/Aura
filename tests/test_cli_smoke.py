@@ -18,15 +18,26 @@ test is the one ``pip install .`` just installed.
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import os
 import re
+import select
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+
+# pty is POSIX-only. On Windows CI we skip the whole pty test section.
+try:
+    import pty as _pty
+except ImportError:  # pragma: no cover — Windows only
+    _pty = None  # type: ignore[assignment]
 
 # Repo root == parent of tests/. Resolved once so individual tests don't
 # recompute it; every subprocess is spawned with ``cwd=_REPO_ROOT`` so
@@ -349,4 +360,425 @@ def test_aura_with_bad_config_fails_gracefully(
     assert version_lines, (
         f"no 'aura <version>' line in stdout despite rc=0: "
         f"{result.stdout!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# pty-backed REPL tests
+# ---------------------------------------------------------------------------
+#
+# The tests above drive aura with a plain subprocess pipe — enough to catch
+# startup / argparse / exit-path bugs, but pt's ``PromptSession`` needs a
+# real pseudo-terminal to take control of stdin. These tests spawn the
+# binary under a pty so the interactive render path (welcome Panel,
+# bottom_toolbar, shift+tab keybinding) actually executes.
+#
+# If the environment can't reach the REPL (missing provider SDK or
+# credential, same guard as the stdin tests), every pty test skips with
+# a clear reason — never a false negative.
+
+
+# Keystroke bytes sent on the pty master. Shift+Tab is the ANSI CSI Z
+# sequence; every VT-compatible terminal emits it, and pt's
+# ``s-tab`` binding matches on these exact bytes.
+_SHIFT_TAB = b"\x1b[Z"
+
+# Substrings that would indicate the legacy "print mode-change line to
+# scrollback" regression. Any of these appearing in pty output means the
+# silent-feedback contract was broken — the bottom_toolbar is the ONLY
+# approved mode indicator.
+_LEGACY_MODE_SPAM = (
+    "mode: accept_edits (press shift+tab",
+    "mode: plan (press shift+tab",
+    "mode: default (press shift+tab",
+)
+
+_PTY_SKIP_REASON_NO_PTY = (
+    "pty module unavailable on this platform (Windows?) — "
+    "pty-based REPL tests are POSIX-only"
+)
+
+
+def _pty_supported() -> bool:
+    """Return True only on platforms where stdlib ``pty`` is importable.
+
+    Linux and macOS qualify; Windows does not. Used to skip the whole
+    pty-test section cleanly rather than fail to import ``pty``.
+    """
+    return _pty is not None
+
+
+class _PtyAura:
+    """Context manager that spawns ``aura`` under a pseudo-terminal.
+
+    The contract is "small, honest, and cleanup-safe": we wire a pty
+    pair to the child's stdio, read from the master fd with
+    ``select``-based timeouts, and on ``__exit__`` we always close the
+    master and kill the child if it's still alive. Every interactive
+    test in this file goes through this class so the cleanup invariant
+    is enforced in exactly one place.
+
+    Usage::
+
+        with _PtyAura(aura_cmd) as ptya:
+            ptya.expect("aura>")
+            ptya.send("/exit\\r")
+            output = ptya.read_all()
+    """
+
+    def __init__(
+        self,
+        cmd: Sequence[str],
+        *,
+        timeout_boot: float = 10.0,
+        rows: int = 24,
+        cols: int = 80,
+    ) -> None:
+        self._cmd = list(cmd)
+        self._timeout_boot = timeout_boot
+        self._rows = rows
+        self._cols = cols
+        self._master_fd: int | None = None
+        self._proc: subprocess.Popen[bytes] | None = None
+        self._buffer = bytearray()
+
+    def __enter__(self) -> _PtyAura:
+        assert _pty is not None  # guarded by _pty_supported at call sites
+        master, slave = _pty.openpty()
+        # Best-effort window size. pt's layout (bottom_toolbar, prompt
+        # width) depends on this; default 80x24 matches a normal xterm.
+        try:
+            import fcntl
+            import struct
+            import termios
+
+            fcntl.ioctl(
+                slave,
+                termios.TIOCSWINSZ,
+                struct.pack("HHHH", self._rows, self._cols, 0, 0),
+            )
+        except Exception:  # noqa: BLE001 — window-size is cosmetic
+            pass
+
+        env = dict(os.environ)
+        # pt emits colour escapes when TERM looks real; we want those in
+        # the captured stream so tests can assert on box-drawing bytes.
+        env["TERM"] = "xterm-256color"
+        env["PYTHONIOENCODING"] = "utf-8"
+        # Defensive: drop any inherited NO_COLOR/FORCE_COLOR so output is
+        # deterministic across local dev and CI.
+        env.pop("NO_COLOR", None)
+
+        try:
+            self._proc = subprocess.Popen(
+                self._cmd,
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                cwd=str(_REPO_ROOT),
+                env=env,
+                close_fds=True,
+                start_new_session=True,
+            )
+        finally:
+            # Parent never writes to the slave end.
+            os.close(slave)
+        self._master_fd = master
+        return self
+
+    # -- low-level I/O ----------------------------------------------------
+
+    def _read_some(self, timeout: float) -> bytes:
+        """Read whatever bytes are available within ``timeout`` seconds.
+
+        Returns b"" on timeout / EOF / already-closed master. The pty
+        master yields EIO on Linux when the slave closes; macOS raises
+        EIO similarly — both treated as EOF. Post-``close_master`` the
+        fd is ``None`` and this returns b"" unconditionally so
+        ``read_all`` can still be called from the test to drain what
+        was already buffered.
+        """
+        if self._master_fd is None:
+            return b""
+        try:
+            ready, _, _ = select.select([self._master_fd], [], [], timeout)
+        except (ValueError, OSError):
+            return b""
+        if not ready:
+            return b""
+        try:
+            return os.read(self._master_fd, 4096)
+        except OSError as exc:
+            if exc.errno in (errno.EIO, errno.EBADF):
+                return b""
+            raise
+
+    def expect(self, substring: str, timeout: float = 5.0) -> str:
+        """Accumulate output until ``substring`` appears or timeout elapses.
+
+        Returns the current decoded buffer (never raises on miss — the
+        caller decides whether absence is a failure). Bytes stay in
+        ``self._buffer`` so ``read_all`` can see everything captured
+        before AND after this call.
+        """
+        needle = substring.encode("utf-8", errors="replace")
+        deadline = time.monotonic() + timeout
+        while needle not in self._buffer and time.monotonic() < deadline:
+            chunk = self._read_some(min(0.5, max(0.05, deadline - time.monotonic())))
+            if not chunk:
+                # No bytes this tick; loop until deadline. A permanently
+                # dead child will exit the loop on timeout, which is
+                # what the caller's absence-assertion will detect.
+                if self._proc is not None and self._proc.poll() is not None:
+                    break
+                continue
+            self._buffer.extend(chunk)
+        return self._buffer.decode("utf-8", errors="replace")
+
+    def send(self, data: bytes | str) -> None:
+        """Write raw bytes to the pty master (as a user's keystrokes)."""
+        assert self._master_fd is not None
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        os.write(self._master_fd, data)
+
+    def read_all(self, timeout: float = 3.0) -> str:
+        """Drain remaining output until EOF or ``timeout`` seconds elapse."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            chunk = self._read_some(min(0.3, max(0.05, deadline - time.monotonic())))
+            if chunk:
+                self._buffer.extend(chunk)
+                continue
+            # No bytes — if child exited, we're done draining.
+            if self._proc is not None and self._proc.poll() is not None:
+                # Give one last tiny window for any trailing output.
+                final = self._read_some(0.1)
+                if final:
+                    self._buffer.extend(final)
+                break
+        return self._buffer.decode("utf-8", errors="replace")
+
+    def close_master(self) -> None:
+        """Close the master fd — signals EOF to the child's stdin."""
+        if self._master_fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(self._master_fd)
+            self._master_fd = None
+
+    def wait(self, timeout: float = 10.0) -> int | None:
+        """Wait for child exit; return returncode or None on timeout."""
+        if self._proc is None:
+            return None
+        try:
+            return self._proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+
+    def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        # Always attempt graceful close first, then kill if the child
+        # didn't take the hint. The process group start_new_session=True
+        # lets us SIGKILL the whole group if uv spawned grandchildren.
+        self.close_master()
+        if self._proc is not None and self._proc.poll() is None:
+            with contextlib.suppress(ProcessLookupError):
+                self._proc.terminate()
+                try:
+                    self._proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(OSError):
+                        os.killpg(self._proc.pid, signal.SIGKILL)
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        self._proc.wait(timeout=2.0)
+
+
+def _skip_if_startup_blocked(output: str) -> None:
+    """Skip the test if aura failed to reach the REPL under pty.
+
+    Mirrors :func:`_has_startup_block` but operates on the combined
+    pty-captured stream (stdout + stderr are merged by the pty). Every
+    pty test calls this immediately after its first ``expect`` so a
+    bare dev env without provider SDKs gets a clear SKIP, never a
+    misleading failure.
+    """
+    if (
+        "MissingProviderDependencyError" in output
+        or "MissingCredentialError" in output
+    ):
+        pytest.skip(
+            "aura could not reach the REPL under pty "
+            "(missing provider SDK or credential); pt render path "
+            "cannot be exercised end-to-end here"
+        )
+
+
+def _requires_pty_and_aura(aura_binary: Sequence[str]) -> None:
+    """Common gate: skip when pty is unavailable or aura isn't runnable."""
+    if not _pty_supported():
+        pytest.skip(_PTY_SKIP_REASON_NO_PTY)
+    # ``aura_binary`` fixture already skipped if unusable, but keep this
+    # defensive — the pty tests assert-sensitive enough that a silent
+    # mis-wire would be hard to diagnose.
+    assert aura_binary, "aura_binary fixture returned empty invocation"
+
+
+# ---------------------------------------------------------------------------
+
+
+def test_pty_repl_boots_and_quits_on_exit(
+    aura_binary: Sequence[str],
+) -> None:
+    """Under a real pty, aura renders the welcome, prompts, and exits on /exit."""
+    _requires_pty_and_aura(aura_binary)
+
+    with _PtyAura(aura_binary, timeout_boot=10.0) as ptya:
+        boot = ptya.expect("aura>", timeout=10.0)
+        _skip_if_startup_blocked(boot)
+        assert "aura>" in boot, (
+            f"did not see 'aura>' prompt within 10s; captured={boot!r}"
+        )
+        assert "Aura" in boot, (
+            f"welcome banner missing 'Aura' marker; captured={boot!r}"
+        )
+
+        ptya.send("/exit\r")
+        rc = ptya.wait(timeout=10.0)
+        tail = ptya.read_all(timeout=2.0)
+
+    assert rc is not None, (
+        f"aura did not exit within 10s of /exit under pty; "
+        f"full output={tail!r}"
+    )
+    # main() returns 0 on a clean /exit; anything else is either a true
+    # crash (no traceback expected — checked below) or an uncaught
+    # propagated signal. Accept 0 only.
+    assert rc == 0, (
+        f"aura exited with rc={rc} on /exit under pty; output={tail!r}"
+    )
+    assert "Traceback (most recent call last)" not in tail, (
+        f"pty REPL exit produced a Python traceback:\n{tail}"
+    )
+
+
+def test_pty_shift_tab_cycles_mode_without_scrollback_spam(
+    aura_binary: Sequence[str],
+) -> None:
+    """Shift+Tab must cycle modes silently — no scrollback spam lines.
+
+    The silent-feedback contract says the bottom_toolbar is the ONLY
+    approved mode indicator. Any ``mode: X (press shift+tab ...)`` line
+    in scrollback is the legacy spam regression (img_2.png in the
+    operator report). We send three shift+tab presses, quit, then scan
+    the full captured stream for the banned substrings.
+    """
+    _requires_pty_and_aura(aura_binary)
+
+    with _PtyAura(aura_binary, timeout_boot=10.0) as ptya:
+        boot = ptya.expect("aura>", timeout=10.0)
+        _skip_if_startup_blocked(boot)
+        assert "aura>" in boot, (
+            f"did not see 'aura>' prompt before shift+tab test; got={boot!r}"
+        )
+
+        # Three rapid shift+tab presses → cycles default → accept_edits
+        # → plan → default. Rapid enough to stress the "don't print a
+        # line per press" invariant.
+        for _ in range(3):
+            ptya.send(_SHIFT_TAB)
+        # Tiny settle window so any (forbidden) spam lines have time to
+        # flush before we start the exit sequence.
+        time.sleep(0.3)
+
+        ptya.send("/exit\r")
+        ptya.wait(timeout=10.0)
+        captured = ptya.read_all(timeout=2.0)
+
+    for banned in _LEGACY_MODE_SPAM:
+        assert banned not in captured, (
+            f"shift+tab produced legacy scrollback spam {banned!r}; "
+            f"bottom_toolbar is the only approved mode indicator.\n"
+            f"full capture:\n{captured}"
+        )
+
+
+def test_pty_eof_exits_cleanly(aura_binary: Sequence[str]) -> None:
+    """Closing the pty master (EOF) must exit the REPL within 10s, no traceback."""
+    _requires_pty_and_aura(aura_binary)
+
+    with _PtyAura(aura_binary, timeout_boot=10.0) as ptya:
+        boot = ptya.expect("aura>", timeout=10.0)
+        _skip_if_startup_blocked(boot)
+        assert "aura>" in boot, (
+            f"did not see 'aura>' prompt before EOF test; got={boot!r}"
+        )
+
+        # Close master → child sees EOF on stdin. pt's
+        # ``prompt_async`` raises EOFError, which the REPL catches and
+        # returns from its loop.
+        ptya.close_master()
+        rc = ptya.wait(timeout=10.0)
+        tail = ptya.read_all(timeout=1.0)
+
+    assert rc is not None, (
+        f"aura did not exit within 10s of EOF under pty; output={tail!r}"
+    )
+    # rc=120 is Python's standard exit code when stdout flushing fails during
+    # shutdown — reproducible with bare ``python3 -c 'input()'`` under the
+    # same pty-close sequence. It is NOT an aura bug; the REPL's EOFError
+    # handler returns cleanly and main() returns 0, but Python's interpreter
+    # shutdown then hits a broken stdout (master fd closed by test) and
+    # self-reports 120. Accept both as "exited cleanly".
+    assert rc in (0, 120), (
+        f"aura exited with unexpected rc={rc} on EOF under pty; output={tail!r}"
+    )
+    assert "Traceback (most recent call last)" not in tail, (
+        f"pty REPL EOF exit produced a Python traceback:\n{tail}"
+    )
+
+
+def test_pty_welcome_banner_single_cyan_panel(
+    aura_binary: Sequence[str],
+) -> None:
+    """Welcome banner is exactly one rich Panel — one open corner, one close.
+
+    The v0.8.0 operator feedback requested a single compact Panel
+    (cyan, ``expand=False``). If someone later adds a second Panel or
+    nests one, the count goes to 2 and this test fires. The star glyph
+    ``✱ Aura`` and the ``v<semver>`` marker must both be visible so
+    the user instantly sees name + version on boot.
+    """
+    _requires_pty_and_aura(aura_binary)
+
+    with _PtyAura(aura_binary, timeout_boot=10.0) as ptya:
+        boot = ptya.expect("aura>", timeout=10.0)
+        _skip_if_startup_blocked(boot)
+        assert "aura>" in boot, (
+            f"did not see 'aura>' prompt before banner test; got={boot!r}"
+        )
+        ptya.send("/exit\r")
+        ptya.wait(timeout=10.0)
+        captured = ptya.read_all(timeout=2.0)
+
+    # Rich's box-drawing rounded corners for Panel: ╭ (U+256D) at
+    # top-left, ╯ (U+256F) at bottom-right. Single Panel → exactly one
+    # of each. A second Panel would double both counts.
+    open_count = captured.count("╭")
+    close_count = captured.count("╯")
+    assert open_count == 1, (
+        f"expected exactly one opening '╭' (single welcome Panel); "
+        f"found {open_count}. capture={captured!r}"
+    )
+    assert close_count == 1, (
+        f"expected exactly one closing '╯' (single welcome Panel); "
+        f"found {close_count}. capture={captured!r}"
+    )
+
+    # Brand + version visible. The banner does ``✱ Aura v<ver>`` as one
+    # logical line, but pt's rendering can wrap — so we assert the two
+    # substrings independently, both present.
+    assert "✱ Aura" in captured, (
+        f"welcome missing '✱ Aura' brand glyph; capture={captured!r}"
+    )
+    assert re.search(r"v\d+\.\d+\.\d+", captured), (
+        f"welcome missing 'v<semver>' marker near Aura; capture={captured!r}"
     )

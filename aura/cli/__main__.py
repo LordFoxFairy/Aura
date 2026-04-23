@@ -394,6 +394,11 @@ def main() -> int:
             # CLI-level guard (same enforcement layer, different entry
             # point).
             disable_bypass=perm_cfg.disable_bypass,
+            # C1 — plumb the parent's rules + safety through so
+            # ``SubagentFactory`` can build a permission hook with the
+            # same policy inputs for every subagent it spawns.
+            ruleset=ruleset,
+            safety=safety_policy,
         )
         _agent_cell[0] = agent
         journal.write("agent_built")

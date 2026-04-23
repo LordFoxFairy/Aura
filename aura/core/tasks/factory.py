@@ -31,10 +31,20 @@ Inheritance rules (matches claude-code's Task tool):
   leak parent state into the child. Keeping the tools enabled means the
   LLM inside the subagent doesn't hallucinate "maybe task_get exists"
   without a way to verify.
-- Parent hooks (permission, budget) are NOT inherited. Safety hooks
-  (bash_safety + must_read_first) are re-installed inside the child's
-  ``__init__`` via the same code path as the parent, so the subagent is
-  safe even though parent-authored hooks don't cross the boundary.
+- Parent budget hooks are NOT inherited. Safety hooks (bash_safety +
+  must_read_first) are re-installed inside the child's ``__init__`` via
+  the same code path as the parent, so the subagent is safe even though
+  parent-authored hooks don't cross the boundary.
+- Permission IS inherited — via a freshly-built hook that reuses the
+  parent's :class:`RuleSet` + :class:`SafetyPolicy` + live mode, but
+  hands the child a private :class:`SessionRuleSet` and a
+  :class:`SubagentAutoDenyAsker` (C1, parity with claude-code's
+  ``shouldAvoidPermissionPrompts: true`` — subagents have no UI so
+  any would-be ask path silently denies). Parent rules still let
+  ``read_file`` etc. auto-allow without a prompt. Plan / accept_edits
+  modes don't make sense on a non-interactive subagent; those collapse
+  to ``default``. ``bypass`` is the one mode that *does* inherit
+  verbatim.
 
 Storage defaults to an in-memory sqlite connection so the subagent's
 transcript doesn't pollute the parent's on-disk session DB. Tests inject a
@@ -51,13 +61,23 @@ from langchain_core.language_models import BaseChatModel
 
 from aura.config.schema import AuraConfig, ToolsConfig
 from aura.core import llm
+from aura.core.hooks import HookChain
+from aura.core.hooks.permission import make_permission_hook
 from aura.core.memory.context import _ReadRecord
+from aura.core.permissions.mode import Mode
+from aura.core.permissions.safety import DEFAULT_SAFETY, SafetyPolicy
+from aura.core.permissions.session import RuleSet, SessionRuleSet
+from aura.core.permissions.subagent_asker import SubagentAutoDenyAsker
 from aura.core.persistence.storage import SessionStorage
 from aura.core.skills import SkillRegistry
 from aura.core.tasks.agent_types import get_agent_type
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
+
+# Singleton — stateless; sharing one instance across every subagent +
+# every tool call is cheap and matches the "no I/O" contract.
+_SUBAGENT_AUTO_DENY_ASKER = SubagentAutoDenyAsker()
 
 
 def _default_storage() -> SessionStorage:
@@ -78,6 +98,10 @@ class SubagentFactory:
         parent_read_records_provider: (
             Callable[[], Mapping[Path, _ReadRecord]] | None
         ) = None,
+        parent_ruleset: RuleSet | None = None,
+        parent_safety: SafetyPolicy | None = None,
+        parent_mode_provider: Callable[[], str] | None = None,
+        parent_session: SessionRuleSet | None = None,
         model_factory: Callable[[], BaseChatModel] | None = None,
         storage_factory: Callable[[], SessionStorage] | None = None,
     ) -> None:
@@ -89,10 +113,23 @@ class SubagentFactory:
         # disables inheritance — child starts with an empty read map
         # (legacy behavior, kept for the handful of tests that build a
         # factory without a parent Agent reference).
+        #
+        # ``parent_ruleset`` / ``parent_safety`` / ``parent_mode_provider``
+        # (C1) — the triplet that lets ``spawn`` assemble a permission
+        # hook identical in spirit to the parent's. ``None`` on all three
+        # disables the child permission hook (legacy path for tests that
+        # build a factory without any permission wiring). ``parent_session``
+        # is NOT inherited — it's recorded here purely so a caller that
+        # wants to verify "child.session is fresh / not parent.session"
+        # has something to compare against. ``spawn`` ignores it.
         self._parent_config = parent_config
         self._parent_model_spec = parent_model_spec
         self._parent_skills = parent_skills
         self._parent_read_records_provider = parent_read_records_provider
+        self._parent_ruleset = parent_ruleset
+        self._parent_safety = parent_safety
+        self._parent_mode_provider = parent_mode_provider
+        self._parent_session = parent_session
         self._model_factory = model_factory
         self._storage_factory = storage_factory or _default_storage
 
@@ -170,12 +207,59 @@ class SubagentFactory:
             inherited_reads = dict(self._parent_read_records_provider())
         else:
             inherited_reads = None
+
+        # C1 — assemble a permission hook for the child. The child needs
+        # the parent's rules (so default-allows + user rules propagate)
+        # and the parent's safety policy (so protected paths still
+        # block), but gets a FRESH ``SessionRuleSet`` — session rules
+        # approved inside the child MUST NOT leak back to the parent —
+        # and the auto-deny asker (any would-be prompt silently denies).
+        #
+        # Mode inheritance rule: ``bypass`` rides through (if the user
+        # explicitly opted into bypass they meant it for the whole tree),
+        # ``plan`` / ``accept_edits`` collapse to ``default`` (the child
+        # has no way to exit plan mode interactively; the parent's plan
+        # gate already blocked whatever spawned this subagent if it was
+        # meant to be dry-run), and any other value maps to ``default``.
+        #
+        # If the factory was built without permission wiring (any of the
+        # three params is ``None``), skip the hook entirely — existing
+        # tests / SDK callers that never set up permissions get the
+        # legacy zero-hook behaviour.
+        child_session = SessionRuleSet()
+        child_hooks: HookChain | None = None
+        child_mode: str = "default"
+        if (
+            self._parent_ruleset is not None
+            and self._parent_safety is not None
+            and self._parent_mode_provider is not None
+        ):
+            parent_mode = self._parent_mode_provider()
+            child_mode = "bypass" if parent_mode == "bypass" else "default"
+            # Freeze the resolved child mode into the hook's closure.
+            # Re-reading ``parent_mode_provider`` at hook fire time would
+            # let a mid-turn parent mode flip (shift+tab) bleed into the
+            # child — the parity contract says mode is decided at spawn.
+            _resolved_mode: Mode = "bypass" if parent_mode == "bypass" else "default"
+            perm_hook = make_permission_hook(
+                asker=_SUBAGENT_AUTO_DENY_ASKER,
+                session=child_session,
+                rules=self._parent_ruleset,
+                project_root=self._parent_config.resolved_storage_path().parent,
+                mode=_resolved_mode,
+                safety=self._parent_safety or DEFAULT_SAFETY,
+            )
+            child_hooks = HookChain(pre_tool=[perm_hook])
+
         return Agent(
             config=child_cfg,
             model=model,
             storage=storage,
+            hooks=child_hooks,
             session_id="subagent",
+            session_rules=child_session,
             pre_loaded_skills=self._parent_skills,
             system_prompt_suffix=type_def.system_prompt_suffix,
             inherited_reads=inherited_reads,
+            mode=child_mode,
         )

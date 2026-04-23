@@ -26,7 +26,8 @@ from aura.core.memory import project_memory, rules
 from aura.core.memory.context import Context, _ReadRecord
 from aura.core.memory.system_prompt import build_system_prompt
 from aura.core.permissions.denials import DENIALS_SINK_KEY, PermissionDenial
-from aura.core.permissions.session import SessionRuleSet
+from aura.core.permissions.safety import SafetyPolicy
+from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
@@ -94,6 +95,8 @@ class Agent:
         system_prompt_suffix: str = "",
         disable_bypass: bool = False,
         inherited_reads: Mapping[Path, _ReadRecord] | None = None,
+        ruleset: RuleSet | None = None,
+        safety: SafetyPolicy | None = None,
     ) -> None:
         # ``session_rules``: CLI hands in the same SessionRuleSet that was used
         # to build the permission hook; Agent.clear_session drops its runtime
@@ -179,11 +182,24 @@ class Agent:
         # ``self`` so ``clear_session`` (which swaps _context) is tracked
         # automatically — the next spawn reads through the refreshed
         # attribute rather than a stale Context reference.
+        # C1: plumb permission inputs into the factory so every spawned
+        # subagent gets a hook with the same rules + safety + live mode
+        # as the parent. ``parent_mode_provider`` closes over ``self`` so
+        # mid-session mode changes (shift+tab, enter_plan_mode) are
+        # visible to spawn. ``ruleset`` / ``safety`` are immutable
+        # snapshots captured at Agent construction — matching how the
+        # parent's own hook was built from the same snapshots at CLI
+        # startup. When either is ``None`` the factory skips installing
+        # the hook (tests / SDK callers that never set up permissions).
         self._subagent_factory = SubagentFactory(
             parent_config=self._config,
             parent_model_spec=self._config.router.get("default", ""),
             parent_skills=self._skill_registry,
             parent_read_records_provider=lambda: self._context._read_records,
+            parent_ruleset=ruleset,
+            parent_safety=safety,
+            parent_mode_provider=lambda: self._mode,
+            parent_session=self._session_rules,
         )
         # Map: task_id -> the detached asyncio.Task handle. Shared with the
         # ``task_create`` tool so Agent.close() can cancel still-running
@@ -1061,6 +1077,8 @@ def build_agent(
     question_asker: QuestionAsker | None = None,
     mode: str = "default",
     disable_bypass: bool = False,
+    ruleset: RuleSet | None = None,
+    safety: SafetyPolicy | None = None,
 ) -> Agent:
     # 生产便利工厂：自动解析 model + storage；Agent 构造器保持 DI 注入以便测试替换。
     provider, model_name = llm.resolve(config.router["default"], cfg=config)
@@ -1077,4 +1095,6 @@ def build_agent(
         question_asker=question_asker,
         mode=mode,
         disable_bypass=disable_bypass,
+        ruleset=ruleset,
+        safety=safety,
     )

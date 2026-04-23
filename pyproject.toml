@@ -109,3 +109,6 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "e2e: end-to-end pty/subprocess scenarios (select with 'pytest -m e2e')",
+]

@@ -33,6 +33,53 @@ _PROTOCOLS: dict[str, tuple[str, str, str | None]] = {
 }
 
 
+# Static registry of model family → max context window (tokens). Used by the
+# status bar to render `live/window` ratios. We match by substring with
+# longest-prefix wins so dated suffixes ("claude-opus-4-20250514") and
+# provider prefixes ("anthropic:claude-opus-4") both resolve to the family.
+# Unknown models fall back to a 128k modern default rather than raising —
+# a wrong ratio is a strictly better UX than a crashed status bar.
+_CONTEXT_WINDOWS: dict[str, int] = {
+    # Anthropic
+    "claude-3-5-sonnet": 200_000,
+    "claude-3-5-haiku": 200_000,
+    "claude-3-opus": 200_000,
+    "claude-3-sonnet": 200_000,
+    "claude-3-haiku": 200_000,
+    "claude-opus-4": 200_000,
+    "claude-sonnet-4": 200_000,
+    "claude-4": 200_000,
+    # OpenAI — listed longest-first-friendly (longest-prefix match wins at
+    # lookup time regardless of insertion order, but the ordering helps
+    # humans reading the table).
+    "gpt-4o-mini": 128_000,
+    "gpt-4o": 128_000,
+    "gpt-4-turbo": 128_000,
+    "gpt-3.5-turbo": 16_385,
+    "gpt-5": 200_000,
+    "gpt-4": 8_192,
+}
+_DEFAULT_CONTEXT_WINDOW = 128_000
+
+
+def get_context_window(model_spec: str) -> int:
+    """Return the max context window in tokens for ``model_spec``.
+
+    Matches by substring with longest-key wins, so ``provider:claude-opus-4-20250514``
+    resolves to ``claude-opus-4`` (200k) and ``openai:gpt-4o-mini`` beats
+    ``gpt-4`` (which would map to the 8k entry). Falls back to
+    ``_DEFAULT_CONTEXT_WINDOW`` when nothing matches — unknown models still
+    render a usable ratio on the status bar instead of a zero-division.
+    """
+    _, _, name = model_spec.rpartition(":")
+    name = (name or model_spec).lower()
+    best: str | None = None
+    for key in _CONTEXT_WINDOWS:
+        if key in name and (best is None or len(key) > len(best)):
+            best = key
+    return _CONTEXT_WINDOWS[best] if best else _DEFAULT_CONTEXT_WINDOW
+
+
 def _load_class(protocol: str) -> type[BaseChatModel]:
     module_name, class_name, _ = _PROTOCOLS[protocol]
     try:

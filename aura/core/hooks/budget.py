@@ -57,6 +57,39 @@ def make_size_budget_hook(
     return _hook
 
 
+def _extract_token_stats(ai_message: AIMessage) -> dict[str, int]:
+    """Pull per-turn input / output / cache-read token counts from *ai_message*.
+
+    LangChain normalizes most providers into ``usage_metadata`` with
+    ``input_tokens`` / ``output_tokens`` / ``total_tokens``. Anthropic's
+    prompt-cache fields (``cache_read_input_tokens``) aren't reflected in
+    the normalized shape yet, so we also peek at ``response_metadata['usage']``.
+    Any missing / wrong-typed field degrades to 0 rather than raising —
+    the status bar tolerates zeroes, it doesn't tolerate a crashed hook.
+    """
+    out = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
+
+    usage = getattr(ai_message, "usage_metadata", None) or {}
+    if isinstance(usage, dict):
+        val = usage.get("input_tokens")
+        if isinstance(val, int):
+            out["input_tokens"] = val
+        val = usage.get("output_tokens")
+        if isinstance(val, int):
+            out["output_tokens"] = val
+
+    # Anthropic: response_metadata.usage.cache_read_input_tokens
+    meta = getattr(ai_message, "response_metadata", None) or {}
+    if isinstance(meta, dict):
+        anthropic_usage = meta.get("usage")
+        if isinstance(anthropic_usage, dict):
+            val = anthropic_usage.get("cache_read_input_tokens")
+            if isinstance(val, int):
+                out["cache_read_tokens"] = val
+
+    return out
+
+
 def make_usage_tracking_hook() -> PostModelHook:
     async def _hook(
         *,
@@ -65,12 +98,31 @@ def make_usage_tracking_hook() -> PostModelHook:
         state: LoopState,
         **_: Any,
     ) -> None:
+        # Legacy field: cumulative total-tokens counter. Kept so the
+        # /verbose summary and older log lines still work.
         usage = getattr(ai_message, "usage_metadata", None)
-        if not usage:
-            return
-        total = usage.get("total_tokens")
-        if isinstance(total, int):
-            state.total_tokens_used += total
+        if usage:
+            total = usage.get("total_tokens")
+            if isinstance(total, int):
+                state.total_tokens_used += total
+
+        # New structured stats for the status bar.
+        per_turn = _extract_token_stats(ai_message)
+        stats = state.custom.setdefault(
+            "_token_stats",
+            {
+                "last_input_tokens": 0,
+                "last_cache_read_tokens": 0,
+                "last_output_tokens": 0,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+            },
+        )
+        stats["last_input_tokens"] = per_turn["input_tokens"]
+        stats["last_cache_read_tokens"] = per_turn["cache_read_tokens"]
+        stats["last_output_tokens"] = per_turn["output_tokens"]
+        stats["total_input_tokens"] += per_turn["input_tokens"]
+        stats["total_output_tokens"] += per_turn["output_tokens"]
 
     return _hook
 

@@ -184,6 +184,69 @@ async def test_non_bypass_mode_uses_plain_prompt(tmp_path: Path) -> None:
     agent.close()
 
 
+async def test_welcome_banner_includes_keybinding_hints(tmp_path: Path) -> None:
+    # Hints live in the welcome banner now (once), not on every prompt.
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+
+    await run_repl_async(
+        agent, input_fn=_ScriptedInput(["/exit"]), console=console,
+    )
+    out = buf.getvalue()
+    # Plain-prose, no angle-bracket syntax.
+    assert "Tab" in out
+    assert "autocomplete" in out
+    assert "Ctrl+R" in out
+    assert "history" in out
+    assert "Ctrl+D" in out
+    assert "exit" in out
+    agent.close()
+
+
+def test_prompt_session_no_toolbar_when_agent_not_passed(tmp_path: Path) -> None:
+    # Bare-bones construction (tests only exercising history/completion)
+    # still works: without an agent, there's nothing to render in the bar,
+    # so it's elided.
+    from aura.cli.repl import _build_prompt_session
+    from aura.core.commands import CommandRegistry
+
+    session = _build_prompt_session(CommandRegistry())
+    assert session.bottom_toolbar is None
+
+
+def test_prompt_session_bottom_toolbar_shows_context_when_agent_passed(
+    tmp_path: Path,
+) -> None:
+    # Real REPL wiring: pass an Agent, get a live toolbar callable. The
+    # toolbar reads _token_stats fresh on each render; exercise it with
+    # seeded stats and assert the rendered HTML carries model + bar +
+    # pinned cached + cwd.
+    from aura.cli.repl import _build_prompt_session
+    from aura.core.agent import Agent
+    from aura.core.commands import CommandRegistry
+    from tests.conftest import FakeChatModel
+    from tests.test_agent import _minimal_config, _storage
+
+    agent = Agent(
+        config=_minimal_config(enabled=[]),
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+    agent.state.custom["_token_stats"] = {
+        "last_input_tokens": 5400,
+        "last_cache_read_tokens": 34_000,
+    }
+
+    session = _build_prompt_session(CommandRegistry(), agent=agent)
+    assert callable(session.bottom_toolbar)
+    html = session.bottom_toolbar()
+    # HTML carries the pieces as children of ansigray / ansi-color tags.
+    text = str(html)
+    assert "5.4k/" in text            # live tokens over window
+    assert "34.0k cached" in text or "34k cached" in text
+    agent.close()
+
+
 async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:
     # Real resilience: if Agent.astream raises (network error, client bug,
     # provider 500), the REPL must print an error and keep looping, NOT

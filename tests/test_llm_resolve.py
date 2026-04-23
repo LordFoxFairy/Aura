@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core.llm import UnknownModelSpecError, resolve
+from aura.core.llm import UnknownModelSpecError, get_context_window, resolve
 
 
 def _cfg(providers: list[dict[str, str]], router: dict[str, str]) -> AuraConfig:
@@ -96,3 +96,27 @@ def test_resolve_empty_model_name_after_colon() -> None:
     provider, model_name = resolve("openai:", cfg=cfg)
     assert provider.name == "openai"
     assert model_name == ""
+
+
+# --------------------------------------------------------------------------
+# get_context_window
+# --------------------------------------------------------------------------
+def test_get_context_window_anthropic_opus_4() -> None:
+    # Dated suffix + provider prefix — resolver must strip both.
+    assert get_context_window("anthropic:claude-opus-4-20250514") == 200_000
+
+
+def test_get_context_window_gpt_4o_mini() -> None:
+    assert get_context_window("openai:gpt-4o-mini") == 128_000
+
+
+def test_get_context_window_unknown_model_returns_default() -> None:
+    # Models we've never heard of fall back to the 128k modern default so the
+    # status bar still shows a usable ratio instead of a divide-by-zero.
+    assert get_context_window("provider:totally-made-up-model") == 128_000
+
+
+def test_get_context_window_longest_prefix_match_wins() -> None:
+    # "gpt-4o-mini" must not get matched as "gpt-4" (8k). Longest substring wins.
+    assert get_context_window("openai:gpt-4o-mini") == 128_000
+    assert get_context_window("openai:gpt-4") == 8_192

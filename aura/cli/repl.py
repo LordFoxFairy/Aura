@@ -7,6 +7,7 @@ import contextlib
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
@@ -25,13 +26,13 @@ from aura.core.persistence import journal
 
 InputFn = Callable[[str], Awaitable[str]]
 
-_BOTTOM_TOOLBAR_HINT = "<tab> complete · <ctrl+r> search · <ctrl+d> exit"
-
 
 def _build_prompt_session(
     registry: CommandRegistry,
+    agent: Agent | None = None,
 ) -> PromptSession[str]:
-    """Construct a PromptSession wired with history, completion, and hints.
+    """Construct a PromptSession wired with history, completion, and an
+    informational bottom toolbar.
 
     - ``FileHistory`` at ``~/.aura/history`` → up-arrow cycles across sessions.
     - ``search_ignore_case=True`` → Ctrl+R reverse search, case-insensitive.
@@ -39,17 +40,56 @@ def _build_prompt_session(
       commands registered after PromptSession construction still complete.
     - ``complete_while_typing=False`` → menu only on Tab, never while typing
       normal prompts (would be noisy).
-    - ``bottom_toolbar`` → dim hint about the keybindings.
+    - ``bottom_toolbar`` is a **callable** closing over ``agent``; pt
+      re-invokes it on every render so the numbers track live state
+      without polling. Shows model / context-pressure bar / pinned-cache /
+      mode / cwd. Keybinding hints live in the welcome banner (shown once)
+      — the bar is for always-relevant stateful info.
+
+    ``agent=None`` disables the bottom_toolbar (keeps the function usable
+    in tests that only exercise history / completion wiring).
     """
     history = FileHistory(str(resolve_history_path()))
     completer = SlashCommandCompleter(lambda: registry)
+    bottom_toolbar = _make_bottom_toolbar(agent) if agent is not None else None
     return PromptSession(
         history=history,
         completer=completer,
         complete_while_typing=False,
         search_ignore_case=True,
-        bottom_toolbar=_BOTTOM_TOOLBAR_HINT,
+        bottom_toolbar=bottom_toolbar,
     )
+
+
+def _make_bottom_toolbar(agent: Agent) -> Callable[[], Any]:
+    """Build a pt-compatible bottom_toolbar callable that reads live agent
+    state on each render. Closing over ``agent`` rather than snapshotting
+    the values is the whole point: every turn's new ``_token_stats`` shows
+    up in the bar without manual re-wiring."""
+    from aura.cli.status_bar import render_bottom_toolbar_html
+    from aura.core.llm import get_context_window
+
+    def _render() -> Any:
+        stats = agent.state.custom.get("_token_stats", {})
+        input_tokens = int(stats.get("last_input_tokens", 0))
+        cache_tokens = int(stats.get("last_cache_read_tokens", 0))
+        model = agent.current_model or ""
+        window = get_context_window(model) if model else 128_000
+        # Mode lives outside Agent (in .aura/settings.json via store.load_ruleset),
+        # not on the config dataclass. The bottom bar stays mode-agnostic for
+        # now — "default" elides the mode piece entirely. Plumbing mode
+        # through Agent is a follow-up.
+        mode = "default"
+        return render_bottom_toolbar_html(
+            model=model or None,
+            input_tokens=input_tokens,
+            cache_read_tokens=cache_tokens,
+            context_window=window,
+            mode=mode,
+            cwd=Path.cwd(),
+        )
+
+    return _render
 
 
 def _make_prompt_session_input(session: PromptSession[str]) -> InputFn:
@@ -86,7 +126,9 @@ async def run_repl_async(
     if input_fn is not None:
         _input: InputFn = input_fn
     elif sys.stdin.isatty():
-        _input = _make_prompt_session_input(_build_prompt_session(registry))
+        _input = _make_prompt_session_input(
+            _build_prompt_session(registry, agent=agent)
+        )
     else:
         _input = _default_input
 
@@ -160,6 +202,12 @@ def _print_welcome(agent: Agent, console: Console) -> None:
     body.append(f"{Path.cwd()}\n", style="")
     body.append("model: ", style="dim")
     body.append(agent.current_model, style="")
+    # Keybinding hints: shown ONCE at startup (clean prose) instead of on
+    # every prompt line as an ugly bottom_toolbar footer.
+    body.append(
+        "\n\nTab to autocomplete · Ctrl+R for history · Ctrl+D to exit",
+        style="dim",
+    )
     console.print(Panel(body, border_style="cyan", padding=(0, 2)))
 
 

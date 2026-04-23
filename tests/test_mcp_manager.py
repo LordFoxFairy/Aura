@@ -47,6 +47,9 @@ async def test_start_all_single_server_wraps_tools_with_aura_metadata(
     async def _fake_list_prompts(client: Any, server_name: str) -> list[Any]:
         return []
 
+    async def _fake_list_resources(client: Any, server_name: str) -> list[Any]:
+        return []
+
     from aura.core.mcp import manager as manager_mod
 
     monkeypatch.setattr(
@@ -54,6 +57,9 @@ async def test_start_all_single_server_wraps_tools_with_aura_metadata(
     )
     monkeypatch.setattr(
         MCPManager, "_list_prompts", staticmethod(_fake_list_prompts),
+    )
+    monkeypatch.setattr(
+        MCPManager, "_list_resources", staticmethod(_fake_list_resources),
     )
 
     mgr = MCPManager([
@@ -67,6 +73,8 @@ async def test_start_all_single_server_wraps_tools_with_aura_metadata(
     assert (t.metadata or {}).get("is_destructive") is True
     assert (t.metadata or {}).get("max_result_size_chars") == 30_000
     fake_client.get_tools.assert_awaited_once_with(server_name="gh")
+    # Resources catalogue is empty when the server exposes no resources.
+    assert mgr.resources_catalogue() == []
 
 
 @pytest.mark.asyncio
@@ -91,11 +99,17 @@ async def test_start_all_broken_server_graceful_degrade(
     async def _fake_list_prompts(client: Any, server_name: str) -> list[Any]:
         return []
 
+    async def _fake_list_resources(client: Any, server_name: str) -> list[Any]:
+        return []
+
     monkeypatch.setattr(
         manager_mod, "MultiServerMCPClient", lambda cfg: fake_client,
     )
     monkeypatch.setattr(
         MCPManager, "_list_prompts", staticmethod(_fake_list_prompts),
+    )
+    monkeypatch.setattr(
+        MCPManager, "_list_resources", staticmethod(_fake_list_resources),
     )
 
     mgr = MCPManager([
@@ -131,11 +145,17 @@ async def test_stop_all_suppresses_teardown_errors(
     async def _fake_list_prompts(client: Any, server_name: str) -> list[Any]:
         return []
 
+    async def _fake_list_resources(client: Any, server_name: str) -> list[Any]:
+        return []
+
     monkeypatch.setattr(
         manager_mod, "MultiServerMCPClient", lambda cfg: fake_client,
     )
     monkeypatch.setattr(
         MCPManager, "_list_prompts", staticmethod(_fake_list_prompts),
+    )
+    monkeypatch.setattr(
+        MCPManager, "_list_resources", staticmethod(_fake_list_resources),
     )
 
     mgr = MCPManager([MCPServerConfig(name="x", command="npx", args=[])])
@@ -156,11 +176,17 @@ async def test_start_all_skips_disabled_servers(
     async def _fake_list_prompts(client: Any, server_name: str) -> list[Any]:
         return []
 
+    async def _fake_list_resources(client: Any, server_name: str) -> list[Any]:
+        return []
+
     monkeypatch.setattr(
         manager_mod, "MultiServerMCPClient", lambda cfg: fake_client,
     )
     monkeypatch.setattr(
         MCPManager, "_list_prompts", staticmethod(_fake_list_prompts),
+    )
+    monkeypatch.setattr(
+        MCPManager, "_list_resources", staticmethod(_fake_list_resources),
     )
 
     mgr = MCPManager([

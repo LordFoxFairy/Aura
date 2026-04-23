@@ -9,13 +9,24 @@ from aura.core.memory.rules import RulesBundle
 from aura.core.skills.types import Skill
 
 
-def _skill(name: str, desc: str = "d", body: str = "b") -> Skill:
+def _skill(
+    name: str,
+    desc: str = "d",
+    body: str = "b",
+    *,
+    when_to_use: str | None = None,
+    paths: frozenset[str] = frozenset(),
+    disable_model_invocation: bool = False,
+) -> Skill:
     return Skill(
         name=name,
         description=desc,
         body=body,
         source_path=Path(f"/tmp/{name}.md"),
         layer="user",
+        when_to_use=when_to_use,
+        paths=paths,
+        disable_model_invocation=disable_model_invocation,
     )
 
 
@@ -118,6 +129,91 @@ def test_invoked_skills_positioned_after_skills_available_before_history(
     assert avail_idx < inv_idx
     assert out[inv_idx + 1] is history[0]
     assert out[inv_idx + 2] is history[1]
+
+
+def test_skills_available_includes_when_to_use_when_present(tmp_path: Path) -> None:
+    """``when_to_use`` frontmatter is rendered inline as triggering guidance."""
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        skills=[
+            _skill("refactor", "refactor helper", when_to_use="when code is messy"),
+            _skill("summarize", "summarize it"),  # no when_to_use
+        ],
+    )
+    out = ctx.build([])
+    avail = next(
+        c for c in (str(m.content) for m in out) if c.startswith("<skills-available>")
+    )
+    # Skills with when_to_use carry the [when to use: ...] suffix.
+    assert "- refactor: refactor helper [when to use: when code is messy]" in avail
+    # Skills without it render as before (plain name: description).
+    assert "- summarize: summarize it" in avail
+    # No trailing "[when to use: ..." on the summarize line.
+    for line in avail.splitlines():
+        if line.startswith("- summarize:"):
+            assert "when to use" not in line
+
+
+def test_disable_model_invocation_skills_hidden_from_skills_available(
+    tmp_path: Path,
+) -> None:
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        skills=[
+            _skill("public", "public desc"),
+            _skill("hidden", "hidden desc", disable_model_invocation=True),
+        ],
+    )
+    out = ctx.build([])
+    avail = next(
+        c for c in (str(m.content) for m in out) if c.startswith("<skills-available>")
+    )
+    assert "public" in avail
+    assert "hidden" not in avail
+
+
+def test_conditional_skills_not_in_skills_available_until_activated(
+    tmp_path: Path,
+) -> None:
+    """Conditional skills are hidden while they sit in the lazy bucket."""
+    # A skill whose ``paths`` is non-empty is conditional — the loader
+    # wouldn't have added it to the registry yet, but an integration test
+    # passing it directly to Context should still see it filtered.
+    conditional = _skill("lazy", paths=frozenset({"src/**"}))
+    unconditional = _skill("eager")
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        skills=[conditional, unconditional],
+    )
+    out = ctx.build([])
+    avail = next(
+        c for c in (str(m.content) for m in out) if c.startswith("<skills-available>")
+    )
+    assert "eager" in avail
+    assert "lazy" not in avail
+
+
+def test_skills_available_omitted_when_only_hidden_skills(tmp_path: Path) -> None:
+    """All skills filtered → no empty tag. Keeps token budget tidy."""
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        skills=[_skill("h", disable_model_invocation=True)],
+    )
+    out = ctx.build([])
+    for m in out:
+        assert "<skills-available>" not in str(m.content)
 
 
 def test_clear_session_resets_invoked_skills(tmp_path: Path) -> None:

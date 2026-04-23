@@ -5,18 +5,14 @@ Covers:
 - Known skill name -> success envelope + recorder called.
 - Unknown skill name -> ToolError with an "available: [..]" list.
 - Empty name -> pydantic ValidationError before body runs.
-- After invocation, Skill appears in Context._invoked_skills via
-  record_skill_invocation (integration check through the real Agent).
-- Double invocation -> second call is a no-op per the existing
-  dedup contract (same source_path).
 - Tool metadata: not destructive, read-only.
 - Tool is registered in the default ``tools.enabled`` list.
 - Tool is wired on the Agent and invokes through the real recorder.
-
-The fast-path unit tests wire the tool with a fake recorder so the tool's
-contract is exercised in isolation. The integration test uses a real Agent
-so we prove the recorder closure + registry actually thread through the
-Context's _invoked_skills. Same split as test_plan_mode_tools.
+- Arguments: skill with declared args renders placeholders; missing args
+  raises ToolError naming the missing positional; skill with no declared
+  args ignores incoming arguments (doesn't error).
+- ${AURA_SKILL_DIR} is substituted at tool-invoke time.
+- ${AURA_SESSION_ID} is substituted from the injected provider.
 """
 
 from __future__ import annotations
@@ -40,13 +36,21 @@ from tests.conftest import FakeChatModel
 # ---------------------------------------------------------------------------
 
 
-def _skill(name: str = "foo", *, path: Path | None = None) -> Skill:
+def _skill(
+    name: str = "foo",
+    *,
+    path: Path | None = None,
+    body: str | None = None,
+    arguments: tuple[str, ...] = (),
+) -> Skill:
+    source = path if path is not None else Path(f"/tmp/{name}.md")
     return Skill(
         name=name,
         description=f"Description of {name}.",
-        body=f"# Body of {name}\ndo the thing",
-        source_path=path if path is not None else Path(f"/tmp/{name}.md"),
+        body=body if body is not None else f"# Body of {name}\ndo the thing",
+        source_path=source,
         layer="user",
+        arguments=arguments,
     )
 
 
@@ -60,8 +64,17 @@ class _RecorderSpy:
         self.calls.append(skill)
 
 
-def _tool(registry: SkillRegistry, spy: _RecorderSpy) -> SkillTool:
-    return SkillTool(recorder=spy, registry=registry)
+def _tool(
+    registry: SkillRegistry,
+    spy: _RecorderSpy,
+    *,
+    session_id: str = "sid-test",
+) -> SkillTool:
+    return SkillTool(
+        recorder=spy,
+        registry=registry,
+        session_id_provider=lambda: session_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -109,20 +122,6 @@ def test_skill_tool_empty_name_rejected_by_schema() -> None:
     assert spy.calls == []
 
 
-def test_skill_tool_double_invocation_is_recorded_twice_but_dedup_in_context() -> None:
-    # The tool's recorder is called each time (no state on the tool). Dedup
-    # is the Context's responsibility and is already tested via
-    # test_context_skills; here we just assert the tool itself is idempotent
-    # w.r.t. envelope shape across repeated calls.
-    reg = SkillRegistry([_skill("alpha")])
-    spy = _RecorderSpy()
-    tool = _tool(reg, spy)
-    tool.invoke({"name": "alpha"})
-    tool.invoke({"name": "alpha"})
-    assert len(spy.calls) == 2
-    assert all(s.name == "alpha" for s in spy.calls)
-
-
 def test_skill_tool_metadata_is_read_only_and_not_destructive() -> None:
     reg = SkillRegistry()
     tool = _tool(reg, _RecorderSpy())
@@ -132,10 +131,79 @@ def test_skill_tool_metadata_is_read_only_and_not_destructive() -> None:
 
 
 def test_skill_tool_in_default_enabled_tools() -> None:
-    # Regression: the default config ships with skill enabled so the LLM
-    # actually has it available out of the box. Complements the explicit
-    # assertion in test_config_schema.test_defaults.
+    # Regression: the default config ships with skill enabled.
     assert "skill" in AuraConfig().tools.enabled
+
+
+# ---------------------------------------------------------------------------
+# Argument handling
+# ---------------------------------------------------------------------------
+
+
+def test_skill_tool_substitutes_argument_placeholders(tmp_path: Path) -> None:
+    skill = _skill(
+        "greet",
+        path=tmp_path / "greet.md",
+        body="Hello ${who}!",
+        arguments=("who",),
+    )
+    reg = SkillRegistry([skill])
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy)
+    tool.invoke({"name": "greet", "arguments": ["alice"]})
+    assert len(spy.calls) == 1
+    # The recorder receives a rendered-body clone; the original skill stays
+    # pristine (frozen dataclass + dataclasses.replace).
+    assert spy.calls[0].body == "Hello alice!"
+    assert skill.body == "Hello ${who}!"
+
+
+def test_skill_tool_missing_argument_raises_tool_error() -> None:
+    skill = _skill("greet", body="Hello ${who}", arguments=("who",))
+    reg = SkillRegistry([skill])
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy)
+    with pytest.raises(ToolError) as excinfo:
+        tool.invoke({"name": "greet"})
+    msg = str(excinfo.value)
+    # Error tells the LLM exactly what's missing so it can re-plan.
+    assert "who" in msg
+    assert "missing" in msg
+    assert spy.calls == []
+
+
+def test_skill_tool_ignores_arguments_when_skill_declares_none() -> None:
+    """LLM may pass [] or irrelevant args defensively — shouldn't error."""
+    skill = _skill("nullary")
+    reg = SkillRegistry([skill])
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy)
+    # Extra arguments are silently dropped.
+    tool.invoke({"name": "nullary", "arguments": ["extra", "stuff"]})
+    assert len(spy.calls) == 1
+
+
+def test_skill_tool_substitutes_skill_dir_and_session_id(tmp_path: Path) -> None:
+    skill_file = tmp_path / "mydir" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True)
+    skill_file.write_text(
+        "---\ndescription: d\n---\nDir=${AURA_SKILL_DIR}\nSid=${AURA_SESSION_ID}\n",
+        encoding="utf-8",
+    )
+    skill = Skill(
+        name="s",
+        description="d",
+        body="Dir=${AURA_SKILL_DIR}\nSid=${AURA_SESSION_ID}\n",
+        source_path=skill_file,
+        layer="user",
+    )
+    reg = SkillRegistry([skill])
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy, session_id="my-sid")
+    tool.invoke({"name": "s"})
+    rendered = spy.calls[0].body
+    assert str(skill_file.parent) in rendered
+    assert "my-sid" in rendered
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +215,6 @@ def _make_agent(tmp_path: Path, skills: list[Skill]) -> Agent:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
-        # Only enable the skill tool — isolates the wiring path.
         "tools": {"enabled": ["skill"]},
     })
     return Agent(
@@ -167,8 +234,6 @@ def test_skill_tool_wired_on_agent_flows_into_context_invoked_list(
         result = tool.invoke({"name": "helper"})
         assert result["invoked"] is True
         assert result["skill"] == "helper"
-        # Real Context receives the skill and renders <skill-invoked> on
-        # the next build — same contract the slash command relies on.
         messages = agent._context.build([])
         contents = " ".join(str(m.content) for m in messages)
         assert '<skill-invoked name="helper">' in contents
@@ -184,8 +249,6 @@ def test_skill_tool_wired_on_agent_dedups_across_double_invocation(
         tool = agent._available_tools["skill"]
         tool.invoke({"name": "once"})
         tool.invoke({"name": "once"})
-        # Second call is a no-op in Context (dedup by source_path): the
-        # rendered list still shows <skill-invoked name="once"> exactly once.
         messages = agent._context.build([])
         contents = " ".join(str(m.content) for m in messages)
         assert contents.count('<skill-invoked name="once">') == 1

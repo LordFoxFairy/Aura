@@ -1077,15 +1077,17 @@ async def test_agent_skills_loaded_at_init_from_cwd_and_home(
 ) -> None:
     _chdir(monkeypatch, tmp_path)
     # Two layers: user-layer skill in fake HOME, project-layer skill in cwd.
+    # Directory-per-skill layout (claude-code v2.1.88 compatible) — plain
+    # .md files at the top of .aura/skills/ are no longer loaded.
     home = tmp_path / "_fake_home"
-    (home / ".aura" / "skills").mkdir(parents=True, exist_ok=True)
-    (home / ".aura" / "skills" / "user-skill.md").write_text(
-        "---\nname: user-skill\ndescription: from user.\n---\nUSER-BODY\n",
+    (home / ".aura" / "skills" / "user-skill").mkdir(parents=True, exist_ok=True)
+    (home / ".aura" / "skills" / "user-skill" / "SKILL.md").write_text(
+        "---\ndescription: from user.\n---\nUSER-BODY\n",
         encoding="utf-8",
     )
-    (tmp_path / ".aura" / "skills").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".aura" / "skills" / "proj-skill.md").write_text(
-        "---\nname: proj-skill\ndescription: from project.\n---\nPROJ-BODY\n",
+    (tmp_path / ".aura" / "skills" / "proj-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".aura" / "skills" / "proj-skill" / "SKILL.md").write_text(
+        "---\ndescription: from project.\n---\nPROJ-BODY\n",
         encoding="utf-8",
     )
 
@@ -1166,6 +1168,14 @@ async def test_agent_aconnect_registers_tools_into_registry(
 
         async def start_all(self) -> tuple[list[Any], list[Any]]:
             return [fake_tool], []
+
+        def resources_catalogue(
+            self,
+        ) -> list[tuple[str, str, str, str, str | None]]:
+            return []
+
+        async def read_resource(self, uri: str) -> dict[str, Any]:
+            raise NotImplementedError
 
         async def stop_all(self) -> None:
             return None

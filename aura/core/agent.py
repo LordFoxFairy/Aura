@@ -235,10 +235,21 @@ class Agent:
                 # Agent.record_skill_invocation so the tool never holds
                 # a reference to Agent itself — same "one arrow" pattern
                 # as enter_plan_mode. Registry is handed in directly
-                # because name-lookup is pure read.
+                # because name-lookup is pure read. ``session_id_provider``
+                # feeds ``${AURA_SESSION_ID}`` substitution; closure over
+                # self so a late session_id change (should never happen
+                # today) still resolves to the live value.
                 self._available_tools[name] = cls(
                     recorder=self.record_skill_invocation,
                     registry=self._skill_registry,
+                    # ``_session_id`` is assigned later in __init__ (line ~249);
+                    # the lambda closes over ``self`` and reads the live
+                    # attribute at invocation time, so the ordering is safe.
+                    # ``getattr`` + default keeps mypy happy (the attribute
+                    # isn't visible to it at this point in the method).
+                    session_id_provider=(
+                        lambda: getattr(self, "_session_id", _DEFAULT_SESSION)
+                    ),
                 )
             else:  # pragma: no cover — guardrail for future additions
                 raise RuntimeError(f"unwired stateful tool: {name}")
@@ -630,11 +641,36 @@ class Agent:
                     error=str(exc),
                 )
         self._mcp_commands = list(commands)
+        # MCP resources → single ``mcp_read_resource`` tool. Only register
+        # when >=1 resource exists across all connected servers; same
+        # empty-catalogue → no-tool discipline as SkillTool. The tool's
+        # description carries the catalogue so the LLM sees the URIs
+        # inline with the function schema (no separate context block).
+        catalogue = manager.resources_catalogue()
+        if catalogue:
+            from aura.tools.mcp_read_resource import (
+                MCPReadResourceTool,
+                build_description,
+            )
+
+            resource_tool = MCPReadResourceTool(
+                resource_reader=manager.read_resource,
+                description=build_description(catalogue),
+            )
+            self._available_tools["mcp_read_resource"] = resource_tool
+            try:
+                self._registry.register(resource_tool)
+            except ValueError as exc:
+                journal.write(
+                    "mcp_resource_tool_register_skipped",
+                    error=str(exc),
+                )
         self._loop._rebind_tools(self._registry.tools())
         journal.write(
             "mcp_aconnect_done",
             tool_count=len(tools),
             command_count=len(commands),
+            resource_count=len(catalogue),
         )
 
     def close(self) -> None:

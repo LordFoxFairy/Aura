@@ -1,26 +1,44 @@
-"""Discover + parse skill files from user + project layers.
+"""Discover + parse skill directories from user + project layers.
 
-Two layers, scanned flat (no recursion, no walk-up):
+Claude-code v2.1.88 parity (see ``loadSkillsDir.ts``):
 
-1. ``~/.aura/skills/*.md`` — user, wins on name collisions.
-2. ``<cwd>/.aura/skills/*.md`` — project.
+- **Layout**: one directory per skill, ``<name>/SKILL.md`` inside it. Plain
+  ``.md`` files at the top of a ``.aura/skills/`` dir are no longer loaded —
+  they emit a ``skill_legacy_format_detected`` journal event so the user can
+  migrate explicitly. Mirrors ``loadSkillsFromSkillsDir`` lines 421-480.
+- **Layers**:
 
-Required frontmatter: ``name`` (str) and ``description`` (str). Any violation
-(missing field, wrong type, malformed YAML, non-UTF-8 body) causes the skill
-to be silently skipped and a ``skill_parse_failed`` journal event emitted.
+  1. User   → ``~/.aura/skills/<name>/SKILL.md``
+  2. Project → walk up from ``cwd`` to ``Path.home()`` (exclusive),
+     scanning each ``<dir>/.aura/skills/<name>/SKILL.md``. Mirrors
+     claude-code's ``getProjectDirsUpToHome('skills', cwd)``. Deeper
+     (closer-to-cwd) dirs are visited last so they LOSE on name collisions —
+     matches claude-code's "first-seen wins" dedup order in
+     ``getSkillDirCommands`` where user layer is pushed before project.
 
-Name collisions: user-layer wins. The losing project-layer skill is dropped
-and a ``skill_name_collision`` journal event is emitted.
+- **Realpath dedup**: two discovered dirs that resolve to the same file
+  (symlinks, overlapping parents) are collapsed to one. First-seen wins —
+  same as the TS ``seenFileIds`` loop. Uses ``Path.resolve()`` which is the
+  Python equivalent of ``realpath`` (the primitive claude-code uses).
+- **Conditional skills**: ``paths:`` frontmatter → skill is STORED but not
+  active at startup. ``activate_conditional_skills_for_paths`` activates
+  matching skills lazily. Activation state is module-global so it survives
+  across ``load_skills`` calls within one session (matches
+  ``activatedConditionalSkillNames``).
 
-Frontmatter parsing mirrors :mod:`aura.core.memory.rules` — the splitter is
-copy-pasted rather than imported so the two subsystems don't grow a cross-cut
-dependency on shared scanning internals.
+Required frontmatter: ``description`` (str, non-empty). ``name`` is an
+optional override — falls back to the directory name (dir name IS the
+skill id in claude-code). Missing description silently skips the skill +
+emits ``skill_parse_failed`` (same "silent-skip-with-audit" pattern as the
+rest of Aura's loader code — one bad skill must not break the catalogue).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+import pathspec
 import yaml
 
 from aura.core.skills.registry import SkillRegistry
@@ -28,131 +46,433 @@ from aura.core.skills.types import Skill, SkillLayer
 
 _AURA_DIR = ".aura"
 _SKILLS_DIR = "skills"
-_MD_SUFFIX = ".md"
+_SKILL_FILE = "SKILL.md"
+
+# Module-global conditional-skill registry. Mirrors claude-code's
+# ``conditionalSkills`` map + ``activatedConditionalSkillNames`` set. Lives
+# at module scope so activation sticks across ``load_skills`` calls within
+# a single process — matches the TS semantics where memoized discovery +
+# activation state are both process-lifetime.
+_conditional_skills: dict[str, Skill] = {}
+_activated_conditional_names: set[str] = set()
 
 
 def load_skills(cwd: Path, *, home: Path | None = None) -> SkillRegistry:
     """Scan user + project layers and return a populated SkillRegistry.
 
+    Conditional skills (``paths:`` frontmatter) are stored in the module's
+    conditional map instead of the returned registry — they only appear in
+    the catalogue after ``activate_conditional_skills_for_paths`` moves
+    them over.
+
     ``home`` defaults to ``Path.home()``; exposed as kwarg for tests.
     """
-    home_dir = (home if home is not None else Path.home())
+    home_dir = (home if home is not None else Path.home()).resolve()
+    cwd_resolved = cwd.resolve()
+
     registry = SkillRegistry()
+    seen_source_paths: set[Path] = set()
 
-    # User layer first — its name wins on collisions.
-    for skill in _scan_layer(home_dir / _AURA_DIR / _SKILLS_DIR, layer="user"):
-        # First writer wins; user layer has no internal collisions because
-        # filesystem names are unique per directory. If two user skills share
-        # frontmatter name, the second one emits a journal event and is
-        # dropped — same machinery as the cross-layer collision below.
-        if registry.get(skill.name) is not None:
-            from aura.core import journal
+    # --- Layer 1: user ---
+    # User layer goes first so it wins on name collisions — matches TS
+    # ``allSkillsWithPaths = [...userSkills, ...projectSkills]`` ordering.
+    user_skills_root = home_dir / _AURA_DIR / _SKILLS_DIR
+    for skill in _load_layer(user_skills_root, layer="user"):
+        _install_or_drop(skill, registry, seen_source_paths)
 
-            journal.write(
-                "skill_name_collision",
-                name=skill.name,
-                kept_path=str(registry.get(skill.name).source_path),  # type: ignore[union-attr]
-                dropped_path=str(skill.source_path),
-            )
+    # --- Layer 2: project (walk up from cwd to home exclusive) ---
+    # Closer-to-cwd dirs are visited LAST so they lose on collisions against
+    # already-registered skills (user + outer project). This is the
+    # "outer-wins" convention: an inner child project inherits its parent's
+    # skills but cannot silently shadow them with a same-named skill. The
+    # user can still override by putting the skill in ~/.aura/skills/, which
+    # is the one layer with real ownership semantics.
+    for project_dir in _project_dirs_up_to_home(cwd_resolved, home_dir):
+        project_skills_root = project_dir / _AURA_DIR / _SKILLS_DIR
+        if project_skills_root.resolve() == user_skills_root.resolve():
+            # If cwd is itself inside $HOME, the walk-up hits $HOME's own
+            # .aura/skills/ which we already scanned as the user layer.
             continue
-        registry.register(skill)
-
-    for skill in _scan_layer(
-        cwd.resolve() / _AURA_DIR / _SKILLS_DIR, layer="project"
-    ):
-        existing = registry.get(skill.name)
-        if existing is not None:
-            from aura.core import journal
-
-            journal.write(
-                "skill_name_collision",
-                name=skill.name,
-                kept_path=str(existing.source_path),
-                dropped_path=str(skill.source_path),
-            )
-            continue
-        registry.register(skill)
+        for skill in _load_layer(project_skills_root, layer="project"):
+            _install_or_drop(skill, registry, seen_source_paths)
 
     return registry
 
 
-# ---------------------------------------------------------------------------
-# Internals
-# ---------------------------------------------------------------------------
+def activate_conditional_skills_for_paths(
+    paths: list[str], cwd: Path,
+) -> list[str]:
+    """Activate stored conditional skills whose ``paths:`` match ``paths``.
 
+    Mirrors ``activateConditionalSkillsForPaths`` (TS). Uses ``pathspec``
+    with gitignore semantics — same library claude-code's ``ignore`` pkg
+    is modelled on, and what Aura already uses for rules matching.
+    Activated skills are registered into a fresh SkillRegistry returned to
+    the caller; tracked in ``_activated_conditional_names`` so subsequent
+    ``load_skills`` calls don't re-stash them as conditional.
 
-def _scan_layer(skills_root: Path, *, layer: SkillLayer) -> list[Skill]:
-    """Return parsed skills from ``skills_root/*.md`` (flat, no recursion)."""
-    if not skills_root.is_dir():
+    Returns: names of newly-activated skills (possibly empty).
+
+    Contract note: the loop's file-touching code paths don't wire this yet
+    — exposing the API is enough to unblock that integration work.
+    """
+    if not _conditional_skills:
         return []
-    try:
-        md_files = sorted(skills_root.glob(f"*{_MD_SUFFIX}"))
-    except OSError:
+
+    cwd_resolved = cwd.resolve()
+    activated: list[str] = []
+
+    for name in list(_conditional_skills.keys()):
+        skill = _conditional_skills[name]
+        if not skill.paths:
+            # Shouldn't happen (conditional → is_conditional() → len(paths)>0),
+            # but belt-and-suspenders: promote orphaned entries unconditionally.
+            _activated_conditional_names.add(name)
+            del _conditional_skills[name]
+            activated.append(name)
+            continue
+        try:
+            spec = pathspec.PathSpec.from_lines("gitignore", skill.paths)
+        except Exception:  # noqa: BLE001 — pathspec raises many exc types
+            # Same tolerance as rules.py: a bad glob pattern can't take down
+            # the activation pipeline. Journal is lossy here because the
+            # skill was already loaded — the user sees the miss via "skill
+            # did not activate" rather than a parse error.
+            continue
+
+        for raw_path in paths:
+            rel = _relative_to_cwd(raw_path, cwd_resolved)
+            if rel is None:
+                continue
+            if spec.match_file(rel):
+                _activated_conditional_names.add(name)
+                del _conditional_skills[name]
+                activated.append(name)
+                break
+
+    return activated
+
+
+def get_conditional_skills() -> list[Skill]:
+    """Return all skills stored as conditional (for integration surfaces)."""
+    return list(_conditional_skills.values())
+
+
+def activated_conditional_names() -> frozenset[str]:
+    """Return the set of skills that have been activated this session."""
+    return frozenset(_activated_conditional_names)
+
+
+def clear_conditional_state() -> None:
+    """Test hook — reset the module-global conditional registry."""
+    _conditional_skills.clear()
+    _activated_conditional_names.clear()
+
+
+def render_skill_body(
+    skill: Skill,
+    session_id: str,
+    argument_values: list[str] | None = None,
+) -> str:
+    """Substitute ``${AURA_SKILL_DIR}``, ``${AURA_SESSION_ID}``, and per-arg
+    placeholders in ``skill.body``.
+
+    Claude-code performs this substitution inside ``getPromptForCommand``
+    (loadSkillsDir.ts:344-369). We do it at invocation time (tool / slash
+    command) so the Context's ``<skill-invoked>`` render block can stay a
+    dumb string-copier — no session-id leak into the memory module.
+    """
+    body = skill.body
+    base_dir = skill.base_dir if skill.base_dir is not None else skill.source_path.parent
+    body = body.replace("${AURA_SKILL_DIR}", str(base_dir))
+    body = body.replace("${AURA_SESSION_ID}", session_id)
+    values = argument_values or []
+    for i, arg_name in enumerate(skill.arguments):
+        placeholder = "${" + arg_name + "}"
+        value = values[i] if i < len(values) else ""
+        body = body.replace(placeholder, value)
+    return body
+
+
+# ---------------------------------------------------------------------------
+# Internals — per-layer scan
+# ---------------------------------------------------------------------------
+
+
+def _install_or_drop(
+    skill: Skill,
+    registry: SkillRegistry,
+    seen_source_paths: set[Path],
+) -> None:
+    """Add ``skill`` to the registry, stash under conditional, or drop on dup."""
+    # Realpath dedup: a skill dir reached via two paths (symlink, overlapping
+    # parent) is already-loaded. Silent skip + journal — matches TS
+    # ``Skipping duplicate skill`` debug log.
+    if skill.source_path in seen_source_paths:
+        from aura.core.persistence import journal
+
+        journal.write(
+            "skill_duplicate_skipped",
+            name=skill.name,
+            source_path=str(skill.source_path),
+        )
+        return
+    seen_source_paths.add(skill.source_path)
+
+    # Conditional skills go into the lazy bucket unless already activated
+    # this session.
+    if skill.is_conditional() and skill.name not in _activated_conditional_names:
+        _conditional_skills[skill.name] = skill
+        return
+
+    # Name collision → first writer wins (user layer came first).
+    if registry.get(skill.name) is not None:
+        from aura.core.persistence import journal
+
+        existing = registry.get(skill.name)
+        journal.write(
+            "skill_name_collision",
+            name=skill.name,
+            kept_path=str(existing.source_path) if existing else "",
+            dropped_path=str(skill.source_path),
+        )
+        return
+    registry.register(skill)
+
+
+def _project_dirs_up_to_home(cwd: Path, home: Path) -> list[Path]:
+    """Return cwd, cwd.parent, ..., up to (but NOT including) ``home``.
+
+    If cwd is not under home (pathological test setups), return ``[cwd]`` —
+    we still scan the project layer at cwd. Claude-code's
+    ``getProjectDirsUpToHome`` uses the same semantics: the walk stops
+    *before* entering home so a user's ``~/.aura/skills/`` isn't double-
+    counted as both layers.
+    """
+    dirs: list[Path] = []
+    current = cwd
+    while True:
+        dirs.append(current)
+        parent = current.parent
+        if parent == current:
+            break  # Filesystem root — stop.
+        if current == home:
+            # We've reached home; the next iteration would be outside home.
+            break
+        if parent == home:
+            break  # Don't include home itself in the project layer.
+        current = parent
+    # Visit outer dirs first so closer-to-cwd skills LOSE on collisions
+    # (outer wins — matches "parent project can't be shadowed by child").
+    # Reverse from the cwd-first order we built.
+    dirs.reverse()
+    return dirs
+
+
+def _load_layer(skills_root: Path, *, layer: SkillLayer) -> list[Skill]:
+    """Return parsed Skills from ``skills_root/<name>/SKILL.md`` entries."""
+    if not skills_root.is_dir():
         return []
 
     out: list[Skill] = []
-    for md_path in md_files:
-        if not md_path.is_file():
+    try:
+        entries = sorted(skills_root.iterdir())
+    except OSError:
+        return []
+
+    # Legacy detection: plain .md at the top level → user still on the old
+    # flat layout. Journal + skip so they migrate explicitly (wrap each
+    # ``foo.md`` → ``foo/SKILL.md``).
+    legacy_files = [e for e in entries if e.is_file() and e.suffix == ".md"]
+    if legacy_files:
+        from aura.core.persistence import journal
+
+        journal.write(
+            "skill_legacy_format_detected",
+            layer=layer,
+            root=str(skills_root),
+            files=[str(f) for f in legacy_files],
+        )
+
+    for entry in entries:
+        # Only dirs (and symlinks to dirs) are valid skill containers.
+        if not entry.is_dir():
             continue
-        skill = _build_skill(md_path, layer=layer)
+        skill_file = entry / _SKILL_FILE
+        if not skill_file.is_file():
+            # Empty skill dir / sidecar (e.g. ``examples/`` directory on
+            # its own, misplaced) — skip silently.
+            continue
+        skill = _build_skill(skill_file, layer=layer)
         if skill is not None:
             out.append(skill)
     return out
 
 
-def _build_skill(md_path: Path, *, layer: SkillLayer) -> Skill | None:
-    """Parse one ``.md`` file into a Skill, or silent-skip with a journal event."""
-    raw = _read_text(md_path)
+def _build_skill(skill_file: Path, *, layer: SkillLayer) -> Skill | None:
+    """Parse one ``SKILL.md`` file into a Skill, or silent-skip."""
+    raw = _read_text(skill_file)
     if raw is None:
-        _emit_parse_failed(md_path, "unreadable")
+        _emit_parse_failed(skill_file, "unreadable")
         return None
 
     frontmatter_text, body = _split_frontmatter(raw)
+    # Frontmatter is optional per claude-code (see the coerceDescriptionToString
+    # fallback); but we require ``description`` so we need SOME frontmatter.
     if frontmatter_text is None:
-        _emit_parse_failed(md_path, "missing frontmatter")
+        _emit_parse_failed(skill_file, "missing frontmatter")
         return None
 
     try:
         parsed = yaml.safe_load(frontmatter_text)
     except yaml.YAMLError as exc:
-        _emit_parse_failed(md_path, f"yaml error: {exc}")
+        _emit_parse_failed(skill_file, f"yaml error: {exc}")
         return None
 
     if not isinstance(parsed, dict):
-        _emit_parse_failed(md_path, "frontmatter is not a mapping")
+        _emit_parse_failed(skill_file, "frontmatter is not a mapping")
         return None
 
-    name = parsed.get("name")
+    # Directory name IS the skill id; ``name`` in frontmatter is a display
+    # override. Match claude-code's ``displayName`` + ``userFacingName()``
+    # split where ``name`` = dir name but ``userFacingName()`` uses the
+    # override. Aura collapses: the override replaces ``name`` outright.
+    dir_name = skill_file.parent.name
+    name_override = parsed.get("name")
+    if isinstance(name_override, str) and name_override.strip():
+        resolved_name = name_override.strip()
+    else:
+        resolved_name = dir_name
+
     description = parsed.get("description")
-    if not isinstance(name, str) or not name.strip():
-        _emit_parse_failed(md_path, "missing or non-string 'name'")
-        return None
     if not isinstance(description, str) or not description.strip():
-        _emit_parse_failed(md_path, "missing or non-string 'description'")
+        _emit_parse_failed(skill_file, "missing or non-string 'description'")
         return None
 
     try:
-        source = md_path.resolve()
+        source = skill_file.resolve()
     except OSError:
-        _emit_parse_failed(md_path, "resolve failed")
+        _emit_parse_failed(skill_file, "resolve failed")
         return None
 
+    try:
+        base_dir = skill_file.parent.resolve()
+    except OSError:
+        base_dir = skill_file.parent
+
+    when_to_use = _coerce_optional_str(parsed.get("when_to_use"))
+    version = _coerce_optional_str(parsed.get("version"))
+    argument_hint = _coerce_optional_str(parsed.get("argument-hint"))
+
+    allowed_tools = _coerce_str_list_field(parsed.get("allowed-tools"))
+    arguments = tuple(_coerce_str_list_field(parsed.get("arguments")))
+    paths_raw = _coerce_str_list_field(parsed.get("paths"))
+    # Normalize "/**" suffix — pathspec treats "src" as matching both the
+    # file and the directory contents, so "src/**" is redundant. Mirrors TS
+    # ``parseSkillPaths`` lines 165-168.
+    normalized_paths: list[str] = []
+    for pattern in paths_raw:
+        if pattern.endswith("/**"):
+            pattern = pattern[:-3]
+        if pattern:
+            normalized_paths.append(pattern)
+    # "All match-all" patterns → treat as unconditional (match TS lines 172-174).
+    if normalized_paths and all(p == "**" for p in normalized_paths):
+        normalized_paths = []
+
+    user_invocable = _coerce_bool(parsed.get("user-invocable"), default=True)
+    disable_model_invocation = _coerce_bool(
+        parsed.get("disable-model-invocation"), default=False,
+    )
+
     return Skill(
-        name=name.strip(),
+        name=resolved_name,
         description=description.strip(),
         body=body,
         source_path=source,
+        base_dir=base_dir,
         layer=layer,
+        when_to_use=when_to_use,
+        allowed_tools=frozenset(allowed_tools),
+        arguments=arguments,
+        argument_hint=argument_hint,
+        version=version,
+        paths=frozenset(normalized_paths),
+        user_invocable=user_invocable,
+        disable_model_invocation=disable_model_invocation,
     )
 
 
-def _emit_parse_failed(md_path: Path, error: str) -> None:
-    from aura.core import journal
+def _coerce_optional_str(value: Any) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else None
+    return None
+
+
+def _coerce_str_list_field(value: Any) -> list[str]:
+    """Accept ``list[str]`` or whitespace-separated str. Drops empty items."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        # Claude-code's ``parseArgumentNames`` splits on whitespace when
+        # a scalar is given — same behaviour here so both YAML forms work
+        # (``arguments: foo bar`` and ``arguments: [foo, bar]``).
+        return [p for p in value.split() if p]
+    if isinstance(value, list):
+        out: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                out.append(item.strip())
+        return out
+    return []
+
+
+def _coerce_bool(value: Any, *, default: bool) -> bool:
+    """Parse booleans loosely — matches claude-code's ``parseBooleanFrontmatter``."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lower = value.strip().lower()
+        if lower in ("true", "yes", "1"):
+            return True
+        if lower in ("false", "no", "0"):
+            return False
+    return default
+
+
+def _relative_to_cwd(raw_path: str, cwd: Path) -> str | None:
+    """Return ``raw_path`` as a cwd-relative POSIX string, or None if outside.
+
+    Matches TS ``activateConditionalSkillsForPaths`` lines 1014-1027: paths
+    outside cwd can't match cwd-relative patterns, and ``ignore`` raises on
+    ``..``/absolute — guard the same way.
+    """
+    p = Path(raw_path)
+    if p.is_absolute():
+        try:
+            rel = p.resolve().relative_to(cwd)
+            return rel.as_posix()
+        except (ValueError, OSError):
+            return None
+    # Already relative — just ensure it stays inside cwd.
+    joined = (cwd / p).resolve()
+    try:
+        rel = joined.relative_to(cwd)
+        return rel.as_posix()
+    except ValueError:
+        return None
+
+
+def _emit_parse_failed(skill_file: Path, error: str) -> None:
+    from aura.core.persistence import journal
 
     try:
-        path_str = str(md_path.resolve())
+        path_str = str(skill_file.resolve())
     except OSError:
-        path_str = str(md_path)
+        path_str = str(skill_file)
     journal.write("skill_parse_failed", path=path_str, error=error)
 
 
@@ -167,11 +487,7 @@ def _read_text(path: Path) -> str | None:
 
 
 def _split_frontmatter(raw: str) -> tuple[str | None, str]:
-    """Split out the leading ``---``-fenced YAML frontmatter.
-
-    Copy of :func:`aura.core.memory.rules._split_frontmatter` (kept local to
-    avoid an inter-subsystem dependency on rules' private helpers).
-    """
+    """Split out the leading ``---``-fenced YAML frontmatter."""
     lines = raw.splitlines(keepends=True)
     if not lines:
         return None, raw

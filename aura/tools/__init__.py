@@ -25,6 +25,7 @@ from aura.tools.enter_plan_mode import EnterPlanMode
 from aura.tools.exit_plan_mode import ExitPlanMode
 from aura.tools.glob import Glob, glob
 from aura.tools.grep import Grep, grep
+from aura.tools.mcp_read_resource import MCPReadResourceTool
 from aura.tools.read_file import ReadFile, read_file
 from aura.tools.skill import SkillTool
 from aura.tools.task_create import TaskCreate
@@ -73,6 +74,7 @@ __all__ = [
     "ExitPlanMode",
     "Glob",
     "Grep",
+    "MCPReadResourceTool",
     "ReadFile",
     "SkillTool",
     "TaskCreate",

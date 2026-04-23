@@ -744,6 +744,118 @@ async def test_picker_ctrl_e_ignored_in_feedback_mode() -> None:
 # ---------------------------------------------------------------------------
 # print_bypass_banner — unchanged contract
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Dispatch routing — v0.7.6 specialized widgets. Generic tools (grep,
+# read_file, etc.) still hit the generic widget; bash / bash_background
+# go to the bash widget; write_file / edit_file go to the write widget.
+# These tests pin the dispatch contract by stubbing each specialized
+# entrypoint and asserting the right one fired.
+# ---------------------------------------------------------------------------
+async def test_dispatch_generic_for_non_specialized_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"bash": 0, "write": 0, "generic": 0}
+
+    async def fake_bash(**_kw: Any) -> tuple[int | None, str]:
+        calls["bash"] += 1
+        return 1, ""
+
+    async def fake_write(**_kw: Any) -> tuple[int | None, str]:
+        calls["write"] += 1
+        return 1, ""
+
+    async def fake_generic(**_kw: Any) -> tuple[int | None, str]:
+        calls["generic"] += 1
+        return 1, ""
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "run_bash_permission", fake_bash)
+    monkeypatch.setattr(perm_mod, "run_write_permission", fake_write)
+    monkeypatch.setattr(perm_mod, "run_generic_permission", fake_generic)
+
+    grep_tool = build_tool(
+        name="grep",
+        description="Search file contents",
+        args_schema=_P,
+        func=_noop,
+        is_read_only=True,
+    )
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console)
+    await asker(tool=grep_tool, args={"msg": "x"}, rule_hint=_HINT)
+    assert calls == {"bash": 0, "write": 0, "generic": 1}
+
+
+async def test_dispatch_bash_for_bash_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"bash": 0, "write": 0, "generic": 0}
+
+    async def fake_bash(**_kw: Any) -> tuple[int | None, str]:
+        calls["bash"] += 1
+        return 1, ""
+
+    async def fake_write(**_kw: Any) -> tuple[int | None, str]:
+        calls["write"] += 1
+        return 1, ""
+
+    async def fake_generic(**_kw: Any) -> tuple[int | None, str]:
+        calls["generic"] += 1
+        return 1, ""
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "run_bash_permission", fake_bash)
+    monkeypatch.setattr(perm_mod, "run_write_permission", fake_write)
+    monkeypatch.setattr(perm_mod, "run_generic_permission", fake_generic)
+
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console)
+    await asker(tool=_bash_like(), args={"command": "ls"}, rule_hint=_HINT)
+    assert calls == {"bash": 1, "write": 0, "generic": 0}
+
+
+async def test_dispatch_write_for_edit_file_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"bash": 0, "write": 0, "generic": 0}
+
+    async def fake_bash(**_kw: Any) -> tuple[int | None, str]:
+        calls["bash"] += 1
+        return 1, ""
+
+    async def fake_write(**_kw: Any) -> tuple[int | None, str]:
+        calls["write"] += 1
+        return 1, ""
+
+    async def fake_generic(**_kw: Any) -> tuple[int | None, str]:
+        calls["generic"] += 1
+        return 1, ""
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "run_bash_permission", fake_bash)
+    monkeypatch.setattr(perm_mod, "run_write_permission", fake_write)
+    monkeypatch.setattr(perm_mod, "run_generic_permission", fake_generic)
+
+    edit_tool = build_tool(
+        name="edit_file",
+        description="Edit a file",
+        args_schema=_P,
+        func=_noop,
+        is_destructive=True,
+    )
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console)
+    await asker(
+        tool=edit_tool,
+        args={"path": "foo.py", "command": "unused"},
+        rule_hint=_HINT,
+    )
+    assert calls == {"bash": 0, "write": 1, "generic": 0}
+
+
 def test_print_bypass_banner_writes_warning() -> None:
     buffer = io.StringIO()
     console = Console(file=buffer, force_terminal=False, color_system=None, width=120)
@@ -844,12 +956,18 @@ async def test_fast_response_not_affected_by_timeout(
 
 
 async def test_real_timeout_via_wait_for() -> None:
-    # End-to-end: _pick_choice_interactive wraps pt.Application.run_async
-    # with asyncio.wait_for(timeout=...). Stub run_async with a coroutine
-    # that sleeps longer than the timeout; confirm TimeoutError bubbles.
+    # End-to-end: _pick_choice_interactive (via the dispatched widget)
+    # wraps pt.Application.run_async with asyncio.wait_for(timeout=...).
+    # Stub run_async with a coroutine that sleeps longer than the
+    # timeout; confirm TimeoutError bubbles.
+    #
+    # Application now lives in ``aura.cli.permission_generic`` (where
+    # the shared pt driver lives); patch the symbol there. Use a
+    # non-specialized tool so the generic widget path runs.
     import asyncio
 
     from aura.cli import permission as permission_module
+    from aura.cli import permission_generic
 
     class _FakeApp:
         is_running = True
@@ -871,11 +989,18 @@ async def test_real_timeout_via_wait_for() -> None:
 
     import pytest as _pytest
 
+    generic_tool = build_tool(
+        name="grep",
+        description="search",
+        args_schema=_P,
+        func=_noop,
+        is_read_only=True,
+    )
     with _pytest.MonkeyPatch.context() as mp:
-        mp.setattr(permission_module, "Application", _FakeApplicationCls)
+        mp.setattr(permission_generic, "Application", _FakeApplicationCls)
         with _pytest.raises(asyncio.TimeoutError):
             await permission_module._pick_choice_interactive(
-                tool=_bash_like(),
+                tool=generic_tool,
                 preview="ls",
                 tag="safe",
                 option_two_label="always",

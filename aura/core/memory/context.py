@@ -245,10 +245,26 @@ class Context:
         # BEFORE history so the invoked body influences the model on the
         # turn following invocation. <skills-available> is rendered once
         # (the full catalogue), then one <skill-invoked> per distinct skill.
-        if self._skills_available:
-            available_lines = [
-                f"- {s.name}: {s.description}" for s in self._skills_available
-            ]
+        #
+        # Filter: hide ``disable_model_invocation`` skills (user-only, not
+        # the LLM's to auto-pick) and conditional skills still in the lazy
+        # bucket (they enter the list only after
+        # ``activate_conditional_skills_for_paths`` moves them into the
+        # registry — which hands back a refreshed Skill list on the next
+        # Context rebuild). When present, ``when_to_use`` is appended as
+        # ``[when to use: ...]`` so the model gets explicit triggering
+        # guidance alongside the description.
+        visible_skills = [
+            s for s in self._skills_available
+            if not s.disable_model_invocation and not s.is_conditional()
+        ]
+        if visible_skills:
+            available_lines: list[str] = []
+            for s in visible_skills:
+                line = f"- {s.name}: {s.description}"
+                if s.when_to_use:
+                    line += f" [when to use: {s.when_to_use}]"
+                available_lines.append(line)
             messages.append(
                 HumanMessage(
                     "<skills-available>\n"

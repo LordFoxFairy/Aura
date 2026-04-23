@@ -1,6 +1,6 @@
 """Aura's thin wrapper around ``langchain-mcp-adapters`` BaseTool / prompt objects.
 
-Two public functions — no classes — because each one maps a plain library
+Three public functions — no classes — because each one maps a plain library
 object onto an Aura-native shape:
 
 - :func:`add_aura_metadata` mutates a :class:`BaseTool` returned by
@@ -15,6 +15,13 @@ object onto an Aura-native shape:
   :class:`Command` so it can be registered into :class:`CommandRegistry`
   alongside built-ins and skill commands. ``source="mcp"`` lets ``/help``
   group it separately.
+
+- :func:`normalize_resource_contents` converts MCP's
+  ``TextResourceContents`` / ``BlobResourceContents`` pydantic objects
+  into plain JSON-serialisable dicts. The ``mcp_read_resource`` tool
+  returns these through LangChain's tool-result channel (which stringifies
+  via ``json.dumps``); shipping the raw pydantic objects fails because
+  ``ResourceContents.uri`` is an ``AnyUrl`` with no default JSON encoder.
 """
 
 from __future__ import annotations
@@ -137,3 +144,60 @@ def make_mcp_command(
         description=prompt_description,
         client=client,
     )
+
+
+def normalize_resource_contents(contents: Any) -> dict[str, Any]:
+    """Flatten an MCP ``ResourceContents`` object into a JSON-safe dict.
+
+    MCP defines two concrete subclasses:
+
+    - ``TextResourceContents`` — has ``.text`` (str). We return it
+      verbatim as ``{"type": "text", "text": ..., "mime": ..., "uri": ...}``
+      so the LLM can read it directly.
+    - ``BlobResourceContents`` — has ``.blob`` (base64 str). We return
+      ``{"type": "blob", "mime": ..., "uri": ..., "size": <decoded
+      length>}``. Deliberately DOES NOT echo the base64 payload back to
+      the LLM: binary blobs are almost never useful for a text model and
+      can be multi-MB. A future release can add an opt-in flag for tools
+      that want the raw bytes (e.g. image understanding).
+
+    Shape for unknown content classes degrades to a ``{"type": "unknown",
+    "uri": ..., "mime": ..., "repr": ...}`` entry — still JSON-safe,
+    still lets the LLM see that *something* came back.
+    """
+    import base64
+
+    uri = getattr(contents, "uri", None)
+    mime = getattr(contents, "mimeType", None)
+    # Prefer text when available — it's the common case for MCP docs,
+    # config files, and DB snapshots.
+    text = getattr(contents, "text", None)
+    if isinstance(text, str):
+        return {
+            "type": "text",
+            "uri": None if uri is None else str(uri),
+            "mime": mime,
+            "text": text,
+        }
+    blob = getattr(contents, "blob", None)
+    if isinstance(blob, str):
+        # Compute the decoded byte size for context — helps the LLM decide
+        # whether to ask for a different representation. Base64 decoding
+        # failures fall back to the base64 string's length so we still
+        # surface *something*.
+        try:
+            size = len(base64.b64decode(blob, validate=False))
+        except (ValueError, TypeError):
+            size = len(blob)
+        return {
+            "type": "blob",
+            "uri": None if uri is None else str(uri),
+            "mime": mime,
+            "size": size,
+        }
+    return {
+        "type": "unknown",
+        "uri": None if uri is None else str(uri),
+        "mime": mime,
+        "repr": repr(contents),
+    }

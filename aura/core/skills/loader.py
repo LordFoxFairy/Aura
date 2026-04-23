@@ -220,10 +220,18 @@ def _install_or_drop(
     seen_source_paths.add(skill.source_path)
 
     # Conditional skills go into the lazy bucket unless already activated
-    # this session.
-    if skill.is_conditional() and skill.name not in _activated_conditional_names:
-        _conditional_skills[skill.name] = skill
-        return
+    # this session. Activated conditionals land in the registry, but we
+    # have to flip the ``activated`` flag on the Skill dataclass so
+    # render-time filters (Context.build) know the conditional trigger
+    # has already fired — otherwise ``is_conditional()`` stays True and
+    # the skill is hidden from <skills-available> forever.
+    if skill.is_conditional():
+        if skill.name in _activated_conditional_names:
+            from dataclasses import replace
+            skill = replace(skill, activated=True)
+        else:
+            _conditional_skills[skill.name] = skill
+            return
 
     # Name collision → first writer wins (user layer came first).
     if registry.get(skill.name) is not None:

@@ -39,6 +39,7 @@ Each does exactly one thing.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, runtime_checkable
@@ -268,9 +269,21 @@ def make_permission_hook(
     session: SessionRuleSet,
     rules: RuleSet = _EMPTY_RULESET,
     project_root: Path,
-    mode: Mode = DEFAULT_MODE,
+    mode: Mode | Callable[[], Mode] = DEFAULT_MODE,
     safety: SafetyPolicy = DEFAULT_SAFETY,
 ) -> PreToolHook:
+    # Bug fix (integration test finding): closing over ``mode`` by VALUE
+    # meant Agent.set_mode(...) mid-session (shift+tab, exit_plan_mode,
+    # enter_plan_mode) was ignored — the hook kept enforcing whatever
+    # mode was captured at CLI startup. Accept a Callable to support live
+    # reads; wrap literals so existing test call-sites stay unchanged.
+    if callable(mode):
+        _mode_provider: Callable[[], Mode] = mode
+    else:
+        _frozen_mode: Mode = mode
+        def _mode_provider() -> Mode:
+            return _frozen_mode
+
     async def _hook(
         *,
         tool: BaseTool,
@@ -285,7 +298,7 @@ def make_permission_hook(
             session=session,
             rules=rules,
             project_root=project_root,
-            mode=mode,
+            mode=_mode_provider(),
             safety=safety,
         )
         # Journal the decision. ``feedback`` is only ever non-empty when

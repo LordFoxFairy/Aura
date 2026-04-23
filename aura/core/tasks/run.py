@@ -30,15 +30,19 @@ async def run_task(
     record = store.get(task_id)
     if record is None:
         return
-    # ``record.agent_type`` is None only for shell-kind tasks (which don't
-    # run through this path) or for legacy records created before the
-    # agent_type field existed. Fall back to general-purpose so inherited
-    # behavior is identical to pre-registry dispatch.
-    agent = factory.spawn(
-        record.prompt,
-        agent_type=record.agent_type or "general-purpose",
-    )
+    # Bug fix (integration test): ``factory.spawn(...)`` USED to live
+    # outside the try/except, so if spawn itself raised (e.g. ValueError
+    # from ``agent_type="explore"`` requiring a tool the parent hadn't
+    # enabled), ``mark_failed`` was never called and the TaskRecord
+    # stayed permanently in ``running`` status. Move spawn into the try;
+    # guard ``agent.close()`` with a None-check so the except blocks
+    # don't trip over an unbound name when spawn itself failed.
+    agent = None
     try:
+        agent = factory.spawn(
+            record.prompt,
+            agent_type=record.agent_type or "general-purpose",
+        )
         final_text = ""
         async for event in agent.astream(record.prompt):
             if isinstance(event, ToolCallStarted):
@@ -53,7 +57,8 @@ async def run_task(
     except asyncio.CancelledError:
         store.mark_cancelled(task_id)
         journal.write("subagent_cancelled", task_id=task_id)
-        agent.close()
+        if agent is not None:
+            agent.close()
         raise
     except Exception as exc:  # noqa: BLE001
         store.mark_failed(task_id, f"{type(exc).__name__}: {exc}")
@@ -62,7 +67,9 @@ async def run_task(
             task_id=task_id,
             error=f"{type(exc).__name__}: {exc}",
         )
-        agent.close()
+        if agent is not None:
+            agent.close()
     else:
         journal.write("subagent_completed", task_id=task_id)
-        agent.close()
+        if agent is not None:
+            agent.close()

@@ -254,6 +254,10 @@ class Context:
         # Context rebuild). When present, ``when_to_use`` is appended as
         # ``[when to use: ...]`` so the model gets explicit triggering
         # guidance alongside the description.
+        # ``is_conditional()`` returns False once a conditional skill has
+        # been activated (loader flips ``activated=True`` on promotion),
+        # so after a matching path touch an activated skill renders here
+        # normally. Unactivated conditionals stay out.
         visible_skills = [
             s for s in self._skills_available
             if not s.disable_model_invocation and not s.is_conditional()

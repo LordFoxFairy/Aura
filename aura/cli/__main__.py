@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from rich.console import Console
 
     from aura.config.schema import AuraConfig
+    from aura.core.agent import Agent
     from aura.core.permissions.mode import Mode
     from aura.schemas.permissions import PermissionsConfig
 
@@ -229,6 +230,27 @@ def main() -> int:
         # on unattended / stale sessions — a hung prompt would otherwise
         # block the whole turn forever.
         asker = make_cli_asker(timeout=perm_cfg.prompt_timeout_sec)
+        # Forward-ref cell: the permission hook needs to read Agent's LIVE
+        # mode (Agent.set_mode is called mid-session by shift+tab /
+        # enter_plan_mode / exit_plan_mode). Closing over the startup
+        # ``mode`` value kept the hook enforcing the stale mode — integration
+        # tests surfaced this. The hook now takes a Callable; we fill the
+        # cell right after ``build_agent`` returns so every hook invocation
+        # reads ``agent.mode`` fresh.
+        _agent_cell: list[Agent | None] = [None]
+
+        def _live_mode() -> Mode:
+            # ``Agent.mode`` is typed ``str`` (enum would create a circular
+            # dep between Agent and permissions.mode); narrow here since
+            # every writer (set_mode validator + CLI resolve) guarantees a
+            # valid Mode literal. Cast is cheaper than threading a Literal
+            # through Agent's public surface.
+            from typing import cast
+            a = _agent_cell[0]
+            if a is None:
+                return mode
+            return cast("Mode", a.mode)
+
         hooks = HookChain(
             pre_tool=[
                 make_permission_hook(
@@ -236,7 +258,7 @@ def main() -> int:
                     session=session,
                     rules=ruleset,
                     project_root=project_root,
-                    mode=mode,
+                    mode=_live_mode,
                     safety=safety_policy,
                 ),
             ],
@@ -260,6 +282,7 @@ def main() -> int:
             # point).
             disable_bypass=perm_cfg.disable_bypass,
         )
+        _agent_cell[0] = agent
         journal.write("agent_built")
     except Exception as exc:  # noqa: BLE001
         return _fail_startup(console, exc)

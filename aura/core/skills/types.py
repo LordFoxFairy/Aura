@@ -79,6 +79,14 @@ class Skill:
     # user_invocable=True, this models the "user-only skill" case — a
     # workflow shortcut the user wants but the model shouldn't auto-invoke.
     disable_model_invocation: bool = False
+    # Flipped to True by ``activate_conditional_skills_for_paths`` when a
+    # conditional skill's paths match a touched file. Used by
+    # :meth:`is_conditional` so render-time filters distinguish "still
+    # waiting to be triggered" (filtered out) from "activated, now visible
+    # in <skills-available>" (rendered). Unconditional skills default to
+    # False and are unaffected (``is_conditional()`` short-circuits on
+    # empty ``paths``).
+    activated: bool = False
 
     def __post_init__(self) -> None:
         # Frozen dataclasses forbid regular attribute assignment; the
@@ -87,5 +95,11 @@ class Skill:
             object.__setattr__(self, "base_dir", self.source_path.parent)
 
     def is_conditional(self) -> bool:
-        """True iff this skill only activates when a matching file is touched."""
-        return len(self.paths) > 0
+        """True iff this skill is waiting on a conditional trigger.
+
+        ``paths`` empty → unconditional (always False).
+        ``paths`` non-empty + ``activated=False`` → conditional, lazy-waiting → True.
+        ``paths`` non-empty + ``activated=True`` → was conditional, now triggered,
+        behaves like unconditional → False.
+        """
+        return len(self.paths) > 0 and not self.activated

@@ -309,7 +309,8 @@ async def test_end_to_end_attachment_reaches_llm_as_humanmessage(
         ):
             pass
     finally:
-        agent.close()
+        # B3: live MCP manager inside async loop → must use aclose().
+        await agent.aclose()
 
     # The scripted LLM was invoked exactly once (one FakeTurn).
     assert len(model.captured_messages) == 1
@@ -363,7 +364,8 @@ async def test_end_to_end_unknown_mention_produces_no_envelope(
         async for _ in agent.astream(resolved_prompt, attachments=None):
             pass
     finally:
-        agent.close()
+        # B3: live MCP manager inside async loop → must use aclose().
+        await agent.aclose()
 
     sent = model.captured_messages[0]
     # No <mcp-resource> envelope was prepended; the prompt text is still

@@ -416,7 +416,8 @@ async def test_agent_aconnect_does_not_auto_register_resource_tool(
         assert agent.mcp_manager is not None
         assert ("s", "doc://a") in agent.mcp_manager._resources
     finally:
-        agent.close()
+        # B3: live MCP manager inside async loop → must use aclose().
+        await agent.aclose()
 
 
 def test_deprecated_tool_metadata_marks_flag() -> None:

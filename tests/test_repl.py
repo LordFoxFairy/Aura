@@ -647,7 +647,8 @@ async def test_mention_preprocessor_injects_attachment_into_turn(
         input_fn=_ScriptedInput(["pull @srv:mem://doc.md", "/exit"]),
         console=console,
     )
-    agent.close()
+    # B3: live MCP manager inside async loop → must use aclose().
+    await agent.aclose()
 
     assert captured, "model was never invoked"
     # Envelope injected BEFORE the user's HumanMessage.

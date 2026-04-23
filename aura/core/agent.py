@@ -753,17 +753,18 @@ class Agent:
                 error=f"{type(exc).__name__}: {exc}",
             )
 
-    async def shutdown(self) -> None:
-        """Fire ``post_session`` then tear down synchronously.
+    async def shutdown(self, *, mcp_timeout: float = 5.0) -> None:
+        """Fire ``post_session`` then tear down asynchronously.
 
-        Symmetric with :meth:`bootstrap`. The sync ``close()`` path
-        stays untouched (callers that can't await — legacy SDK — keep
-        working) and deliberately does NOT fire post_session: firing an
-        async hook from a sync context would either block the event
-        loop or schedule a best-effort task that never gets awaited.
-        Cleaner contract: async consumers call ``shutdown()``; sync
-        consumers call ``close()`` and miss the signal — no surprise
-        semantics either way.
+        Symmetric with :meth:`bootstrap`. The sync :meth:`close` path
+        stays available for legacy SDK callers that never opened a loop,
+        and deliberately does NOT fire post_session: firing an async
+        hook from a sync context would either block the event loop or
+        schedule a best-effort task that never gets awaited. Cleaner
+        contract: async consumers call ``shutdown()`` (which delegates
+        to :meth:`aclose`, preserving the timeout-bounded MCP teardown
+        from B3); sync consumers call :meth:`close` and miss the
+        post_session signal — no surprise semantics either way.
         """
         if self._hooks.post_session:
             try:
@@ -776,7 +777,11 @@ class Agent:
                     session=self._session_id,
                     error=f"{type(exc).__name__}: {exc}",
                 )
-        self.close()
+        # Must NOT call self.close() here — that's the sync entry point,
+        # which refuses to run inside an active event loop since B3 (no
+        # fire-and-forget). shutdown() is always invoked under a running
+        # loop (REPL context), so go directly through aclose.
+        await self.aclose(mcp_timeout=mcp_timeout)
 
     async def aconnect(self) -> None:
         """Establish MCP connections and register discovered tools / prompts.
@@ -831,12 +836,42 @@ class Agent:
             resource_count=len(catalogue),
         )
 
-    def close(self) -> None:
-        # Cancel any still-running subagent tasks first so they don't keep
-        # scribbling into a half-torn-down agent. ``cancel()`` is a request,
-        # not a join — we don't await here (close is sync), but the event
-        # loop will deliver the CancelledError next time the task is
-        # scheduled, at which point run_task flips the record to cancelled.
+    # ------------------------------------------------------------------
+    # Shutdown (B3): timeout-bounded, cancel-on-timeout MCP teardown.
+    # ------------------------------------------------------------------
+    #
+    # The pre-B3 ``close`` had two failure modes that cost us in dogfood:
+    #
+    # 1. **Fire-and-forget under an active loop.** If ``close`` was called
+    #    from inside a running event loop (notebook / Tauri backend /
+    #    ``asyncio.run(_entry())`` during teardown but before the loop
+    #    closed), it did ``loop.create_task(stop_all())`` and returned —
+    #    the task was then orphaned and a hanging MCP server kept its
+    #    subprocess alive past agent teardown.
+    # 2. **Swallow-all ``except Exception``** made every path look like a
+    #    success in journal; operators couldn't tell a clean shutdown
+    #    apart from a swallowed RuntimeError.
+    #
+    # New contract:
+    #   * :meth:`aclose` is the canonical async entry. ``stop_all`` runs
+    #     under :func:`asyncio.wait_for`; on timeout the coroutine is
+    #     cancelled, ``servers_hanging`` is computed from
+    #     ``manager.status()`` (whoever's still ``connected``), and a
+    #     ``mcp_close_timeout`` journal event fires. Unexpected errors
+    #     emit ``mcp_close_error``; the happy path emits ``mcp_stopped``.
+    #   * :meth:`close` is the sync SDK/CLI wrapper. No active loop →
+    #     ``asyncio.run(self.aclose(...))``. Active loop → :class:`RuntimeError`
+    #     so the caller is forced onto the async path. Fire-and-forget is
+    #     gone.
+    def _teardown_local_tasks(self) -> None:
+        """Cancel subagent tasks + kill lingering shell subprocesses.
+
+        Split out of ``close`` / ``aclose`` so both paths share the same
+        local-cleanup sequence. ``.cancel()`` is a request, not a join —
+        we don't await here; the event loop will deliver the
+        ``CancelledError`` next time each task is scheduled, at which
+        point run_task flips the record to cancelled.
+        """
         for task_id, task in list(self._running_tasks.items()):
             if not task.done():
                 task.cancel()
@@ -852,28 +887,116 @@ class Agent:
                 with contextlib.suppress(ProcessLookupError, Exception):
                     proc.kill()
             self._running_shells.pop(task_id, None)
-        # stop_all() is async; Agent.close() is sync (legacy SDK API).
-        # Run a small event loop if none is running; otherwise schedule +
-        # best-effort-detach. This mirrors the storage close path which is
-        # pure-sync.
-        if self._mcp_manager is not None:
-            import asyncio as _asyncio
 
+    def _connected_server_names(self) -> list[str]:
+        """Best-effort snapshot of servers still in ``connected`` state.
+
+        Used to populate ``servers_hanging`` on the timeout journal
+        event. ``status()`` is pure-sync and defensively written never to
+        raise — if a half-torn-down manager misbehaves we degrade to
+        ``[]`` rather than poisoning the shutdown path.
+        """
+        mgr = self._mcp_manager
+        if mgr is None:
+            return []
+        try:
+            entries = mgr.status()
+        except Exception:  # noqa: BLE001
+            return []
+        return [e.name for e in entries if getattr(e, "state", None) == "connected"]
+
+    async def aclose(self, *, mcp_timeout: float = 5.0) -> None:
+        """Async, timeout-bounded teardown (B3).
+
+        Contract:
+        - Cancels in-flight subagent tasks + kills lingering shell
+          subprocesses (same as the old sync ``close``).
+        - Runs ``MCPManager.stop_all`` under ``asyncio.wait_for``. On
+          timeout, the coroutine is cancelled and a ``mcp_close_timeout``
+          event fires with ``{session, elapsed_sec, timeout_sec,
+          servers_hanging}``.
+        - Unexpected exceptions during ``stop_all`` are captured into a
+          ``mcp_close_error`` event (shutdown is best-effort; a thrown
+          exception must not crash the caller).
+        - Normal completion emits ``mcp_stopped`` with ``elapsed_sec``.
+        - ``self._mcp_manager`` is set to ``None`` on every branch so a
+          subsequent ``aclose()`` / ``close()`` is an idempotent no-op.
+        - Finally, ``self._storage.close()`` to flush SQLite.
+        """
+        self._teardown_local_tasks()
+
+        if self._mcp_manager is not None:
+            mgr = self._mcp_manager
+            servers_hanging = self._connected_server_names()
+            loop = asyncio.get_running_loop()
+            t0 = loop.time()
             try:
-                loop = _asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            try:
-                if loop is None:
-                    _asyncio.run(self._mcp_manager.stop_all())
-                else:
-                    loop.create_task(self._mcp_manager.stop_all())
+                await asyncio.wait_for(mgr.stop_all(), timeout=mcp_timeout)
+            except TimeoutError:
+                elapsed = loop.time() - t0
+                journal.write(
+                    "mcp_close_timeout",
+                    session=self._session_id,
+                    elapsed_sec=elapsed,
+                    timeout_sec=mcp_timeout,
+                    servers_hanging=servers_hanging,
+                )
             except Exception as exc:  # noqa: BLE001
                 journal.write(
-                    "mcp_stop_all_failed",
+                    "mcp_close_error",
+                    session=self._session_id,
                     error=f"{type(exc).__name__}: {exc}",
                 )
-            self._mcp_manager = None
+            else:
+                journal.write(
+                    "mcp_stopped",
+                    session=self._session_id,
+                    elapsed_sec=loop.time() - t0,
+                )
+            finally:
+                self._mcp_manager = None
+
+        self._storage.close()
+
+    def close(self, *, mcp_timeout: float = 5.0) -> None:
+        """Sync teardown — thin wrapper around :meth:`aclose`.
+
+        Primary entry for no-loop callers (the CLI's outer ``finally``
+        after ``asyncio.run(_entry())`` has returned, legacy SDK users
+        who never opened a loop, sync unit tests). When called without a
+        running loop we spin one via ``asyncio.run(self.aclose(...))``.
+
+        Inside a running event loop there are two cases:
+
+        * **No MCP manager to tear down** (and no storage-hostile state) —
+          we do the pure-sync cleanup in-place (``_teardown_local_tasks``
+          + ``_storage.close()``). This keeps the historical contract for
+          async unit tests that build a bare Agent and call ``close()``.
+        * **MCP manager is live** — we refuse. The pre-B3 path was
+          ``loop.create_task(stop_all())`` fire-and-forget, which leaked
+          tasks and kept MCP subprocesses alive past exit. Async callers
+          must explicitly ``await agent.aclose(...)`` to get the
+          timeout-bounded shutdown contract.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No active loop — safe to run our own.
+            asyncio.run(self.aclose(mcp_timeout=mcp_timeout))
+            return
+        # Active loop. If nothing needs the async teardown, do the sync
+        # subset in-place — safe, matches pre-B3 behaviour for bare
+        # agents. If an MCP manager IS live, refuse: the caller must
+        # await aclose() to honour the timeout + cancel-on-timeout
+        # contract.
+        if self._mcp_manager is not None:
+            raise RuntimeError(
+                "Agent.close() called inside a running event loop with a "
+                "live MCP manager. Use `await agent.aclose(mcp_timeout=...)` "
+                "instead — the old fire-and-forget close path was removed "
+                "in v0.11 (B3)."
+            )
+        self._teardown_local_tasks()
         self._storage.close()
 
     async def __aenter__(self) -> Agent:
@@ -885,7 +1008,7 @@ class Agent:
         exc: BaseException | None,
         tb: object | None,
     ) -> None:
-        self.close()
+        await self.aclose()
 
 
 def build_agent(

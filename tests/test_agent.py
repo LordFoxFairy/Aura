@@ -1221,7 +1221,9 @@ async def test_agent_aconnect_registers_tools_into_registry(
     await agent.aconnect()
 
     assert "mcp__gh__search" in agent._registry
-    agent.close()
+    # B3: async context must use aclose() (sync close with live MCP
+    # manager inside a running loop raises — see test_mcp_close_timeout).
+    await agent.aclose()
 
 
 def test_agent_registers_task_tools_and_tasks_store(tmp_path: Path) -> None:

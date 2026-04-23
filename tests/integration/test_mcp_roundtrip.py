@@ -158,7 +158,8 @@ async def test_aconnect_exposes_manager_without_auto_registering_tool(
         # Tool is NOT auto-registered.
         assert "mcp_read_resource" not in agent._available_tools
     finally:
-        agent.close()
+        # B3: live MCP manager inside async loop → must use aclose().
+        await agent.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +193,8 @@ async def test_aconnect_empty_catalogue_still_exposes_manager(
         assert agent.mcp_manager.resources_catalogue() == []
         assert "mcp_read_resource" not in agent._available_tools
     finally:
-        agent.close()
+        # B3: live MCP manager inside async loop → must use aclose().
+        await agent.aclose()
 
 
 # ---------------------------------------------------------------------------

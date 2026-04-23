@@ -44,6 +44,60 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Disable permission prompts — every tool call allowed without asking. "
              "Dangerous; prefer per-rule allows in .aura/settings.json.",
     )
+
+    # Subcommands. ``subcommand=None`` (the default) keeps the existing
+    # "run REPL" behaviour — every global flag above still works when no
+    # subcommand is given. A subcommand short-circuits to its own handler
+    # before main() ever builds the agent.
+    subparsers = parser.add_subparsers(dest="subcommand")
+
+    mcp = subparsers.add_parser(
+        "mcp",
+        help="manage MCP servers (~/.aura/mcp_servers.json)",
+        description="Manage MCP (Model Context Protocol) server entries.",
+    )
+    mcp_sub = mcp.add_subparsers(dest="mcp_action")
+
+    mcp_add = mcp_sub.add_parser(
+        "add",
+        help="add an MCP server",
+        description=(
+            "Add an MCP server entry.\n\n"
+            "Examples:\n"
+            "  aura mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /tmp\n"
+            "  aura mcp add -e API_KEY=xxx my-server -- my-mcp-server\n"
+            "  aura mcp add --transport sse sentry -- https://mcp.sentry.dev/mcp\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    mcp_add.add_argument("name", help="server name (namespaces tools as mcp__<name>__<tool>)")
+    mcp_add.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable_http"],
+        default="stdio",
+        help="transport type (default: stdio)",
+    )
+    mcp_add.add_argument(
+        "--env", "-e",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="environment variable for stdio transport (repeatable)",
+    )
+    # NOTE: ``command_args`` is populated by ``_split_dashdash`` in main()
+    # BEFORE argparse parses the rest. We can't use ``argparse.REMAINDER``
+    # here because it gobbles greedily once the first positional (``name``)
+    # is consumed — meaning ``aura mcp add foo --transport stdio -- cmd``
+    # would stuff ``--transport stdio -- cmd`` into REMAINDER instead of
+    # letting ``--transport`` parse normally. We register the attribute
+    # with a default so downstream code can always read ``args.command_args``.
+    mcp_add.set_defaults(command_args=[])
+
+    mcp_sub.add_parser("list", help="list configured MCP servers")
+
+    mcp_remove = mcp_sub.add_parser("remove", help="remove an MCP server by name")
+    mcp_remove.add_argument("name", help="server name to remove")
+
     return parser
 
 
@@ -119,10 +173,43 @@ def _fail_startup(console: Console, exc: BaseException) -> int:
     return 2
 
 
+def _split_dashdash(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Split ``argv`` on the first literal ``--`` token.
+
+    ``claude mcp add <name> -- <command> [args...]`` uses ``--`` as a
+    shell-safe separator between flags and the pass-through command. We
+    honour that convention by peeling the trailing ``--`` + remainder off
+    before argparse sees the list — argparse's own ``--`` handling is
+    positional-only and doesn't play well with ``REMAINDER`` once there
+    are optional flags (``--transport``, ``--env``) mixed in.
+    """
+    try:
+        idx = argv.index("--")
+    except ValueError:
+        return argv, []
+    return argv[:idx], argv[idx + 1 :]
+
+
 def main() -> int:
     _force_utf8_streams()
     parser = _make_parser()
-    args = parser.parse_args()
+
+    raw_argv = sys.argv[1:]
+    pre, post = _split_dashdash(raw_argv)
+    args = parser.parse_args(pre)
+    # Attach the post-`--` tokens to the namespace so the mcp add handler
+    # sees them regardless of whether argparse registered ``command_args``.
+    if args.subcommand == "mcp" and getattr(args, "mcp_action", None) == "add":
+        args.command_args = post
+
+    # Subcommand fast-path: pure file ops, no agent / LLM / REPL. Claude-code
+    # parity — ``claude mcp add`` doesn't spin up the chat UI, and neither
+    # does ``aura mcp add``. Dispatch here returns an exit code directly so
+    # we never touch ``load_config`` or ``build_agent``.
+    if args.subcommand == "mcp":
+        from aura.cli.mcp_cli import handle_mcp
+
+        return handle_mcp(args)
 
     from pathlib import Path
 

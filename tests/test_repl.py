@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 
+import pytest
 from langchain_core.messages import AIMessage
 from rich.console import Console
 
@@ -561,6 +562,157 @@ async def test_escape_resets_mode_silently_no_scrollback_spam(
     out = buf.getvalue()
     assert "mode:" not in out
     agent.close()
+
+
+async def test_mention_preprocessor_injects_attachment_into_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The REPL's ``_run_turn`` calls ``extract_and_resolve_attachments``
+    # before handing the prompt to ``astream``. When the agent has a live
+    # MCP manager that knows the mentioned URI, the rendered
+    # ``<mcp-resource>`` envelope must reach the LLM's ``_agenerate``.
+    from langchain_core.messages import BaseMessage, HumanMessage
+
+    from aura.core import agent as agent_module
+
+    class _FakeMgr:
+        def __init__(self, configs: object) -> None:
+            # Minimal MCPManager-shaped object — only the surface used by
+            # the preprocessor + aconnect.
+            self._resources: dict[tuple[str, str], object] = {
+                ("srv", "mem://doc.md"): object(),
+            }
+
+        def resources_catalogue(
+            self,
+        ) -> list[tuple[str, str, str, str, str | None]]:
+            return [("srv", "mem://doc.md", "doc.md", "", None)]
+
+        async def read_resource(self, uri: str) -> dict[str, object]:
+            return {
+                "uri": uri,
+                "server": "srv",
+                "contents": [
+                    {"type": "text", "text": "INJECTED DOC", "uri": uri},
+                ],
+            }
+
+        async def start_all(self) -> tuple[list[object], list[object]]:
+            return [], []
+
+        async def stop_all(self) -> None:
+            return None
+
+    monkeypatch.setattr(agent_module, "MCPManager", _FakeMgr)
+
+    captured: list[list[BaseMessage]] = []
+
+    class _Capture(FakeChatModel):
+        async def _agenerate(  # type: ignore[override]
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: object | None = None,
+            **kwargs: object,
+        ) -> object:
+            captured.append(list(messages))
+            return await super()._agenerate(
+                messages, stop, run_manager, **kwargs,  # type: ignore[arg-type]
+            )
+
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+        "mcp_servers": [
+            {
+                "name": "srv",
+                "transport": "stdio",
+                "command": "echo",
+                "args": ["noop"],
+            },
+        ],
+    })
+    agent = Agent(
+        config=cfg,
+        model=_Capture(
+            turns=[FakeTurn(message=AIMessage(content="ok"))],  # type: ignore[call-arg]
+        ),
+        storage=SessionStorage(tmp_path / "db"),
+    )
+    await agent.aconnect()
+    console, buf = _capture_console()
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["pull @srv:mem://doc.md", "/exit"]),
+        console=console,
+    )
+    agent.close()
+
+    assert captured, "model was never invoked"
+    # Envelope injected BEFORE the user's HumanMessage.
+    sent = captured[0]
+    envelopes = [
+        m for m in sent
+        if isinstance(m, HumanMessage)
+        and isinstance(m.content, str)
+        and "<mcp-resource" in m.content
+    ]
+    assert len(envelopes) == 1
+    assert "INJECTED DOC" in str(envelopes[0].content)
+    # REPL surfaces a dim confirmation line for each attached resource.
+    assert "attached @srv:mem://doc.md" in buf.getvalue()
+
+
+async def test_prompt_without_mentions_skips_attachment_path(
+    tmp_path: Path,
+) -> None:
+    # A plain prompt MUST NOT trigger any MCP calls or inject envelopes,
+    # even when the agent has no manager wired (common path).
+    from langchain_core.messages import BaseMessage, HumanMessage
+
+    captured: list[list[BaseMessage]] = []
+
+    class _Capture(FakeChatModel):
+        async def _agenerate(  # type: ignore[override]
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: object | None = None,
+            **kwargs: object,
+        ) -> object:
+            captured.append(list(messages))
+            return await super()._agenerate(
+                messages, stop, run_manager, **kwargs,  # type: ignore[arg-type]
+            )
+
+    agent = Agent(
+        config=AuraConfig.model_validate({
+            "providers": [{"name": "openai", "protocol": "openai"}],
+            "router": {"default": "openai:gpt-4o-mini"},
+            "tools": {"enabled": []},
+        }),
+        model=_Capture(
+            turns=[FakeTurn(message=AIMessage(content="ok"))],  # type: ignore[call-arg]
+        ),
+        storage=SessionStorage(tmp_path / "db"),
+    )
+    console, _buf = _capture_console()
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["just a plain prompt", "/exit"]),
+        console=console,
+    )
+    agent.close()
+
+    assert captured
+    sent = captured[0]
+    assert not any(
+        isinstance(m, HumanMessage)
+        and isinstance(m.content, str)
+        and "<mcp-resource" in m.content
+        for m in sent
+    )
 
 
 async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:

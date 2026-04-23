@@ -10,7 +10,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
 from aura.config.schema import MCPServerConfig
-from aura.core.mcp.manager import MCPManager
+from aura.core.mcp.manager import MCPManager, MCPServerStatus
 
 
 class _P(BaseModel):
@@ -197,3 +197,264 @@ async def test_start_all_skips_disabled_servers(
     assert commands == []
     # Never asked the client about a disabled server.
     fake_client.get_tools.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# In-REPL control surface — /mcp enable / disable / reconnect / status
+# ---------------------------------------------------------------------------
+
+
+def _patch_manager_internals(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    tools_by_server: dict[str, list[StructuredTool]] | None = None,
+    errors_by_server: dict[str, Exception] | None = None,
+) -> MagicMock:
+    """Wire up a fake MultiServerMCPClient that returns per-server data.
+
+    Returns the fake-client MagicMock so individual tests can inspect
+    call counts. Both ``_list_prompts`` and ``_list_resources`` are
+    stubbed to empty lists — we only exercise tool discovery here.
+    """
+    tools_by_server = tools_by_server or {}
+    errors_by_server = errors_by_server or {}
+
+    fake_client = MagicMock()
+    # ``.connections`` is a real dict — ``enable``/``disable`` mutate it.
+    fake_client.connections = {}
+
+    async def _get_tools(*, server_name: str) -> list[StructuredTool]:
+        if server_name in errors_by_server:
+            raise errors_by_server[server_name]
+        return list(tools_by_server.get(server_name, []))
+
+    fake_client.get_tools = AsyncMock(side_effect=_get_tools)
+
+    async def _fake_list_prompts(client: Any, server_name: str) -> list[Any]:
+        return []
+
+    async def _fake_list_resources(client: Any, server_name: str) -> list[Any]:
+        return []
+
+    from aura.core.mcp import manager as manager_mod
+
+    def _make_client(connections: dict[str, Any]) -> MagicMock:
+        # Library populates ``.connections`` from the ctor arg; mimic that
+        # so ``session(name)`` lookups behave like the real library would.
+        fake_client.connections = dict(connections)
+        return fake_client
+
+    monkeypatch.setattr(manager_mod, "MultiServerMCPClient", _make_client)
+    monkeypatch.setattr(
+        MCPManager, "_list_prompts", staticmethod(_fake_list_prompts),
+    )
+    monkeypatch.setattr(
+        MCPManager, "_list_resources", staticmethod(_fake_list_resources),
+    )
+    return fake_client
+
+
+def test_status_before_start_all_is_never_started() -> None:
+    """Sanity: no connect attempt yet → every known server is never_started."""
+    mgr = MCPManager([
+        MCPServerConfig(name="a", command="npx", args=[]),
+        MCPServerConfig(name="b", command="npx", args=[]),
+    ])
+    rows = mgr.status()
+    assert [r.name for r in rows] == ["a", "b"]
+    assert all(r.state == "never_started" for r in rows)
+    assert all(r.error_message is None for r in rows)
+    assert all(r.tool_count == 0 for r in rows)
+
+
+def test_status_includes_disabled_by_config() -> None:
+    """enabled=False at construction → disabled state in status()."""
+    mgr = MCPManager([
+        MCPServerConfig(name="on", command="npx", args=[]),
+        MCPServerConfig(name="off", command="npx", args=[], enabled=False),
+    ])
+    rows = {r.name: r for r in mgr.status()}
+    assert rows["on"].state == "never_started"
+    assert rows["off"].state == "disabled"
+
+
+def test_status_never_raises_with_no_servers() -> None:
+    # A zero-config manager must still return a (possibly empty) list —
+    # the /mcp list view renders this as the "no MCP servers" placeholder.
+    mgr = MCPManager([])
+    assert mgr.status() == []
+
+
+def test_known_server_names_returns_all_configured() -> None:
+    mgr = MCPManager([
+        MCPServerConfig(name="alpha", command="npx", args=[]),
+        MCPServerConfig(name="beta", command="npx", args=[], enabled=False),
+    ])
+    # Preserves config order (disabled included).
+    assert mgr.known_server_names() == ["alpha", "beta"]
+
+
+@pytest.mark.asyncio
+async def test_status_after_start_all_reflects_connected_and_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_manager_internals(
+        monkeypatch,
+        tools_by_server={"good": [_fake_tool("t1"), _fake_tool("t2")]},
+        errors_by_server={"bad": RuntimeError("boom")},
+    )
+    mgr = MCPManager([
+        MCPServerConfig(name="good", command="npx", args=[]),
+        MCPServerConfig(name="bad", command="npx", args=[]),
+    ])
+    await mgr.start_all()
+    rows = {r.name: r for r in mgr.status()}
+    assert rows["good"].state == "connected"
+    assert rows["good"].tool_count == 2
+    assert rows["bad"].state == "error"
+    assert rows["bad"].error_message is not None
+    assert "boom" in rows["bad"].error_message
+
+
+@pytest.mark.asyncio
+async def test_disable_flips_status_to_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_manager_internals(
+        monkeypatch,
+        tools_by_server={"srv": [_fake_tool("only")]},
+    )
+    mgr = MCPManager([MCPServerConfig(name="srv", command="npx", args=[])])
+    await mgr.start_all()
+    assert next(r for r in mgr.status() if r.name == "srv").state == "connected"
+
+    result = await mgr.disable("srv")
+    assert "disabled" in result
+    row = next(r for r in mgr.status() if r.name == "srv")
+    assert row.state == "disabled"
+    assert row.tool_count == 0
+    assert row.error_message is None
+
+
+@pytest.mark.asyncio
+async def test_disable_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_manager_internals(monkeypatch)
+    mgr = MCPManager([MCPServerConfig(name="srv", command="npx", args=[])])
+    # No start_all; immediately disable — state was never_started.
+    first = await mgr.disable("srv")
+    assert "disabled" in first
+    # Second disable must not raise and must state already-disabled.
+    second = await mgr.disable("srv")
+    assert "already disabled" in second
+
+
+@pytest.mark.asyncio
+async def test_disable_unknown_name_returns_error_text() -> None:
+    # No start_all, no subprocess path touched — manager built from empty
+    # configs, unknown-name disable returns a textual error.
+    mgr = MCPManager([MCPServerConfig(name="known", command="npx", args=[])])
+    text = await mgr.disable("nonexistent")
+    assert "no MCP server named" in text
+    assert "nonexistent" in text
+    assert "known" in text  # known-names hint
+
+
+@pytest.mark.asyncio
+async def test_enable_unknown_name_returns_error_text() -> None:
+    mgr = MCPManager([MCPServerConfig(name="known", command="npx", args=[])])
+    text = await mgr.enable("nonexistent")
+    assert "no MCP server named" in text
+    assert "nonexistent" in text
+
+
+@pytest.mark.asyncio
+async def test_reconnect_unknown_name_returns_error_text() -> None:
+    mgr = MCPManager([MCPServerConfig(name="known", command="npx", args=[])])
+    text = await mgr.reconnect("nonexistent")
+    assert "no MCP server named" in text
+
+
+@pytest.mark.asyncio
+async def test_enable_after_disable_reconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_manager_internals(
+        monkeypatch,
+        tools_by_server={"srv": [_fake_tool("x")]},
+    )
+    mgr = MCPManager([MCPServerConfig(name="srv", command="npx", args=[])])
+    await mgr.start_all()
+    await mgr.disable("srv")
+    row = next(r for r in mgr.status() if r.name == "srv")
+    assert row.state == "disabled"
+
+    text = await mgr.enable("srv")
+    assert "connected" in text
+    row = next(r for r in mgr.status() if r.name == "srv")
+    assert row.state == "connected"
+    assert row.tool_count == 1
+
+
+@pytest.mark.asyncio
+async def test_enable_already_connected_is_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_manager_internals(
+        monkeypatch,
+        tools_by_server={"srv": [_fake_tool("x")]},
+    )
+    mgr = MCPManager([MCPServerConfig(name="srv", command="npx", args=[])])
+    await mgr.start_all()
+    text = await mgr.enable("srv")
+    assert "already connected" in text
+
+
+@pytest.mark.asyncio
+async def test_reconnect_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Running reconnect twice in a row must not crash / must succeed both."""
+    _patch_manager_internals(
+        monkeypatch,
+        tools_by_server={"srv": [_fake_tool("x")]},
+    )
+    mgr = MCPManager([MCPServerConfig(name="srv", command="npx", args=[])])
+    await mgr.start_all()
+    first = await mgr.reconnect("srv")
+    second = await mgr.reconnect("srv")
+    assert "reconnected" in first
+    assert "reconnected" in second
+    row = next(r for r in mgr.status() if r.name == "srv")
+    assert row.state == "connected"
+
+
+@pytest.mark.asyncio
+async def test_reconnect_surfaces_error_on_failed_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reconnect that fails must return an error string AND set error state."""
+    _patch_manager_internals(
+        monkeypatch,
+        errors_by_server={"srv": RuntimeError("broken pipe")},
+    )
+    mgr = MCPManager([MCPServerConfig(name="srv", command="npx", args=[])])
+    text = await mgr.reconnect("srv")
+    assert "failed to reconnect" in text
+    assert "broken pipe" in text
+    row = next(r for r in mgr.status() if r.name == "srv")
+    assert row.state == "error"
+    assert row.error_message is not None
+
+
+def test_mcp_server_status_is_frozen_dataclass() -> None:
+    """``MCPServerStatus`` should be immutable so callers can't mutate state."""
+    import dataclasses as _dc
+
+    s = MCPServerStatus(
+        name="x", transport="stdio", state="connected",
+        error_message=None, tool_count=0, resource_count=0, prompt_count=0,
+    )
+    with pytest.raises(_dc.FrozenInstanceError):
+        s.tool_count = 5  # type: ignore[misc]

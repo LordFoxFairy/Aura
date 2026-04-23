@@ -1,19 +1,23 @@
-"""Integration: MCP discovery → mcp_read_resource tool → LLM calls it.
+"""Integration: MCP manager discovery + resource reachability via the
+``Agent.mcp_manager`` accessor.
 
-Unit tests cover :class:`MCPManager` against a fake adapter, and
-:class:`MCPReadResourceTool` against a synthetic catalogue. This tier
-drives the whole pipeline through a real :class:`Agent`:
+The v0.10.x architecture exposes MCP resources via the CLI-layer
+``@server:uri`` attachment preprocessor (see :mod:`aura.cli.attachments`
+and :file:`tests/integration/test_mcp_attachments.py`). The old LLM-tool
+auto-registration (``mcp_read_resource``) was deprecated at the same
+time — the tool class is still importable for programmatic SDK users
+but is no longer wired into the default Agent.
 
-1. A stub ``MCPManager`` (monkeypatched into ``aura.core.agent``) reports
-   2 resources at ``aconnect`` time.
-2. The agent registers ``mcp_read_resource`` into the tool registry with
-   the catalogue baked into its description.
-3. The scripted LLM issues a ``mcp_read_resource(uri=...)`` call; the
-   tool routes through the stub manager's ``read_resource`` and returns
-   the contents.
-4. Confirms the "no resources" path is clean — the tool is NOT
-   registered when the catalogue is empty (matches the "no empty
-   schemas" discipline).
+This file covers what the integration tier still needs to assert at the
+manager-→-Agent boundary:
+
+1. ``aconnect`` exposes the live :class:`MCPManager` on
+   :attr:`Agent.mcp_manager` (the attachment preprocessor relies on this).
+2. ``aconnect`` no longer auto-registers ``mcp_read_resource`` regardless
+   of whether the catalogue has entries (parity with claude-code).
+3. Programmatic SDK users can still import + instantiate
+   :class:`MCPReadResourceTool` and have it round-trip a URI through the
+   manager (the opt-in path still works).
 """
 
 from __future__ import annotations
@@ -22,12 +26,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage
 
 from aura.core import agent as agent_module
-from aura.schemas.events import ToolCallCompleted
-from tests.conftest import FakeChatModel, FakeTurn
-from tests.integration.conftest import build_integration_agent, drain
+from tests.conftest import FakeChatModel
+from tests.integration.conftest import build_integration_agent
 
 # ---------------------------------------------------------------------------
 # FakeMCPManager — drops in where aura.core.agent.MCPManager would go.
@@ -118,15 +120,18 @@ def _cfg_with_one_server() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Test 1 — 2 resources → mcp_read_resource is registered with catalogue
+# Test 1 — aconnect exposes the manager and does NOT register the tool
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_aconnect_with_two_resources_registers_tool(
+async def test_aconnect_exposes_manager_without_auto_registering_tool(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Catalogue has entries — prior versions would auto-register
+    # ``mcp_read_resource`` here. v0.10.x replaces that with the CLI
+    # @mention preprocessor, so the tool must NOT appear.
     resources = {
         "mem://a": "contents-of-a",
         "mem://b": "contents-of-b",
@@ -134,8 +139,6 @@ async def test_aconnect_with_two_resources_registers_tool(
     fake_cls = _make_manager_factory(resources)
     monkeypatch.setattr(agent_module, "MCPManager", fake_cls)
 
-    # Agent must have mcp_servers configured; AuraConfig demands it exist.
-    # We build manually so we can pass mcp_servers in.
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
     from aura.core.persistence.storage import SessionStorage
@@ -148,82 +151,23 @@ async def test_aconnect_with_two_resources_registers_tool(
     )
     try:
         await agent.aconnect()
-        # Tool registered.
-        assert "mcp_read_resource" in agent._available_tools
-        tool = agent._available_tools["mcp_read_resource"]
-        # Description carries both catalogued URIs.
-        assert "mem://a" in tool.description
-        assert "mem://b" in tool.description
+        # Manager is on the accessor the @mention preprocessor uses.
+        assert agent.mcp_manager is not None
+        catalogue = agent.mcp_manager.resources_catalogue()
+        assert {uri for _, uri, *_ in catalogue} == {"mem://a", "mem://b"}
+        # Tool is NOT auto-registered.
+        assert "mcp_read_resource" not in agent._available_tools
     finally:
         agent.close()
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — LLM calls mcp_read_resource → tool message carries content
+# Test 2 — empty catalogue: manager still exposed, tool still not registered
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_llm_reads_resource_via_tool(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    resources = {"mem://a": "contents-of-a", "mem://b": "contents-of-b"}
-    fake_cls = _make_manager_factory(resources)
-    monkeypatch.setattr(agent_module, "MCPManager", fake_cls)
-
-    turns = [
-        FakeTurn(
-            message=AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "id": "tc_1",
-                        "name": "mcp_read_resource",
-                        "args": {"uri": "mem://a"},
-                    }
-                ],
-            )
-        ),
-        FakeTurn(message=AIMessage(content="read it")),
-    ]
-
-    from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
-    from aura.core.persistence.storage import SessionStorage
-
-    cfg = AuraConfig.model_validate(_cfg_with_one_server())
-    agent = Agent(
-        config=cfg,
-        model=FakeChatModel(turns=turns),
-        storage=SessionStorage(tmp_path / "aura.db"),
-    )
-    try:
-        await agent.aconnect()
-        events = await drain(agent, "read A")
-    finally:
-        agent.close()
-
-    completed = [e for e in events if isinstance(e, ToolCallCompleted)]
-    assert len(completed) == 1
-    assert completed[0].name == "mcp_read_resource"
-    assert completed[0].error is None
-    output = completed[0].output
-    # Shape: {"uri":"mem://a","server":"fake","contents":[{"text":"contents-of-a", ...}]}
-    assert isinstance(output, dict)
-    assert output["uri"] == "mem://a"
-    assert any(
-        "contents-of-a" in str(c.get("text", "")) for c in output["contents"]
-    )
-
-
-# ---------------------------------------------------------------------------
-# Test 3 — zero resources → mcp_read_resource NOT registered
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_empty_catalogue_does_not_register_tool(
+async def test_aconnect_empty_catalogue_still_exposes_manager(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -242,11 +186,47 @@ async def test_empty_catalogue_does_not_register_tool(
     )
     try:
         await agent.aconnect()
-        # With zero resources, mcp_read_resource must NOT be registered —
-        # matches the "empty catalogue, skip tool" discipline.
+        # Manager is still there (needed by the @mention preprocessor
+        # even though its catalogue is empty).
+        assert agent.mcp_manager is not None
+        assert agent.mcp_manager.resources_catalogue() == []
         assert "mcp_read_resource" not in agent._available_tools
     finally:
         agent.close()
+
+
+# ---------------------------------------------------------------------------
+# Test 3 — programmatic SDK use: the deprecated tool still works when wired
+# explicitly by a caller that wants LLM-driven resource reads.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deprecated_tool_still_works_for_programmatic_sdk_users() -> None:
+    # The class is deprecated (not auto-registered) but remains importable
+    # + invocable. This guard prevents accidentally deleting it during
+    # later cleanups — SDK users who opted into the LLM-driven surface
+    # should not silently lose it.
+    from aura.tools.mcp_read_resource import MCPReadResourceTool, build_description
+
+    async def reader(uri: str) -> dict[str, Any]:
+        return {
+            "uri": uri,
+            "server": "fake",
+            "contents": [{"type": "text", "text": f"body-of-{uri}", "uri": uri}],
+        }
+
+    tool = MCPReadResourceTool(
+        resource_reader=reader,
+        description=build_description(
+            [("fake", "mem://doc", "doc", "", None)],
+        ),
+    )
+    # Deprecation marker is on metadata, but the tool still functions.
+    assert tool.metadata and tool.metadata.get("deprecated") is True
+    out = await tool.ainvoke({"uri": "mem://doc"})
+    assert out["uri"] == "mem://doc"
+    assert out["contents"][0]["text"] == "body-of-mem://doc"
 
 
 # ---------------------------------------------------------------------------

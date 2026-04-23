@@ -362,19 +362,26 @@ async def test_tool_invocation_unknown_uri_raises_tool_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Agent wiring — tool appears iff resources exist
+# Agent wiring
 # ---------------------------------------------------------------------------
+#
+# ``MCPReadResourceTool`` is NOT auto-registered as of v0.10.x — resources
+# flow through the CLI-layer ``@server:uri`` attachment preprocessor
+# (see :mod:`aura.cli.attachments`). ``aconnect`` exposes the manager on
+# :attr:`Agent.mcp_manager` but does not touch ``available_tools`` for the
+# resource surface anymore. The tool class remains importable for
+# programmatic SDK users who want LLM-driven reads (tested above via
+# ``test_tool_invocation_*``).
 
 
 @pytest.mark.asyncio
-async def test_agent_aconnect_registers_tool_when_resources_exist(
+async def test_agent_aconnect_does_not_auto_register_resource_tool(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
 ) -> None:
     from aura.config.schema import AuraConfig, StorageConfig
     from aura.core.agent import Agent
     from aura.core.persistence.storage import SessionStorage
 
-    # Minimal Agent: no model needed for aconnect (we don't run a turn).
     cfg = AuraConfig(
         router={"default": "openai:gpt-4o-mini"},
         mcp_servers=[MCPServerConfig(name="s", command="npx", args=[])],
@@ -384,18 +391,14 @@ async def test_agent_aconnect_registers_tool_when_resources_exist(
     storage = SessionStorage(cfg.resolved_storage_path())
 
     async def _fake_start_all(self: Any) -> tuple[list[Any], list[Any]]:
-        # Simulate a manager that discovered 1 resource.
+        # Simulate a manager that discovered 1 resource — but the tool
+        # still must NOT auto-register; the @mention preprocessor owns the
+        # resource surface now.
         self._resources[("s", "doc://a")] = _fake_resource("doc://a", name="a")
         return [], []
 
     monkeypatch.setattr(MCPManager, "start_all", _fake_start_all)
 
-    # Reader closure — returns a dummy JSON-safe shape.
-    async def _fake_read_resource(self: Any, uri: str) -> dict[str, Any]:
-        return {"uri": uri, "server": "s", "contents": []}
-
-    monkeypatch.setattr(MCPManager, "read_resource", _fake_read_resource)
-
     fake_model = MagicMock()
     fake_model.bind_tools = MagicMock(return_value=fake_model)
 
@@ -406,44 +409,25 @@ async def test_agent_aconnect_registers_tool_when_resources_exist(
     )
     try:
         await agent.aconnect()
-        assert "mcp_read_resource" in agent._available_tools
-        tool = agent._available_tools["mcp_read_resource"]
-        assert "doc://a" in tool.description
-    finally:
-        agent.close()
-
-
-@pytest.mark.asyncio
-async def test_agent_aconnect_skips_tool_when_no_resources(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
-) -> None:
-    from aura.config.schema import AuraConfig, StorageConfig
-    from aura.core.agent import Agent
-    from aura.core.persistence.storage import SessionStorage
-
-    cfg = AuraConfig(
-        router={"default": "openai:gpt-4o-mini"},
-        mcp_servers=[MCPServerConfig(name="s", command="npx", args=[])],
-        storage=StorageConfig(path=str(tmp_path / "sessions.db")),
-    )
-    storage = SessionStorage(cfg.resolved_storage_path())
-
-    async def _fake_start_all(self: Any) -> tuple[list[Any], list[Any]]:
-        # No resources discovered.
-        return [], []
-
-    monkeypatch.setattr(MCPManager, "start_all", _fake_start_all)
-
-    fake_model = MagicMock()
-    fake_model.bind_tools = MagicMock(return_value=fake_model)
-
-    agent = Agent(
-        config=cfg,
-        model=fake_model,
-        storage=storage,
-    )
-    try:
-        await agent.aconnect()
+        # Tool stays OUT of the registry / available map — the @mention
+        # preprocessor is the supported surface as of v0.10.x.
         assert "mcp_read_resource" not in agent._available_tools
+        # Manager is still reachable for the preprocessor to query.
+        assert agent.mcp_manager is not None
+        assert ("s", "doc://a") in agent.mcp_manager._resources
     finally:
         agent.close()
+
+
+def test_deprecated_tool_metadata_marks_flag() -> None:
+    # Defensive: SDK filters (e.g. `show me only non-deprecated tools`)
+    # should be able to check this flag without reaching into the tool's
+    # module-private constants.
+    async def _noop_reader(uri: str) -> dict[str, Any]:
+        return {"uri": uri, "server": "x", "contents": []}
+
+    tool = MCPReadResourceTool(resource_reader=_noop_reader)
+    assert tool.metadata is not None
+    assert tool.metadata.get("deprecated") is True
+    assert tool.metadata.get("deprecated_since") == "0.10.0"
+    assert "@server:uri" in (tool.metadata.get("deprecated_replacement") or "")

@@ -87,6 +87,15 @@ class _MCPPromptCommand:
     with SkillCommand's surface (``handled=True, kind="print"``). A later
     release can route prompt bodies through Context if MCP prompts become
     multi-turn templates instead of one-shot messages.
+
+    When the underlying MCP prompt declares ``arguments`` (see
+    ``mcp.types.PromptArgument``), invocation-time positional tokens
+    (``/server__prompt alpha beta``) are parsed and forwarded as a named
+    ``arguments={}`` dict — matching claude-code's behaviour in
+    ``src/services/mcp/client.ts`` (``zipObject(argNames, argsArray)``
+    around lines 2055 / 2077). Missing *required* args produce a
+    user-visible error instead of silently sending ``None``; extra
+    positionals are dropped silently (parity with lodash ``zipObject``).
     """
 
     source: CommandSource = "mcp"
@@ -98,18 +107,82 @@ class _MCPPromptCommand:
         prompt_name: str,
         description: str,
         client: MultiServerMCPClient,
+        arg_names: tuple[str, ...] = (),
+        required_args: frozenset[str] = frozenset(),
     ) -> None:
         self._server = server_name
         self._prompt = prompt_name
         self._client = client
         self.name = f"/{server_name}__{prompt_name}"
         self.description = description
+        # Argument schema captured at registration time (see
+        # ``make_mcp_command``). Preserved as an ordered tuple so positional
+        # tokens at invocation zip deterministically against the names.
+        self.arg_names: tuple[str, ...] = arg_names
+        self.required_args: frozenset[str] = required_args
+
+    def _build_arguments(
+        self, arg: str
+    ) -> tuple[dict[str, str] | None, str | None]:
+        """Parse the invocation tail into an ``arguments`` dict.
+
+        Returns ``(arguments_dict, None)`` on success or
+        ``(None, error_text)`` when required args are missing. Extra
+        positionals beyond ``arg_names`` are dropped silently — lodash
+        ``zipObject`` behaviour (claude-code parity). Tokens split on
+        whitespace like ``str.split()`` (claude-code uses ``args.split(' ')``
+        but whitespace split is strictly more forgiving for tab / multi-
+        space input and doesn't change correct-case behaviour).
+        """
+        tokens = arg.split() if arg else []
+        # Pair each declared argument name with its positional token. Names
+        # beyond the provided tokens are considered "unprovided"; required
+        # ones then flag the missing-arg error.
+        provided: dict[str, str] = {}
+        for i, name in enumerate(self.arg_names):
+            if i < len(tokens):
+                provided[name] = tokens[i]
+        missing = [n for n in self.arg_names if n in self.required_args and n not in provided]
+        if missing:
+            return None, (
+                f"mcp prompt {self._server}:{self._prompt} "
+                f"missing required argument(s): {', '.join(missing)}"
+            )
+        return provided, None
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         from aura.core import journal
 
+        arguments, error = self._build_arguments(arg)
+        if arguments is None:
+            # Required-arg validation failure: surface to the user and
+            # journal it — no network call happens. Matches claude-code's
+            # "surface an actionable error" shape for CLI prompt
+            # commands. ``error`` is guaranteed non-None whenever
+            # ``arguments`` is None (see ``_build_arguments`` contract).
+            assert error is not None
+            journal.write(
+                "mcp_prompt_missing_args",
+                server=self._server,
+                prompt=self._prompt,
+                arg_names=list(self.arg_names),
+                required=sorted(self.required_args),
+            )
+            return CommandResult(handled=True, kind="print", text=error)
+
         try:
-            messages = await self._client.get_prompt(self._server, self._prompt)
+            # The ``arguments`` kwarg exists on
+            # ``MultiServerMCPClient.get_prompt`` (see the library's
+            # ``client.py``: signature is
+            # ``get_prompt(server_name, prompt_name, *, arguments=None)``).
+            # Passing an empty dict is equivalent to ``None`` for
+            # zero-arg prompts, so we always forward it for a single
+            # code path.
+            messages = await self._client.get_prompt(
+                self._server,
+                self._prompt,
+                arguments=arguments,
+            )
         except Exception as exc:  # noqa: BLE001
             # Server may have died between startup discovery and now. Surface
             # a user-visible failure + journal the reason rather than throw.
@@ -126,7 +199,12 @@ class _MCPPromptCommand:
             )
 
         text = "\n".join(str(m.content) for m in messages)
-        journal.write("mcp_prompt_invoked", server=self._server, prompt=self._prompt)
+        journal.write(
+            "mcp_prompt_invoked",
+            server=self._server,
+            prompt=self._prompt,
+            arg_count=len(arguments),
+        )
         return CommandResult(handled=True, kind="print", text=text)
 
 
@@ -136,13 +214,43 @@ def make_mcp_command(
     prompt_name: str,
     prompt_description: str,
     client: MultiServerMCPClient,
+    prompt_arguments: list[Any] | None = None,
 ) -> _MCPPromptCommand:
-    """Build a :class:`Command` that fetches and renders an MCP prompt."""
+    """Build a :class:`Command` that fetches and renders an MCP prompt.
+
+    ``prompt_arguments`` is the raw list from ``mcp.types.Prompt.arguments``
+    — each element is expected to expose ``.name: str`` and
+    ``.required: bool | None`` (the MCP pydantic ``PromptArgument`` shape).
+    When supplied, positional tokens passed to the slash command at
+    invocation are forwarded to ``client.get_prompt(..., arguments=...)``.
+    Defaults to ``None`` for backward compatibility: existing call sites
+    that haven't wired the arg schema through continue to work — the prompt
+    will still fetch, it just won't carry user-provided arguments.
+    """
+    arg_names: tuple[str, ...] = ()
+    required_args: frozenset[str] = frozenset()
+    if prompt_arguments:
+        names: list[str] = []
+        required: set[str] = set()
+        for pa in prompt_arguments:
+            name = getattr(pa, "name", None)
+            if not isinstance(name, str) or not name:
+                # Defensive: MCP spec requires a name but servers are
+                # free to misbehave. Skipping nameless entries keeps the
+                # positional index well-defined.
+                continue
+            names.append(name)
+            if getattr(pa, "required", False) is True:
+                required.add(name)
+        arg_names = tuple(names)
+        required_args = frozenset(required)
     return _MCPPromptCommand(
         server_name=server_name,
         prompt_name=prompt_name,
         description=prompt_description,
         client=client,
+        arg_names=arg_names,
+        required_args=required_args,
     )
 
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 
 from aura.config.schema import AuraConfig, AuraConfigError
@@ -316,11 +317,23 @@ class Agent:
         # 4 is the standard rough approximation.
         self._pinned_tokens_estimate = self._estimate_pinned_tokens()
 
-    async def astream(self, prompt: str) -> AsyncIterator[AgentEvent]:
+    async def astream(
+        self,
+        prompt: str,
+        *,
+        attachments: list[HumanMessage] | None = None,
+    ) -> AsyncIterator[AgentEvent]:
         # 事务性：history 只在 turn 正常完成才 save（else 分支）。
         #   CancelledError → yield Final + re-raise → 跳过 else → 下次从 pre-turn 状态恢复
         # max_turns 由 AgentLoop 直接 yield Final(reason="max_turns") 表示，走正常 save 路径。
         # 保证：存储里永远不会出现半截 turn（AI tool_call 缺对应 tool result 等）。
+        #
+        # ``attachments``: optional HumanMessages to prepend BEFORE the user's
+        # HumanMessage on the next turn. CLI-layer @mention preprocessing
+        # (aura.cli.attachments) builds ``<mcp-resource>`` envelopes here —
+        # injected at the loop layer so they land in history in the right
+        # order (attachments BEFORE user turn) and are persisted along with
+        # the rest of the turn. Pass ``None`` / empty list for a normal turn.
         #
         # The session_scope context routes every journal.write made on this
         # task — including ones emitted deep inside the loop / tools — to the
@@ -347,7 +360,11 @@ class Agent:
             # prompt already too long) surface instead of looping forever.
             retry_exc: BaseException | None = None
             try:
-                async for event in self._loop.run_turn(user_prompt=prompt, history=history):
+                async for event in self._loop.run_turn(
+                    user_prompt=prompt,
+                    history=history,
+                    attachments=attachments,
+                ):
                     yield event
             except asyncio.CancelledError:
                 journal.write("astream_cancelled", session=self._session_id)
@@ -368,9 +385,16 @@ class Agent:
             if retry_exc is not None:
                 await self.compact(source="reactive")
                 # compact replaced history with [summary, *recent_files, *tail];
-                # the retry must see the new messages.
+                # the retry must see the new messages. Attachments are
+                # intentionally NOT replayed on the retry — the first attempt
+                # already persisted them into history if it got that far, and
+                # replaying would double-inject. Safe because run_turn appends
+                # attachments before the user HumanMessage; if history carries
+                # the originals they already landed there.
                 history = self._storage.load(self._session_id)
-                async for event in self._loop.run_turn(user_prompt=prompt, history=history):
+                async for event in self._loop.run_turn(
+                    user_prompt=prompt, history=history,
+                ):
                     yield event
 
             self._storage.save(self._session_id, history)
@@ -473,6 +497,19 @@ class Agent:
     @property
     def state(self) -> LoopState:
         return self._state
+
+    @property
+    def mcp_manager(self) -> MCPManager | None:
+        """Live MCP manager, or ``None`` before/outside ``aconnect``.
+
+        Exposed for the CLI-layer ``@mention`` preprocessor (see
+        :mod:`aura.cli.attachments`), which needs read access to the
+        resources catalogue and ``read_resource`` without reaching into a
+        private attribute. Always ``None`` when no servers are configured
+        or when ``aconnect`` hasn't run yet — the caller short-circuits on
+        that case.
+        """
+        return self._mcp_manager
 
     @property
     def current_model(self) -> str:
@@ -641,30 +678,18 @@ class Agent:
                     error=str(exc),
                 )
         self._mcp_commands = list(commands)
-        # MCP resources → single ``mcp_read_resource`` tool. Only register
-        # when >=1 resource exists across all connected servers; same
-        # empty-catalogue → no-tool discipline as SkillTool. The tool's
-        # description carries the catalogue so the LLM sees the URIs
-        # inline with the function schema (no separate context block).
+        # MCP resources are exposed via the CLI-layer ``@server:uri`` mention
+        # preprocessor (see :mod:`aura.cli.attachments`), NOT as an LLM tool.
+        # Claude-code parity: the user attaches resources by naming them
+        # inline; the preprocessor resolves + injects the body before the
+        # turn hits the model. The prior ``mcp_read_resource`` auto-
+        # registration was removed in v0.10.x — it inverted the control
+        # direction (LLM had to invent URIs) and silently re-pulled
+        # resources turn after turn. :class:`aura.tools.mcp_read_resource
+        # .MCPReadResourceTool` is still importable for programmatic SDK
+        # users who want LLM-driven reads; the resource surface just isn't
+        # wired into the default agent anymore.
         catalogue = manager.resources_catalogue()
-        if catalogue:
-            from aura.tools.mcp_read_resource import (
-                MCPReadResourceTool,
-                build_description,
-            )
-
-            resource_tool = MCPReadResourceTool(
-                resource_reader=manager.read_resource,
-                description=build_description(catalogue),
-            )
-            self._available_tools["mcp_read_resource"] = resource_tool
-            try:
-                self._registry.register(resource_tool)
-            except ValueError as exc:
-                journal.write(
-                    "mcp_resource_tool_register_skipped",
-                    error=str(exc),
-                )
         self._loop._rebind_tools(self._registry.tools())
         journal.write(
             "mcp_aconnect_done",

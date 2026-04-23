@@ -1,12 +1,27 @@
 """mcp_read_resource — LLM-invocable tool that reads a URI-identified MCP resource.
 
+.. deprecated:: 0.10.x
+    **Not auto-registered** on Agent construction. Prefer the
+    ``@server:uri`` attachment syntax in the user prompt (see
+    :mod:`aura.cli.attachments`) — that matches claude-code's
+    ``extractMcpResourceMentions`` surface and injects the resource
+    body as pre-loaded context BEFORE the LLM turn runs, instead of
+    making the model decide when to pull.
+
+    This class is kept importable for **programmatic SDK users** who want
+    LLM-driven resource reads (e.g. an agent that runs without a human in
+    the loop and legitimately needs to choose URIs at runtime). In that
+    case, construct the tool manually and pass it via
+    ``available_tools=`` to :class:`aura.core.agent.Agent`. The v0.10.x
+    default Agent never wires it on its own.
+
 MCP servers expose three kinds of capabilities: *tools*, *prompts*, and
 *resources*. Tools are already reachable via the usual LangChain tool
 surface (see :func:`aura.core.mcp.adapter.add_aura_metadata`); prompts
 are bridged as commands (see :func:`aura.core.mcp.adapter.make_mcp_command`);
-resources — text/blob content addressed by a stable URI — previously had
-no path to the model. This module closes that gap by exposing ONE generic
-tool the LLM can call with any known URI.
+resources — text/blob content addressed by a stable URI — flow through
+the CLI's ``@mention`` preprocessor today, leaving this tool as a legacy
+opt-in surface.
 
 Design choices worth defending:
 
@@ -114,13 +129,38 @@ def build_description(
     return "\n".join(lines)
 
 
+def _build_deprecated_metadata() -> dict[str, Any]:
+    # Base metadata + a local ``deprecated`` flag. ``tool_metadata`` returns
+    # a plain dict so we can tack on extra keys; no schema change needed on
+    # the shared helper for a one-tool opt-in marker. SDK code that wants
+    # to filter deprecated tools can check ``(tool.metadata or {}).get(
+    # "deprecated") is True``.
+    base = tool_metadata(
+        is_read_only=True,
+        is_destructive=False,
+        is_concurrency_safe=True,
+        max_result_size_chars=50_000,
+        args_preview=_preview,
+    )
+    base["deprecated"] = True
+    base["deprecated_since"] = "0.10.0"
+    base["deprecated_replacement"] = (
+        "@server:uri attachment syntax in the user prompt "
+        "(see aura.cli.attachments)"
+    )
+    return base
+
+
 class MCPReadResourceTool(BaseTool):
     """Read an MCP resource by URI.
 
-    Wired into the Agent only when at least one connected MCP server
-    exposed a resource during ``aconnect()``. Tool's description is built
-    dynamically from the catalogue at wiring time — see
-    :func:`build_description`.
+    **Deprecated in v0.10.x.** Not auto-registered on Agent construction;
+    prefer the ``@server:uri`` attachment syntax. Still importable for
+    programmatic SDK users who want LLM-driven resource reads — pass the
+    constructed instance via ``available_tools=`` to :class:`Agent`.
+
+    Tool's description is built dynamically from the catalogue at
+    wiring time — see :func:`build_description`.
     """
 
     # ``ResourceReader`` is a bare Callable alias, not a pydantic model —
@@ -130,19 +170,7 @@ class MCPReadResourceTool(BaseTool):
     name: str = "mcp_read_resource"
     description: str = _BASE_DESCRIPTION + _NO_RESOURCES_SUFFIX
     args_schema: type[BaseModel] = ReadResourceParams
-    metadata: dict[str, Any] | None = tool_metadata(
-        # Reading a resource has no local side effects; the permission
-        # layer still prompts by default for unfamiliar tools but a user
-        # rule like ``mcp_read_resource`` can blanket-allow it.
-        is_read_only=True,
-        is_destructive=False,
-        is_concurrency_safe=True,
-        # 50k chars is enough for a decent-size doc (roughly 12.5k
-        # tokens); anything bigger gets truncated by the result-budget
-        # hook with a clear "…[truncated]" marker.
-        max_result_size_chars=50_000,
-        args_preview=_preview,
-    )
+    metadata: dict[str, Any] | None = _build_deprecated_metadata()
     _reader: ResourceReader = PrivateAttr()
 
     def __init__(

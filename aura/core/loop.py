@@ -175,8 +175,20 @@ class AgentLoop:
         return self._max_turns
 
     async def run_turn(
-        self, *, user_prompt: str, history: list[BaseMessage]
+        self,
+        *,
+        user_prompt: str,
+        history: list[BaseMessage],
+        attachments: list[HumanMessage] | None = None,
     ) -> AsyncIterator[AgentEvent]:
+        # Attachments land BEFORE the user's HumanMessage so the model sees
+        # the injected context first (matching how claude-code prepends
+        # ``<attachment>`` blocks ahead of the user turn). Injected into
+        # history directly rather than via Context.build — they're
+        # turn-scoped and persisted in history, not part of the pinned
+        # prefix; stashing them in Context would bust its caching contract.
+        if attachments:
+            history.extend(attachments)
         history.append(HumanMessage(content=user_prompt))
 
         while True:

@@ -518,6 +518,27 @@ async def _run_turn(
     for monotonic wall time (unaffected by system clock adjustments).
     """
     from aura.cli._coordination import set_spinner_pause_callback
+    from aura.cli.attachments import (
+        extract_and_resolve_attachments,
+        render_attachments_as_messages,
+    )
+
+    # @mention resolution happens BEFORE the spinner — the network-bound
+    # MCP reads shouldn't be hidden behind "thinking…" (the user wants to
+    # see that a doc was pulled before the LLM starts). If no mentions
+    # match, this short-circuits to the original prompt + empty list.
+    resolved_prompt, attachments = await extract_and_resolve_attachments(
+        prompt, agent.mcp_manager,
+    )
+    attachment_messages = render_attachments_as_messages(attachments)
+    # Surface each resolved attachment as a dim line so the user sees
+    # exactly which resources were pulled. One line per attachment; zero
+    # output when no mentions resolved (keeps the common path clean).
+    for att in attachments:
+        console.print(
+            f"[dim]attached @{att.server}:{att.uri}"
+            f" ({len(att.content)} chars)[/dim]"
+        )
 
     spinner = ThinkingSpinner(console)
     spinner.start()
@@ -537,7 +558,9 @@ async def _run_turn(
     set_spinner_pause_callback(_stop_spinner)
 
     async def _stream() -> None:
-        async for event in agent.astream(prompt):
+        async for event in agent.astream(
+            resolved_prompt, attachments=attachment_messages or None,
+        ):
             await _stop_spinner()
             renderer.on_event(event)
         await _stop_spinner()

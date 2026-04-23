@@ -2,6 +2,130 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.10.0] — claude-code parity overhaul
+
+Big release. 18 commits, +404 tests (1313 → 1717), ~9000 new LOC. Multiple
+audit rounds against claude-code v2.1.88 source surfaced and closed every
+"wrong-direction" design plus a pile of MINOR gaps. End state: `make check`,
+`scripts/verify_real_llm.py` (12/12 real deepseek:glm-5), and
+`scripts/verify_pty_interactive.py` (2/2 real pty) all green.
+
+### Breaking changes
+
+- **Skills format**: flat `~/.aura/skills/*.md` is gone. Skills now live in
+  `~/.aura/skills/<name>/SKILL.md` directories (matches claude-code v2.1.88).
+  Legacy flat files are detected and journalled (`skill_legacy_format_detected`)
+  but NOT loaded. Migration: `mv ~/.aura/skills/foo.md ~/.aura/skills/foo/SKILL.md`.
+- **`mcp_read_resource` tool**: deprecated. Resources are now surfaced via the
+  `@server:uri` attachment syntax in the user prompt (mirrors claude-code's
+  `extractMcpResourceMentions`). The tool class is retained importable for
+  SDK users who prefer LLM-driven reads, but it's no longer auto-registered.
+- **Default `tools.enabled`**: gains `ask_user_question` and `task_create`
+  which were silently missing and made the respective features dead on the
+  default config. If you hardcoded an older enabled list, add both.
+- **`UIConfig.theme`** field removed (orphan — never read at runtime).
+- **`exit_plan_mode`**: requires user approval now (was always unilateral);
+  `to_mode` default changed from `"default"` to `None` so the tool can
+  distinguish "omitted" from "explicit default" and restore the captured
+  prior mode on the first case.
+
+### Shipped — new capabilities
+
+- **subagent_type system**: 4 types registered in `aura/core/tasks/agent_types.py`
+  (`general-purpose` / `explore` / `verify` / `plan`). `task_create` exposes
+  the choice to the LLM with per-type allowed-tools filter + system-prompt
+  suffix.
+- **MCP `@server:uri` attachments** in REPL input (preprocessor at
+  `aura/cli/attachments.py`): user mentions are resolved via
+  `MCPManager.read_resource` and injected as `HumanMessage` before the turn.
+- **MCP management CLI**: `aura mcp add <name> [--scope global|project] [-e K=V] [--transport stdio|sse|streamable_http] -- <cmd>`, `aura mcp list`,
+  `aura mcp remove <name>`. Settings persist to `~/.aura/mcp_servers.json`
+  (global) and `<cwd>/.aura/mcp_servers.json` (project). Project layer
+  shadows global per-name; walk-up search from cwd.
+- **In-REPL `/mcp` slash command**: `/mcp`, `/mcp enable <name>`,
+  `/mcp disable <name>`, `/mcp reconnect <name>`, `/mcp help`. Shows table
+  with NAME / TRANSPORT / STATUS / TOOLS / RESOURCES / PROMPTS counts.
+- **MCP auto-reconnect**: remote transports (sse / streamable_http) get
+  exponential-backoff retry (1/2/4/8/16s, cap 60s, max 5 attempts) on
+  mid-session failures. `stop_all` cancels pending reconnect tasks.
+- **MCP per-op timeout**: 30s default (configurable via
+  `AURA_MCP_TIMEOUT_SEC` env or `MCPManager(op_timeout_sec=)` kwarg)
+  around `get_tools` / `list_prompts` / `list_resources` / `read_resource`
+  / `get_prompt`.
+- **MCP prompt argument substitution**: `_MCPPromptCommand` now forwards
+  positional args (`/server__prompt alpha beta` → `{arg0: "alpha", arg1: "beta"}`)
+  instead of silently dropping them.
+- **Per-tool-type permission dialogs**: `aura/cli/permission_bash.py`
+  highlights dangerous args (`rm -rf`, `sudo`, pipe-to-shell, `chmod 777`,
+  system-path writes, raw-block-devices, `rm &` background, etc.);
+  `aura/cli/permission_write.py` shows diff preview on `edit_file`, size +
+  first 5 lines on `write_file`. Generic fallback preserved for other tools.
+- **Permission prompt timeout**: `PermissionsConfig.prompt_timeout_sec`
+  (default 300s). Non-response → deny + journal.
+- **`disable_bypass` org kill switch**: `PermissionsConfig.disable_bypass`
+  refuses `--bypass-permissions` CLI flag AND programmatic
+  `Agent(mode="bypass")`/`set_mode("bypass")` with `AuraConfigError`.
+- **prePlanMode restoration**: `Agent._prior_mode` captured on
+  `enter_plan_mode`, restored on `exit_plan_mode` approval when `to_mode`
+  is omitted. Bypass clamp: `prior_mode="bypass"` never restores.
+- **5 new hook events**: `PreSession`, `PostSession`, `PostSubagent`,
+  `PreCompact`, `PreUserPrompt` — fired from Agent.bootstrap/shutdown,
+  `run_task` terminals, `run_compact`, `loop.run_turn` respectively.
+- **Per-tool timeout**: `grep`/`glob`/`read_file`/`web_fetch`/`web_search`
+  get 10–30s deadlines via `asyncio.wait_for` around `tool.ainvoke` in the
+  loop. `bash`/`bash_background` keep their own SIGTERM→SIGKILL ladder.
+- **Search-command output fold**: renderer folds >20-line output from
+  search-like tools to head 10 / tail 5 with `[N lines total, 15 shown]`
+  footer. `grep`/`glob`/`read_file`/`web_search` carry `is_search_command=True`.
+- **Input-aware tool metadata**: `is_destructive` / `is_read_only` accept
+  a callable `(args: dict) -> bool` — `bash({command: "ls"})` now
+  resolves False while `bash({command: "rm -rf"})` resolves True. Routes
+  through the permission hook's safety branch.
+- **Command frontmatter hints**: `Command` protocol gains `allowed_tools:
+  tuple[str, ...]` + `argument_hint: str | None`. `/help` renders the
+  hint inline. Skills propagate both from their `SKILL.md` frontmatter.
+- **Bash safety AST deepening**: added 8 Tier A floors (pipe-to-shell,
+  obfuscated `base64|xxd|openssl ... | sh`, system-path `rm -rf`,
+  world-writable `chmod`, root `chown`, `sed -i` on system paths,
+  redirects to `/etc`/`/usr`/`/bin`/`/boot`/`/sys`/`/proc`, `exec rm -rf`).
+
+### Fixed — bugs surfaced during integration testing
+
+- **permission hook stale mode**: the hook captured `mode` by value at
+  construction; mid-session `set_mode` was ignored. Now accepts
+  `Callable[[], Mode]`; CLI wires `lambda: agent.mode` so each invocation
+  reads live state.
+- **`run_task` factory.spawn outside try/except**: a spawn exception (e.g.
+  `agent_type="explore"` requiring a tool the parent didn't enable) left
+  `TaskRecord.status` permanently "running". Moved inside try; guarded
+  `agent.close()` with a None-check.
+- **conditional skill invisible after activation**: added `activated: bool`
+  to `Skill` dataclass; `is_conditional()` now returns False once promoted.
+- **shift+tab spam**: rapid presses no longer litter scrollback with
+  `mode: X (press shift+tab to cycle …)` — state flip + invalidate only.
+- **duplicate status bar**: `_print_post_turn_status` shrunk to a single
+  `done · N.Ns` marker.
+- **welcome banner**: back to single cyan Panel, ~38% narrower.
+- **repo URL**: every reference corrected to `github.com/LordFoxFairy/Aura`.
+- **`BEFOREmutating` typo** in exit_plan_mode.py docstring.
+
+### Deferred — explicitly out of scope
+
+- Claude-code plugin subsystem (`claude plugin install ...`) — architectural,
+  not a drop-in.
+- `auto` mode (classifier-gated permissions) — requires an external classifier.
+- MCP server-initiated notifications (`notifications/message`) — rare.
+- Onboarding commands (`/config`, `/doctor`, `/setup`, `/login`) — non-core.
+
+### Integration
+
+- 18 commits since v0.9.1. All merged to `main`. No tag'd intermediates.
+- Four audit rounds: startup chain, ask/permission, subagent loop, parity
+  sweep. All gaps either closed or explicitly documented as descoped.
+- Verification gates: `make check` (1717 passed), `scripts/verify_real_llm.py`
+  (12/12 against deepseek:glm-5), `scripts/verify_pty_interactive.py` (2/2
+  against a real pty).
+
 ## [0.9.1] — PyPI publishing readiness
 
 Parallel-subagent run of 5 tasks with `git worktree` isolation (directly addressing the v0.9.0 git-stash race). All 5 landed clean, integrated to main with zero conflicts (each track owned distinct files). This is the release that makes `pip install aura-agent` possible.

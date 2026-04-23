@@ -25,6 +25,10 @@ Single-session parity sweep against the `docs/specs/2026-04-23-aura-main-channel
 - **U2 — animated welcome banner spinner** (`523e673`): darwin frame set borrowed from claude-code `SpinnerGlyph`; settles on `✱`. Non-TTY / pipe contexts short-circuit to the static render — no animation frames in scripted CI stdout.
 - **U3 — inline tool-result glyph** (`2371c25`): `✓ name(args) — summary` on a single line; the orphan-`✓` line artifact (rendered when the result summary was empty) is gone.
 
+### Security
+
+- **C1 — subagent auto-deny permission hook** (`64d79d0`): parity with claude-code `runAgent.ts:440-451` (`shouldAvoidPermissionPrompts: true` on the child `ToolPermissionContext`). Subagents run without a UI — any `_decide` path that would have prompted the user is now silently denied with a provenance-stamped `"subagent_auto_deny"` feedback on the model-facing error, instead of hanging the turn forever. Inherited parent `RuleSet` + `SafetyPolicy` still grant / safety-block normally; only the `ask` branch collapses. Child also gets a fresh `SessionRuleSet` so no ambient approvals leak back to the parent.
+
 ### E2E
 
 - **`tests/e2e/test_parity_v0_11.py`** (new): pty-driven subprocess scenarios that exercise the parity scenario from the spec (§E2E Case) end-to-end — paste attachment, mid-stream SIGINT, resume by session id, safety-deny `/etc/passwd`, `last_turn_denials()` API, subagent read-record inheritance, `aclose` with hanging MCP stub. Uses stdlib `pty` (not `pexpect`), no network, no provider SDK. Gated behind `pytest -m e2e` so the default `make check` keeps its speed profile.

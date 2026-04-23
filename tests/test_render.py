@@ -38,19 +38,109 @@ def test_assistant_delta_plain_text_appears() -> None:
     assert "hello world" in buf.getvalue()
 
 
-def test_tool_call_started_shows_marker_and_args() -> None:
+def test_tool_call_started_alone_does_not_emit_until_completion() -> None:
+    # U3 parity with claude-code: the tool-use header line carries the
+    # FINAL glyph (✓/✗) inline, so the started line is buffered until
+    # completion (or a progress chunk / Final / new started / audit /
+    # finish forces a flush). A bare ToolCallStarted should produce no
+    # scrollback yet.
     r, buf = _capture()
     r.on_event(ToolCallStarted(name="read_file", input={"path": "/tmp/x"}))
+    assert buf.getvalue() == ""
+
+
+def test_tool_call_started_plus_completed_emits_single_inline_line() -> None:
+    # The common path: a tool runs to completion without progress chunks.
+    # Renderer emits ONE line — ``✓ name(args) — summary`` — not two.
+    r, buf = _capture()
+    r.on_event(ToolCallStarted(name="read_file", input={"path": "/tmp/x"}))
+    r.on_event(ToolCallCompleted(
+        name="read_file",
+        output={
+            "content": "x", "lines": 1, "total_lines": 1,
+            "offset": 0, "limit": None, "partial": False,
+        },
+    ))
     out = buf.getvalue()
-    assert "◆" in out
+    assert "✓" in out
     assert "read_file" in out
     assert "path" in out
+    # Exactly one non-empty line of output — no stray ``✓`` on its own.
+    non_empty = [ln for ln in out.splitlines() if ln.strip()]
+    assert len(non_empty) == 1
+    # And the ◆ running marker shouldn't appear — completion replaced it.
+    assert "◆" not in out
 
 
 def test_tool_call_completed_success_shows_checkmark() -> None:
+    # Without a preceding Started (e.g. fake/partial stream), a bare
+    # completed event still prints a ✓ line — preserves the old contract
+    # for callers that don't emit a matched pair.
     r, buf = _capture()
     r.on_event(ToolCallCompleted(name="read_file", output={"content": "x"}))
     assert "✓" in buf.getvalue()
+
+
+def test_tool_call_error_inline_glyph_precedes_error_panel() -> None:
+    # U3 parity: on failure, the ✗ glyph + tool(args) go inline on a
+    # header line and the error panel renders UNDER it. No orphan header
+    # with a ◆, no separate ✓.
+    r, buf = _capture()
+    r.on_event(ToolCallStarted(name="bash", input={"command": "oops"}))
+    r.on_event(ToolCallCompleted(name="bash", output=None, error="permission denied"))
+    out = buf.getvalue()
+    assert "✗" in out
+    assert "bash" in out
+    assert "oops" in out
+    # Error panel borders show up below.
+    assert "╭" in out or "┌" in out
+    assert "◆" not in out
+    assert "✓" not in out
+
+
+def test_tool_call_completed_after_progress_chunk_omits_duplicated_header() -> None:
+    # If a progress chunk flushed the ◆ header, completion should NOT
+    # reprint the tool name — that would produce a visual duplicate.
+    # Only the ✓ summary prints under the progress stream.
+    from aura.schemas.events import ToolCallProgress
+
+    r, buf = _capture()
+    r.on_event(ToolCallStarted(name="bash", input={"command": "ls /"}))
+    r.on_event(ToolCallProgress(name="bash", stream="stdout", chunk="bin\netc\n"))
+    r.on_event(ToolCallCompleted(
+        name="bash",
+        output={
+            "stdout": "bin\netc\n", "stderr": "", "exit_code": 0,
+            "truncated": False, "killed_at_hard_ceiling": False,
+        },
+    ))
+    out = buf.getvalue()
+    # Header printed once — exactly one ◆ line for "bash(ls /)".
+    assert out.count("◆") == 1
+    # Progress lines nested under it.
+    assert "bin" in out
+    assert "etc" in out
+    # Completion summary visible but NOT re-naming the tool.
+    assert "✓" in out
+    assert out.count("bash") == 1  # only on the ◆ header — not re-named
+    assert "ok" in out             # bash-formatter summary
+
+
+def test_tool_call_lone_checkmark_line_never_emitted() -> None:
+    # Guard the specific user-reported pattern: "◆ tool(args)" followed
+    # by a lone line with just "✓". Renderer must NEVER produce that.
+    r, buf = _capture()
+    r.on_event(ToolCallStarted(name="todo_write", input={"todos": []}))
+    r.on_event(ToolCallCompleted(name="todo_write", output={"ok": True}))
+    out = buf.getvalue()
+    # Split and strip ANSI — look for any line that is JUST the check
+    # with nothing else. Rich may wrap in escape codes; compare raw runes.
+    import re
+    ansi_re = re.compile(r"\x1b\[[0-9;]*m")
+    lines = [ansi_re.sub("", ln).strip() for ln in out.splitlines() if ln.strip()]
+    assert not any(ln == "✓" for ln in lines), (
+        f"lone '✓' line regression: {lines!r}"
+    )
 
 
 def test_tool_call_completed_error_shows_panel_with_tool_name_and_message() -> None:
@@ -82,9 +172,14 @@ def test_finish_emits_trailing_newline() -> None:
 
 
 def test_long_tool_args_are_truncated() -> None:
+    # Args truncation applies wherever the tool line is flushed — whether
+    # via a matched Completed inline emit or via finish() forcing the
+    # pending header to print with ◆. Exercise the Completed path since
+    # that's the common dogfood case.
     r, buf = _capture()
     long_value = "x" * 500
     r.on_event(ToolCallStarted(name="t", input={"data": long_value}))
+    r.on_event(ToolCallCompleted(name="t", output={"ok": True}))
     out = buf.getvalue()
     assert "…" in out
     assert len(out) < 300
@@ -94,14 +189,23 @@ def test_renderer_handles_multi_event_sequence() -> None:
     r, buf = _capture()
     r.on_event(AssistantDelta(text="let me check "))
     r.on_event(ToolCallStarted(name="read_file", input={"path": "/tmp/x"}))
-    r.on_event(ToolCallCompleted(name="read_file", output={"content": "..."}))
+    r.on_event(ToolCallCompleted(
+        name="read_file",
+        output={
+            "content": "...", "lines": 1, "total_lines": 1,
+            "offset": 0, "limit": None, "partial": False,
+        },
+    ))
     r.on_event(AssistantDelta(text="done"))
     r.on_event(Final(message="done"))
     r.finish()
     out = buf.getvalue()
     assert "let me check" in out
-    assert "◆" in out
+    # Post-U3: no ◆ when the matched Started/Completed pair is emitted
+    # inline with the final ✓ glyph.
+    assert "◆" not in out
     assert "✓" in out
+    assert "read_file" in out
     assert "done" in out
 
 
@@ -123,10 +227,20 @@ def test_permission_audit_rule_allow_text_flows_through() -> None:
 
 
 def test_permission_audit_appears_between_started_and_completed() -> None:
+    # Audit arriving mid-flight forces the Started header to flush as a
+    # running ◆ — otherwise the audit text would land above a header
+    # that's still buffered. Then the Completed line prints the ✓
+    # summary line under the audit. Three lines in order: ◆ → audit → ✓.
     r, buf = _capture()
     r.on_event(ToolCallStarted(name="read_file", input={"path": "/tmp/x"}))
     r.on_event(PermissionAudit(tool="read_file", text="auto-allowed: rule `read_file`"))
-    r.on_event(ToolCallCompleted(name="read_file", output={"content": "x"}))
+    r.on_event(ToolCallCompleted(
+        name="read_file",
+        output={
+            "content": "x", "lines": 1, "total_lines": 1,
+            "offset": 0, "limit": None, "partial": False,
+        },
+    ))
     out = buf.getvalue()
     started_pos = out.index("◆")
     audit_pos = out.index("auto-allowed")
@@ -136,9 +250,12 @@ def test_permission_audit_appears_between_started_and_completed() -> None:
 
 def test_renderer_escapes_bracket_markup_in_tool_input() -> None:
     # LLM-chosen input might contain ``[...]`` which rich would otherwise
-    # parse as inline markup. Renderer must escape before wrapping.
+    # parse as inline markup. Renderer must escape before wrapping — both
+    # on the buffered-then-flushed header path AND the inline success path.
+    # Exercise the header path via Finish (flushes pending as ◆).
     r, buf = _capture()
     r.on_event(ToolCallStarted(name="bash", input={"command": "echo [red]HI[/red]"}))
+    r.finish()
     out = buf.getvalue()
     # Literal ``[red]`` must appear in output as text (escaped).
     assert "[red]" in out
@@ -334,11 +451,13 @@ def test_assistant_delta_whitespace_only_content_emits_no_output() -> None:
 
 def test_assistant_delta_flushed_before_tool_call_started() -> None:
     # Ordering guarantee: prose must land on screen BEFORE the tool-call
-    # line that triggered the flush. Otherwise a "let me check" preamble
-    # would appear AFTER the ◆ read_file(...) line.
+    # line. Post-U3 the ToolCallStarted header is buffered until
+    # completion; force it out with finish() and check ordering with the
+    # ◆-running glyph (no matched Completed in this test).
     r, buf = _capture()
     r.on_event(AssistantDelta(text="let me check"))
     r.on_event(ToolCallStarted(name="read_file", input={"path": "/x"}))
+    r.finish()
     out = buf.getvalue()
     prose_pos = out.index("let me check")
     tool_pos = out.index("◆")

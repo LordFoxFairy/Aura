@@ -82,6 +82,17 @@ class Renderer:
         # so we defer until the turn's text is complete before handing it
         # to rich.Markdown.
         self._pending_text = ""
+        # Buffer for a ToolCallStarted whose line we HAVEN'T flushed yet.
+        # Parity with claude-code's AssistantToolUseMessage / ToolUseLoader:
+        # the leading glyph transitions ◆-while-running → ✓/✗-when-done on
+        # the SAME line. Rich prints to scrollback (can't rewrite lines),
+        # so the equivalent outcome is: defer the started line and, when
+        # the completion event arrives *before* any progress chunk, emit a
+        # single line with the final ✓/✗ glyph inline. If progress arrives
+        # first we must flush the header so chunks nest under it; in that
+        # case completion prints just the ✓/✗ summary under the header.
+        # Stored as (name, input) — the args string is (re)rendered on emit.
+        self._pending_tool: tuple[str, dict[str, Any]] | None = None
 
     def on_event(self, event: AgentEvent) -> None:
         if isinstance(event, AssistantDelta):
@@ -92,19 +103,33 @@ class Renderer:
         # tool-call → prose ordering within a turn.
         self._flush_pending()
         if isinstance(event, ToolCallStarted):
-            # Escape variable content — tool input / name may contain ``[...]``
-            # which rich would otherwise interpret as inline markup.
-            name = rich_escape(event.name)
-            args = rich_escape(compact_args(event.input))
-            self._console.print(f"[dim]◆ {name}({args})[/dim]")
+            # Defer the header line (see `_pending_tool` docstring). The
+            # glyph choice (◆ vs ✓ vs ✗) is decided on ToolCallCompleted.
+            # A new ToolCallStarted before the previous one completed is
+            # unexpected but we flush the old one with ◆ first (running
+            # placeholder) to keep ordering honest.
+            if self._pending_tool is not None:
+                self._flush_pending_tool_as_running()
+            self._pending_tool = (event.name, event.input)
             return
         if isinstance(event, PermissionAudit):
+            # Audit line renders UNDER the tool-call header. Flush the
+            # pending header first (as running ◆) so audit text lands
+            # below the line it annotates rather than above a header
+            # that's still buffered.
+            if self._pending_tool is not None:
+                self._flush_pending_tool_as_running()
             # Spec §8.4: dim one-liner, 4-space indent, directly after the
             # started line. Audit text carries rule strings that may contain
             # literal ``[...]`` — escape before wrapping in [dim].
             self._console.print(f"    [dim]{rich_escape(event.text)}[/dim]")
             return
         if isinstance(event, ToolCallProgress):
+            # Progress chunks need the header printed first so they nest
+            # visibly under it. Flush the buffered header (as running ◆)
+            # once, then stream chunks below.
+            if self._pending_tool is not None:
+                self._flush_pending_tool_as_running()
             # Stream each chunk dim, with a ``│`` prefix so bash output
             # visually nests under its ToolCallStarted line rather than
             # masquerading as assistant prose. The spinner is already
@@ -125,15 +150,51 @@ class Renderer:
                 )
             return
         if isinstance(event, ToolCallCompleted):
+            # Consume a pending header (if any) INLINE with the final glyph.
+            # Claude-code parity: the leading character of the tool-use line
+            # carries the status (gray ● while running, green ● on success,
+            # red ● on error) — the equivalent in scrollback is "one line,
+            # final glyph". If progress already flushed the header, we
+            # print just the completion summary under it.
+            pending = self._pending_tool
+            self._pending_tool = None
             if event.error:
+                # Still need the tool-call header so the user sees WHICH
+                # invocation failed. If the header was already flushed by
+                # progress, don't reprint it; otherwise emit it inline with
+                # the failure glyph.
+                if pending is not None:
+                    name, args = pending
+                    self._console.print(
+                        f"[red]✗[/red] [dim]{rich_escape(name)}"
+                        f"({rich_escape(compact_args(args))})[/dim]",
+                    )
                 self._console.print(_render_tool_error(event.name, event.error))
                 return
             formatter = _TOOL_RESULT_FORMATTERS.get(event.name)
-            if formatter is not None:
-                summary = rich_escape(formatter(event.output))
-                self._console.print(f"[green]✓[/green] [dim]{summary}[/dim]")
+            summary = (
+                rich_escape(formatter(event.output))
+                if formatter is not None else None
+            )
+            if pending is not None:
+                # Single inline line: glyph + tool(args) [+ summary].
+                name, args = pending
+                head = (
+                    f"[green]✓[/green] [dim]{rich_escape(name)}"
+                    f"({rich_escape(compact_args(args))})[/dim]"
+                )
+                if summary is not None:
+                    self._console.print(f"{head} [dim]— {summary}[/dim]")
+                else:
+                    self._console.print(head)
             else:
-                self._console.print("[green]✓[/green]")
+                # Header was already flushed by a progress chunk — emit
+                # only the completion glyph + summary to avoid duplicating
+                # the tool name on-screen.
+                if summary is not None:
+                    self._console.print(f"[green]✓[/green] [dim]{summary}[/dim]")
+                else:
+                    self._console.print("[green]✓[/green]")
             # Fold step: only for tools whose metadata declares
             # ``is_search_command=True`` AND output line count >
             # _FOLD_THRESHOLD. Fold follows the ✓ summary so the user
@@ -152,13 +213,41 @@ class Renderer:
             # above. Synthetic Finals (e.g. max_turns_reached) are dropped
             # here too; the REPL owns rendering the "stopped: max turns"
             # line itself.
+            if self._pending_tool is not None:
+                # Defensive: a Final arriving while a tool header is still
+                # buffered (tool started but never completed — e.g. the
+                # stream broke mid-call) — flush the header as running so
+                # the transcript still shows the invocation.
+                self._flush_pending_tool_as_running()
             return
 
     def finish(self) -> None:
         # Flush any trailing assistant text (e.g. turn ended without a
-        # Final event in tests) before the terminal newline.
+        # Final event in tests) before the terminal newline. A pending
+        # tool header with no completion (cancelled stream, etc.) is
+        # emitted as running ◆ so the user sees "something started here"
+        # in the transcript.
         self._flush_pending()
+        if self._pending_tool is not None:
+            self._flush_pending_tool_as_running()
         self._console.print()
+
+    def _flush_pending_tool_as_running(self) -> None:
+        """Emit the buffered ToolCallStarted line with the running ◆ glyph.
+
+        Called when a progress chunk / audit / early Final forces us to
+        commit to the header BEFORE the completion event arrives. The
+        glyph choice mirrors claude-code's ToolUseLoader "unresolved"
+        state (gray BLACK_CIRCLE); ◆ is the closest Unicode diamond we
+        already ship.
+        """
+        assert self._pending_tool is not None
+        name, args = self._pending_tool
+        self._pending_tool = None
+        self._console.print(
+            f"[dim]◆ {rich_escape(name)}"
+            f"({rich_escape(compact_args(args))})[/dim]",
+        )
 
     def _flush_pending(self) -> None:
         """Emit buffered assistant text as markdown-or-plain, then clear."""

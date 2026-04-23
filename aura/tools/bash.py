@@ -13,13 +13,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from asyncio.subprocess import Process
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from aura.core.permissions.matchers import exact_match_on
 from aura.schemas.tool import ToolError, tool_metadata
+from aura.tools.progress import get_progress_callback
 
 _DEFAULT_TIMEOUT = 30
 _MAX_OUTPUT_BYTES = 30_000  # what the model sees — kept small to protect context
@@ -63,7 +64,9 @@ def _format_streamed(tail_bytes: bytes, total: int) -> tuple[str, bool]:
 
 
 async def _stream_capped(
-    stream: asyncio.StreamReader | None, proc: Process
+    stream: asyncio.StreamReader | None,
+    proc: Process,
+    label: Literal["stdout", "stderr"] = "stdout",
 ) -> tuple[bytes, int, bool]:
     """Read ``stream`` to EOF while keeping only the last ``_MAX_OUTPUT_BYTES``
     in memory. If total bytes read for this stream crosses the hard ceiling,
@@ -71,6 +74,13 @@ async def _stream_capped(
     Python RSS.
 
     Returns ``(tail_bytes, total_bytes, killed_at_hard_ceiling)``.
+
+    While reading, each chunk is also forwarded to the ambient progress
+    callback (if one is installed — see :mod:`aura.tools.progress`) so the
+    renderer can stream output to the user in near-realtime rather than
+    waiting for the process to exit. Decode errors fall back to
+    ``errors='replace'`` — matches the final-output decode so partial
+    multibyte sequences surface as U+FFFD on both paths.
 
     The tail buffer is bounded to ``_MAX_OUTPUT_BYTES`` + one chunk — we
     trim after each append. This keeps a 10 GB output producer pinned at
@@ -82,6 +92,7 @@ async def _stream_capped(
     buf = bytearray()
     total = 0
     killed = False
+    cb = get_progress_callback()
     while True:
         try:
             chunk = await stream.read(_STREAM_CHUNK)
@@ -94,6 +105,11 @@ async def _stream_capped(
         if len(buf) > _MAX_OUTPUT_BYTES:
             # Trim in-place to the tail window.
             del buf[: len(buf) - _MAX_OUTPUT_BYTES]
+        if cb is not None:
+            # Fire-and-forget: a misbehaving renderer must NOT break the
+            # capture path — swallow any callback exception.
+            with contextlib.suppress(Exception):
+                cb(label, chunk.decode("utf-8", errors="replace"))
         if total >= _HARD_CEILING_BYTES and not killed:
             killed = True
             # Kill the producer; the stream will EOF shortly. Keep looping
@@ -206,8 +222,12 @@ class Bash(BaseTool):
         # producer (`yes`, `cat /dev/zero`, pathological build output) that
         # buffer is RSS-unbounded. Streaming caps Python memory at ~60 KB
         # (2 × _MAX_OUTPUT_BYTES) regardless of how much the child emits.
-        stdout_task = asyncio.create_task(_stream_capped(proc.stdout, proc))
-        stderr_task = asyncio.create_task(_stream_capped(proc.stderr, proc))
+        stdout_task = asyncio.create_task(
+            _stream_capped(proc.stdout, proc, "stdout"),
+        )
+        stderr_task = asyncio.create_task(
+            _stream_capped(proc.stderr, proc, "stderr"),
+        )
         # Hold the gather-future in a local so we can explicitly consume
         # its exception on the error path. Without this, asyncio logs an
         # "exception was never retrieved" warning when wait_for cancels it.

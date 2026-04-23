@@ -81,20 +81,26 @@ def _capture_console() -> tuple[Console, io.StringIO]:
     return console, buf
 
 
-def _stub_picker(return_value: int | None) -> Any:
-    """Async stub for ``_pick_choice_interactive``. Returns the preset
-    value on every call; records the call kwargs for assertion."""
+def _stub_picker(
+    return_value: int | None, feedback: str = "",
+) -> Any:
+    """Async stub for ``_pick_choice_interactive``. Returns ``(choice,
+    feedback)`` on every call; records the call kwargs for assertion.
+
+    Default ``feedback=""`` keeps backwards compat with every existing
+    test that only cares about ``choice``.
+    """
     captured: dict[str, Any] = {}
 
-    async def _picker(**kwargs: Any) -> int | None:
+    async def _picker(**kwargs: Any) -> tuple[int | None, str]:
         captured.update(kwargs)
-        return return_value
+        return return_value, feedback
 
     return _picker, captured
 
 
 def _stub_picker_raises(exc: BaseException) -> Any:
-    async def _picker(**_: Any) -> int | None:
+    async def _picker(**_: Any) -> tuple[int | None, str]:
         raise exc
 
     return _picker
@@ -463,6 +469,164 @@ async def test_audit_line_prints_after_decision(
     # ``"ls"``), so the audit line reads cleanly.
     assert "ls" in out
     assert "yes" in out
+
+
+# ---------------------------------------------------------------------------
+# Tab-to-amend — feedback threading through the asker
+# ---------------------------------------------------------------------------
+async def test_feedback_flows_through_accept(
+    monkeypatch: pytest.MonkeyPatch, _journal_capture: Path,
+) -> None:
+    # Picker returns (1, "needs --verbose"); the asker must pass the
+    # note through to AskerResponse.feedback AND record it in the
+    # permission_answered journal event.
+    picker, _ = _stub_picker(1, feedback="needs --verbose")
+    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console)
+    resp = await asker(
+        tool=_bash_like(), args={"command": "npm test"}, rule_hint=_HINT,
+    )
+    assert resp.choice == "accept"
+    assert resp.feedback == "needs --verbose"
+    answered = next(
+        e for e in _events(_journal_capture) if e["event"] == "permission_answered"
+    )
+    assert answered["feedback"] == "needs --verbose"
+
+
+async def test_feedback_flows_through_deny(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    picker, _ = _stub_picker(3, feedback="wrong dir")
+    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console)
+    resp = await asker(
+        tool=_bash_like(), args={"command": "rm -rf /"}, rule_hint=_HINT,
+    )
+    assert resp.choice == "deny"
+    assert resp.feedback == "wrong dir"
+
+
+async def test_feedback_flows_through_always(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    picker, _ = _stub_picker(2, feedback="trusted suite")
+    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console)
+    resp = await asker(
+        tool=_bash_like(with_matcher=True),
+        args={"command": "npm test"},
+        rule_hint=_HINT,
+    )
+    assert resp.choice == "always"
+    assert resp.feedback == "trusted suite"
+    assert resp.rule == Rule(tool="bash", content="npm test")
+
+
+async def test_empty_feedback_is_backwards_compatible(
+    monkeypatch: pytest.MonkeyPatch, _journal_capture: Path,
+) -> None:
+    # When the user never pressed Tab, feedback is "" — the journal
+    # event should NOT carry a spurious feedback field.
+    picker, _ = _stub_picker(1)  # feedback defaults to ""
+    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    console, _ = _capture_console()
+    asker = make_cli_asker(console=console)
+    resp = await asker(
+        tool=_bash_like(), args={"command": "ls"}, rule_hint=_HINT,
+    )
+    assert resp.feedback == ""
+    answered = next(
+        e for e in _events(_journal_capture) if e["event"] == "permission_answered"
+    )
+    assert "feedback" not in answered
+
+
+def test_audit_line_includes_feedback_when_present() -> None:
+    console, buf = _capture_console()
+    _render_decision_audit_line(
+        console,
+        tool=_bash_like(),
+        tag="safe",
+        preview="ls",
+        choice=1,
+        feedback="double-check the path",
+    )
+    out = buf.getvalue()
+    assert "yes" in out
+    assert "double-check the path" in out
+
+
+def test_audit_line_omits_feedback_when_empty() -> None:
+    # Default empty feedback must not render an empty quoted suffix.
+    console, buf = _capture_console()
+    _render_decision_audit_line(
+        console,
+        tool=_bash_like(),
+        tag="safe",
+        preview="ls",
+        choice=1,
+    )
+    # No dangling `"` pair from a zero-width feedback string.
+    assert '""' not in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# _pick_choice_interactive — Tab-to-amend key handling (driven via
+# synthesized key-press input so we exercise real KeyBindings rather
+# than stubbing the picker).
+# ---------------------------------------------------------------------------
+async def _drive_picker(
+    keys: str, *, is_destructive: bool = False,
+) -> tuple[int | None, str]:
+    """Run the real ``_pick_choice_interactive`` against a synthetic
+    stdin buffer. Uses pt's ``create_pipe_input`` so we can feed raw
+    key bytes without a real TTY."""
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    from aura.cli import permission as cli_permission_mod
+
+    with create_pipe_input() as inp:
+        inp.send_text(keys)
+        # pt Application picks up get_app_session's input/output when
+        # constructed, so temporarily install a session with our pipe.
+        from prompt_toolkit.application import create_app_session
+
+        with create_app_session(input=inp, output=DummyOutput()):
+            return await cli_permission_mod._pick_choice_interactive(
+                tool=_bash_like(is_destructive=is_destructive),
+                preview="ls",
+                tag="destructive" if is_destructive else "safe",
+                option_two_label="Yes, and don't ask again",
+                default_choice=3 if is_destructive else 1,
+            )
+
+
+async def test_picker_tab_then_type_then_enter_commits_with_feedback() -> None:
+    # Cursor starts on option 1 (default_choice=1 for safe). Tab →
+    # feedback mode; type "hi"; Enter → commit option 1 with feedback.
+    choice, feedback = await _drive_picker("\thi\r")
+    assert choice == 1
+    assert feedback == "hi"
+
+
+async def test_picker_tab_then_esc_returns_to_option_mode() -> None:
+    # Tab → feedback mode; Esc → back to option mode (buffer cleared);
+    # Enter → commit default option with empty feedback.
+    choice, feedback = await _drive_picker("\thi\x1b\r")
+    assert choice == 1
+    assert feedback == ""
+
+
+async def test_picker_no_tab_returns_empty_feedback() -> None:
+    # Plain Enter on the default: backwards-compat path.
+    choice, feedback = await _drive_picker("\r")
+    assert choice == 1
+    assert feedback == ""
 
 
 # ---------------------------------------------------------------------------

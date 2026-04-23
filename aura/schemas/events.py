@@ -22,6 +22,25 @@ class ToolCallStarted:
 
 
 @dataclass(frozen=True)
+class ToolCallProgress:
+    """Incremental output chunk streamed while a tool is still running.
+
+    Currently produced by the ``bash`` tool: each stdout/stderr chunk
+    surfaces to the renderer in near-realtime so a long-running command
+    doesn't sit silently for 30s+ before the user sees any output.
+
+    ``stream`` is ``"stdout"`` or ``"stderr"``; ``chunk`` is a decoded
+    UTF-8 fragment (may contain partial multibyte sequences replaced
+    with U+FFFD). Chunks are NOT newline-aligned — callers that want
+    one-line-per-print must buffer themselves.
+    """
+
+    name: str
+    stream: Literal["stdout", "stderr"]
+    chunk: str
+
+
+@dataclass(frozen=True)
 class ToolCallCompleted:
     """Tool invocation finished with result or error."""
 
@@ -58,6 +77,11 @@ class PermissionAudit:
 
 
 AgentEvent = (
-    AssistantDelta | ToolCallStarted | ToolCallCompleted | Final | PermissionAudit
+    AssistantDelta
+    | ToolCallStarted
+    | ToolCallProgress
+    | ToolCallCompleted
+    | Final
+    | PermissionAudit
 )
 """Type alias for all events emitted by the agent loop."""

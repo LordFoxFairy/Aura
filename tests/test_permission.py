@@ -125,6 +125,19 @@ def test_asker_response_is_frozen() -> None:
         resp.choice = "deny"  # type: ignore[misc]
 
 
+def test_asker_response_feedback_defaults_to_empty_string() -> None:
+    assert AskerResponse(choice="accept").feedback == ""
+    assert AskerResponse(choice="deny").feedback == ""
+
+
+def test_asker_response_carries_feedback_field() -> None:
+    resp = AskerResponse(choice="deny", feedback="wrong dir")
+    assert resp.feedback == "wrong dir"
+    # Field is frozen like the rest.
+    with pytest.raises(FrozenInstanceError):
+        resp.feedback = "changed"  # type: ignore[misc]
+
+
 def test_permission_asker_runtime_checkable() -> None:
     asker = _SpyAsker(response=AskerResponse(choice="accept"))
     assert isinstance(asker, PermissionAsker)
@@ -414,6 +427,63 @@ async def test_ask_deny_returns_tool_result(
     assert result.error == "denied: user"
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_deny"
+
+
+async def test_ask_deny_with_feedback_embeds_note_in_error(
+    journal_events: list[tuple[str, dict[str, Any]]],
+) -> None:
+    # Contract: when the user typed a note via Tab-to-amend, the hook
+    # surfaces it to the model as part of the deny message AND
+    # captures it in the permission_decision journal event.
+    spy = _SpyAsker(response=AskerResponse(choice="deny", feedback="wrong dir"))
+    hook = make_permission_hook(
+        asker=spy,
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=Path("/tmp"),
+    )
+    result = await hook(tool=_tool(), args={}, state=LoopState())
+    assert isinstance(result, ToolResult)
+    assert result.error == "denied: user — note: wrong dir"
+    decision_event = next(e for e in journal_events if e[0] == "permission_decision")
+    assert decision_event[1]["feedback"] == "wrong dir"
+
+
+async def test_ask_accept_with_feedback_keeps_allow_but_records_note(
+    journal_events: list[tuple[str, dict[str, Any]]],
+) -> None:
+    # Accept + feedback: tool still runs (result is None), but the
+    # feedback is journaled so downstream consumers / the model
+    # transcript can see what the user said.
+    spy = _SpyAsker(response=AskerResponse(choice="accept", feedback="ok, proceed"))
+    hook = make_permission_hook(
+        asker=spy,
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=Path("/tmp"),
+    )
+    result = await hook(tool=_tool(), args={}, state=LoopState())
+    assert result is None
+    decision_event = next(e for e in journal_events if e[0] == "permission_decision")
+    assert decision_event[1]["feedback"] == "ok, proceed"
+
+
+async def test_ask_no_feedback_omits_journal_field(
+    journal_events: list[tuple[str, dict[str, Any]]],
+) -> None:
+    # Default (empty) feedback must NOT land in the journal event —
+    # existing audit scrapers shouldn't see a spurious "feedback": ""
+    # key on every decision.
+    spy = _SpyAsker(response=AskerResponse(choice="deny"))
+    hook = make_permission_hook(
+        asker=spy,
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=Path("/tmp"),
+    )
+    await hook(tool=_tool(), args={}, state=LoopState())
+    decision_event = next(e for e in journal_events if e[0] == "permission_decision")
+    assert "feedback" not in decision_event[1]
 
 
 async def test_ask_always_session_scope_adds_rule_to_session() -> None:

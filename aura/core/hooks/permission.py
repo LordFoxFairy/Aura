@@ -83,11 +83,18 @@ class AskerResponse:
       no rule would be meaningless (nothing to install); an ``accept`` or
       ``deny`` with a rule would be a category error (the hook only
       installs on ``always``).
+
+    ``feedback`` carries the free-text note the user typed via the
+    widget's Tab-to-amend UX. Empty string means "no feedback" (the
+    common case); when non-empty it gets threaded into the journal
+    event AND — for denials — appended to the model-facing error
+    string so the LLM can read the user's reason for saying no.
     """
 
     choice: Literal["accept", "always", "deny"]
     scope: Literal["project", "session"] = "session"
     rule: Rule | None = None
+    feedback: str = ""
 
     def __post_init__(self) -> None:
         if self.choice == "always" and self.rule is None:
@@ -159,8 +166,13 @@ def _plan_error_message(tool: BaseTool, args: dict[str, Any]) -> str:
     )
 
 
-def _deny_message(decision: Decision) -> str:
+def _deny_message(decision: Decision, *, feedback: str = "") -> str:
     """Model-facing error string for denied decisions. Concise + actionable.
+
+    When the user provided free-text feedback via the widget's
+    Tab-to-amend path, append it to ``user_deny`` so the LLM can read
+    *why* the user said no. ``safety_blocked`` is generated mechanically
+    and has no user-authored reason — feedback is ignored there.
 
     Note: ``plan_mode_blocked`` is handled out-of-band by the hook so the
     message can embed the tool name + args preview without threading them
@@ -170,6 +182,8 @@ def _deny_message(decision: Decision) -> str:
         case "safety_blocked":
             return "denied: protected path (safety policy)"
         case "user_deny":
+            if feedback:
+                return f"denied: user — note: {feedback}"
             return "denied: user"
         case _:  # pragma: no cover — unreachable by construction
             return "denied"
@@ -242,7 +256,7 @@ def make_permission_hook(
         state: LoopState,
         **_: Any,
     ) -> ToolResult | None:
-        decision = await _decide(
+        decision, feedback = await _decide(
             tool=tool,
             args=args,
             asker=asker,
@@ -252,6 +266,13 @@ def make_permission_hook(
             mode=mode,
             safety=safety,
         )
+        # Journal the decision. ``feedback`` is only ever non-empty when
+        # the user typed a note via the widget's Tab-to-amend flow;
+        # otherwise the field is omitted so existing audit scrapers
+        # don't see a spurious empty string on every event.
+        extra: dict[str, Any] = {}
+        if feedback:
+            extra["feedback"] = feedback
         journal.write(
             "permission_decision",
             tool=tool.name,
@@ -259,6 +280,7 @@ def make_permission_hook(
             rule=decision.rule.to_string() if decision.rule is not None else None,
             mode=mode,
             target=decision.target,
+            **extra,
         )
         # Transient per-call stash: loop._plan_tool_calls reads this back
         # IMMEDIATELY after run_pre_tool returns (same tool call, same
@@ -273,7 +295,7 @@ def make_permission_hook(
             return ToolResult(
                 ok=False, error=_plan_error_message(tool, args),
             )
-        return ToolResult(ok=False, error=_deny_message(decision))
+        return ToolResult(ok=False, error=_deny_message(decision, feedback=feedback))
 
     return _hook
 
@@ -288,7 +310,15 @@ async def _decide(
     project_root: Path,
     mode: Mode,
     safety: SafetyPolicy,
-) -> Decision:
+) -> tuple[Decision, str]:
+    """Decide whether to allow + return (decision, feedback).
+
+    ``feedback`` is the free-text note the user typed via the widget's
+    Tab-to-amend flow, or ``""`` when unavailable / not applicable. Only
+    the user-interactive branches (accept / always / deny via the asker)
+    can produce feedback; rule-allow / safety-blocked / mode-bypass
+    short-circuits always return ``""``.
+    """
     # 1. Bypass mode — loud and first. Note: bypass deliberately does NOT
     # run through safety here; the safety floor for bypass lives at the
     # tool level (bash_safety_hook) and for path tools is enforced by
@@ -297,7 +327,7 @@ async def _decide(
     # ``test_bypass_mode_short_circuits_even_on_protected_path``.
     if mode == "bypass":
         journal.write("permission_bypass", tool=tool.name)
-        return Decision(allow=True, reason="mode_bypass")
+        return Decision(allow=True, reason="mode_bypass"), ""
 
     # 2. Safety — any tool with a resolvable path arg, write-or-read
     # direction chosen by the tool's is_destructive flag. Runs BEFORE
@@ -306,27 +336,27 @@ async def _decide(
     if target is not None:
         is_write = bool((tool.metadata or {}).get("is_destructive", False))
         if is_protected(target, safety, is_write=is_write):
-            return Decision(allow=False, reason="safety_blocked", target=target)
+            return Decision(allow=False, reason="safety_blocked", target=target), ""
 
     # 3. Plan mode — dry-run deny for every safety-cleared tool call.
     # Deliberately placed AFTER safety so a plan-mode session still
     # surfaces safety_blocked decisions for protected paths (the user
     # sees the real reason, not a generic "plan would have called").
     if mode == "plan":
-        return Decision(allow=False, reason="plan_mode_blocked")
+        return Decision(allow=False, reason="plan_mode_blocked"), ""
 
     # 4. accept_edits mode — auto-allow the edit-family tools. Any other
     # tool (bash, web_fetch, custom) falls through to the rule/ask path,
     # so side-effecting calls still require explicit consent.
     if mode == "accept_edits" and tool.name in _ACCEPT_EDITS_TOOLS:
-        return Decision(allow=True, reason="mode_accept_edits")
+        return Decision(allow=True, reason="mode_accept_edits"), ""
 
     # 5. Rule match — project first (includes built-in defaults), session second.
     matched = rules.matches(tool.name, args, tool)
     if matched is None:
         matched = session.matches(tool.name, args, tool)
     if matched is not None:
-        return Decision(allow=True, reason="rule_allow", rule=matched)
+        return Decision(allow=True, reason="rule_allow", rule=matched), ""
 
     # 6. Ask.
     rule_hint = Rule(tool=tool.name, content=None)
@@ -341,13 +371,14 @@ async def _decide(
             tool=tool.name,
             detail=f"{type(exc).__name__}: {exc}",
         )
-        return Decision(allow=False, reason="user_deny")
+        return Decision(allow=False, reason="user_deny"), ""
 
+    feedback = response.feedback
     match response.choice:
         case "accept":
-            return Decision(allow=True, reason="user_accept")
+            return Decision(allow=True, reason="user_accept"), feedback
         case "deny":
-            return Decision(allow=False, reason="user_deny")
+            return Decision(allow=False, reason="user_deny"), feedback
         case "always":
             _install_always(
                 response,
@@ -355,4 +386,7 @@ async def _decide(
                 project_root=project_root,
                 tool_name=tool.name,
             )
-            return Decision(allow=True, reason="user_always", rule=response.rule)
+            return (
+                Decision(allow=True, reason="user_always", rule=response.rule),
+                feedback,
+            )

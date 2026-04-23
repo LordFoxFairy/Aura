@@ -35,6 +35,10 @@ class HelpCommand:
         for cmd in commands:
             lines.append(f"  {cmd.name:<14} {cmd.description}")
         lines.append("")
+        lines.append(
+            "Keybindings: shift+tab cycles permission mode "
+            "(default -> accept_edits -> plan) · esc resets to default."
+        )
         lines.append("Anything else is sent as a prompt to the agent.")
         return CommandResult(
             handled=True, kind="print", text="\n".join(lines)

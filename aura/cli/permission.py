@@ -177,7 +177,7 @@ async def _pick_choice_interactive(
     tag: Literal["destructive", "read-only", "safe"],  # noqa: ARG001
     option_two_label: str,
     default_choice: int,
-) -> int | None:
+) -> tuple[int | None, str]:
     """Run an inline ``prompt_toolkit.Application`` that lets the user
     arrow-key through three options and commits on Enter.
 
@@ -196,9 +196,19 @@ async def _pick_choice_interactive(
           2. Yes, and don't ask again for: ...
           3. No
 
-        Esc to cancel · Enter to confirm · 1/2/3 to jump
+        Esc to cancel · Enter to confirm · 1/2/3 to jump · Tab to amend
 
-    Returns 1/2/3 on commit, ``None`` on cancel (Esc / Ctrl+C).
+    Returns ``(choice, feedback)`` — ``choice`` is 1/2/3 on commit or
+    ``None`` on cancel (Esc / Ctrl+C); ``feedback`` is the free-text
+    note the user typed via the Tab-to-amend path, or ``""`` when
+    absent (the common case).
+
+    Tab-to-amend (matches claude-code's ``useShellPermissionFeedback``):
+    user presses Tab while the cursor is on any option → a text-input
+    buffer appears below the options with a dim ``Add feedback (Enter
+    to submit, Esc to cancel)`` hint; printable keys append, Backspace
+    pops, Enter commits the focused option with the feedback, Esc
+    aborts the feedback entry (returns to option mode, no commit).
 
     Not ``full_screen`` — pt renders the block at the bottom of the
     scrollback and ``erase_when_done=True`` clears it on exit. An
@@ -224,6 +234,12 @@ async def _pick_choice_interactive(
     )
     cursor: list[int] = [default_choice - 1]
     committed: list[int | None] = [None]
+    # Tab-to-amend state. Single-slot lists so nested closures can
+    # mutate without nonlocal ceremony (same pattern as ``cursor`` /
+    # ``committed`` above).
+    awaiting_feedback: list[bool] = [False]
+    feedback_buf: list[str] = [""]
+    feedback_returned: list[str] = [""]
 
     def _widget_fragments() -> FormattedText:
         # Single FormattedText for the whole widget — keeps the block
@@ -253,20 +269,42 @@ async def _pick_choice_interactive(
             else:
                 frags.append(("class:dim", f"    {n}. {label}\n"))
         frags.append(("", "\n"))
-        frags.append((
-            "class:dim",
-            "  Esc to cancel · Enter to confirm · 1/2/3 to jump",
-        ))
+        if awaiting_feedback[0]:
+            # Feedback-entry mode: show the buffer on its own line with
+            # a caret cursor, plus the help text beneath. The hint line
+            # replaces the usual footer — elide "Tab to amend" since
+            # the input line itself is the cue.
+            frags.append(("ansicyan", f"  › {feedback_buf[0]}▌\n"))
+            frags.append((
+                "class:dim",
+                "  Add feedback (Enter to submit, Esc to cancel)",
+            ))
+        else:
+            frags.append((
+                "class:dim",
+                "  Esc to cancel · Enter to confirm · 1/2/3 to jump · Tab to amend",
+            ))
         return FormattedText(frags)
 
     kb = KeyBindings()
 
-    @kb.add("up")
+    def _in_option_mode() -> bool:
+        return not awaiting_feedback[0]
+
+    # --- Option-mode bindings (cursor navigation + number shortcuts +
+    # Tab to enter feedback mode). Guarded with a filter so they go
+    # inert while the feedback buffer is active — otherwise typing "1"
+    # as part of a note would commit the prompt.
+    from prompt_toolkit.filters import Condition
+
+    option_mode = Condition(_in_option_mode)
+
+    @kb.add("up", filter=option_mode)
     def _(event: Any) -> None:
         cursor[0] = (cursor[0] - 1) % len(options)
         event.app.invalidate()
 
-    @kb.add("down")
+    @kb.add("down", filter=option_mode)
     def _(event: Any) -> None:
         cursor[0] = (cursor[0] + 1) % len(options)
         event.app.invalidate()
@@ -274,27 +312,77 @@ async def _pick_choice_interactive(
     # Enter / Return. Real terminals send ``\r`` (CR), which pt maps to
     # ``c-m``; some callers send ``\n`` (LF) → ``c-j``. Bind both so
     # neither a real tty nor a piped stdin makes Enter silently no-op.
-    @kb.add("enter")
-    @kb.add("c-m")
-    @kb.add("c-j")
+    @kb.add("enter", filter=option_mode)
+    @kb.add("c-m", filter=option_mode)
+    @kb.add("c-j", filter=option_mode)
     def _(event: Any) -> None:
         committed[0] = options[cursor[0]][0]
         event.app.exit()
 
-    @kb.add("c-c")
-    @kb.add("escape")
+    @kb.add("c-c", filter=option_mode)
+    @kb.add("escape", filter=option_mode)
     def _(event: Any) -> None:
         committed[0] = None
         event.app.exit()
 
+    @kb.add("tab", filter=option_mode)
+    def _(event: Any) -> None:
+        awaiting_feedback[0] = True
+        event.app.invalidate()
+
     # Number shortcuts — 1/2/3 jump the cursor AND commit in one keystroke
     # (matches claude-code's number-to-commit convention).
     for i, (n, _label) in enumerate(options):
-        @kb.add(str(n))
+        @kb.add(str(n), filter=option_mode)
         def _(event: Any, idx: int = i) -> None:
             cursor[0] = idx
             committed[0] = options[idx][0]
             event.app.exit()
+
+    # --- Feedback-mode bindings. Enter commits with feedback, Esc aborts
+    # feedback entry (returns to option mode without committing),
+    # Backspace pops, any other printable key appends.
+    feedback_mode = Condition(lambda: awaiting_feedback[0])
+
+    @kb.add("enter", filter=feedback_mode)
+    @kb.add("c-m", filter=feedback_mode)
+    @kb.add("c-j", filter=feedback_mode)
+    def _(event: Any) -> None:
+        committed[0] = options[cursor[0]][0]
+        feedback_returned[0] = feedback_buf[0]
+        event.app.exit()
+
+    @kb.add("escape", filter=feedback_mode)
+    def _(event: Any) -> None:
+        # Esc cancels feedback entry but keeps the dialog open so the
+        # user can still pick an option. Clear the buffer so the next
+        # Tab starts fresh.
+        awaiting_feedback[0] = False
+        feedback_buf[0] = ""
+        event.app.invalidate()
+
+    @kb.add("c-c", filter=feedback_mode)
+    def _(event: Any) -> None:
+        # Ctrl+C is still a hard cancel — tear down the whole prompt.
+        committed[0] = None
+        feedback_returned[0] = ""
+        event.app.exit()
+
+    @kb.add("backspace", filter=feedback_mode)
+    def _(event: Any) -> None:
+        if feedback_buf[0]:
+            feedback_buf[0] = feedback_buf[0][:-1]
+            event.app.invalidate()
+
+    # Any printable character appends to the feedback buffer. Using
+    # ``<any>`` covers single-char key presses that aren't otherwise
+    # bound; the guard filters out non-printable control characters.
+    @kb.add("<any>", filter=feedback_mode)
+    def _(event: Any) -> None:
+        data = event.data
+        if data and data.isprintable():
+            feedback_buf[0] += data
+            event.app.invalidate()
 
     # Single-Window layout: one FormattedTextControl whose fragments
     # include embedded ``\n`` characters. pt wraps it to the correct
@@ -324,7 +412,7 @@ async def _pick_choice_interactive(
     # queue[0] at a time.
     async with prompt_mutex():
         await app.run_async()
-    return committed[0]
+    return committed[0], feedback_returned[0]
 
 
 def _render_decision_audit_line(
@@ -334,6 +422,7 @@ def _render_decision_audit_line(
     tag: Literal["destructive", "read-only", "safe"],
     preview: str,
     choice: int | None,
+    feedback: str = "",
 ) -> None:
     """Print a one-line audit trace of the decision the user just made.
 
@@ -343,14 +432,18 @@ def _render_decision_audit_line(
     here so the transcript reads linearly.
 
     Format: ``● bash(pwd) — yes`` / ``⚠ bash(rm) — no`` / etc.
+    Non-empty ``feedback`` (from the Tab-to-amend flow) appears as a
+    dim trailing `` — "note"`` so the scrollback records what the
+    user actually said.
     """
     color_map = {"destructive": "red", "read-only": "green", "safe": "yellow"}
     color = color_map[tag]
     marker = "⚠" if tag == "destructive" else "●"
     decision = {1: "yes", 2: "yes (always)", 3: "no", None: "cancelled"}[choice]
+    suffix = f' — "{feedback}"' if feedback else ""
     console.print(
         f"[{color}]{marker}[/{color}] [bold]{tool.name}[/bold]"
-        f"[dim]({preview}) — {decision}[/dim]"
+        f"[dim]({preview}) — {decision}{suffix}[/dim]"
     )
 
 
@@ -383,7 +476,7 @@ def make_cli_asker(console: Console | None = None) -> PermissionAsker:
         )
 
         try:
-            choice = await _pick_choice_interactive(
+            choice, feedback = await _pick_choice_interactive(
                 tool=tool,
                 preview=preview,
                 tag=tag,
@@ -406,22 +499,50 @@ def make_cli_asker(console: Console | None = None) -> PermissionAsker:
             return AskerResponse(choice="deny")
 
         _render_decision_audit_line(
-            _console, tool=tool, tag=tag, preview=preview, choice=choice,
+            _console,
+            tool=tool,
+            tag=tag,
+            preview=preview,
+            choice=choice,
+            feedback=feedback,
         )
 
+        # Thread ``feedback`` into the journal event AND the returned
+        # AskerResponse. Empty string is the common case (user didn't
+        # press Tab); non-empty flows on to the hook, which embeds it
+        # into the model-facing deny message and the decision journal.
+        answered_extra: dict[str, Any] = {}
+        if feedback:
+            answered_extra["feedback"] = feedback
         if choice == 1:
-            journal.write("permission_answered", tool=tool.name, choice="accept")
-            return AskerResponse(choice="accept")
+            journal.write(
+                "permission_answered",
+                tool=tool.name,
+                choice="accept",
+                **answered_extra,
+            )
+            return AskerResponse(choice="accept", feedback=feedback)
         if choice == 2:
-            journal.write("permission_answered", tool=tool.name, choice="always")
+            journal.write(
+                "permission_answered",
+                tool=tool.name,
+                choice="always",
+                **answered_extra,
+            )
             return AskerResponse(
                 choice="always",
                 scope=option_two_scope,
                 rule=option_two_rule,
+                feedback=feedback,
             )
         # choice == 3 (explicit No) OR None (Ctrl+C / Esc cancelled)
-        journal.write("permission_answered", tool=tool.name, choice="deny")
-        return AskerResponse(choice="deny")
+        journal.write(
+            "permission_answered",
+            tool=tool.name,
+            choice="deny",
+            **answered_extra,
+        )
+        return AskerResponse(choice="deny", feedback=feedback)
 
     return _ask
 

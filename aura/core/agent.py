@@ -381,6 +381,24 @@ class Agent:
         re-reading the permission store each render."""
         return self._mode
 
+    def set_mode(self, mode: str) -> None:
+        """Update the current permission mode.
+
+        Valid values: ``default`` / ``accept_edits`` / ``plan`` /
+        ``bypass``. The CLI's shift+tab keybinding uses this to cycle
+        among the three non-bypass modes at runtime; ``bypass`` remains
+        settable programmatically (CLI entry point uses it) but is
+        deliberately excluded from the interactive cycle — it can only
+        be enabled via ``--bypass-permissions``.
+        """
+        valid = {"default", "accept_edits", "plan", "bypass"}
+        if mode not in valid:
+            raise ValueError(
+                f"invalid mode {mode!r}; expected one of {sorted(valid)}"
+            )
+        self._mode = mode
+        journal.write("mode_changed", session=self._session_id, mode=mode)
+
     @property
     def context_window(self) -> int:
         """Effective context window in tokens. Honors

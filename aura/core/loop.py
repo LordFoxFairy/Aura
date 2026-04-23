@@ -31,10 +31,17 @@ from aura.schemas.events import (
     Final,
     PermissionAudit,
     ToolCallCompleted,
+    ToolCallProgress,
     ToolCallStarted,
 )
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError, ToolResult
+from aura.tools.errors import hint_for_error
+from aura.tools.progress import (
+    ProgressCallback,
+    reset_progress_callback,
+    set_progress_callback,
+)
 
 # Reasons for which a permission prompt was NOT shown — the renderer surfaces
 # an "auto-allowed: <reason>" dim line after ToolCallStarted. User-prompted
@@ -54,14 +61,22 @@ PATH_TRIGGER_TOOLS: dict[str, str] = {
 }
 
 
-def _serialize(result: ToolResult) -> str:
+def _serialize(result: ToolResult, *, tool_name: str = "") -> str:
     # `default=str` + `ensure_ascii=False`：遇到非 JSON-native 值
     # （datetime / Path / bytes）降级为字符串而非抛异常。
     # 这里抛出会导致那一条 ToolMessage 漏 append —— 破坏 tool_call.id 与
     # ToolMessage 的严格对齐。
     if result.ok:
         return json.dumps(result.output, default=str, ensure_ascii=False)
-    return result.error or "tool failed"
+    # On error, append the SAME hint the UI renders so the model sees the
+    # recovery guidance in its tool-result message — not just the user.
+    # Without this, a failing grep/read/edit leaves the model guessing how
+    # to recover while a red panel blinks at the human.
+    error = result.error or "tool failed"
+    hint = hint_for_error(tool_name, error)
+    if hint is not None:
+        return f"{error}\n\nHint: {hint}"
+    return error
 
 
 @dataclass(frozen=True)
@@ -257,7 +272,53 @@ class AgentLoop:
                 "tool_execute_begin", tool=tc["name"], tool_call_id=tc["id"],
             )
 
-        results = await asyncio.gather(*(self._execute_step(s) for s in batch))
+        # Progress plumbing: tools that opt-in (e.g. bash) push chunks onto
+        # ``progress_queue`` via the contextvar-based callback. We drain the
+        # queue WHILE gather is still awaiting — that's the whole reason a
+        # long ``npm test`` no longer sits silently. A ``None`` sentinel
+        # placed by the callback installer signals "all tools done".
+        progress_queue: asyncio.Queue[tuple[str, str, str] | None] = asyncio.Queue()
+
+        def _on_progress(tool_name: str) -> ProgressCallback:
+            def _cb(stream: Literal["stdout", "stderr"], chunk: str) -> None:
+                progress_queue.put_nowait((tool_name, stream, chunk))
+            return _cb
+
+        async def _execute_with_progress(step: ToolStep) -> ToolResult:
+            # Install the per-step callback only for THIS task's async
+            # context (contextvars are task-local), then reset so nothing
+            # leaks to the next batch.
+            token = set_progress_callback(_on_progress(step.tool_call["name"]))
+            try:
+                return await self._execute_step(step)
+            finally:
+                reset_progress_callback(token)
+
+        async def _gather_all() -> list[ToolResult]:
+            return list(await asyncio.gather(
+                *(_execute_with_progress(s) for s in batch),
+            ))
+
+        gather_task = asyncio.create_task(_gather_all())
+        # Sentinel pusher: queue a None once gather completes so the drain
+        # loop below can exit cleanly without racing on gather_task.done().
+        gather_task.add_done_callback(lambda _t: progress_queue.put_nowait(None))
+
+        while True:
+            item = await progress_queue.get()
+            if item is None:
+                break
+            tool_name, stream_name, chunk = item
+            # Literal narrowing — the callback only ever pushes valid labels,
+            # but the queue is typed loosely to keep the cast site local.
+            assert stream_name in ("stdout", "stderr")
+            yield ToolCallProgress(
+                name=tool_name,
+                stream=stream_name,  # type: ignore[arg-type]
+                chunk=chunk,
+            )
+
+        results: list[ToolResult] = await gather_task
 
         for step, result in zip(batch, results, strict=True):
             tc = step.tool_call
@@ -271,7 +332,7 @@ class AgentLoop:
             status: Literal["success", "error"] = "success" if result.ok else "error"
             history.append(
                 ToolMessage(
-                    content=_serialize(result),
+                    content=_serialize(result, tool_name=tc["name"]),
                     tool_call_id=tc["id"],
                     name=tc["name"],
                     status=status,

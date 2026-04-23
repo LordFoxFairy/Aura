@@ -17,8 +17,18 @@ from aura.schemas.events import (
     AssistantDelta,
     PermissionAudit,
     ToolCallCompleted,
+    ToolCallProgress,
     ToolCallStarted,
 )
+from aura.tools.errors import hint_for_error
+
+
+# Re-exported so existing callers / tests can continue to do
+# ``from aura.cli.render import _hint_for_error``; the real table
+# lives in ``aura.tools.errors`` to avoid a cli → tool-error layering
+# inversion (loop.py needs it too, and must not import from cli).
+def _hint_for_error(tool_name: str, error: str) -> str | None:
+    return hint_for_error(tool_name, error)
 
 
 class Renderer:
@@ -41,6 +51,26 @@ class Renderer:
             # started line. Audit text carries rule strings that may contain
             # literal ``[...]`` — escape before wrapping in [dim].
             self._console.print(f"    [dim]{rich_escape(event.text)}[/dim]")
+            return
+        if isinstance(event, ToolCallProgress):
+            # Stream each chunk dim, with a ``│`` prefix so bash output
+            # visually nests under its ToolCallStarted line rather than
+            # masquerading as assistant prose. The spinner is already
+            # stopped by the first tool event in this turn — progress
+            # events ride on the same "some tool event fired" trigger
+            # so nothing flickers.
+            #
+            # Trailing newlines stripped: rich's ``print`` adds its own,
+            # so a newline-terminated chunk would otherwise emit a blank
+            # row per line.
+            text = event.chunk.rstrip("\n")
+            if not text:
+                return
+            for line in text.split("\n"):
+                self._console.print(
+                    f"[dim]│ {rich_escape(line)}[/dim]",
+                    highlight=False,
+                )
             return
         if isinstance(event, ToolCallCompleted):
             if event.error:
@@ -181,53 +211,11 @@ _TOOL_RESULT_FORMATTERS: dict[str, Callable[[Any], str]] = {
 # Error rendering — boxed panel + actionable hints. Replaces the previous
 # `✗ message` one-liner so operators see WHAT failed and a concrete next
 # step without hunting the transcript for context.
+#
+# Hint lookup lives in ``aura.tools.errors`` (imported as ``_hint_for_error``
+# above) — shared with the loop's ToolMessage builder so the MODEL sees the
+# same guidance the user does. Don't inline the table here.
 # ---------------------------------------------------------------------------
-
-_ERROR_HINTS: list[tuple[str, str]] = [
-    # Order matters: first substring hit wins. Put the more-specific
-    # messages BEFORE shorter ones that would otherwise prefix-match.
-    ("ripgrep",
-     "install ripgrep — brew install ripgrep  (or the platform equivalent)"),
-    ("old_str not found",
-     "the string may have changed on disk; re-read the file to see "
-     "current content before the next edit_file"),
-    ("not found",
-     "check the path; the file may have been moved or deleted"),
-    ("has not been read yet",
-     "call read_file({path}) first — edit_file / write_file require a "
-     "prior read to catch staleness"),
-    ("file has changed since last read",
-     "re-read the file; its content drifted between read and edit"),
-    ("file was only partially read",
-     "read_file the target again with offset=0 limit=None before edit"),
-    ("unknown task_id",
-     "only IDs returned by task_create are valid; /tasks lists them"),
-    ("ripgrep",
-     "install ripgrep — brew install ripgrep  (or the platform equivalent)"),
-    ("cannot create parent dir",
-     "check write permissions on the parent directory"),
-    ("bash safety blocked",
-     "the command pattern is a hard floor; split into safer steps or "
-     "use non-matching syntax"),
-    ("plan mode",
-     "plan mode is active — switch to a different permission mode to "
-     "actually execute tools"),
-    ("timeout",
-     "raise the timeout kwarg for long-running work, or break the "
-     "command into chunks"),
-]
-
-
-def _hint_for_error(tool_name: str, error: str) -> str | None:
-    """First substring-match wins. Returns None when no hint applies; the
-    renderer omits the hint line entirely in that case rather than padding
-    with a generic 'try again' noise."""
-    _ = tool_name  # accepted for future per-tool routing; currently unused
-    haystack = error.lower()
-    for needle, hint in _ERROR_HINTS:
-        if needle.lower() in haystack:
-            return hint
-    return None
 
 
 def _render_tool_error(tool_name: str, error: str) -> Panel:

@@ -2,6 +2,39 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.7.6] — 1:1 claude-code parity polish
+
+Owner asked for 1:1 polish against claude-code's real source. Audited three surfaces in parallel (permission widget hotkeys, main prompt footer, per-tool result rendering), ranked gaps by value × cost, shipped the top 4. Skipped the rest with documented reasoning.
+
+### Shipped
+
+- **Error hints propagate to the LLM context.** Aura's error-pattern-to-hint mapping (ripgrep, "has not been read yet", permission-denied, etc.) was a user-facing-only panel; the model never saw it, so recovery in the next turn was worse than it could be. Moved the hint table into `aura/tools/errors.py` (shared between UI and the loop's ToolMessage serializer). Loop now appends `Hint: {text}` to the error string the model sees. The user's red panel keeps its prominent UX weight.
+- **Bash stdout/stderr streaming.** `aura/tools/bash.py` already captured output in ring buffers; it just didn't emit progress events. New `ToolCallProgress` event type, context-var-based progress callback plumbing (`aura/tools/progress.py`), renderer prints each chunk dim with a `│ ` prefix. Both stdout and stderr flow independently; spinner stops on first progress event.
+- **Tab to amend on permission widget.** Mirrors claude-code's `useShellPermissionFeedback.ts:51-80`. In the widget, Tab toggles a feedback-input buffer under the options — user types free-text, Enter commits the selected option with the feedback, Esc aborts feedback and returns to option mode. `AskerResponse` gains a `feedback: str = ""` field; the "user denied" message sent to the LLM includes `— note: {feedback}` when non-empty; journal event carries it as an optional key. Footer text cycles: `Tab to amend` on options, `Add feedback (Enter to submit, Esc to cancel)` in feedback mode.
+- **Shift+Tab cycles permission mode.** Mirrors claude-code's `PromptInputFooterLeftSide.tsx:360-368`. At the main prompt, Shift+Tab cycles `default → accept_edits → plan → default`. `bypass` is explicitly skipped (dangerous; only set via `--bypass-permissions` CLI flag). New `Agent.set_mode(mode)` with validation. Esc at the prompt resets to `default` (claude-code convention). Confirmation prints dim to the scrollback so the transcript records the change; bottom toolbar re-reads `agent.mode` on the next render.
+
+### Skipped (deliberate)
+
+- **ctrl+e to explain** (`PermissionExplanation.tsx:92-147`) — requires a separate LLM request per invocation. Added latency + cost + request volume. User can ask the model "explain this" inline instead; no UI-layer primitive needed.
+- **Custom StatusLine hook** (`StatusLine.tsx:30-34`) — user-level customization (shell command producing the status text). Nice-to-have, not parity-blocking. Defer until real demand.
+- **Team / PR / Voice / VIM / Remote** footer segments — Anthropic-specific features. Aura has no analog; porting would require the underlying features first.
+
+### Kept (Aura's existing wins, don't "align" away)
+
+- Error panel with red border + multi-line body for tool failures (more scannable than claude-code's inline text).
+- Per-tool hint mapping (teaches the model recovery without coaching).
+- Graceful degradation on malformed tool output.
+- Post-turn status checkpoint (claude-code hides its status during streaming with no mitigation).
+
+### Added files
+
+- `aura/tools/errors.py` — shared hint table + `hint_for_error()` function.
+- `aura/tools/progress.py` — ContextVar-based progress callback plumbing.
+
+### Stats
+
+- 1125 tests (baseline 1094, +31 new). Lint + mypy clean. Three parallel subagent diffs merged zero conflicts. Dogfooded: 3 widget scenarios (Tab-commit-with-feedback, Tab-Esc-abort, arrow-nav-and-Enter) all pass in pty.
+
 ## [0.7.5] — Interactive arrow-key permission widget + FIFO prompt mutex
 
 User dogfooded v0.7.4 and flagged two real problems: the prompt was typed-number-to-select (↑/↓ leaked through as raw escape codes) and the thinking spinner kept animating behind the prompt. Also pointed at claude-code's actual permission widget (screenshot) asking for that exact layout.

@@ -12,6 +12,7 @@ from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
+from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.panel import Panel
@@ -29,10 +30,71 @@ from aura.core.persistence import journal
 InputFn = Callable[[str], Awaitable[str]]
 
 
+#: Order used by the shift+tab mode-cycle keybinding. ``bypass`` is
+#: deliberately absent — it's dangerous (allow-everything) and can only
+#: be enabled via ``--bypass-permissions`` at CLI startup, never mid-session.
+_MODE_CYCLE: tuple[str, ...] = ("default", "accept_edits", "plan")
+
+
+def _cycle_mode(current: str) -> str:
+    """Advance ``current`` one step through :data:`_MODE_CYCLE`.
+
+    If ``current`` is not in the cycle (e.g. ``"bypass"``), returns it
+    unchanged — callers should check and short-circuit so the user sees
+    a clear message instead of an unexpected mode flip.
+    """
+    if current not in _MODE_CYCLE:
+        return current
+    idx = _MODE_CYCLE.index(current)
+    return _MODE_CYCLE[(idx + 1) % len(_MODE_CYCLE)]
+
+
+def _build_mode_key_bindings(agent: Agent, console: Console) -> KeyBindings:
+    """Build a KeyBindings with shift+tab bound to cycle the agent's mode.
+
+    Printed confirmation goes to ``console`` so the transcript records
+    the change (pt's bottom toolbar also re-reads ``agent.mode`` on the
+    next render via ``event.app.invalidate()``, so both surfaces update
+    in lockstep).
+    """
+    kb = KeyBindings()
+
+    @kb.add("s-tab")
+    def _(event: Any) -> None:
+        current = agent.mode
+        if current == "bypass":
+            console.print(
+                "[dim]shift+tab disabled under --bypass-permissions[/dim]"
+            )
+            return
+        new_mode = _cycle_mode(current)
+        agent.set_mode(new_mode)
+        console.print(
+            f"[dim]mode: {new_mode}  "
+            f"(press shift+tab to cycle · esc to reset to default)[/dim]"
+        )
+        event.app.invalidate()
+
+    @kb.add("escape", eager=True)
+    def _(event: Any) -> None:
+        # Esc resets to default — matches claude-code's convention. Eager
+        # so the single-tap Esc doesn't have to wait for the meta-key
+        # timeout. Under bypass we leave the mode alone (bypass is sticky
+        # for the whole session by design).
+        if agent.mode == "bypass" or agent.mode == "default":
+            return
+        agent.set_mode("default")
+        console.print("[dim]mode: default[/dim]")
+        event.app.invalidate()
+
+    return kb
+
+
 def _build_prompt_session(
     registry: CommandRegistry,
     agent: Agent | None = None,
     last_turn_seconds_getter: Callable[[], float] | None = None,
+    console: Console | None = None,
 ) -> PromptSession[str]:
     """Construct a PromptSession wired with history, completion, and an
     informational bottom toolbar.
@@ -69,6 +131,15 @@ def _build_prompt_session(
         "bottom-toolbar": "noreverse",
         "bottom-toolbar.text": "noreverse",
     })
+    # Shift+Tab cycles permission mode at the prompt — attach the
+    # binding only when we have both an agent (to mutate) and a console
+    # (to print confirmation). Missing either falls back to pt's default
+    # bindings (tests that only exercise history/completion won't trip).
+    key_bindings = (
+        _build_mode_key_bindings(agent, console)
+        if agent is not None and console is not None
+        else None
+    )
     return PromptSession(
         history=history,
         completer=completer,
@@ -76,6 +147,7 @@ def _build_prompt_session(
         search_ignore_case=True,
         bottom_toolbar=bottom_toolbar,
         style=style,
+        key_bindings=key_bindings,
     )
 
 
@@ -163,6 +235,7 @@ async def run_repl_async(
                 registry,
                 agent=agent,
                 last_turn_seconds_getter=lambda: last_turn_seconds[0],
+                console=_console,
             )
         )
     else:
@@ -244,7 +317,8 @@ def _print_welcome(agent: Agent, console: Console) -> None:
     body.append("✱ Aura", style="bold")
     body.append(f" v{__version__}  ·  ", style="dim")
     body.append("/help", style="cyan")
-    body.append("  ·  Ctrl+D to exit\n", style="dim")
+    body.append("  ·  Ctrl+D to exit  ·  ", style="dim")
+    body.append("shift+tab cycles mode\n", style="dim")
     body.append("model: ", style="dim")
     body.append(f"{agent.current_model}\n", style="")
     body.append("cwd: ", style="dim")

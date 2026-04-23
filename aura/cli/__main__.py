@@ -238,6 +238,7 @@ def main() -> int:
         await run_repl_async(
             agent, console=console, verbose=args.verbose,
             bypass=(mode == "bypass"),
+            statusline=perm_cfg.statusline,
         )
 
     try:

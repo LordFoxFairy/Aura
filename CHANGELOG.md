@@ -2,6 +2,46 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.8.0] — Task lifecycle tools + StatusLine hook + ctrl+e explain
+
+Major: Task subsystem gets a real lifecycle API (not just fire-and-forget), the bottom bar becomes user-extensible via a shell hook, and the permission widget gains ctrl+e for an inline explanation block. Shipped via 3 parallel subagents, merged zero conflicts.
+
+### Shipped
+
+- **Task lifecycle tools** — `task_get`, `task_list`, `task_stop` join `task_create` + `task_output`. Maps almost 1:1 onto claude-code's `TaskGetTool` / `TaskStopTool` / `TaskListTool`.
+  - `task_get` — returns full `TaskRecord` (status, started_at, finished_at, duration, final_result, error, progress) with an `include_messages` flag for the full transcript.
+  - `task_stop` — cancels a running subagent: looks up the `asyncio.Task` handle on `Agent._running_tasks`, cancels, awaits unwind with timeout, sets `status=cancelled`.
+  - `task_list` — paginated + status-filterable listing + a counts summary (`{running, completed, failed, cancelled}`).
+  - **Progress tracking** — `TaskRecord.progress: TaskProgress` (tool_count / token_count / last_activity_at / recent_activities ring-buffer cap 5). Updates from `run_task` as child tool events arrive.
+  - Slash commands: `/task-get <id>`, `/task-stop <id>` (short-id prefix resolution).
+  - Subagent inheritance: `task_get` / `task_list` / `task_stop` flow to children (they operate on the child's own store — safe no-op); `task_create` / `task_output` stay stripped (no recursion).
+
+- **Configurable StatusLine hook** — `.aura/settings.json` gains a new `statusline` block:
+  ```json
+  { "statusline": {"command": "bash -c ~/bin/aura-statusline.sh", "timeout_ms": 500, "enabled": true} }
+  ```
+  When set, each bottom-toolbar render executes the command with a stable v1 JSON envelope (`model`, `context_window`, `tokens`, `mode`, `cwd`, `last_turn_seconds`) on stdin. ANSI-escaped stdout becomes the bar. Timeouts / non-zero exits / crashes silently fall back to the default rendering — the bar never degrades to garbage. Matches claude-code's `StatusLine.tsx` hook contract.
+  - pt 3.0.52's `bottom_toolbar` must return synchronously; implemented as cached-value + async-refresh with `app.invalidate()` so each render shows the latest hook output without blocking.
+
+- **ctrl+e to explain** on the permission widget — toggles an inline `┌ Explanation … └` block with *What this tool does* / *Arguments* (pretty-printed 2-column, truncated at 80 chars) / *Risk* (one-liner per tag) / *What happens if you approve* (per-tool verb). **Static, no LLM call** — matches claude-code's UX surface without the latency / cost / race conditions of a separate inference. Ignored while in Tab-amend feedback mode so typing doesn't steal keystrokes.
+
+### Changed
+
+- `aura/core/tasks/types.py` — `TaskRecord.progress` field; `TaskProgress` dataclass.
+- `aura/core/tasks/store.py` — `record_activity()`, `list(limit=…)`.
+- `aura/core/tasks/run.py` — emits progress on each `ToolCallStarted`.
+- `aura/core/agent.py` — wires 3 new stateful tools.
+- `aura/config/schema.py` — default `tools.enabled` gains `task_get` / `task_list` / `task_stop`.
+- `aura/schemas/permissions.py` — new `StatusLineConfig`; `PermissionsConfig.statusline: StatusLineConfig | None`.
+- `aura/cli/permission.py` — `_build_explanation`, `c-e` keybinding, widget state `explain_visible`.
+- `aura/cli/statusline_hook.py` (NEW) — `run_statusline_command`, `build_envelope`, `STATUSLINE_ENVELOPE_VERSION`.
+- `aura/cli/status_bar.py` — `render_bottom_toolbar_with_hook`.
+- `aura/cli/repl.py` — cached-hook-output + async-refresh pattern.
+
+### Stats
+
+- 1181 tests pass (baseline 1125 + 56 new). Lint + mypy clean. Three subagents produced independent diffs with strict file ownership; integration merge required no manual fixups.
+
 ## [0.7.6] — 1:1 claude-code parity polish
 
 Owner asked for 1:1 polish against claude-code's real source. Audited three surfaces in parallel (permission widget hotkeys, main prompt footer, per-tool result rendering), ranked gaps by value × cost, shipped the top 4. Skipped the rest with documented reasoning.

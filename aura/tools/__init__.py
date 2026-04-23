@@ -24,7 +24,10 @@ from aura.tools.glob import Glob, glob
 from aura.tools.grep import Grep, grep
 from aura.tools.read_file import ReadFile, read_file
 from aura.tools.task_create import TaskCreate
+from aura.tools.task_get import TaskGet
+from aura.tools.task_list import TaskList
 from aura.tools.task_output import TaskOutput
+from aura.tools.task_stop import TaskStop
 from aura.tools.todo_write import TodoWrite
 from aura.tools.web_fetch import WebFetch, web_fetch
 from aura.tools.web_search import WebSearch
@@ -45,6 +48,9 @@ BUILTIN_STATEFUL_TOOLS: dict[str, type[BaseTool]] = {
     "ask_user_question": AskUserQuestion,
     "task_create": TaskCreate,
     "task_output": TaskOutput,
+    "task_get": TaskGet,
+    "task_list": TaskList,
+    "task_stop": TaskStop,
     "web_search": WebSearch,
 }
 
@@ -58,7 +64,10 @@ __all__ = [
     "Grep",
     "ReadFile",
     "TaskCreate",
+    "TaskGet",
+    "TaskList",
     "TaskOutput",
+    "TaskStop",
     "TodoWrite",
     "ToolError",
     "ToolResult",

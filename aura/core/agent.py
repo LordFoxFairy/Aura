@@ -156,8 +156,13 @@ class Agent:
                     factory=self._subagent_factory,
                     running=self._running_tasks,
                 )
-            elif name == "task_output":
+            elif name == "task_output" or name == "task_get" or name == "task_list":
                 self._available_tools[name] = cls(store=self._tasks_store)
+            elif name == "task_stop":
+                self._available_tools[name] = cls(
+                    store=self._tasks_store,
+                    running=self._running_tasks,
+                )
             elif name == "web_search":
                 # web_search takes an optional WebSearchConfig; when the user
                 # did not declare ``web_search:`` in config, the tool falls

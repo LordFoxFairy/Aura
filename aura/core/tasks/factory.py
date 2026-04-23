@@ -20,7 +20,17 @@ Inheritance rules (matches claude-code's Task tool):
   servers. That's the simplest + correct-enough design.
 - Recursion guard: ``task_create`` / ``task_output`` are stripped from the
   child's tools.enabled — a subagent CANNOT spawn further subagents in
-  0.5.x (dispatch not wired into child Agents yet).
+  0.5.x (dispatch not wired into child Agents yet). The inspection tools
+  ``task_get`` / ``task_list`` / ``task_stop`` ARE inherited: they operate
+  on the shared :class:`TasksStore` held by the parent Agent, so a
+  subagent can poll its siblings. Each child gets its own TasksStore
+  instance in practice (spawn builds a fresh Agent, which builds a fresh
+  store), so ``task_get("sibling-id")`` from a subagent will see an empty
+  store and return ``unknown task_id`` — that's intentional: siblings
+  aren't visible across the parent/child boundary, and we don't want to
+  leak parent state into the child. Keeping the tools enabled means the
+  LLM inside the subagent doesn't hallucinate "maybe task_get exists"
+  without a way to verify.
 - Parent hooks (permission, budget) are NOT inherited. Safety hooks
   (bash_safety + must_read_first) are re-installed inside the child's
   ``__init__`` via the same code path as the parent, so the subagent is

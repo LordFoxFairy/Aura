@@ -41,7 +41,10 @@ def _agent(tmp_path: Path) -> Agent:
 def test_default_registry_has_builtin_set() -> None:
     r = build_default_registry()
     names = {c.name for c in r.list()}
-    assert names == {"/help", "/exit", "/clear", "/compact", "/model", "/tasks"}
+    assert names == {
+        "/help", "/exit", "/clear", "/compact", "/model",
+        "/tasks", "/task-get", "/task-stop",
+    }
 
 
 @pytest.mark.asyncio

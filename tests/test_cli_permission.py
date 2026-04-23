@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from rich.console import Console
 
 from aura.cli.permission import (
+    _build_explanation,
     _compose_option_two,
     _preview,
     _render_decision_audit_line,
@@ -627,6 +628,117 @@ async def test_picker_no_tab_returns_empty_feedback() -> None:
     choice, feedback = await _drive_picker("\r")
     assert choice == 1
     assert feedback == ""
+
+
+# ---------------------------------------------------------------------------
+# _build_explanation — Ctrl+E static explanation block
+# ---------------------------------------------------------------------------
+def _fragment_text(frags: Any) -> str:
+    """Flatten a FormattedText list into a single string for content
+    assertions (style tuples → just their text component)."""
+    return "".join(text for _style, text in frags)
+
+
+def test_build_explanation_has_required_sections() -> None:
+    tool = _bash_like()
+    frags = _build_explanation(tool, {"command": "ls"}, "safe")
+    text = _fragment_text(frags)
+    assert "Arguments:" in text
+    assert "Risk:" in text
+    assert "What happens" in text
+    # Framing chrome so it reads as a collapsible panel.
+    assert "┌ Explanation" in text
+    assert "└" in text
+
+
+def test_build_explanation_renders_args_key_value() -> None:
+    tool = _bash_like()
+    frags = _build_explanation(tool, {"command": "npm test"}, "safe")
+    text = _fragment_text(frags)
+    assert "command: npm test" in text
+
+
+def test_build_explanation_truncates_long_arg_values() -> None:
+    tool = _bash_like()
+    huge = "x" * 500
+    frags = _build_explanation(tool, {"command": huge}, "safe")
+    text = _fragment_text(frags)
+    # No line in the block should carry the full 500-char value.
+    assert huge not in text
+    assert "…" in text
+
+
+def test_build_explanation_destructive_risk_line() -> None:
+    tool = _bash_like(is_destructive=True)
+    frags = _build_explanation(tool, {"command": "rm -rf /"}, "destructive")
+    text = _fragment_text(frags)
+    assert "modify or delete" in text
+
+
+def test_build_explanation_read_only_risk_line() -> None:
+    tool = _bash_like(is_read_only=True)
+    frags = _build_explanation(tool, {"command": "cat x"}, "read-only")
+    text = _fragment_text(frags)
+    assert "no side effects" in text
+
+
+def test_build_explanation_safe_risk_line() -> None:
+    tool = _bash_like()
+    frags = _build_explanation(tool, {"command": "mkdir a"}, "safe")
+    text = _fragment_text(frags)
+    assert "Low risk" in text
+
+
+def test_build_explanation_uses_tool_verb_for_known_tool() -> None:
+    # ``bash`` is in _TOOL_VERB → the "What happens" line uses "Run
+    # shell command" rather than the generic fallback.
+    tool = _bash_like()
+    frags = _build_explanation(tool, {"command": "ls"}, "safe")
+    text = _fragment_text(frags)
+    assert "Run shell command" in text
+
+
+def test_build_explanation_handles_empty_args() -> None:
+    # A tool invoked with no args still renders an Arguments section,
+    # marked ``(none)`` — not an empty / missing block.
+    tool = _bash_like()
+    frags = _build_explanation(tool, {}, "safe")
+    text = _fragment_text(frags)
+    assert "Arguments:" in text
+    assert "(none)" in text
+
+
+# ---------------------------------------------------------------------------
+# _pick_choice_interactive — Ctrl+E toggle via driven keystrokes
+# ---------------------------------------------------------------------------
+async def test_picker_ctrl_e_does_not_crash_and_commits() -> None:
+    # Ctrl+E toggles the panel and Enter still commits the default
+    # option. We can't introspect the widget's internal state from
+    # outside the Application, but the commit-after-toggle path
+    # exercises the keybinding end-to-end — if the binding were
+    # unregistered or raised, Enter wouldn't reach the c-m handler
+    # cleanly.
+    choice, feedback = await _drive_picker("\x05\r")  # ctrl+e then Enter
+    assert choice == 1
+    assert feedback == ""
+
+
+async def test_picker_ctrl_e_toggle_twice_still_commits() -> None:
+    # Two Ctrl+E presses (show, then hide) and Enter commits default —
+    # the state must flip both ways without wedging the widget.
+    choice, feedback = await _drive_picker("\x05\x05\r")
+    assert choice == 1
+    assert feedback == ""
+
+
+async def test_picker_ctrl_e_ignored_in_feedback_mode() -> None:
+    # Tab → feedback mode; Ctrl+E is non-printable so the ``<any>``
+    # feedback-mode binding filters it out, AND the option-mode filter
+    # on the c-e binding prevents a toggle. Result: typed "ab", Ctrl+E
+    # is dropped, feedback is "ab", Enter commits default.
+    choice, feedback = await _drive_picker("\ta\x05b\r")
+    assert choice == 1
+    assert feedback == "ab"
 
 
 # ---------------------------------------------------------------------------

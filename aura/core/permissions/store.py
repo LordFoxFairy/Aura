@@ -141,6 +141,9 @@ def load(project_root: Path) -> PermissionsConfig:
     #          still a wins-value (the user can downgrade project bypass
     #          on their own machine).
     #   allow / safety_exempt — concat, project first.
+    #   statusline — local wins entirely when present (it's a single
+    #          config object, not a list; local is the "per-machine
+    #          override" surface, so it's the natural winner).
     # Route the merged dict through model_validate so pydantic narrows
     # ``mode`` from Any to the Literal it declares — mypy-clean without a cast.
     merged: dict[str, Any] = {
@@ -154,6 +157,9 @@ def load(project_root: Path) -> PermissionsConfig:
             + list(local_raw.get("safety_exempt") or [])
         ),
     }
+    statusline = local_raw.get("statusline") or project_raw.get("statusline")
+    if statusline is not None:
+        merged["statusline"] = statusline
     return PermissionsConfig.model_validate(merged)
 
 

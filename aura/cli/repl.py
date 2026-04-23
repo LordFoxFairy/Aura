@@ -26,6 +26,7 @@ from aura.cli.spinner import ThinkingSpinner
 from aura.core.agent import Agent
 from aura.core.commands import CommandRegistry
 from aura.core.persistence import journal
+from aura.schemas.permissions import StatusLineConfig
 
 InputFn = Callable[[str], Awaitable[str]]
 
@@ -95,6 +96,7 @@ def _build_prompt_session(
     agent: Agent | None = None,
     last_turn_seconds_getter: Callable[[], float] | None = None,
     console: Console | None = None,
+    statusline: StatusLineConfig | None = None,
 ) -> PromptSession[str]:
     """Construct a PromptSession wired with history, completion, and an
     informational bottom toolbar.
@@ -123,7 +125,7 @@ def _build_prompt_session(
     history = FileHistory(str(resolve_history_path()))
     completer = SlashCommandCompleter(lambda: registry)
     bottom_toolbar = (
-        _make_bottom_toolbar(agent, last_turn_seconds_getter)
+        _make_bottom_toolbar(agent, last_turn_seconds_getter, statusline)
         if agent is not None
         else None
     )
@@ -154,6 +156,7 @@ def _build_prompt_session(
 def _make_bottom_toolbar(
     agent: Agent,
     last_turn_seconds_getter: Callable[[], float] | None = None,
+    statusline: StatusLineConfig | None = None,
 ) -> Callable[[], Any]:
     """Build a pt-compatible bottom_toolbar callable that reads live agent
     state on each render. Closing over ``agent`` rather than snapshotting
@@ -165,27 +168,112 @@ def _make_bottom_toolbar(
     ``last_turn_seconds_getter`` is a closure over a REPL-scope mutable
     so the bar picks up the most recent turn's wall-clock duration without
     stashing it on agent state (it's display-only REPL info).
+
+    When ``statusline`` is set and active, the callable runs the user's
+    shell command to produce the bar text; each render kicks off an
+    async refresh and returns the LAST cached value so pt (whose
+    toolbar callable must return synchronously) never blocks on the
+    subprocess. pt gets told to ``invalidate()`` when the refresh
+    completes so the new text shows on the very next paint.
     """
     from aura.cli.status_bar import render_bottom_toolbar_html
 
-    def _render() -> Any:
+    # Cache for hook-driven bars: holds the LAST successful hook render
+    # (or ``None`` pre-first-fire) so pt always has SOMETHING to paint
+    # synchronously. Hook runs async in the background; on completion
+    # it rewrites this cell and invalidates the pt app.
+    hook_cache: list[Any] = [None]
+    refresh_in_flight: list[bool] = [False]
+
+    def _snapshot() -> dict[str, Any]:
         stats = agent.state.custom.get("_token_stats", {})
-        input_tokens = int(stats.get("last_input_tokens", 0))
-        cache_tokens = int(stats.get("last_cache_read_tokens", 0))
-        model = agent.current_model or ""
-        last_secs = (
-            last_turn_seconds_getter() if last_turn_seconds_getter else 0.0
-        )
+        return {
+            "input_tokens": int(stats.get("last_input_tokens", 0)),
+            "cache_tokens": int(stats.get("last_cache_read_tokens", 0)),
+            "model": agent.current_model or "",
+            "last_secs": (
+                last_turn_seconds_getter() if last_turn_seconds_getter else 0.0
+            ),
+            "pinned": agent.pinned_tokens_estimate,
+            "window": agent.context_window,
+            "mode": agent.mode,
+            "cwd": Path.cwd(),
+        }
+
+    def _render_default(snap: dict[str, Any]) -> Any:
         return render_bottom_toolbar_html(
-            model=model or None,
-            input_tokens=input_tokens,
-            cache_read_tokens=cache_tokens,
-            pinned_estimate_tokens=agent.pinned_tokens_estimate,
-            context_window=agent.context_window,
-            mode=agent.mode,
-            cwd=Path.cwd(),
-            last_turn_seconds=last_secs,
+            model=snap["model"] or None,
+            input_tokens=snap["input_tokens"],
+            cache_read_tokens=snap["cache_tokens"],
+            pinned_estimate_tokens=snap["pinned"],
+            context_window=snap["window"],
+            mode=snap["mode"],
+            cwd=snap["cwd"],
+            last_turn_seconds=snap["last_secs"],
         )
+
+    hook_active = statusline is not None and statusline.is_active
+
+    def _render() -> Any:
+        snap = _snapshot()
+        if not hook_active or statusline is None:
+            return _render_default(snap)
+        # Hook path — return cached value immediately, refresh in bg.
+        if not refresh_in_flight[0]:
+            refresh_in_flight[0] = True
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(_refresh(snap))
+            except RuntimeError:
+                # No running loop (e.g. smoke tests invoking the callable
+                # outside an event loop); just synchronously fall back.
+                refresh_in_flight[0] = False
+                return _render_default(snap)
+        cached = hook_cache[0]
+        return cached if cached is not None else _render_default(snap)
+
+    async def _refresh(snap: dict[str, Any]) -> None:
+        """Background job: run the hook, update the cache, invalidate pt.
+
+        Any exception is swallowed — the default render is already in the
+        cache fallback path, so a hook crash is visually indistinguishable
+        from the hook being unset. Errors go to the journal for debugging.
+        """
+        from aura.cli.status_bar import render_bottom_toolbar_with_hook
+
+        try:
+            assert statusline is not None
+            result = await render_bottom_toolbar_with_hook(
+                model=snap["model"] or None,
+                input_tokens=snap["input_tokens"],
+                cache_read_tokens=snap["cache_tokens"],
+                pinned_estimate_tokens=snap["pinned"],
+                context_window=snap["window"],
+                mode=snap["mode"],
+                cwd=snap["cwd"],
+                last_turn_seconds=snap["last_secs"],
+                hook_command=statusline.command,
+                hook_timeout_s=statusline.timeout_ms / 1000.0,
+            )
+            hook_cache[0] = result
+            # Ask pt to repaint — without this the new cached value would
+            # only show on the NEXT user keystroke.
+            try:
+                from prompt_toolkit.application.current import (
+                    get_app_or_none,
+                )
+                app = get_app_or_none()
+                if app is not None:
+                    app.invalidate()
+            except Exception:  # noqa: BLE001
+                pass
+        except Exception as exc:  # noqa: BLE001 — display-path resilience
+            journal.write(
+                "statusline_hook_error",
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+        finally:
+            refresh_in_flight[0] = False
 
     return _render
 
@@ -208,6 +296,7 @@ async def run_repl_async(
     console: Console | None = None,
     verbose: bool = False,
     bypass: bool = False,
+    statusline: StatusLineConfig | None = None,
 ) -> None:
     journal.write("repl_started")
     _console = console if console is not None else Console()
@@ -236,6 +325,7 @@ async def run_repl_async(
                 agent=agent,
                 last_turn_seconds_getter=lambda: last_turn_seconds[0],
                 console=_console,
+                statusline=statusline,
             )
         )
     else:

@@ -18,7 +18,7 @@ from aura.core.commands.builtin import (
     HelpCommand,
     ModelCommand,
 )
-from aura.core.commands.tasks import TasksCommand
+from aura.core.commands.tasks import TaskGetCommand, TasksCommand, TaskStopCommand
 from aura.core.skills.command import SkillCommand
 
 __all__ = [
@@ -46,6 +46,8 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     r.register(CompactCommand())
     r.register(ModelCommand())
     r.register(TasksCommand())
+    r.register(TaskGetCommand())
+    r.register(TaskStopCommand())
     if agent is not None:
         for skill in agent._skill_registry.list():
             r.register(SkillCommand(skill=skill, agent=agent))

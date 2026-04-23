@@ -146,6 +146,86 @@ def _preview(tool: BaseTool, args: dict[str, Any]) -> str:
     return tool.name
 
 
+# Risk one-liners shown in the Ctrl+E explanation block. Tag → human
+# phrasing. Kept here (not in _TOOL_VERB or the tag resolver) so the
+# wording stays close to the rendering site.
+_RISK_LINES: dict[str, str] = {
+    "destructive": "⚠ This tool can modify or delete data.",
+    "read-only": "● Read-only — no side effects.",
+    "safe": "● Low risk — creates new data without overwrite.",
+}
+
+
+def _build_explanation(
+    tool: BaseTool,
+    args: dict[str, Any],
+    tag: Literal["destructive", "read-only", "safe"],
+) -> list[tuple[str, str]]:
+    """Render the Ctrl+E explanation block for this tool invocation.
+
+    Static, local-only — no LLM, no agent callback. Pulls from:
+
+      * ``tool.description`` (first paragraph, up to 4 lines) for *what*
+        this tool does in general,
+      * ``args`` dict for *how* it's being called this time (2-column
+        ``key: value`` block, values truncated to 80 chars so a giant
+        bash command doesn't balloon the widget),
+      * ``tag`` for the risk one-liner,
+      * ``_TOOL_VERB`` for the "what happens if you approve" line.
+
+    Framed with ``┌ Explanation`` / ``└`` so it reads as a collapsible
+    panel. All dim except the header to visually demote it below the
+    question + options.
+    """
+    frags: list[tuple[str, str]] = [
+        ("class:dim bold", "  ┌ Explanation\n"),
+    ]
+
+    # "What this tool does" — first paragraph of description, up to 4
+    # lines. Paragraph-break on the first blank line so long docstrings
+    # don't bleed their full API reference into the widget.
+    desc = (tool.description or "").strip()
+    para_lines: list[str] = []
+    for line in desc.splitlines():
+        if not line.strip():
+            break
+        para_lines.append(line.strip())
+        if len(para_lines) >= 4:
+            break
+    if para_lines:
+        frags.append(("class:dim bold", "  │ What this tool does:\n"))
+        for line in para_lines:
+            frags.append(("class:dim", f"  │     {line}\n"))
+
+    # "Arguments" — 2-column key: value. Values truncated to 80 chars
+    # (visual-only; the tool still receives the full args downstream).
+    frags.append(("class:dim bold", "  │ Arguments:\n"))
+    if args:
+        for key, value in args.items():
+            rendered = repr(value) if not isinstance(value, str) else value
+            if len(rendered) > 80:
+                rendered = rendered[:79] + "…"
+            frags.append(("class:dim", f"  │     {key}: {rendered}\n"))
+    else:
+        frags.append(("class:dim", "  │     (none)\n"))
+
+    # "Risk" — static one-liner per tag.
+    frags.append(("class:dim bold", "  │ Risk:\n"))
+    frags.append(("class:dim", f"  │     {_RISK_LINES[tag]}\n"))
+
+    # "What happens if you approve" — per-tool verb or generic fallback.
+    frags.append(("class:dim bold", "  │ What happens if you approve:\n"))
+    verb = _TOOL_VERB.get(tool.name)
+    if verb:
+        happens = f"{verb} with the arguments above."
+    else:
+        happens = "The tool will be invoked with the arguments above."
+    frags.append(("class:dim", f"  │     {happens}\n"))
+
+    frags.append(("class:dim bold", "  └\n"))
+    return frags
+
+
 def _compose_option_two(
     tool: BaseTool, args: dict[str, Any],
 ) -> tuple[str, Rule, Literal["project", "session"]]:
@@ -174,9 +254,10 @@ async def _pick_choice_interactive(
     *,
     tool: BaseTool,
     preview: str,
-    tag: Literal["destructive", "read-only", "safe"],  # noqa: ARG001
+    tag: Literal["destructive", "read-only", "safe"],
     option_two_label: str,
     default_choice: int,
+    args: dict[str, Any] | None = None,
 ) -> tuple[int | None, str]:
     """Run an inline ``prompt_toolkit.Application`` that lets the user
     arrow-key through three options and commits on Enter.
@@ -240,6 +321,11 @@ async def _pick_choice_interactive(
     awaiting_feedback: list[bool] = [False]
     feedback_buf: list[str] = [""]
     feedback_returned: list[str] = [""]
+    # Ctrl+E explanation-panel toggle. Starts collapsed; Ctrl+E flips.
+    # Kept out of feedback mode so a Ctrl+E mid-note doesn't steal the
+    # keystroke from the buffer.
+    explain_visible: list[bool] = [False]
+    explanation_frags = _build_explanation(tool, args or {}, tag)
 
     def _widget_fragments() -> FormattedText:
         # Single FormattedText for the whole widget — keeps the block
@@ -261,6 +347,14 @@ async def _pick_choice_interactive(
         if verb:
             frags.append(("class:dim", f"  {verb}\n"))
         frags.append(("", "\n"))
+        if explain_visible[0]:
+            # Insert the pre-built explanation block between the verb
+            # and the question. Pre-built (not lazily rebuilt on every
+            # render) because tool/args don't change during the widget's
+            # lifetime — so we avoid re-walking description lines on
+            # every keystroke.
+            frags.extend(explanation_frags)
+            frags.append(("", "\n"))
         frags.append(("bold", "  Do you want to proceed?\n"))
         for i, (n, label) in enumerate(options):
             is_sel = i == cursor[0]
@@ -273,16 +367,21 @@ async def _pick_choice_interactive(
             # Feedback-entry mode: show the buffer on its own line with
             # a caret cursor, plus the help text beneath. The hint line
             # replaces the usual footer — elide "Tab to amend" since
-            # the input line itself is the cue.
+            # the input line itself is the cue. Ctrl+E is intentionally
+            # NOT advertised here: it's inert in feedback mode.
             frags.append(("ansicyan", f"  › {feedback_buf[0]}▌\n"))
             frags.append((
                 "class:dim",
                 "  Add feedback (Enter to submit, Esc to cancel)",
             ))
         else:
+            explain_hint = (
+                "ctrl+e to hide" if explain_visible[0] else "ctrl+e to explain"
+            )
             frags.append((
                 "class:dim",
-                "  Esc to cancel · Enter to confirm · 1/2/3 to jump · Tab to amend",
+                "  Esc to cancel · Enter to confirm · 1/2/3 to jump · "
+                f"Tab to amend · {explain_hint}",
             ))
         return FormattedText(frags)
 
@@ -328,6 +427,16 @@ async def _pick_choice_interactive(
     @kb.add("tab", filter=option_mode)
     def _(event: Any) -> None:
         awaiting_feedback[0] = True
+        event.app.invalidate()
+
+    # Ctrl+E — toggle the static explanation panel. Option-mode-only
+    # (feedback mode's ``<any>`` binding would otherwise eat it as the
+    # literal ``\x05`` byte, which is non-printable and gets filtered
+    # anyway — explicit option_mode filter is defence-in-depth so the
+    # keystroke is unambiguously ignored during feedback entry).
+    @kb.add("c-e", filter=option_mode)
+    def _(event: Any) -> None:
+        explain_visible[0] = not explain_visible[0]
         event.app.invalidate()
 
     # Number shortcuts — 1/2/3 jump the cursor AND commit in one keystroke
@@ -482,6 +591,7 @@ def make_cli_asker(console: Console | None = None) -> PermissionAsker:
                 tag=tag,
                 option_two_label=option_two_label,
                 default_choice=default_choice,
+                args=args,
             )
         except (KeyboardInterrupt, SystemExit):
             # Defensive — pt normally consumes these via the c-c /

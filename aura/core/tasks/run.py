@@ -19,7 +19,7 @@ import asyncio
 from aura.core.persistence import journal
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
-from aura.schemas.events import Final
+from aura.schemas.events import Final, ToolCallStarted
 
 
 async def run_task(
@@ -34,7 +34,13 @@ async def run_task(
     try:
         final_text = ""
         async for event in agent.astream(record.prompt):
-            if isinstance(event, Final):
+            if isinstance(event, ToolCallStarted):
+                # Progress is for the PARENT's ``task_get`` polling —
+                # cheap write, stays in parent's event loop, no cross-process
+                # sync. Child tool invocations are the most meaningful unit
+                # of "what is this subagent doing right now".
+                store.record_activity(task_id, event.name)
+            elif isinstance(event, Final):
                 final_text = event.message
         store.mark_completed(task_id, final_text)
     except asyncio.CancelledError:

@@ -21,6 +21,7 @@ def test_defaults() -> None:
     assert cfg.router == {"default": "openai:gpt-4o-mini"}
     assert cfg.tools.enabled == [
         "bash", "edit_file", "glob", "grep", "read_file",
+        "task_get", "task_list", "task_stop",
         "todo_write", "web_fetch", "write_file",
     ]
     assert cfg.ui.theme == "default"

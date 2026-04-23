@@ -33,8 +33,9 @@ Design notes
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.formatted_text import ANSI, HTML, FormattedText
 from rich.text import Text
 
 # emit ⚠ warning when turn input exceeds this %; gives user a heads-up before the auto-compact floor
@@ -234,3 +235,83 @@ def render_bottom_toolbar_html(
         )
 
     return HTML(" · ".join(pieces))
+
+
+# ---------------------------------------------------------------------------
+# User-overridable bottom-toolbar (StatusLine hook)
+# ---------------------------------------------------------------------------
+
+
+async def render_bottom_toolbar_with_hook(
+    *,
+    model: str | None,
+    input_tokens: int,
+    cache_read_tokens: int,
+    context_window: int,
+    mode: str,
+    cwd: Path,
+    pinned_estimate_tokens: int = 0,
+    last_turn_seconds: float = 0.0,
+    hook_command: str | None = None,
+    hook_timeout_s: float = 0.5,
+) -> Any:
+    """Like :func:`render_bottom_toolbar_html` but consults the user's
+    StatusLine hook first.
+
+    If ``hook_command`` is set, run it via
+    :func:`aura.cli.statusline_hook.run_statusline_command`; feed the
+    v1 envelope on stdin; use its stdout as the bar, wrapped as
+    :class:`prompt_toolkit.formatted_text.ANSI` so colour escapes the
+    user emits are rendered (not printed literally).
+
+    Any hook failure — ``None`` return, ``ANSI`` construction crash on
+    exotic input — falls back to the default ``render_bottom_toolbar_html``
+    path silently. The hook is a display convenience, never a hard
+    dependency. Errors NEVER propagate: a broken user script cannot
+    take down the REPL.
+
+    Return type is ``Any`` because we may return either ``ANSI``
+    (hook path) or ``HTML`` (fallback); both implement the
+    ``AnyFormattedText`` protocol that pt consumes.
+    """
+    from aura.cli.statusline_hook import build_envelope, run_statusline_command
+
+    default = render_bottom_toolbar_html(
+        model=model,
+        input_tokens=input_tokens,
+        cache_read_tokens=cache_read_tokens,
+        context_window=context_window,
+        mode=mode,
+        cwd=cwd,
+        pinned_estimate_tokens=pinned_estimate_tokens,
+        last_turn_seconds=last_turn_seconds,
+    )
+
+    if not hook_command:
+        return default
+
+    envelope = build_envelope(
+        model=model,
+        context_window_size=context_window,
+        input_tokens=input_tokens,
+        cache_read_tokens=cache_read_tokens,
+        pinned_estimate_tokens=pinned_estimate_tokens,
+        mode=mode,
+        cwd=str(cwd),
+        last_turn_seconds=last_turn_seconds,
+    )
+    try:
+        raw = await run_statusline_command(
+            command=hook_command,
+            timeout_seconds=hook_timeout_s,
+            envelope=envelope,
+        )
+    except Exception:  # noqa: BLE001 — display path must never crash the REPL
+        return default
+    if raw is None:
+        return default
+    try:
+        return ANSI(raw)
+    except Exception:  # noqa: BLE001 — unparseable ANSI ⇒ fall back
+        # Last-ditch: render as plain text so at least SOMETHING shows.
+        return FormattedText([("", raw)])

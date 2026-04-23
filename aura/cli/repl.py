@@ -64,28 +64,23 @@ def _build_prompt_session(
 def _make_bottom_toolbar(agent: Agent) -> Callable[[], Any]:
     """Build a pt-compatible bottom_toolbar callable that reads live agent
     state on each render. Closing over ``agent`` rather than snapshotting
-    the values is the whole point: every turn's new ``_token_stats`` shows
-    up in the bar without manual re-wiring."""
+    the values is the whole point: every turn's new ``_token_stats`` +
+    any mid-session ``/model`` switch show up in the bar without manual
+    re-wiring. ``Agent.mode`` and ``Agent.context_window`` encapsulate
+    the mode / window resolution so the toolbar stays a thin projection."""
     from aura.cli.status_bar import render_bottom_toolbar_html
-    from aura.core.llm import get_context_window
 
     def _render() -> Any:
         stats = agent.state.custom.get("_token_stats", {})
         input_tokens = int(stats.get("last_input_tokens", 0))
         cache_tokens = int(stats.get("last_cache_read_tokens", 0))
         model = agent.current_model or ""
-        window = get_context_window(model) if model else 128_000
-        # Mode lives outside Agent (in .aura/settings.json via store.load_ruleset),
-        # not on the config dataclass. The bottom bar stays mode-agnostic for
-        # now — "default" elides the mode piece entirely. Plumbing mode
-        # through Agent is a follow-up.
-        mode = "default"
         return render_bottom_toolbar_html(
             model=model or None,
             input_tokens=input_tokens,
             cache_read_tokens=cache_tokens,
-            context_window=window,
-            mode=mode,
+            context_window=agent.context_window,
+            mode=agent.mode,
             cwd=Path.cwd(),
         )
 

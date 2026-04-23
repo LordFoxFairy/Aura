@@ -215,6 +215,35 @@ def test_log_config_unknown_key_raises() -> None:
         })
 
 
+def test_context_window_default_is_none() -> None:
+    # When unset, the status bar falls back to ``llm.get_context_window`` —
+    # the override field being ``None`` by default is the signal that "no
+    # override is active", don't conflate with 0/missing.
+    assert AuraConfig().context_window is None
+
+
+def test_context_window_honors_override_value() -> None:
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "x", "protocol": "openai"}],
+        "router": {"default": "x:m"},
+        "context_window": 1_000_000,
+    })
+    assert cfg.context_window == 1_000_000
+
+
+def test_context_window_rejects_zero_and_negative() -> None:
+    # gt=0: context window of 0/-1 is meaningless and would cause div-by-zero
+    # in the status bar's pct calculation.
+    from pydantic import ValidationError
+    for bad in (0, -1, -1000):
+        with pytest.raises(ValidationError):
+            AuraConfig.model_validate({
+                "providers": [{"name": "x", "protocol": "openai"}],
+                "router": {"default": "x:m"},
+                "context_window": bad,
+            })
+
+
 def test_aura_config_rejects_permissions_key() -> None:
     # Post-2026-04-21: permission config doesn't live in config.json anymore.
     # It lives in settings.json (loaded by aura.core.permissions.store). If

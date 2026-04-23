@@ -88,6 +88,7 @@ class Agent:
         auto_compact_threshold: int = AUTO_COMPACT_THRESHOLD,
         session_log_dir: Path | None = None,
         pre_loaded_skills: SkillRegistry | None = None,
+        mode: str = "default",
     ) -> None:
         # ``session_rules``: CLI hands in the same SessionRuleSet that was used
         # to build the permission hook; Agent.clear_session drops its runtime
@@ -98,6 +99,12 @@ class Agent:
         self._hooks = hooks or HookChain()
         self._state = LoopState()
         self._session_rules = session_rules
+        # Permission mode — the CLI resolves the effective mode (config +
+        # --bypass-permissions flag) and hands it in. Stored here so the
+        # status bar can surface it without reaching back into the store
+        # each render. Valid values: "default" / "accept_edits" / "plan" /
+        # "bypass"; enforcement still happens in the permission hook.
+        self._mode = mode
         # Auto-compact trigger. Non-zero = enabled. When a turn completes
         # successfully and total_tokens_used crosses the threshold, astream
         # calls self.compact(source="auto") before returning. 0 disables it.
@@ -358,6 +365,27 @@ class Agent:
         return self._config.router.get("default", "")
 
     @property
+    def mode(self) -> str:
+        """Effective permission mode — one of
+        ``default`` / ``accept_edits`` / ``plan`` / ``bypass``. Read-only
+        mirror of what the CLI installed at construction. Surfaced here
+        so the bottom status bar can display the current mode without
+        re-reading the permission store each render."""
+        return self._mode
+
+    @property
+    def context_window(self) -> int:
+        """Effective context window in tokens. Honors
+        ``AuraConfig.context_window`` override when set, otherwise falls
+        back to ``aura.core.llm.get_context_window`` for the current
+        model. Kept on Agent so the bottom bar has one clean place to
+        read it from rather than re-resolving on every render."""
+        if self._config.context_window is not None:
+            return self._config.context_window
+        from aura.core.llm import get_context_window
+        return get_context_window(self.current_model)
+
+    @property
     def router_aliases(self) -> dict[str, str]:
         """除 'default' 之外的别名 → 'provider:model' 映射。"""
         return {k: v for k, v in self._config.router.items() if k != "default"}
@@ -479,6 +507,7 @@ def build_agent(
     session_id: str = _DEFAULT_SESSION,
     session_rules: SessionRuleSet | None = None,
     question_asker: QuestionAsker | None = None,
+    mode: str = "default",
 ) -> Agent:
     # 生产便利工厂：自动解析 model + storage；Agent 构造器保持 DI 注入以便测试替换。
     provider, model_name = llm.resolve(config.router["default"], cfg=config)
@@ -493,4 +522,5 @@ def build_agent(
         session_id=session_id,
         session_rules=session_rules,
         question_asker=question_asker,
+        mode=mode,
     )

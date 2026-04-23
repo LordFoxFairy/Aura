@@ -112,6 +112,19 @@ class AuraConfig(BaseModel):
     log: LogConfig = Field(default_factory=LogConfig)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     web_search: WebSearchConfig | None = None
+    # Optional per-user override for the context window the status bar uses
+    # to render the live context-pressure ratio. When ``None``, Aura looks
+    # the window up by model spec via ``aura.core.llm.get_context_window``;
+    # when set, this value wins regardless of model. Useful for:
+    #  - frontier models not yet in the table that the user knows the exact
+    #    window size of
+    #  - beta / extended-context deployments (e.g. Claude 4.x with 1M
+    #    extended context enabled — the model spec is the same but the
+    #    window is 5×)
+    #  - proxies that round-trip through a different provider's tokenizer
+    # Does NOT change what the model actually accepts — only the denominator
+    # the status bar divides by.
+    context_window: int | None = Field(default=None, gt=0)
     # NOTE: permission config does NOT live here. Providers/router/storage/log
     # are runtime wiring; permissions are a separate concern with their own
     # file(s) at ``.aura/settings.json`` + ``.aura/settings.local.json``,

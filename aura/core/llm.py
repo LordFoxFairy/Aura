@@ -37,10 +37,15 @@ _PROTOCOLS: dict[str, tuple[str, str, str | None]] = {
 # status bar to render `live/window` ratios. We match by substring with
 # longest-prefix wins so dated suffixes ("claude-opus-4-20250514") and
 # provider prefixes ("anthropic:claude-opus-4") both resolve to the family.
-# Unknown models fall back to a 128k modern default rather than raising —
-# a wrong ratio is a strictly better UX than a crashed status bar.
+# Unknown models fall back to ``_DEFAULT_CONTEXT_WINDOW`` (a deliberately
+# generous 512k so new frontier models that ship past our table still render
+# a usable ratio — a wrong-but-high ratio is a strictly better UX than a
+# crashed status bar OR a claim that a 1M-context model is at 40% when it's
+# actually at 10%).
 _CONTEXT_WINDOWS: dict[str, int] = {
-    # Anthropic
+    # Anthropic — Opus / Sonnet / Haiku families. Claude 4.x variants are
+    # documented at 200k standard + 1M extended-context; 200k is the
+    # default surface for most configurations, so that's what we display.
     "claude-3-5-sonnet": 200_000,
     "claude-3-5-haiku": 200_000,
     "claude-3-opus": 200_000,
@@ -48,6 +53,7 @@ _CONTEXT_WINDOWS: dict[str, int] = {
     "claude-3-haiku": 200_000,
     "claude-opus-4": 200_000,
     "claude-sonnet-4": 200_000,
+    "claude-haiku-4": 200_000,
     "claude-4": 200_000,
     # OpenAI — listed longest-first-friendly (longest-prefix match wins at
     # lookup time regardless of insertion order, but the ordering helps
@@ -56,10 +62,21 @@ _CONTEXT_WINDOWS: dict[str, int] = {
     "gpt-4o": 128_000,
     "gpt-4-turbo": 128_000,
     "gpt-3.5-turbo": 16_385,
-    "gpt-5": 200_000,
+    "gpt-5": 400_000,
     "gpt-4": 8_192,
+    # Google / Gemini (common via OpenAI-compatible proxies)
+    "gemini-2": 1_000_000,
+    "gemini-1.5": 1_000_000,
 }
-_DEFAULT_CONTEXT_WINDOW = 128_000
+
+# Bumped to 512k (from 128k) per user request: frontier models increasingly
+# ship 400k-1M contexts; falling back to 128k for an unknown model badly
+# under-reports window size and makes the %-bar look alarming on models
+# that have room to spare. 512k is "generous without lying": the common
+# 200k/400k/1M tiers all render reasonable bars against this default, and
+# operators who care about the exact number can override via the config
+# block ``AuraConfig.context_window``.
+_DEFAULT_CONTEXT_WINDOW = 512_000
 
 
 def get_context_window(model_spec: str) -> int:

@@ -204,6 +204,10 @@ def main() -> int:
             hooks=hooks,
             session_rules=session,
             question_asker=make_cli_user_asker(),
+            # Hand the resolved mode in so the bottom bar + any future
+            # agent-level consumer can read it without re-consulting the
+            # permission store.
+            mode=mode,
         )
         journal.write("agent_built")
     except Exception as exc:  # noqa: BLE001

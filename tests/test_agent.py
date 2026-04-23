@@ -1282,3 +1282,87 @@ async def test_agent_aconnect_graceful_on_manager_failure(
     events = await _collect(agent, "hi")
     assert any(isinstance(e, Final) for e in events)
     agent.close()
+
+
+# --------------------------------------------------------------------------
+# Agent.mode — permission mode mirrored for the status bar
+# --------------------------------------------------------------------------
+def test_agent_mode_defaults_to_default(tmp_path: Path) -> None:
+    # No mode kwarg ⇒ "default". Matches Aura's 4-mode ladder default.
+    agent = _agent(tmp_path, turns=[FakeTurn(AIMessage(content="ok"))])
+    assert agent.mode == "default"
+
+
+def test_agent_mode_respects_kwarg(tmp_path: Path) -> None:
+    agent = Agent(
+        config=_minimal_config(),
+        model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
+        storage=_storage(tmp_path),
+        mode="bypass",
+    )
+    assert agent.mode == "bypass"
+
+
+def test_build_agent_plumbs_mode_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # build_agent is the CLI's entry point — the ``mode`` kwarg must
+    # survive the trip to Agent or the bottom bar will silently show
+    # "default" forever regardless of --bypass-permissions.
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "storage": {"path": str(tmp_path / "s.db")},
+    })
+
+    def _fake_create(provider: Any, model_name: str) -> Any:  # noqa: ARG001
+        return FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))])
+
+    monkeypatch.setattr("aura.core.agent.llm.create", _fake_create)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    agent = build_agent(cfg, mode="accept_edits")
+    try:
+        assert agent.mode == "accept_edits"
+    finally:
+        agent.close()
+
+
+# --------------------------------------------------------------------------
+# Agent.context_window — override takes precedence over llm lookup
+# --------------------------------------------------------------------------
+def test_agent_context_window_falls_back_to_llm_lookup(tmp_path: Path) -> None:
+    # No override ⇒ resolve via the llm module's static table.
+    # openai:gpt-4o-mini is in the table at 128k.
+    agent = _agent(tmp_path, turns=[FakeTurn(AIMessage(content="ok"))])
+    assert agent.context_window == 128_000
+
+
+def test_agent_context_window_honors_config_override(tmp_path: Path) -> None:
+    # Explicit override in AuraConfig wins regardless of model — useful
+    # for extended-context deployments (e.g. Claude 4.x 1M mode).
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},  # would be 128k
+        "context_window": 1_000_000,
+    })
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
+        storage=_storage(tmp_path),
+    )
+    assert agent.context_window == 1_000_000
+
+
+def test_agent_context_window_unknown_model_uses_generous_default(tmp_path: Path) -> None:
+    # Frontier model not in the table ⇒ 512k default (not 128k) so the
+    # pct-bar doesn't lie about a 1M-window model being at "40%" when it's
+    # really at 10%.
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "unknown-vendor", "protocol": "openai"}],
+        "router": {"default": "unknown-vendor:some-frontier-model-we-havent-tabled"},
+    })
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
+        storage=_storage(tmp_path),
+    )
+    assert agent.context_window == 512_000

@@ -53,7 +53,7 @@ def _make_parser() -> argparse.ArgumentParser:
 
     mcp = subparsers.add_parser(
         "mcp",
-        help="manage MCP servers (~/.aura/mcp_servers.json)",
+        help="manage MCP servers (~/.aura/mcp_servers.json + project overrides)",
         description="Manage MCP (Model Context Protocol) server entries.",
     )
     mcp_sub = mcp.add_subparsers(dest="mcp_action")
@@ -67,6 +67,7 @@ def _make_parser() -> argparse.ArgumentParser:
             "  aura mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /tmp\n"
             "  aura mcp add -e API_KEY=xxx my-server -- my-mcp-server\n"
             "  aura mcp add --transport sse sentry -- https://mcp.sentry.dev/mcp\n"
+            "  aura mcp add --scope project repo-tools -- ./scripts/mcp-server.js\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -76,6 +77,17 @@ def _make_parser() -> argparse.ArgumentParser:
         choices=["stdio", "sse", "streamable_http"],
         default="stdio",
         help="transport type (default: stdio)",
+    )
+    mcp_add.add_argument(
+        "--scope",
+        choices=["global", "project"],
+        default="global",
+        help=(
+            "which layer to write to: 'global' (~/.aura/mcp_servers.json, "
+            "the default — available in every project) or 'project' "
+            "(<cwd>/.aura/mcp_servers.json, travels with the repo and "
+            "overrides global on name collisions)"
+        ),
     )
     mcp_add.add_argument(
         "--env", "-e",
@@ -93,10 +105,24 @@ def _make_parser() -> argparse.ArgumentParser:
     # with a default so downstream code can always read ``args.command_args``.
     mcp_add.set_defaults(command_args=[])
 
-    mcp_sub.add_parser("list", help="list configured MCP servers")
+    mcp_sub.add_parser(
+        "list",
+        help="list configured MCP servers (merged across scopes)",
+    )
 
     mcp_remove = mcp_sub.add_parser("remove", help="remove an MCP server by name")
     mcp_remove.add_argument("name", help="server name to remove")
+    mcp_remove.add_argument(
+        "--scope",
+        choices=["auto", "global", "project"],
+        default="auto",
+        help=(
+            "which layer to remove from. 'auto' (default) targets "
+            "whichever layer currently owns the name — project wins on "
+            "collision, so 'auto' removes the entry the user actually "
+            "sees. Pass an explicit scope to remove a shadowed entry."
+        ),
+    )
 
     return parser
 

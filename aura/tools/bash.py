@@ -6,12 +6,25 @@ is taken down via a SIGTERM→SIGKILL ladder; cancellation is re-raised to
 preserve structured-concurrency semantics.
 
 Targets macOS + Linux. Windows is not supported (POSIX signal ladder).
+
+Input-aware destructiveness
+---------------------------
+
+``bash`` carries an input-aware ``is_destructive`` classifier on its
+metadata (``_is_bash_destructive``) rather than a static ``True``. The
+permission hook resolves it per-invocation via
+:func:`aura.schemas.tool.resolve_is_destructive`, so ``bash("ls /tmp")``
+resolves False (safety layer treats it as a read) while ``bash("rm -rf
+/tmp")`` resolves True. This matches claude-code's ``isDestructive(input)``
+method pattern — the same tool object classifies differently depending
+on what the LLM asked it to do. Static flags can't express that.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 from asyncio.subprocess import Process
 from typing import Any, Literal
 
@@ -42,6 +55,57 @@ class BashParams(BaseModel):
 
 def _preview(args: dict[str, Any]) -> str:
     return f"command: {args.get('command', '')}"
+
+
+# Dangerous-command pattern table. Kept in sync with the widget-side table
+# in ``aura.cli.permission_bash._DANGEROUS_PATTERNS`` — same regexes, same
+# semantics. Duplicated rather than imported to avoid a tools → cli layer
+# dependency (the CLI layer imports from tools, not the other way round).
+# If a new dangerous pattern is added to the CLI widget, mirror it here so
+# the permission hook's safety-direction classification stays consistent
+# with the UI's warning banner.
+_DANGEROUS_COMMAND_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # rm -r / rm -f / rm -rf (and combined short flags like -rfv).
+    re.compile(r"(?:^|[;&|\s])rm\s+(?:-[a-zA-Z]*[rRf][a-zA-Z]*)"),
+    # sudo — any elevation is a destructive intent signal.
+    re.compile(r"(?:^|[;&|\s])sudo\b"),
+    # curl|sh / wget|sh (pipe-to-shell install).
+    re.compile(r"\b(?:curl|wget)\b[^|]*\|\s*(?:sh|bash|zsh|ksh|sudo)\b"),
+    # chmod 777 / chmod -R 777 / chmod 0777.
+    re.compile(r"\bchmod\s+(?:-R\s+)?0?777\b"),
+    # Redirects to system paths: > /etc/..., >> /usr/..., > /bin/...
+    re.compile(r">{1,2}\s*/(?:etc|usr|bin|sbin|boot|sys|proc)(?:/|\b)"),
+    # Writes to raw block devices: > /dev/sda, dd of=/dev/sd*.
+    re.compile(r"(?:>{1,2}\s*|\bof=)\s*/dev/(?:sd[a-z]|nvme|hd[a-z]|vd[a-z])"),
+    # rm combined with background operator: rm ... & (not &&).
+    re.compile(r"\brm\b[^;&\n]*&(?!&)"),
+)
+
+
+def _is_bash_destructive(args: dict[str, Any]) -> bool:
+    """Input-aware ``is_destructive`` classifier for bash.
+
+    Mirrors claude-code's ``isDestructive(input)`` method pattern. The
+    same ``bash`` tool is safe for ``ls /tmp`` and destructive for
+    ``rm -rf /`` — the classification has to look at the command string,
+    not at a tool-wide flag.
+
+    Returns True iff the command matches any entry in
+    ``_DANGEROUS_COMMAND_PATTERNS``. A non-string or missing command
+    falls through to False — the tool's own arg-schema validation
+    catches malformed inputs before dispatch, and treating a missing
+    command as destructive would noise-up the safety layer.
+
+    Consumed by :func:`aura.schemas.tool.resolve_is_destructive` from
+    the permission hook; never called directly. Raising from here would
+    fail-safe to True via the resolver (ambiguity ≙ destructive), so
+    the implementation stays defensive — no external calls, no I/O,
+    just regex scans.
+    """
+    command = args.get("command", "")
+    if not isinstance(command, str) or not command:
+        return False
+    return any(pat.search(command) for pat in _DANGEROUS_COMMAND_PATTERNS)
 
 
 def _format_streamed(tail_bytes: bytes, total: int) -> tuple[str, bool]:
@@ -193,7 +257,11 @@ class Bash(BaseTool):
     )
     args_schema: type[BaseModel] = BashParams
     metadata: dict[str, Any] | None = tool_metadata(
-        is_destructive=True,
+        # Input-aware: a command like ``ls`` resolves to False (read-like,
+        # safety layer picks the protected_reads list); ``rm -rf`` resolves
+        # to True (destructive, protected_writes list). See
+        # ``_is_bash_destructive`` and ``resolve_is_destructive``.
+        is_destructive=_is_bash_destructive,
         rule_matcher=exact_match_on("command"),
         args_preview=_preview,
     )

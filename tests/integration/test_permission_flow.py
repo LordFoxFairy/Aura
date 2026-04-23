@@ -127,6 +127,12 @@ async def test_bash_permission_allow_tool_runs_llm_sees_stdout(
 async def test_bash_permission_deny_tool_refused_llm_sees_feedback(
     tmp_path: Path,
 ) -> None:
+    # NOTE: probe must be a command the user wants to DENY but that is not
+    # caught by the Tier A safety floor — otherwise the safety hook would
+    # short-circuit before the permission asker is consulted, and this
+    # test would assert on a safety-blocked message instead of a
+    # user-denied one. ``rm -rf /`` was the original probe but is now
+    # (correctly) caught by the ``destructive_removal`` floor.
     turns = [
         FakeTurn(
             message=AIMessage(
@@ -135,7 +141,7 @@ async def test_bash_permission_deny_tool_refused_llm_sees_feedback(
                     {
                         "id": "tc_1",
                         "name": "bash",
-                        "args": {"command": "rm -rf /"},
+                        "args": {"command": "echo sensitive-output"},
                     }
                 ],
             )

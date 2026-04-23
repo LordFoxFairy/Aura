@@ -71,6 +71,50 @@ async def test_make_mcp_command_source_is_mcp_and_name_prefixed() -> None:
     assert cmd.description == "summarize a PR"
 
 
+def test_mcp_command_no_args_has_empty_frontmatter_defaults() -> None:
+    """Argument-less MCP prompt → empty tuple + None, symmetric with skills.
+
+    MCP prompts don't self-declare tool-gating; the Command surface
+    must still carry the fields so ``/help`` can treat every command
+    uniformly.
+    """
+    client = MagicMock()
+    cmd = make_mcp_command(
+        server_name="gh",
+        prompt_name="list_repos",
+        prompt_description="list repos",
+        client=client,
+    )
+    assert cmd.allowed_tools == ()
+    assert cmd.argument_hint is None
+
+
+def test_mcp_command_argument_hint_derived_from_prompt_args() -> None:
+    """Declared MCP prompt args → human-readable argument_hint.
+
+    Required args render as ``<name>``, optional as ``[name]`` — mirrors
+    the conventional "required angle / optional square" CLI idiom and
+    lets the slash-command picker surface the call shape without
+    re-querying the MCP server.
+    """
+
+    class _A:
+        def __init__(self, name: str, *, required: bool = False) -> None:
+            self.name = name
+            self.required = required
+
+    client = MagicMock()
+    cmd = make_mcp_command(
+        server_name="gh",
+        prompt_name="summarize_pr",
+        prompt_description="summarize a PR",
+        client=client,
+        prompt_arguments=[_A("pr_id", required=True), _A("style")],
+    )
+    assert cmd.allowed_tools == ()
+    assert cmd.argument_hint == "<pr_id> [style]"
+
+
 @pytest.mark.asyncio
 async def test_make_mcp_command_handle_fetches_body_and_prints() -> None:
     client = MagicMock()

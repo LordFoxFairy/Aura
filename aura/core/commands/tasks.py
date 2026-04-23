@@ -51,6 +51,8 @@ class TasksCommand:
     name = "/tasks"
     description = "list subagent tasks (running / recent)"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = None
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         records = agent._tasks_store.list()
@@ -76,6 +78,8 @@ class TaskGetCommand:
     name = "/task-get"
     description = "show full status of a subagent task by id"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = "<id-prefix>"
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         if not arg.strip():
@@ -125,6 +129,8 @@ class TaskStopCommand:
     name = "/task-stop"
     description = "cancel a running subagent task by id"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = "<id-prefix>"
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         if not arg.strip():

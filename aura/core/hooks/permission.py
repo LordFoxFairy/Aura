@@ -55,7 +55,7 @@ from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.permissions.store import PermissionStoreError, save_rule
 from aura.core.persistence import journal
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
+from aura.schemas.tool import ToolResult, resolve_is_destructive
 
 # Shared empty immutable RuleSet — safe as a default (frozen, no mutable state).
 _EMPTY_RULESET = RuleSet()
@@ -367,9 +367,13 @@ async def _decide(
     # 2. Safety — any tool with a resolvable path arg, write-or-read
     # direction chosen by the tool's is_destructive flag. Runs BEFORE
     # plan/accept_edits so no mode can sneak past the protected list.
+    # ``resolve_is_destructive`` handles both static bools and per-call
+    # classifiers (e.g. bash's ``_is_bash_destructive``) — a direct
+    # ``metadata.get("is_destructive")`` would see a callable as truthy
+    # and misclassify every invocation as destructive.
     target = _safety_target(args)
     if target is not None:
-        is_write = bool((tool.metadata or {}).get("is_destructive", False))
+        is_write = resolve_is_destructive(tool.metadata, args)
         if is_protected(target, safety, is_write=is_write):
             return Decision(allow=False, reason="safety_blocked", target=target), ""
 

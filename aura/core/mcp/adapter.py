@@ -99,6 +99,11 @@ class _MCPPromptCommand:
     """
 
     source: CommandSource = "mcp"
+    # MCP prompts do not self-declare tool-gating today; we keep the
+    # shape symmetric with SkillCommand / built-ins (empty tuple = "no
+    # explicit gating") so ``/help`` and future inspectors can treat the
+    # Command surface uniformly across sources.
+    allowed_tools: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -120,6 +125,20 @@ class _MCPPromptCommand:
         # tokens at invocation zip deterministically against the names.
         self.arg_names: tuple[str, ...] = arg_names
         self.required_args: frozenset[str] = required_args
+        # Derive a human-readable ``argument_hint`` from the MCP-declared
+        # argument schema when the prompt carries one. Required args are
+        # wrapped in ``<angle>`` brackets (missing → error); optional args
+        # get ``[square]`` brackets. ``None`` when the prompt takes no
+        # arguments — mirrors SkillCommand's default and matches
+        # claude-code's slash-command UX.
+        if arg_names:
+            parts = [
+                f"<{n}>" if n in required_args else f"[{n}]"
+                for n in arg_names
+            ]
+            self.argument_hint: str | None = " ".join(parts)
+        else:
+            self.argument_hint = None
 
     def _build_arguments(
         self, arg: str

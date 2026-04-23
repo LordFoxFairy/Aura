@@ -48,6 +48,8 @@ class MCPCommand:
     name = "/mcp"
     description = "list / enable / disable / reconnect MCP servers"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = "[list|enable|disable|reconnect|help] [name]"
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         tokens = arg.split()

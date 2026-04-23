@@ -35,6 +35,16 @@ class SkillCommand:
         self._agent = agent
         self.name = f"/{skill.name}"
         self.description = skill.description
+        # Propagate frontmatter metadata onto the Command surface so UI /
+        # future permission layers can render/inspect them without
+        # reaching back through ``self._skill``. ``allowed_tools`` is a
+        # frozenset on Skill; flatten to a sorted tuple for stable
+        # ordering across runs (matches ``registry.list()`` sorted-by-name
+        # invariant and keeps snapshot tests deterministic).
+        self.allowed_tools: tuple[str, ...] = tuple(
+            sorted(skill.allowed_tools)
+        )
+        self.argument_hint: str | None = skill.argument_hint
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         from aura.core.persistence import journal

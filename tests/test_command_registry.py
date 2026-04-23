@@ -60,10 +60,14 @@ class _StubCommand:
         source: CommandSource = "builtin",
         description: str = "stub",
         text: str = "ok",
+        allowed_tools: tuple[str, ...] = (),
+        argument_hint: str | None = None,
     ) -> None:
         self.name = name
         self.description = description
         self.source: CommandSource = source
+        self.allowed_tools: tuple[str, ...] = allowed_tools
+        self.argument_hint: str | None = argument_hint
         self._text = text
         self.last_arg: str | None = None
         self.last_agent: Agent | None = None
@@ -285,3 +289,72 @@ def test_stub_command_satisfies_command_protocol() -> None:
     """
     cmd: Command = _StubCommand("/foo")
     assert cmd.name == "/foo"
+
+
+# ---------------------------------------------------------------------------
+# Frontmatter metadata surface — allowed_tools + argument_hint
+# ---------------------------------------------------------------------------
+
+
+def test_builtin_commands_expose_default_frontmatter_fields() -> None:
+    """Built-ins all carry the new fields with sensible defaults.
+
+    ``/help`` has no args, so ``argument_hint is None`` and
+    ``allowed_tools == ()``. The DATA presence matters — enforcement is
+    a later layer (permission).
+    """
+    help_cmd = HelpCommand(registry=CommandRegistry())
+    assert help_cmd.allowed_tools == ()
+    assert help_cmd.argument_hint is None
+
+    exit_cmd = ExitCommand()
+    assert exit_cmd.allowed_tools == ()
+    assert exit_cmd.argument_hint is None
+
+
+def test_model_command_carries_argument_hint() -> None:
+    """``/model`` accepts an optional spec — the hint must advertise that."""
+    cmd = ModelCommand()
+    assert cmd.allowed_tools == ()
+    assert cmd.argument_hint == "[spec]"
+
+
+def test_registry_list_preserves_frontmatter_fields() -> None:
+    """``list()`` round-trips new fields untouched — no filtering."""
+    r = CommandRegistry()
+    stub = _StubCommand(
+        "/debug",
+        description="debug a bug",
+        allowed_tools=("bash", "read_file"),
+        argument_hint="<bug_description>",
+    )
+    r.register(stub)
+    (listed,) = r.list()
+    assert listed.allowed_tools == ("bash", "read_file")
+    assert listed.argument_hint == "<bug_description>"
+
+
+@pytest.mark.asyncio
+async def test_help_output_includes_argument_hint_when_present(
+    tmp_path: Path,
+) -> None:
+    """/help must render the argument_hint inline next to the command name.
+
+    Verifies the end-user surface claude-code's slash-command picker
+    exposes — without this, users can't discover that a command takes
+    arguments without inspecting source.
+    """
+    r = CommandRegistry()
+    help_cmd = HelpCommand(registry=r)
+    r.register(help_cmd)
+    r.register(
+        _StubCommand(
+            "/debug",
+            description="debug a bug",
+            argument_hint="<bug_description>",
+        )
+    )
+    agent = _agent(tmp_path)
+    result = await r.dispatch("/help", agent)
+    assert "/debug <bug_description>" in result.text
+    assert "debug a bug" in result.text

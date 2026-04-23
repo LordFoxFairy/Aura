@@ -119,6 +119,8 @@ class GitStatusCommand:
     name = "/status"
     description = "git status (short + branch)"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = None
 
     def __init__(self, *, writer: Writer | None = None) -> None:
         # Writer is kept for symmetry with /diff and /log; /status
@@ -237,6 +239,8 @@ class GitDiffCommand:
     name = "/diff"
     description = "git diff (stat by default; --full or --staged)"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = "[--full|--staged]"
 
     def __init__(self, *, writer: Writer | None = None) -> None:
         self._writer = writer
@@ -318,6 +322,8 @@ class GitLogCommand:
     name = "/log"
     description = "git log --oneline (default 20, up to 100)"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = "[N]"
 
     def __init__(self, *, writer: Writer | None = None) -> None:
         self._writer = writer

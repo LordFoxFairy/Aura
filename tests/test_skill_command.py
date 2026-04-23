@@ -85,3 +85,45 @@ async def test_skill_command_registers_via_command_registry_and_dispatches(
     contents = " ".join(str(m.content) for m in messages)
     assert '<skill-invoked name="helper">' in contents
     agent.close()
+
+
+def test_skill_command_propagates_allowed_tools_and_argument_hint(
+    tmp_path: Path,
+) -> None:
+    """Skill frontmatter → Command surface, one-hop lossless.
+
+    The Skill dataclass carries ``allowed_tools`` (frozenset) and
+    ``argument_hint`` (str|None); SkillCommand must lift both onto its
+    own attributes so ``/help`` and future UIs can inspect the skill's
+    tool-gating + argument surface without reaching into Skill. Flatten
+    the frozenset to a sorted tuple for deterministic ordering across
+    runs.
+    """
+    agent = _agent(tmp_path)
+    skill = Skill(
+        name="fix-bug",
+        description="fix a bug",
+        body="# body",
+        source_path=Path("/tmp/fix-bug.md"),
+        layer="user",
+        allowed_tools=frozenset({"bash", "read_file"}),
+        argument_hint="<bug_description>",
+    )
+    cmd = SkillCommand(skill=skill, agent=agent)
+    assert cmd.allowed_tools == ("bash", "read_file")
+    assert cmd.argument_hint == "<bug_description>"
+    agent.close()
+
+
+def test_skill_command_defaults_match_empty_frontmatter(tmp_path: Path) -> None:
+    """Skill without frontmatter knobs → Command defaults to empty / None.
+
+    The minimal-five-field Skill (as produced by ``_skill()`` here)
+    omits ``allowed_tools`` / ``argument_hint``; the wrapper must still
+    expose the fields with sensible empty defaults.
+    """
+    agent = _agent(tmp_path)
+    cmd = SkillCommand(skill=_skill("bare"), agent=agent)
+    assert cmd.allowed_tools == ()
+    assert cmd.argument_hint is None
+    agent.close()

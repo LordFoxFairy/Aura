@@ -1,12 +1,28 @@
 """Subcommand handlers for ``aura mcp add|list|remove``.
 
 These handlers are pure file-ops: no LLM, no REPL, no agent. They edit
-``~/.aura/mcp_servers.json`` via :mod:`aura.config.mcp_store` and return
-the standard exit codes:
+the global store at ``~/.aura/mcp_servers.json`` and (when
+``--scope project`` is passed) the project-layer store at
+``<cwd>/.aura/mcp_servers.json`` via :mod:`aura.config.mcp_store`, and
+return the standard exit codes:
 
 - 0 on success
 - 1 on user error (duplicate name on add, unknown name on remove, etc.)
 - 2 is reserved for argparse; we never emit it from here.
+
+Scope semantics (claude-code parity: global / local / managed — we only
+expose global + project today):
+
+- ``--scope global`` (default) writes to ``~/.aura/mcp_servers.json``.
+- ``--scope project`` writes to ``<cwd>/.aura/mcp_servers.json`` — the
+  file should be committed with the project so collaborators get the
+  same MCP topology.
+- ``aura mcp list`` always shows the MERGED view and tags each row
+  with its originating scope.
+- ``aura mcp remove <name>`` defaults to "auto": project wins on
+  collision, so removing by name targets the layer that's actually
+  contributing the resolved entry. The caller can pin a scope with
+  ``--scope`` to remove from the non-winning layer instead.
 """
 
 from __future__ import annotations
@@ -14,7 +30,16 @@ from __future__ import annotations
 import argparse
 import sys
 
-from aura.config.mcp_store import get_path, load, save
+from aura.config.mcp_store import (
+    Scope,
+    find_scope_of,
+    global_path,
+    load,
+    load_layer,
+    project_layer_names,
+    project_path,
+    save,
+)
 from aura.config.schema import MCPServerConfig
 
 
@@ -37,13 +62,36 @@ def _parse_env_pairs(raw: list[str]) -> dict[str, str]:
     return env
 
 
+def _resolve_write_scope(raw: str | None) -> Scope:
+    """Map the CLI ``--scope`` value to a concrete write scope.
+
+    ``None`` (flag omitted) defaults to ``"global"`` — that's the
+    pre-project-layer behaviour and what every existing test expects.
+    """
+    if raw in (None, "global"):
+        return "global"
+    if raw == "project":
+        return "project"
+    # argparse ``choices=`` catches this earlier; belt-and-suspenders in
+    # case a direct caller bypasses argparse.
+    raise ValueError(f"unknown scope: {raw!r}")
+
+
+def _scope_path(scope: Scope) -> str:
+    """Render the on-disk path for a given scope (for user messages)."""
+    return str(global_path() if scope == "global" else project_path())
+
+
 def _cmd_add(args: argparse.Namespace) -> int:
     name: str = args.name
     transport: str = args.transport
-    # ``command_args`` is produced by ``_split_dashdash`` in __main__: the
-    # list of tokens after the literal ``--`` separator. Never contains
-    # the ``--`` itself.
     raw_tokens: list[str] = list(args.command_args or [])
+
+    try:
+        scope = _resolve_write_scope(getattr(args, "scope", None))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     try:
         env = _parse_env_pairs(args.env or [])
@@ -99,29 +147,40 @@ def _cmd_add(args: argparse.Namespace) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 1
 
+    # Duplicate-name check is per-layer: the user is adding a new entry
+    # to THIS scope, and a same-named entry in the OTHER scope is
+    # meaningful (project overrides global by design). Only reject if
+    # the target layer already has the name.
     try:
-        servers = load()
+        existing = load_layer(scope)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    if any(s.name == name for s in servers):
+    if any(s.name == name for s in existing):
         print(
-            f"error: MCP server {name!r} already exists in {get_path()}. "
-            f"Run 'aura mcp remove {name}' first, then re-add.",
+            f"error: MCP server {name!r} already exists in "
+            f"{_scope_path(scope)}. Run 'aura mcp remove {name} "
+            f"--scope {scope}' first, then re-add.",
             file=sys.stderr,
         )
         return 1
 
-    servers.append(entry)
-    save(servers)
+    existing.append(entry)
+    save(existing, scope=scope)
 
     if transport == "stdio":
         joined = " ".join([entry.command or ""] + list(entry.args))
-        print(f"Added stdio MCP server {name!r} with command: {joined.strip()}")
+        print(
+            f"Added stdio MCP server {name!r} ({scope}) "
+            f"with command: {joined.strip()}"
+        )
     else:
-        print(f"Added {transport} MCP server {name!r} with url: {entry.url}")
-    print(f"File modified: {get_path()}")
+        print(
+            f"Added {transport} MCP server {name!r} ({scope}) "
+            f"with url: {entry.url}"
+        )
+    print(f"File modified: {_scope_path(scope)}")
     return 0
 
 
@@ -136,14 +195,43 @@ def _cmd_list(_args: argparse.Namespace) -> int:
         print("(no MCP servers configured)")
         return 0
 
-    headers = ("NAME", "TRANSPORT", "COMMAND", "ENABLED")
-    rows: list[tuple[str, str, str, str]] = []
+    # Build a name→scope index from the raw layers so we can tag each
+    # merged row. We ask each layer independently (load() already did
+    # this work but threw the per-layer origin away). The project walk
+    # mirrors load()'s merge order: project wins on collision.
+    try:
+        global_names = {s.name for s in load_layer("global")}
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    # Project-scope names come from the merged walk-up set (any layer
+    # under cwd up to $HOME). We don't distinguish individual project
+    # ancestors in the UI — "project" is a single logical scope from the
+    # user's perspective, matching claude-code.
+    try:
+        project_names = project_layer_names()
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    def _scope_for(name: str) -> str:
+        if name in project_names:
+            return "project"
+        if name in global_names:
+            return "global"
+        return "?"
+
+    headers = ("NAME", "SCOPE", "TRANSPORT", "COMMAND", "ENABLED")
+    rows: list[tuple[str, str, str, str, str]] = []
     for s in servers:
         if s.transport == "stdio":
             command_repr = " ".join([s.command or ""] + list(s.args)).strip()
         else:
             command_repr = s.url or ""
-        rows.append((s.name, s.transport, command_repr, "yes" if s.enabled else "no"))
+        rows.append(
+            (s.name, _scope_for(s.name), s.transport, command_repr,
+             "yes" if s.enabled else "no"),
+        )
 
     # Column widths computed once — header + widest row per column. Simple
     # space-padded table; no external dep since rich can't be used from a
@@ -154,7 +242,7 @@ def _cmd_list(_args: argparse.Namespace) -> int:
             if len(cell) > widths[i]:
                 widths[i] = len(cell)
 
-    def _fmt(row: tuple[str, str, str, str]) -> str:
+    def _fmt(row: tuple[str, str, str, str, str]) -> str:
         return "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row))
 
     print(_fmt(headers))
@@ -165,22 +253,47 @@ def _cmd_list(_args: argparse.Namespace) -> int:
 
 def _cmd_remove(args: argparse.Namespace) -> int:
     name: str = args.name
+    raw_scope: str | None = getattr(args, "scope", None)
+
+    # "auto" (or flag omitted) → whichever layer currently owns the
+    # name. Project wins on collision. This matches claude-code's
+    # "remove the resolved entry" behaviour.
+    if raw_scope in (None, "auto"):
+        owner = find_scope_of(name)
+        if owner is None:
+            # Surface a path the user will recognise — whichever layer
+            # would have been the target if they'd added the server
+            # with default flags.
+            print(
+                f"error: MCP server {name!r} not found in "
+                f"{_scope_path('global')} or project layers.",
+                file=sys.stderr,
+            )
+            return 1
+        scope: Scope = owner
+    else:
+        try:
+            scope = _resolve_write_scope(raw_scope)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
     try:
-        servers = load()
+        current = load_layer(scope)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    filtered = [s for s in servers if s.name != name]
-    if len(filtered) == len(servers):
+    filtered = [s for s in current if s.name != name]
+    if len(filtered) == len(current):
         print(
-            f"error: MCP server {name!r} not found in {get_path()}.",
+            f"error: MCP server {name!r} not found in {_scope_path(scope)}.",
             file=sys.stderr,
         )
         return 1
-    save(filtered)
-    print(f"Removed MCP server {name!r}")
-    print(f"File modified: {get_path()}")
+    save(filtered, scope=scope)
+    print(f"Removed MCP server {name!r} ({scope})")
+    print(f"File modified: {_scope_path(scope)}")
     return 0
 
 

@@ -44,6 +44,7 @@ from aura.core.permissions.matchers import exact_match_on
 from aura.core.persistence import journal
 from aura.core.tasks.store import TasksStore
 from aura.schemas.tool import ToolError, tool_metadata
+from aura.tools.bash import _is_bash_destructive
 
 # Hard ceiling on the caller-supplied timeout. 24h — a single agent
 # session should never need to park a background shell longer than
@@ -114,7 +115,10 @@ class BashBackground(BaseTool):
     )
     args_schema: type[BaseModel] = BashBackgroundParams
     metadata: dict[str, Any] | None = tool_metadata(
-        is_destructive=True,
+        # Input-aware — shared classifier with ``bash``. A long-running
+        # ``tail -f access.log`` resolves False; ``sudo systemctl stop``
+        # resolves True. See ``aura.tools.bash._is_bash_destructive``.
+        is_destructive=_is_bash_destructive,
         # Spawning processes and mutating the store + running-shells map
         # is not safe to batch with siblings.
         is_concurrency_safe=False,

@@ -44,11 +44,23 @@ class Command(Protocol):
         description: one-line summary rendered by ``/help``.
         source: where the command came from — shown grouped by ``/help``
             once Skills/MCP commands exist.
+        allowed_tools: tools this command explicitly gates itself to. Empty
+            tuple means "no explicit gating" — the command inherits the
+            agent's default tool surface. Mirrors claude-code's skill
+            ``allowed-tools`` frontmatter field. DATA ONLY in v0.7 — the
+            dispatcher does not enforce it yet; callers (UI, future
+            permission layer) may inspect it.
+        argument_hint: one-line hint rendered by slash-command completion
+            (e.g. ``"<bug_description>"`` or ``"[branch] [--full]"``).
+            ``None`` means "no hint". Mirrors claude-code's skill
+            ``argument-hint`` frontmatter field.
     """
 
     name: str
     description: str
     source: CommandSource
+    allowed_tools: tuple[str, ...]
+    argument_hint: str | None
 
     async def handle(
         self, arg: str, agent: Agent

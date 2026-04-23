@@ -47,6 +47,8 @@ class ExportCommand:
     name = "/export"
     description = "export session transcript to a file"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = "[path] [--format md|json]"
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         try:

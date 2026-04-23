@@ -45,6 +45,11 @@ class CommandRegistry:
         """Return all registered commands, sorted by name.
 
         Stable ordering keeps ``/help`` output deterministic across runs.
+        Every element exposes the full :class:`Command` surface —
+        ``name``, ``description``, ``source``, ``allowed_tools`` (possibly
+        empty tuple), and ``argument_hint`` (possibly ``None``) — so
+        callers (``/help``, future completion UI, permission layer) can
+        render or inspect the metadata without a second registry hop.
         """
         return [self._commands[k] for k in sorted(self._commands)]
 

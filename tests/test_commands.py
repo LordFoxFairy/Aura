@@ -159,3 +159,31 @@ async def test_dispatch_whitespace_line_not_handled(tmp_path: Path) -> None:
     r = build_default_registry()
     result = await dispatch("   ", agent, r)
     assert result.handled is False
+
+
+def test_default_registry_exposes_frontmatter_metadata() -> None:
+    """Every built-in exposes the new metadata fields.
+
+    Baseline: all built-ins default ``allowed_tools`` to the empty tuple
+    (no tool-gating opinion) and carry either ``None`` or a string
+    ``argument_hint``. This locks down the shape for downstream
+    consumers (REPL completion, permission layer) so they can treat
+    ``cmd.allowed_tools`` / ``cmd.argument_hint`` as present on every
+    registered command.
+    """
+    r = build_default_registry()
+    for cmd in r.list():
+        assert cmd.allowed_tools == (), (
+            f"{cmd.name} must default allowed_tools to () — got "
+            f"{cmd.allowed_tools!r}"
+        )
+        assert cmd.argument_hint is None or isinstance(
+            cmd.argument_hint, str
+        )
+
+
+def test_default_registry_model_command_advertises_hint() -> None:
+    """Spot-check: ``/model`` carries a meaningful hint end-to-end."""
+    r = build_default_registry()
+    model_cmd = next(c for c in r.list() if c.name == "/model")
+    assert model_cmd.argument_hint == "[spec]"

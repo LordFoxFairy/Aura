@@ -22,6 +22,8 @@ class HelpCommand:
     name = "/help"
     description = "show this message"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = None
 
     def __init__(self, *, registry: CommandRegistry) -> None:
         # Keep a reference to the registry so /help always reflects the
@@ -31,9 +33,15 @@ class HelpCommand:
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         commands = self._registry.list()
         # Column-align name -> description; width 14 covers "/model <spec>".
+        # When a command declares ``argument_hint``, tack it onto the name
+        # column (e.g. "/debug <bug_description>") so users see the call
+        # shape alongside the summary. Parity with claude-code's slash-
+        # command picker which shows the hint inline.
         lines = ["Available commands:"]
         for cmd in commands:
-            lines.append(f"  {cmd.name:<14} {cmd.description}")
+            hint = getattr(cmd, "argument_hint", None)
+            label = f"{cmd.name} {hint}" if hint else cmd.name
+            lines.append(f"  {label:<24} {cmd.description}")
         lines.append("")
         lines.append(
             "Keybindings: shift+tab cycles permission mode "
@@ -51,6 +59,8 @@ class ExitCommand:
     name = "/exit"
     description = "exit the REPL (Ctrl+D also works)"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = None
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         return CommandResult(handled=True, kind="exit", text="")
@@ -62,6 +72,8 @@ class ClearCommand:
     name = "/clear"
     description = "clear the current session's history"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = None
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         agent.clear_session()
@@ -76,6 +88,8 @@ class CompactCommand:
     name = "/compact"
     description = "summarize history + preserve state"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = None
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         result = await agent.compact(source="manual")
@@ -95,6 +109,8 @@ class ModelCommand:
     name = "/model"
     description = "show or switch model (no arg = status)"
     source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = "[spec]"
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         if not arg:

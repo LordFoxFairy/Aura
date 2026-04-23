@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 import pytest
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
 from aura.core.hooks.permission import (
@@ -25,7 +25,7 @@ from aura.core.permissions.mode import DEFAULT_MODE, Mode
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
+from aura.schemas.tool import ToolResult, tool_metadata
 from aura.tools.base import build_tool
 
 
@@ -439,6 +439,204 @@ async def test_bypass_mode_unchanged_auto_allow() -> None:
     result = await hook(tool=tool, args={}, state=LoopState())
     assert result is None
     assert spy.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Input-aware is_destructive — the safety layer's direction flag must
+# honour per-call classifiers (claude-code's isDestructive(input) pattern).
+# A static ``metadata.get("is_destructive")`` would see the classifier as
+# truthy and misclassify every invocation as destructive.
+# ---------------------------------------------------------------------------
+
+
+def _tool_with_classifier(
+    *,
+    name: str,
+    args_schema: type[BaseModel],
+    is_destructive_fn: Any,
+) -> BaseTool:
+    """Build a StructuredTool with a callable is_destructive in metadata.
+
+    ``build_tool`` accepts only static bools for is_destructive; this
+    helper sidesteps it by calling ``tool_metadata`` directly so we
+    can exercise the callable branch end-to-end through the hook.
+    """
+    return StructuredTool.from_function(
+        func=lambda **_kw: {},
+        name=name,
+        description=name,
+        args_schema=args_schema,
+        metadata=tool_metadata(is_destructive=is_destructive_fn),
+    )
+
+
+async def test_safety_uses_callable_is_destructive_true_branch(tmp_path: Path) -> None:
+    """A callable that returns True must route through protected_writes.
+
+    Build a path-bearing tool whose classifier returns True; point it at
+    a path that's on the protected_writes list. The hook must block it
+    with ``safety_blocked`` — proving the resolver extracted True from
+    the callable rather than seeing the function object as truthy and
+    coincidentally matching.
+    """
+    tool = _tool_with_classifier(
+        name="destructive_writer",
+        args_schema=_PathArgs,
+        is_destructive_fn=lambda _args: True,
+    )
+    hook = make_permission_hook(
+        asker=_SpyAsker(),
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=tmp_path,
+        mode="default",
+    )
+    state = LoopState()
+    result = await hook(
+        tool=tool,
+        args={"path": str(tmp_path / ".git" / "HEAD")},
+        state=state,
+    )
+    assert isinstance(result, ToolResult)
+    stashed = state.custom.get("_aura_pending_decision")
+    assert isinstance(stashed, Decision)
+    assert stashed.reason == "safety_blocked"
+
+
+async def test_safety_uses_callable_is_destructive_false_branch(tmp_path: Path) -> None:
+    """A callable that returns False must route through protected_reads.
+
+    For paths not on the reads list but on the writes list, a read-like
+    classification should NOT surface safety_blocked. This is the safe
+    ``bash("ls /tmp/.aura/...")`` case — the static True path used to
+    block it unnecessarily.
+    """
+    # Use a path that's considered a "write target" (under .git) but
+    # our classifier says this is a read-only operation. .git is on
+    # protected_writes but NOT on protected_reads, so the read-direction
+    # lookup returns False and we fall through to the ask path.
+    tool = _tool_with_classifier(
+        name="benign_reader",
+        args_schema=_PathArgs,
+        is_destructive_fn=lambda _args: False,
+    )
+    spy = _SpyAsker(response=AskerResponse(choice="accept"))
+    hook = make_permission_hook(
+        asker=spy,
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=tmp_path,
+        mode="default",
+    )
+    state = LoopState()
+    result = await hook(
+        tool=tool,
+        args={"path": str(tmp_path / ".git" / "HEAD")},
+        state=state,
+    )
+    # Not blocked by safety — fell through to the ask path.
+    assert result is None
+    stashed = state.custom.get("_aura_pending_decision")
+    assert isinstance(stashed, Decision)
+    assert stashed.reason != "safety_blocked"
+
+
+async def test_safety_callable_receives_actual_args(tmp_path: Path) -> None:
+    """The hook must pass the real args dict to the classifier — not
+    ``{}`` or some sentinel. Guards against a refactor that silently
+    swaps in an empty dict (which would break every input-aware tool)."""
+    received: list[dict[str, Any]] = []
+
+    def classifier(args: dict[str, Any]) -> bool:
+        received.append(args)
+        # Return True so we land on the protected path and observe the
+        # safety branch in action.
+        return True
+
+    tool = _tool_with_classifier(
+        name="probe",
+        args_schema=_PathArgs,
+        is_destructive_fn=classifier,
+    )
+    hook = make_permission_hook(
+        asker=_SpyAsker(),
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=tmp_path,
+        mode="default",
+    )
+    await hook(
+        tool=tool,
+        args={"path": str(tmp_path / ".git" / "HEAD")},
+        state=LoopState(),
+    )
+    assert received == [{"path": str(tmp_path / ".git" / "HEAD")}]
+
+
+async def test_safety_callable_exception_fails_safe_to_destructive(
+    tmp_path: Path,
+) -> None:
+    """A throwing classifier must be treated as destructive — NOT
+    waved through with a silent False. A broken classifier that fell
+    open would be a silent permission regression."""
+
+    def broken(_args: dict[str, Any]) -> bool:
+        raise RuntimeError("buggy classifier")
+
+    tool = _tool_with_classifier(
+        name="broken",
+        args_schema=_PathArgs,
+        is_destructive_fn=broken,
+    )
+    hook = make_permission_hook(
+        asker=_SpyAsker(),
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=tmp_path,
+        mode="default",
+    )
+    state = LoopState()
+    result = await hook(
+        tool=tool,
+        args={"path": str(tmp_path / ".git" / "HEAD")},
+        state=state,
+    )
+    # Fail-safe: treated as destructive → safety_blocked on protected write path.
+    assert isinstance(result, ToolResult)
+    stashed = state.custom.get("_aura_pending_decision")
+    assert isinstance(stashed, Decision)
+    assert stashed.reason == "safety_blocked"
+
+
+async def test_accept_edits_bash_ls_still_prompts_not_auto_allowed(
+    tmp_path: Path,
+) -> None:
+    """Conservative-over-claude-code decision: even though ``bash("ls")``
+    now resolves is_destructive=False via the input-aware classifier,
+    accept_edits mode still does NOT auto-allow it. The
+    ``_ACCEPT_EDITS_TOOLS`` allow-list is keyed on tool NAME
+    (read/write/edit_file), not on the resolved destructiveness flag —
+    opting into "accept file edits" must not silently opt into shell
+    commands just because they happen to be read-like."""
+    spy = _SpyAsker(response=AskerResponse(choice="accept"))
+    hook = make_permission_hook(
+        asker=spy,
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=tmp_path,
+        mode="accept_edits",
+    )
+    # Real bash tool carries the callable classifier; "ls" resolves
+    # is_destructive=False, but the tool name is "bash" which is NOT
+    # on the accept_edits allow-list.
+    from aura.tools.bash import bash as real_bash
+
+    result = await hook(
+        tool=real_bash, args={"command": "ls /tmp"}, state=LoopState(),
+    )
+    # Fell through to ask — the asker was consulted.
+    assert result is None
+    assert len(spy.calls) == 1
 
 
 # Silence "async def not awaited" warnings by letting pytest-asyncio pick up

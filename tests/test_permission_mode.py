@@ -639,6 +639,79 @@ async def test_accept_edits_bash_ls_still_prompts_not_auto_allowed(
     assert len(spy.calls) == 1
 
 
+# ---------------------------------------------------------------------------
+# B1 — audit journal records the LIVE resolved mode, not the captured param.
+#
+# When ``mode`` is a Callable the journal must record the resolved string,
+# not the function object (which would either blow up JSON serialization
+# or write an opaque ``"<function ... at 0x...>"`` blob). When the mode
+# provider changes mid-session (``Agent.set_mode``) the *next* journal
+# event must reflect the new value, not a startup-frozen snapshot.
+# ---------------------------------------------------------------------------
+
+
+async def test_permission_audit_mode_live_read_with_callable(
+    journal_events: list[tuple[str, dict[str, Any]]],
+) -> None:
+    """AC-B1-1: Callable mode → journal records the resolved string, not the fn."""
+    hook = make_permission_hook(
+        asker=_SpyAsker(),
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=Path("/tmp"),
+        mode=lambda: "accept_edits",
+    )
+    # write_file is on the accept_edits allow-list — tool will be auto-allowed,
+    # giving us a clean ``permission_decision`` event to inspect.
+    tool = _tool("write_file", is_destructive=True, args_schema=_PathArgs)
+    await hook(
+        tool=tool, args={"path": "/tmp/new.txt"}, state=LoopState(),
+    )
+    decision_event = next(e for e in journal_events if e[0] == "permission_decision")
+    recorded_mode = decision_event[1]["mode"]
+    # Must be the resolved literal string, not the Callable itself nor a repr.
+    assert recorded_mode == "accept_edits"
+    assert isinstance(recorded_mode, str)
+    assert not callable(recorded_mode)
+
+
+async def test_permission_audit_mode_reflects_mid_turn_switch(
+    journal_events: list[tuple[str, dict[str, Any]]],
+) -> None:
+    """AC-B1-2: mid-turn mode switch → next journal event records the new mode."""
+    current_mode: list[Mode] = ["default"]
+
+    def mode_provider() -> Mode:
+        return current_mode[0]
+
+    spy = _SpyAsker(response=AskerResponse(choice="accept"))
+    hook = make_permission_hook(
+        asker=spy,
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=Path("/tmp"),
+        mode=mode_provider,
+    )
+    tool = _tool("writer")
+
+    # Turn 1 — default mode, asker prompts, decision journaled.
+    await hook(tool=tool, args={}, state=LoopState())
+    first = next(e for e in journal_events if e[0] == "permission_decision")
+    assert first[1]["mode"] == "default"
+
+    # Simulate Agent.set_mode("plan") between turns.
+    current_mode[0] = "plan"
+
+    # Turn 2 — plan mode, write-adjacent tool is blocked by plan dry-run.
+    write_tool = _tool("write_file", is_destructive=True, args_schema=_PathArgs)
+    await hook(
+        tool=write_tool, args={"path": "/tmp/x"}, state=LoopState(),
+    )
+    events_for_decision = [e for e in journal_events if e[0] == "permission_decision"]
+    # The *newest* decision event must reflect the switched mode.
+    assert events_for_decision[-1][1]["mode"] == "plan"
+
+
 # Silence "async def not awaited" warnings by letting pytest-asyncio pick up
 # the tests in auto mode. The project's pytest config already enables this —
 # but we import asyncio above for future use / clarity.

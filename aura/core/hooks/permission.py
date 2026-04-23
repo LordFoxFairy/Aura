@@ -313,7 +313,11 @@ def make_permission_hook(
             tool=tool.name,
             reason=decision.reason,
             rule=decision.rule.to_string() if decision.rule is not None else None,
-            mode=mode,
+            # Resolve the Callable/literal via the same provider used by
+            # _decide above so the audit trail records the *live* mode
+            # string (not the captured Callable object, which would serialize
+            # as ``"<function ... at 0x...>"`` and be useless downstream).
+            mode=_mode_provider(),
             target=decision.target,
             **extra,
         )

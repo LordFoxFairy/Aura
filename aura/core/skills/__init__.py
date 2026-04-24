@@ -22,6 +22,7 @@ invocation body injection, body pre-rendered with variable substitution).
 """
 
 from aura.core.skills.command import SkillCommand
+from aura.core.skills.errors import format_missing_args_error
 from aura.core.skills.loader import (
     activate_conditional_skills_for_paths,
     activated_conditional_names,
@@ -41,6 +42,7 @@ __all__ = [
     "activate_conditional_skills_for_paths",
     "activated_conditional_names",
     "clear_conditional_state",
+    "format_missing_args_error",
     "get_conditional_skills",
     "load_skills",
     "render_skill_body",

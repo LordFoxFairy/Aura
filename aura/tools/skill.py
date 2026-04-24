@@ -35,6 +35,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from aura.core.skills.errors import format_missing_args_error
 from aura.core.skills.loader import render_skill_body
 from aura.core.skills.registry import SkillRegistry
 from aura.core.skills.types import Skill
@@ -162,10 +163,8 @@ class SkillTool(BaseTool):
         declared = skill.arguments
         values = list(arguments) if arguments else []
         if declared and len(values) < len(declared):
-            missing = list(declared[len(values):])
             raise ToolError(
-                f"skill {name!r} requires arguments {list(declared)}; "
-                f"missing: {missing}"
+                format_missing_args_error(name, declared, len(values))
             )
         # Skills with NO declared arguments silently ignore extras — the
         # LLM may defensively pass [] or unrelated lists and we don't want

@@ -20,6 +20,7 @@ import dataclasses
 from typing import TYPE_CHECKING
 
 from aura.core.commands.types import CommandResult, CommandSource
+from aura.core.skills.errors import format_missing_args_error
 from aura.core.skills.loader import render_skill_body
 from aura.core.skills.types import Skill
 
@@ -55,6 +56,20 @@ class SkillCommand:
         # → no args. We keep it intentionally simple; quoted-args parsing
         # is a v0.8 concern.
         arg_values = arg.split() if arg.strip() else []
+        # Symmetric with SkillTool._invoke — missing required args produce
+        # a user-visible error instead of a silently-broken body render.
+        # Shares ``format_missing_args_error`` with the tool path so the
+        # text is byte-for-byte identical across surfaces (users who see
+        # the tool error recognise the slash-path variant).
+        declared = self._skill.arguments
+        if declared and len(arg_values) < len(declared):
+            return CommandResult(
+                handled=True,
+                kind="print",
+                text=format_missing_args_error(
+                    self._skill.name, declared, len(arg_values),
+                ),
+            )
         rendered_body = render_skill_body(
             self._skill,
             session_id=self._agent.session_id,

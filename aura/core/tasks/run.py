@@ -21,8 +21,7 @@ can override via the ``AURA_SUBAGENT_TIMEOUT_SEC`` environment variable
 (float, ``0`` or negative disables the ceiling — escape hatch for
 long-running agents). On timeout the record is flipped to ``failed``
 with ``error="subagent_timeout: exceeded <N>s"`` and the
-``subagent_timeout`` journal event fires; ``post_subagent`` sees
-``status="failed"``.
+``subagent_timeout`` journal event fires.
 
 Matches the spirit of claude-code's ``AbortController`` contract
 (``src/tools/AgentTool/runAgent.ts``) — claude-code uses an abort
@@ -35,7 +34,6 @@ from __future__ import annotations
 import asyncio
 import os
 
-from aura.core.hooks import HookChain
 from aura.core.persistence import journal
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
@@ -94,44 +92,11 @@ def _resolve_timeout(override: float | None) -> float | None:
     return DEFAULT_SUBAGENT_TIMEOUT_SEC
 
 
-async def _fire_post_subagent(
-    hooks: HookChain | None,
-    *,
-    task_id: str,
-    status: str,
-    final_text: str,
-    error: str | None,
-) -> None:
-    """Best-effort invoke of the parent's ``post_subagent`` chain.
-
-    Called from each terminal branch of ``run_task`` with the terminal
-    status + whatever text/error was captured. Exceptions get journaled
-    + swallowed; the subagent's record is already persisted before this
-    fires so a buggy hook cannot corrupt the transition.
-    """
-    if hooks is None or not hooks.post_subagent:
-        return
-    try:
-        await hooks.run_post_subagent(
-            task_id=task_id,
-            status=status,
-            final_text=final_text,
-            error=error,
-        )
-    except Exception as exc:  # noqa: BLE001
-        journal.write(
-            "post_subagent_hook_failed",
-            task_id=task_id,
-            error=f"{type(exc).__name__}: {exc}",
-        )
-
-
 async def run_task(
     store: TasksStore,
     factory: SubagentFactory,
     task_id: str,
     *,
-    parent_hooks: HookChain | None = None,
     timeout_sec: float | None = None,
 ) -> None:
     record = store.get(task_id)
@@ -183,15 +148,6 @@ async def run_task(
             # branch here would crash ``run_task`` mid-cleanup, orphaning
             # connections and leaving the TaskRecord in ``running``.
             await agent.aclose()
-        # Fire BEFORE re-raising so the hook sees the cancellation even
-        # when the parent is tearing down.
-        await _fire_post_subagent(
-            parent_hooks,
-            task_id=task_id,
-            status="cancelled",
-            final_text=final_text,
-            error=None,
-        )
         raise
     except TimeoutError as exc:
         # Wall-clock ceiling hit. ``asyncio.timeout`` raises TimeoutError
@@ -224,13 +180,6 @@ async def run_task(
             # branch here would crash ``run_task`` mid-cleanup, orphaning
             # connections and leaving the TaskRecord in ``running``.
             await agent.aclose()
-        await _fire_post_subagent(
-            parent_hooks,
-            task_id=task_id,
-            status="failed",
-            final_text=final_text,
-            error=err_msg,
-        )
     except Exception as exc:  # noqa: BLE001
         err_msg = f"{type(exc).__name__}: {exc}"
         store.mark_failed(task_id, err_msg)
@@ -244,13 +193,6 @@ async def run_task(
             # branch here would crash ``run_task`` mid-cleanup, orphaning
             # connections and leaving the TaskRecord in ``running``.
             await agent.aclose()
-        await _fire_post_subagent(
-            parent_hooks,
-            task_id=task_id,
-            status="failed",
-            final_text=final_text,
-            error=err_msg,
-        )
     else:
         journal.write("subagent_completed", task_id=task_id)
         if agent is not None:
@@ -262,10 +204,3 @@ async def run_task(
             # branch here would crash ``run_task`` mid-cleanup, orphaning
             # connections and leaving the TaskRecord in ``running``.
             await agent.aclose()
-        await _fire_post_subagent(
-            parent_hooks,
-            task_id=task_id,
-            status="completed",
-            final_text=final_text,
-            error=None,
-        )

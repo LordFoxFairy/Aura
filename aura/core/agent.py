@@ -264,16 +264,10 @@ class Agent:
                     asker=question_asker or _unavailable_question_asker,
                 )
             elif name == "task_create":
-                # ``parent_hooks=self._hooks`` threads the parent's live
-                # HookChain into run_task so post_subagent fires on each
-                # terminal transition. Passing the bound chain (not a
-                # copy) keeps the wire-up in sync with runtime hook
-                # installs (e.g. clear_session swap of must_read_first).
                 self._available_tools[name] = cls(
                     store=self._tasks_store,
                     factory=self._subagent_factory,
                     running=self._running_tasks,
-                    parent_hooks=self._hooks,
                 )
             elif name == "task_output" or name == "task_get" or name == "task_list":
                 self._available_tools[name] = cls(store=self._tasks_store)
@@ -462,21 +456,6 @@ class Agent:
                 prompt_preview=prompt[:200],
             )
             history = self._storage.load(self._session_id)
-            # pre_user_prompt fires at the very entry — BEFORE attachments +
-            # user HumanMessage land in history — so hooks see the prompt
-            # exactly as the user typed it. Observational only; buggy hooks
-            # get journaled + swallowed so a broken observer can't block
-            # user turns.
-            if self._hooks.pre_user_prompt:
-                try:
-                    await self._hooks.run_pre_user_prompt(
-                        prompt=prompt, state=self._state,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    journal.write(
-                        "pre_user_prompt_hook_failed",
-                        error=f"{type(exc).__name__}: {exc}",
-                    )
             # Attachments land BEFORE the user's HumanMessage so the model
             # sees the injected context first (matching how claude-code
             # prepends ``<attachment>`` blocks ahead of the user turn).
@@ -840,64 +819,6 @@ class Agent:
             todos_provider=lambda: self._state.custom.get("todos", []),
             inherited_reads=inherited_reads,
         )
-
-    async def bootstrap(self) -> None:
-        """Fire the ``pre_session`` hook chain — session-start signal.
-
-        The sibling to :meth:`shutdown`. Kept separate from ``__init__``
-        (which is sync) because hooks are async by contract and we don't
-        want to spin up a throwaway event loop just to fire a best-effort
-        signal. Cleanest separation: callers that want pre_session
-        delivered call ``bootstrap()`` after construction, mirroring the
-        existing ``aconnect()`` invocation in the CLI entry point.
-
-        Exceptions raised inside a hook are journaled and swallowed —
-        these are observational signals; a buggy hook must NOT abort the
-        session it's supposed to be announcing. No-op when no
-        pre_session hooks are registered.
-        """
-        if not self._hooks.pre_session:
-            return
-        try:
-            await self._hooks.run_pre_session(
-                session_id=self._session_id, cwd=self._cwd,
-            )
-        except Exception as exc:  # noqa: BLE001
-            journal.write(
-                "pre_session_hook_failed",
-                session=self._session_id,
-                error=f"{type(exc).__name__}: {exc}",
-            )
-
-    async def shutdown(self, *, mcp_timeout: float = 5.0) -> None:
-        """Fire ``post_session`` then tear down asynchronously.
-
-        Symmetric with :meth:`bootstrap`. The sync :meth:`close` path
-        stays available for legacy SDK callers that never opened a loop,
-        and deliberately does NOT fire post_session: firing an async
-        hook from a sync context would either block the event loop or
-        schedule a best-effort task that never gets awaited. Cleaner
-        contract: async consumers call ``shutdown()`` (which delegates
-        to :meth:`aclose`, preserving the timeout-bounded MCP teardown
-        from B3); sync consumers call :meth:`close` and miss the
-        post_session signal — no surprise semantics either way.
-        """
-        if self._hooks.post_session:
-            try:
-                await self._hooks.run_post_session(
-                    session_id=self._session_id, cwd=self._cwd,
-                )
-            except Exception as exc:  # noqa: BLE001
-                journal.write(
-                    "post_session_hook_failed",
-                    session=self._session_id,
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-        # Must NOT call self.close() here — that's the sync entry point,
-        # which refuses to run inside an active event loop since B3 (no
-        # fire-and-forget). shutdown() is always invoked under a running
-        # loop (REPL context), so go directly through aclose.
-        await self.aclose(mcp_timeout=mcp_timeout)
 
     async def aconnect(self) -> None:
         """Establish MCP connections and register discovered tools / prompts.

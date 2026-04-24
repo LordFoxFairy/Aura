@@ -416,11 +416,6 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             console.print(f"[yellow]mcp connect error (continuing): {exc}[/yellow]")
             journal.write("mcp_connect_cli_error", error=str(exc))
-        # pre_session signal — fires AFTER aconnect so hooks can observe
-        # the tool / resource surface that MCP discovered (they may
-        # introspect agent.mcp_manager). No-op when no pre_session
-        # subscribers are installed.
-        await agent.bootstrap()
         try:
             await run_repl_async(
                 agent, console=console, verbose=args.verbose,
@@ -428,10 +423,11 @@ def main() -> int:
                 statusline=perm_cfg.statusline,
             )
         finally:
-            # post_session before the sync close() in the outer finally
-            # so hooks see the live manager + storage. Always runs —
-            # matches bootstrap's always-runs contract.
-            await agent.shutdown()
+            # Async teardown inside the event loop — aclose honors the
+            # B3 timeout-bounded MCP stop path. The sync ``agent.close()``
+            # in the outer finally is the legacy belt-and-braces guard
+            # for the case this block was never reached.
+            await agent.aclose()
 
     try:
         asyncio.run(_entry())

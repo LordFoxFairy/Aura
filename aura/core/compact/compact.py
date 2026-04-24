@@ -141,22 +141,6 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
     """
     from aura.core.hooks.must_read_first import make_must_read_first_hook
 
-    # pre_compact fires BEFORE the summary LLM turn so hooks can persist
-    # the outgoing state / emit a UI notification / etc. Exceptions are
-    # journaled + swallowed — compact is a recovery path, a buggy hook
-    # must not prevent it from running.
-    if agent._hooks.pre_compact:
-        try:
-            await agent._hooks.run_pre_compact(
-                state=agent._state, trigger=source,
-            )
-        except Exception as exc:  # noqa: BLE001
-            journal.write(
-                "pre_compact_hook_failed",
-                source=source,
-                error=f"{type(exc).__name__}: {exc}",
-            )
-
     before_tokens = agent._state.total_tokens_used
     history = agent._storage.load(agent.session_id)
 

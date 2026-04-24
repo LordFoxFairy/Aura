@@ -17,7 +17,6 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.core.hooks import HookChain
 from aura.core.tasks.agent_types import all_agent_types, get_agent_type
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.run import run_task
@@ -91,13 +90,6 @@ class TaskCreate(BaseTool):
     store: TasksStore
     factory: SubagentFactory
     _running: dict[str, asyncio.Task[None]] = PrivateAttr()
-    # Optional parent hook chain — threaded through so ``run_task`` can
-    # fire ``post_subagent`` on terminal transitions. Stored as a
-    # PrivateAttr for the same pydantic-vs-bare-Callable reason
-    # ``_running`` is; defaults to ``None`` so legacy tests that wire
-    # task_create without a chain keep working (no hooks fired, same
-    # behavior as before the slot was added).
-    _parent_hooks: HookChain | None = PrivateAttr(default=None)
 
     def __init__(
         self,
@@ -105,12 +97,10 @@ class TaskCreate(BaseTool):
         store: TasksStore,
         factory: SubagentFactory,
         running: dict[str, asyncio.Task[None]],
-        parent_hooks: HookChain | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(store=store, factory=factory, **kwargs)
         self._running = running
-        self._parent_hooks = parent_hooks
 
     @property
     def running(self) -> dict[str, asyncio.Task[None]]:
@@ -152,7 +142,6 @@ class TaskCreate(BaseTool):
                 self.store,
                 self.factory,
                 record.id,
-                parent_hooks=self._parent_hooks,
             ),
             name=f"aura-subagent-{record.id[:8]}",
         )

@@ -272,6 +272,9 @@ class AgentLoop:
                     turn=self._state.turn_count,
                     cleared_pair_count=mc_result.cleared_pair_count,
                     cleared_tool_call_ids=list(mc_result.cleared_tool_call_ids),
+                    cleared_positions=[
+                        [p.ai_idx, p.tool_idx] for p in mc_result.cleared_pairs
+                    ],
                 )
         # Wrap ONLY the SDK call — not tool dispatch, not hook run, not
         # history.append — so retries are surgical and tool semantics stay

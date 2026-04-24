@@ -14,18 +14,14 @@ from __future__ import annotations
 KEEP_LAST_N_TURNS = 3
 
 # Per-run caps on the post-compact re-injection of recently touched files.
-# Unused in 0.4.0 — reserved for the next iteration where we restore
-# "recently read" file bodies. Constants declared now so tests can pin them.
+# Live — read by ``compact.py::_build_recent_files`` to cap the volume of
+# file bodies re-added after the summary block replaces middle history.
 MAX_FILES_TO_RESTORE = 5
 MAX_TOKENS_PER_FILE = 5_000
 
-# Budget for the summary turn itself. Advisory — the FakeChatModel in tests
-# doesn't enforce this; production models respect prompt guidance.
-SUMMARY_BUDGET = 50_000
-
 # Auto-compact trigger: when LoopState.total_tokens_used exceeds this value,
-# a post_model observer would mark a pending compact. Wired as a config
-# field in a later release (0.4.1). 0 = disabled.
+# a post_model observer would mark a pending compact. Wired via the
+# ``auto_compact_threshold`` constructor kwarg on ``Agent``. 0 = disabled.
 AUTO_COMPACT_THRESHOLD = 150_000
 
 # --- Microcompact (G2, v0.12) -----------------------------------------------
@@ -35,13 +31,21 @@ AUTO_COMPACT_THRESHOLD = 150_000
 #
 # Pair-count trigger: once the outgoing prompt contains more than this many
 # compactable tool_use/tool_result pairs, the oldest ones get their payloads
-# replaced with ``MICROCOMPACT_CLEAR_MARKER``. Mirrors claude-code's default.
-MICROCOMPACT_TRIGGER_PAIRS = 8
+# replaced with ``MICROCOMPACT_CLEAR_MARKER``.
+#
+# Claude-code defaults to 8/5 — tuned for its higher average tool-call rate
+# per turn. Aura turns are leaner (fewer concurrent tool calls, tighter
+# prompts), so the pair accumulation rate is roughly half. 5/3 matches the
+# same "keep ~60% of trigger" ratio at a threshold that actually fires in
+# realistic Aura sessions instead of sitting above the practical ceiling.
+MICROCOMPACT_TRIGGER_PAIRS = 5
 
 # Number of most-recent compactable pairs to keep raw when the trigger fires.
 # Claude-code enforces ``Math.max(1, keep_recent)`` — we mirror that floor in
 # ``select_clear_ids`` so a misconfiguration of 0 never clears *everything*.
-MICROCOMPACT_KEEP_RECENT = 5
+# Invariant: must be strictly less than ``MICROCOMPACT_TRIGGER_PAIRS`` so the
+# trigger can actually fire clears once crossed (see Agent.__init__ guard).
+MICROCOMPACT_KEEP_RECENT = 3
 
 # Literal string that replaces the old ToolMessage.content payload. Chosen to
 # be unambiguous + compact; claude-code uses the same wording.

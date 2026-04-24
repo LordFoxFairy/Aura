@@ -91,11 +91,18 @@ class MicrocompactResult:
     serializes this verbatim, and tests/dogfood sessions benefit from
     stable oldest-first ordering. Using a tuple also keeps the dataclass
     hashable, matching the rest of the compact module's conventions.
+
+    ``cleared_pairs`` carries the full :class:`ToolPair` records (with
+    ``ai_idx`` / ``tool_idx``) so callers that emit journal events or
+    render diagnostics can pinpoint *which positions* in the message list
+    were cleared, not just which tool_call_ids. Same oldest-first order
+    as ``cleared_tool_call_ids``.
     """
 
     messages: list[BaseMessage]
     cleared_pair_count: int
     cleared_tool_call_ids: tuple[str, ...]
+    cleared_pairs: tuple[ToolPair, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +307,7 @@ def apply_microcompact(
             messages=messages,
             cleared_pair_count=0,
             cleared_tool_call_ids=(),
+            cleared_pairs=(),
         )
     pairs = find_tool_pairs(messages, policy.compactable_tools)
     clear_ids = select_clear_ids(
@@ -312,16 +320,18 @@ def apply_microcompact(
             messages=messages,
             cleared_pair_count=0,
             cleared_tool_call_ids=(),
+            cleared_pairs=(),
         )
     # Preserve oldest-first order in the returned tuple — ``pairs`` is already
     # in encounter order (T1's contract), so filtering it by clear_ids keeps
     # the ordering without another sort.
-    ordered_cleared = tuple(
-        pair.tool_call_id for pair in pairs if pair.tool_call_id in clear_ids
+    ordered_cleared_pairs = tuple(
+        pair for pair in pairs if pair.tool_call_id in clear_ids
     )
     new_messages = apply_clear(messages, clear_ids, policy.clear_marker)
     return MicrocompactResult(
         messages=new_messages,
-        cleared_pair_count=len(ordered_cleared),
-        cleared_tool_call_ids=ordered_cleared,
+        cleared_pair_count=len(ordered_cleared_pairs),
+        cleared_tool_call_ids=tuple(p.tool_call_id for p in ordered_cleared_pairs),
+        cleared_pairs=ordered_cleared_pairs,
     )

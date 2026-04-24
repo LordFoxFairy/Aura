@@ -23,7 +23,6 @@ from aura.core.compact.constants import (
     MICROCOMPACT_COMPACTABLE_TOOLS,
     MICROCOMPACT_KEEP_RECENT,
     MICROCOMPACT_TRIGGER_PAIRS,
-    SUMMARY_BUDGET,
 )
 from aura.core.compact.microcompact import (
     MicrocompactPolicy,
@@ -49,7 +48,6 @@ __all__ = [
     "MICROCOMPACT_TRIGGER_PAIRS",
     "MicrocompactPolicy",
     "MicrocompactResult",
-    "SUMMARY_BUDGET",
     "SUMMARY_SYSTEM",
     "SUMMARY_USER_PREFIX",
     "ToolPair",

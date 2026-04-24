@@ -268,7 +268,7 @@ async def test_microcompact_applied_journal_event_emitted(tmp_path: Path) -> Non
             model=model,
             storage=storage,
             session_id=session_id,
-            # Defaults: trigger=8, keep=5 → 10 pairs clears the oldest 5.
+            # Defaults: trigger=5, keep=3 → 10 pairs clears the oldest 7.
         )
         try:
             async for _ in agent.astream("next"):
@@ -285,10 +285,18 @@ async def test_microcompact_applied_journal_event_emitted(tmp_path: Path) -> Non
         assert len(applied) == 1
         ev = applied[0]
         assert ev["session"] == session_id
-        assert ev["cleared_pair_count"] == 5
+        assert ev["cleared_pair_count"] == 7
         # Oldest-first ordering: pre-seeded history used ``tc-0``..``tc-9``,
-        # so the oldest 5 are ``tc-0``..``tc-4``.
-        assert ev["cleared_tool_call_ids"] == [f"tc-{i}" for i in range(5)]
+        # so the oldest 7 are ``tc-0``..``tc-6``.
+        assert ev["cleared_tool_call_ids"] == [f"tc-{i}" for i in range(7)]
+        # ``cleared_positions`` — the ToolPair indices into the outgoing
+        # ``messages`` view (what find_tool_pairs sees). Context.build
+        # prepends a SystemMessage, shifting each raw-history position
+        # by +1. Raw triples (Human @ 3i, AI @ 3i+1, Tool @ 3i+2) become
+        # (3i+1, 3i+2, 3i+3) in the outgoing view.
+        assert ev["cleared_positions"] == [
+            [3 * i + 2, 3 * i + 3] for i in range(7)
+        ]
     finally:
         journal.reset()
 
@@ -373,12 +381,12 @@ async def test_ai_message_tool_calls_preserved_in_outgoing_prompt(
     # is empty, contributes nothing) == 10 ids in encounter order.
     assert ai_tool_call_ids == [f"tc-{i}" for i in range(10)]
 
-    # 5 markers (oldest) + 5 original payloads (recent).
-    assert _count_markers(sent) == 5
+    # 7 markers (oldest) + 3 original payloads (recent) — defaults: trigger=5, keep=3.
+    assert _count_markers(sent) == 7
     payloads = [
         m.content for m in sent
         if isinstance(m, ToolMessage) and m.name == "read_file"
     ]
     assert len(payloads) == 10
-    assert payloads[:5] == [MICROCOMPACT_CLEAR_MARKER] * 5
-    assert payloads[5:] == [f"payload-for-pair-{i}" for i in range(5, 10)]
+    assert payloads[:7] == [MICROCOMPACT_CLEAR_MARKER] * 7
+    assert payloads[7:] == [f"payload-for-pair-{i}" for i in range(7, 10)]

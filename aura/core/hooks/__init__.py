@@ -11,7 +11,7 @@ the tool call).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
@@ -19,6 +19,11 @@ from langchain_core.tools import BaseTool
 from aura.core.permissions.decision import Decision
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
+
+#: Values accepted for the ``trigger`` field of the pre-compact hook. Mirrors
+#: the ``source`` literal on ``Agent.compact`` — kept here so hook authors get
+#: a real type (not ``str``) and typos are caught at call-site type-check time.
+CompactTrigger = Literal["manual", "auto", "reactive"]
 
 
 @dataclass(frozen=True)
@@ -184,14 +189,13 @@ class PostSubagentHook(Protocol):
 
 class PreCompactHook(Protocol):
     # Fires inside ``run_compact`` BEFORE the summary LLM turn. ``trigger``
-    # is one of ``"manual"`` / ``"auto"`` / ``"reactive"`` — matches the
-    # ``source`` param passed to ``Agent.compact``. ``state`` is the live
-    # LoopState (read-only reference; hook should treat as such).
+    # matches the ``source`` param passed to ``Agent.compact``. ``state`` is
+    # the live LoopState (read-only reference; hook should treat as such).
     async def __call__(
         self,
         *,
         state: LoopState,
-        trigger: str,
+        trigger: CompactTrigger,
         **kwargs: Any,
     ) -> None: ...
 
@@ -334,7 +338,7 @@ class HookChain:
             )
 
     async def run_pre_compact(
-        self, *, state: LoopState, trigger: str,
+        self, *, state: LoopState, trigger: CompactTrigger,
     ) -> None:
         for hook in self.pre_compact:
             await hook(state=state, trigger=trigger)

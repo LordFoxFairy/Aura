@@ -139,8 +139,21 @@ class SkillTool(BaseTool):
         self, name: str, arguments: list[str] | None,
     ) -> dict[str, Any]:
         skill = self._registry.get(name)
+        # ``disable_model_invocation=True`` skills are hidden from the
+        # model's <skills-available> catalogue (see
+        # SkillRegistry.model_visible). If the model somehow references
+        # one by name anyway (stale context, hand-authored transcript),
+        # refuse the invocation — matching claude-code's contract that
+        # ``disable-model-invocation`` is the hard "model cannot call this
+        # skill" flag. The error shape mirrors the unknown-skill branch so
+        # the model's retry logic treats "hidden" the same as "missing".
+        if skill is not None and skill.disable_model_invocation:
+            available = [s.name for s in self._registry.model_visible()]
+            raise ToolError(
+                f"no skill named {name!r}; available: {available}"
+            )
         if skill is None:
-            available = [s.name for s in self._registry.list()]
+            available = [s.name for s in self._registry.model_visible()]
             raise ToolError(
                 f"no skill named {name!r}; available: {available}"
             )

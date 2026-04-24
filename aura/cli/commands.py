@@ -61,7 +61,15 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     r.register(GitLogCommand())
     r.register(MCPCommand())
     if agent is not None:
-        for skill in agent._skill_registry.list():
+        # Only skills with ``user_invocable=True`` get a ``/<name>`` slash
+        # command — claude-code parity. Skills flagged ``user-invocable:
+        # false`` remain model-invocable via the ``skill`` tool but are
+        # hidden from the slash-command surface (picker, ``/help``,
+        # completion). ``SkillRegistry.user_invocable()`` applies that
+        # filter; the Context still sees ``registry.list()`` for the full
+        # ``<skills-available>`` catalogue (model visibility is governed
+        # separately by ``disable_model_invocation``).
+        for skill in agent._skill_registry.user_invocable():
             r.register(SkillCommand(skill=skill, agent=agent))
         # MCP commands were collected at aconnect() time; register them
         # last so a name collision with a built-in / skill is flagged

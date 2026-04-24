@@ -138,7 +138,7 @@ class BuddyCommand:
         if static_mode:
             lines = [*header, *_frame(0), *footer]
             return CommandResult(
-                handled=True, kind="print", text="\n".join(lines),
+                handled=True, kind="view", text="\n".join(lines),
             )
 
         # Animated path. Own the 5 sprite lines + 2 footer lines by
@@ -152,10 +152,13 @@ class BuddyCommand:
             frame_picker=_frame,
             tick_ms=_tick_ms(),
         )
-        # Nothing left for the REPL renderer to print — the animation
-        # already produced all the output. An empty ``kind="print"`` still
-        # keeps ``handled=True`` so dispatch knows the command ran.
-        return CommandResult(handled=True, kind="print", text="")
+        # Animation already produced the output; return ``kind="view"``
+        # with empty text so the REPL's view handler shows only the
+        # "press Enter to continue" prompt (no extra panel, since we
+        # have nothing to frame — the sprite is already above the
+        # cursor). This keeps the UX consistent with the static path:
+        # display-then-wait-for-Enter for every ``/buddy`` invocation.
+        return CommandResult(handled=True, kind="view", text="")
 
 
 def _tick_ms() -> int:

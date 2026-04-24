@@ -568,6 +568,16 @@ async def run_repl_async(
             if result.kind == "exit":
                 journal.write("repl_exit", reason="slash_exit")
                 return
+            if result.kind == "view":
+                # Modal-style display: wrap text in a framed panel and
+                # block until the user hits Enter. Keeps `/help`, `/stats`,
+                # `/buddy` etc. on screen as overlays instead of scrolling
+                # into the backlog. Empty ``result.text`` is valid — a
+                # command may have already printed its own output (an
+                # animated sprite, a streamed log) in which case we just
+                # show the "press Enter" prompt.
+                _render_view(_console, result.text)
+                continue
             if result.text:
                 _console.print(result.text)
             continue
@@ -621,6 +631,43 @@ _BANNER_FRAME_INTERVAL: float = 0.12
 #: every terminal we support (braille glyphs like ``⏺`` are missing on
 #: older Linux fonts).
 _BANNER_SETTLE_GLYPH: str = "✱"
+
+
+def _render_view(console: Console, text: str) -> None:
+    """Render a ``kind="view"`` command output as a modal-style panel.
+
+    Wraps ``text`` in a dim-bordered :class:`rich.panel.Panel` so the
+    content reads as an overlay rather than scrolling into the chat
+    backlog, then blocks on ``console.input`` until the user hits Enter
+    (or Ctrl+C / Ctrl+D — both dismiss silently). An empty ``text`` is
+    valid: commands that already emitted their own output (a typed
+    animation, a streamed subprocess) still want the "press Enter"
+    pause so the view state stays on screen until the user chooses
+    to dismiss it.
+
+    Matches claude-code's modal UX for info commands (``/stats``,
+    ``/help``) without pulling in a full prompt-toolkit Dialog — a
+    bordered rich panel + a one-line input prompt is the cheapest
+    shape that gives the "content stays until I dismiss it" feel the
+    user asked for.
+    """
+    stripped = text.strip("\n")
+    if stripped:
+        console.print(Panel(stripped, border_style="dim", padding=(0, 1)))
+    try:
+        console.input("[dim](press Enter to continue) [/dim]")
+    except (EOFError, KeyboardInterrupt, OSError):
+        # Silent dismiss — Ctrl+C / Ctrl+D should not crash the REPL
+        # (the outer loop's handler would swallow them anyway, but
+        # catching here keeps the view's mental model clean: the
+        # ONLY way out is "dismiss"; how you pressed the key doesn't
+        # matter).
+        #
+        # ``OSError``: pytest capture wraps stdin with a reader that
+        # raises on read during non-interactive runs. Gracefully falling
+        # through to "panel printed, no wait" keeps the view tests
+        # working without mocking the whole ``console.input`` path.
+        console.print()
 
 
 def _render_welcome_panel(agent: Agent, glyph: str) -> Panel:

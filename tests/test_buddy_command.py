@@ -64,7 +64,10 @@ async def test_buddy_command_renders_species_rarity_mood(
     r = build_default_registry()
     result = await dispatch("/buddy", agent, r)
     assert result.handled is True
-    assert result.kind == "print"
+    # /buddy renders as a modal view — content stays on screen until
+    # the user dismisses with Enter. Non-TTY (pytest) still populates
+    # ``text`` because the animation path is skipped in non-TTY.
+    assert result.kind == "view"
 
     # Rehydrate the expected buddy with the same seed source the command
     # uses — keeps the test seed-agnostic across CI environments.

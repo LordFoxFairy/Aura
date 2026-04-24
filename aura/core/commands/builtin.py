@@ -71,7 +71,7 @@ class HelpCommand:
         )
         lines.append("Anything else is sent as a prompt to the agent.")
         return CommandResult(
-            handled=True, kind="print", text="\n".join(lines)
+            handled=True, kind="view", text="\n".join(lines)
         )
 
 

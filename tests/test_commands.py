@@ -66,7 +66,10 @@ async def test_dispatch_help_prints_command_list(tmp_path: Path) -> None:
     r = build_default_registry()
     result = await dispatch("/help", agent, r)
     assert result.handled is True
-    assert result.kind == "print"
+    # /help renders as a modal view (kind="view") since v0.13 — REPL
+    # wraps it in a framed panel and waits for Enter. Old "print" kind
+    # let the help scroll away before users could read it.
+    assert result.kind == "view"
     # Don't pin exact wording — registry enumerates dynamically now.
     assert "/help" in result.text
     assert "/exit" in result.text

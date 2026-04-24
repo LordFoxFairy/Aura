@@ -78,4 +78,4 @@ class StatsCommand:
                 f"out {_fmt(last_output)} / cache {_fmt(last_cache)}"
             ),
         ]
-        return CommandResult(handled=True, kind="print", text="\n".join(lines))
+        return CommandResult(handled=True, kind="view", text="\n".join(lines))

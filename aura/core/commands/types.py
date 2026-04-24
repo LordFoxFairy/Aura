@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from aura.core.agent import Agent
 
 
-CommandKind = Literal["print", "exit", "noop"]
+CommandKind = Literal["print", "view", "exit", "noop"]
 CommandSource = Literal["builtin", "skill", "mcp"]
 
 
@@ -27,7 +27,18 @@ class CommandResult:
 
     - ``handled=False, kind="noop"`` → the line is a normal prompt; the REPL
       should send it to the agent.
-    - ``handled=True, kind="print"`` → REPL prints ``text`` and re-prompts.
+    - ``handled=True, kind="print"`` → REPL prints ``text`` and re-prompts
+      immediately. Use for actions whose feedback is one line of status
+      ("session cleared", "switched to opus", "task stopped").
+    - ``handled=True, kind="view"`` → REPL wraps ``text`` in a framed panel
+      and blocks until the user hits Enter. Use for display-heavy commands
+      (``/help``, ``/buddy``, ``/stats``, ``/tasks`` listing, ``/status``
+      ``/diff`` ``/log``) so the content stays on screen as an overlay
+      rather than scrolling into the backlog. Matches claude-code's modal
+      behaviour for its info commands. Empty ``text`` is valid — the
+      command may have already printed its own output (e.g., an animation
+      in ``/buddy``), in which case the REPL just shows the "press Enter
+      to continue" prompt.
     - ``handled=True, kind="exit"`` → REPL exits cleanly.
     """
 

@@ -176,7 +176,10 @@ async def test_help_command_enumerates_all_registered(tmp_path: Path) -> None:
     result = await r.dispatch("/help", agent)
 
     assert result.handled is True
-    assert result.kind == "print"
+    # /help migrated to "view" kind in v0.13 — REPL renders it as a
+    # modal panel that waits for Enter to dismiss, instead of a plain
+    # print that scrolls into the backlog.
+    assert result.kind == "view"
     assert "/help" in result.text
     assert "/alpha" in result.text
     assert "/beta" in result.text

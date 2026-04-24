@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 
 from aura.core.persistence import journal
 from aura.core.tasks.factory import SubagentFactory
@@ -107,6 +108,18 @@ async def run_task(
     # into the error message + journal so the operator sees exactly how
     # long we waited.
     effective_timeout = _resolve_timeout(timeout_sec)
+    # V13-T1C: subagent_start fires before spawn so operators observing the
+    # journal see a clear "run_task began for X" signal even if spawn itself
+    # raises (the lifecycle pairs with one of subagent_completed /
+    # subagent_cancelled / subagent_timeout / subagent_failed, all of which
+    # now carry a ``duration_sec`` field computed from ``start_monotonic``).
+    start_monotonic = time.monotonic()
+    journal.write(
+        "subagent_start",
+        task_id=task_id,
+        agent_type=record.agent_type or "general-purpose",
+        prompt_chars=len(record.prompt),
+    )
     # Bug fix (integration test): ``factory.spawn(...)`` USED to live
     # outside the try/except, so if spawn itself raised (e.g. ValueError
     # from ``agent_type="explore"`` requiring a tool the parent hadn't
@@ -138,7 +151,11 @@ async def run_task(
         store.mark_completed(task_id, final_text)
     except asyncio.CancelledError:
         store.mark_cancelled(task_id)
-        journal.write("subagent_cancelled", task_id=task_id)
+        journal.write(
+            "subagent_cancelled",
+            task_id=task_id,
+            duration_sec=round(time.monotonic() - start_monotonic, 3),
+        )
         if agent is not None:
             # ``aclose`` is the async-safe teardown. ``close()`` on a live
             # event loop raises ``RuntimeError`` when the child Agent has
@@ -166,6 +183,7 @@ async def run_task(
             "subagent_timeout",
             task_id=task_id,
             timeout_sec=effective_timeout,
+            duration_sec=round(time.monotonic() - start_monotonic, 3),
             # Preserve the underlying cause for deep debugging; mostly
             # ``TimeoutError()`` with no message, but a future re-raise
             # inside astream could carry something more useful.
@@ -183,7 +201,12 @@ async def run_task(
     except Exception as exc:  # noqa: BLE001
         err_msg = f"{type(exc).__name__}: {exc}"
         store.mark_failed(task_id, err_msg)
-        journal.write("subagent_failed", task_id=task_id, error=err_msg)
+        journal.write(
+            "subagent_failed",
+            task_id=task_id,
+            error=err_msg,
+            duration_sec=round(time.monotonic() - start_monotonic, 3),
+        )
         if agent is not None:
             # ``aclose`` is the async-safe teardown. ``close()`` on a live
             # event loop raises ``RuntimeError`` when the child Agent has
@@ -194,7 +217,12 @@ async def run_task(
             # connections and leaving the TaskRecord in ``running``.
             await agent.aclose()
     else:
-        journal.write("subagent_completed", task_id=task_id)
+        journal.write(
+            "subagent_completed",
+            task_id=task_id,
+            duration_sec=round(time.monotonic() - start_monotonic, 3),
+            final_text_chars=len(final_text),
+        )
         if agent is not None:
             # ``aclose`` is the async-safe teardown. ``close()`` on a live
             # event loop raises ``RuntimeError`` when the child Agent has

@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage
 
+from aura.core.memory.attachments import build_mcp_resource_message
 from aura.core.persistence import journal
 
 if TYPE_CHECKING:
@@ -214,7 +215,9 @@ async def extract_and_resolve_attachments(
             )
         )
         journal.write(
-            "at_mention_mcp_resource_success", server=server, uri=uri,
+            "at_mention_mcp_resource_success",
+            server=server,
+            uri=uri,
         )
     return prompt, attachments
 
@@ -224,23 +227,24 @@ def render_attachments_as_messages(
 ) -> list[HumanMessage]:
     """Wrap each resolved attachment as a ``<mcp-resource>`` HumanMessage.
 
-    Format mirrors the ``<nested-memory>`` / ``<rule>`` envelope pattern
-    used by :meth:`aura.core.memory.context.Context.build` — an XML-ish
-    open/close tag with identifying attributes, then the raw content. The
-    LLM is already trained to read these envelopes from the pinned prefix;
-    reusing the shape keeps the prompt structurally uniform.
+    This is the CLI-side ingress renderer — it only decides WHICH
+    attachments to emit and in what order. The actual envelope SHAPE
+    (``<mcp-resource ...>\\nBODY\\n</mcp-resource>``) lives in
+    :func:`aura.core.memory.attachments.build_mcp_resource_message` so
+    that the Memory subsystem retains a single construction site for
+    every injected-into-outgoing-prompt HumanMessage shape — the same
+    invariant :meth:`aura.core.memory.context.Context.build` upholds for
+    rules / skills / nested memory.
 
     Empty list → empty return: the REPL can always call this
     unconditionally without a size guard.
     """
-    out: list[HumanMessage] = []
-    for att in attachments:
-        header = f'<mcp-resource server="{att.server}" uri="{att.uri}"'
-        if att.name and att.name != att.uri:
-            header += f' name="{att.name}"'
-        header += ">"
-        body = att.content if att.content else "[empty resource]"
-        out.append(
-            HumanMessage(f"{header}\n{body}\n</mcp-resource>"),
+    return [
+        build_mcp_resource_message(
+            server=att.server,
+            uri=att.uri,
+            name=att.name,
+            content=att.content,
         )
-    return out
+        for att in attachments
+    ]

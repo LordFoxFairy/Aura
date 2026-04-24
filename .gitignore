@@ -1,9 +1,12 @@
 # =============================================================================
 # Local-only workspace: planning + research docs are kept on disk for the
 # human/agent workflow but are intentionally not part of git history.
+# Leading slash anchors to repo root — ``tasks/`` without the slash would
+# match any directory named ``tasks`` at ANY depth (e.g. ``aura/core/tasks/``
+# which is real production code). Same for ``docs/``.
 # =============================================================================
-docs/
-tasks/
+/docs/
+/tasks/
 
 # =============================================================================
 # OS

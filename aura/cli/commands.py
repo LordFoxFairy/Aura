@@ -25,6 +25,7 @@ from aura.core.commands.git_commands import (
     GitStatusCommand,
 )
 from aura.core.commands.mcp_cmd import MCPCommand
+from aura.core.commands.stats import StatsCommand
 from aura.core.commands.tasks import TaskGetCommand, TasksCommand, TaskStopCommand
 from aura.core.skills.command import SkillCommand
 
@@ -53,6 +54,7 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     r.register(CompactCommand())
     r.register(ModelCommand())
     r.register(ExportCommand())
+    r.register(StatsCommand())
     r.register(TasksCommand())
     r.register(TaskGetCommand())
     r.register(TaskStopCommand())

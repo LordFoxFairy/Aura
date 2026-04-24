@@ -43,6 +43,7 @@ def test_default_registry_has_builtin_set() -> None:
     names = {c.name for c in r.list()}
     assert names == {
         "/help", "/exit", "/clear", "/compact", "/model", "/export",
+        "/stats",
         "/tasks", "/task-get", "/task-stop",
         "/status", "/diff", "/log", "/mcp",
     }

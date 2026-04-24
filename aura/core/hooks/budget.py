@@ -116,6 +116,8 @@ def make_usage_tracking_hook() -> PostModelHook:
                 "last_output_tokens": 0,
                 "total_input_tokens": 0,
                 "total_output_tokens": 0,
+                "total_cache_read_tokens": 0,
+                "turn_count": 0,
             },
         )
         stats["last_input_tokens"] = per_turn["input_tokens"]
@@ -123,6 +125,36 @@ def make_usage_tracking_hook() -> PostModelHook:
         stats["last_output_tokens"] = per_turn["output_tokens"]
         stats["total_input_tokens"] += per_turn["input_tokens"]
         stats["total_output_tokens"] += per_turn["output_tokens"]
+        stats["total_cache_read_tokens"] = (
+            stats.get("total_cache_read_tokens", 0) + per_turn["cache_read_tokens"]
+        )
+        stats["turn_count"] = stats.get("turn_count", 0) + 1
+
+        # Always-on ``turn_usage`` journal event. Unlike the optional
+        # event-logger's ``post_model`` (attached via ``--log``), this fires
+        # every turn by default so ``/stats`` and future v0.14 historical
+        # aggregation have real data without the user opting in. Model name
+        # extraction is best-effort — some providers put it in
+        # ``response_metadata['model_name']``, others in ``['model']``; we
+        # accept either and fall back to empty string if neither exists.
+        from aura.core.persistence import journal
+
+        model_name = ""
+        meta = getattr(ai_message, "response_metadata", None) or {}
+        if isinstance(meta, dict):
+            for key in ("model_name", "model", "model_id"):
+                val = meta.get(key)
+                if isinstance(val, str) and val:
+                    model_name = val
+                    break
+        journal.write(
+            "turn_usage",
+            turn=state.turn_count,
+            model=model_name,
+            input_tokens=per_turn["input_tokens"],
+            output_tokens=per_turn["output_tokens"],
+            cache_read_tokens=per_turn["cache_read_tokens"],
+        )
 
     return _hook
 

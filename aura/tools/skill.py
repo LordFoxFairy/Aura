@@ -177,6 +177,22 @@ class SkillTool(BaseTool):
         )
         invoked_skill = dataclasses.replace(skill, body=rendered_body)
         self._recorder(invoked_skill)
+        # Mirror SkillCommand.handle's audit emit — same event shape,
+        # same ``allowed_tools`` and origin-layer ``source`` — so the
+        # audit trail captures declared intent regardless of which path
+        # (slash vs tool) invoked the skill. ``invocation="tool"``
+        # distinguishes the model-driven path from the user's slash
+        # command. Enforcement of ``allowed_tools`` remains a v0.13
+        # concern (see ``Command.allowed_tools`` docstring).
+        from aura.core.persistence import journal
+
+        journal.write(
+            "skill_invoked",
+            name=skill.name,
+            invocation="tool",
+            source=skill.layer,
+            allowed_tools=sorted(skill.allowed_tools),
+        )
         return {
             "skill": skill.name,
             "invoked": True,

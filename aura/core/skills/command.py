@@ -80,8 +80,18 @@ class SkillCommand:
         # the rendered copy carries the substituted text.
         invoked = dataclasses.replace(self._skill, body=rendered_body)
         self._agent.record_skill_invocation(invoked)
+        # Audit surface for allowed_tools: enforcement is a v0.13 concern
+        # (see ``Command.allowed_tools`` docstring); until then the journal
+        # event captures declared intent so post-hoc audits can reconstruct
+        # what each skill asked to scope down to. ``source`` is the Skill's
+        # origin layer (user / project / managed); ``invocation`` is the
+        # path we reached this event through (slash / tool).
         journal.write(
-            "skill_invoked", name=self._skill.name, source="slash",
+            "skill_invoked",
+            name=self._skill.name,
+            invocation="slash",
+            source=self._skill.layer,
+            allowed_tools=sorted(self._skill.allowed_tools),
         )
         return CommandResult(
             handled=True,

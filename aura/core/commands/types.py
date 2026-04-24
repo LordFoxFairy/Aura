@@ -47,9 +47,12 @@ class Command(Protocol):
         allowed_tools: tools this command explicitly gates itself to. Empty
             tuple means "no explicit gating" — the command inherits the
             agent's default tool surface. Mirrors claude-code's skill
-            ``allowed-tools`` frontmatter field. DATA ONLY in v0.7 — the
-            dispatcher does not enforce it yet; callers (UI, future
-            permission layer) may inspect it.
+            ``allowed-tools`` frontmatter field. Inspected by the audit
+            layer (emitted into the ``skill_invoked`` journal event on
+            every invocation); NOT enforced as a runtime allowlist in
+            v0.12 — the skill body still runs under the full active tool
+            surface. Enforcement via scoped session rules is tracked as
+            v0.13 work.
         argument_hint: one-line hint rendered by slash-command completion
             (e.g. ``"<bug_description>"`` or ``"[branch] [--full]"``).
             ``None`` means "no hint". Mirrors claude-code's skill

@@ -20,10 +20,17 @@ class _FakeCommand:
     """Minimal Command-protocol stand-in — no Agent required."""
 
     source = "builtin"
+    allowed_tools: tuple[str, ...] = ()
 
-    def __init__(self, name: str, description: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        argument_hint: str | None = None,
+    ) -> None:
         self.name = name
         self.description = description
+        self.argument_hint = argument_hint
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         return CommandResult(handled=True, kind="print", text="")
@@ -95,6 +102,68 @@ def test_slash_completer_exposes_description_in_display_meta() -> None:
     assert len(completions) == 1
     # display_meta may be a plain str or FormattedText — stringify for the assert.
     assert "show help" in str(completions[0].display_meta)
+
+
+def test_slash_completer_renders_argument_hint_after_name() -> None:
+    """Commands with an ``argument_hint`` surface it dimmed after the name."""
+    r = _registry(
+        _FakeCommand(
+            "/skill-name", "invoke skill", argument_hint="<topic>",
+        ),
+    )
+    completer = SlashCommandCompleter(lambda: r)
+
+    doc = Document(text="/sk", cursor_position=3)
+    completions = list(completer.get_completions(doc, complete_event=None))
+    assert len(completions) == 1
+    # display is a FormattedText (list of style/text tuples) when a hint is
+    # present. Stringify both the display and the raw tuples to verify both
+    # the name and the hint are included.
+    display = completions[0].display
+    rendered = "".join(
+        text for _, text, *_ in display
+    ) if not isinstance(display, str) else display
+    assert "/skill-name" in rendered
+    assert "<topic>" in rendered
+
+
+def test_slash_completer_omits_argument_hint_when_absent() -> None:
+    """Commands without an ``argument_hint`` show only the name in display."""
+    r = _registry(_FakeCommand("/exit", "quit"))
+    completer = SlashCommandCompleter(lambda: r)
+
+    doc = Document(text="/ex", cursor_position=3)
+    completions = list(completer.get_completions(doc, complete_event=None))
+    assert len(completions) == 1
+    # prompt_toolkit normalizes the display to FormattedText; extract and
+    # assert the rendered text has the name only (no hint placeholder).
+    display = completions[0].display
+    rendered = "".join(
+        text for _, text, *_ in display
+    ) if not isinstance(display, str) else display
+    assert rendered == "/exit"
+    assert "<" not in rendered
+
+
+def test_slash_completer_collapses_multiline_description() -> None:
+    """Multi-line descriptions (common on LLM-authored skills) render as one
+    line in the meta column, not as garbled multi-line text."""
+    body = (
+        "Use when starting any conversation.\n"
+        "Establishes how to find and use skills."
+    )
+    r = _registry(_FakeCommand("/using-superpowers", body))
+    completer = SlashCommandCompleter(lambda: r)
+
+    doc = Document(text="/us", cursor_position=3)
+    completions = list(completer.get_completions(doc, complete_event=None))
+    assert len(completions) == 1
+    meta = completions[0].display_meta
+    rendered = "".join(
+        text for _, text, *_ in meta
+    ) if not isinstance(meta, str) else meta
+    assert "\n" not in rendered
+    assert rendered == "Use when starting any conversation."
 
 
 def test_history_file_path_under_aura_home(

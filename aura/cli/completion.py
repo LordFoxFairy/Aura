@@ -19,6 +19,7 @@ from pathlib import Path
 
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
+from prompt_toolkit.formatted_text import FormattedText
 
 from aura.core.commands import CommandRegistry
 
@@ -46,13 +47,33 @@ class SlashCommandCompleter(Completer):
             return
         registry = self._registry_getter()
         for cmd in registry.list():
-            if cmd.name.startswith(text):
-                yield Completion(
-                    cmd.name,
-                    start_position=-len(text),
-                    display=cmd.name,
-                    display_meta=cmd.description,
-                )
+            if not cmd.name.startswith(text):
+                continue
+            # Display column: ``/name`` + dimmed ``<arg_hint>`` when the
+            # command declares one. Mirrors claude-code's completion menu
+            # where required args sit after the name in a muted color,
+            # distinguishing the invocable token (`/skill-name`) from the
+            # hint about what to type after it (`<topic>`).
+            if cmd.argument_hint:
+                display: str | FormattedText = FormattedText([
+                    ("", cmd.name),
+                    ("", " "),
+                    ("class:completion-menu.meta", cmd.argument_hint),
+                ])
+            else:
+                display = cmd.name
+            # display_meta is rendered on a single line by prompt_toolkit's
+            # dropdown; a multi-line description (common for skills authored
+            # by LLMs that drop a paragraph into ``description``) would push
+            # the column into garbage. Keep the first line only — callers
+            # who want the full text can use ``/help``.
+            meta_first_line = cmd.description.split("\n", 1)[0].strip()
+            yield Completion(
+                cmd.name,
+                start_position=-len(text),
+                display=display,
+                display_meta=meta_first_line,
+            )
 
 
 def resolve_history_path() -> Path:

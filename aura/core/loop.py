@@ -47,6 +47,12 @@ from aura.tools.progress import (
     set_progress_callback,
 )
 
+# Canonical default session name. Shared with ``aura.core.agent`` — keep a
+# single source of truth so ``AgentLoop(session_id=)`` default and
+# ``Agent(session_id=)`` default never drift. Any string literal ``"default"``
+# elsewhere in the session_id pipeline is a bug.
+DEFAULT_SESSION = "default"
+
 # Reasons for which a permission prompt was NOT shown — the renderer surfaces
 # an "auto-allowed: <reason>" dim line after ToolCallStarted. User-prompted
 # allows/denies skip the audit (the prompt itself was the audit).
@@ -174,7 +180,7 @@ class AgentLoop:
         state: LoopState | None = None,
         max_turns: int | None = 50,
         retry_config: RetryConfig | None = None,
-        session_id: str = "default",
+        session_id: str = DEFAULT_SESSION,
         microcompact_policy: MicrocompactPolicy | None = None,
         batch_timeout_sec: float | None = None,
     ) -> None:

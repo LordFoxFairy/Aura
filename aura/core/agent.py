@@ -26,6 +26,7 @@ from aura.core.hooks import HookChain
 from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.hooks.budget import default_hooks
 from aura.core.hooks.must_read_first import make_must_read_first_hook
+from aura.core.loop import DEFAULT_SESSION as _DEFAULT_SESSION
 from aura.core.loop import AgentLoop
 from aura.core.mcp import MCPManager
 from aura.core.memory import project_memory, rules
@@ -46,8 +47,6 @@ from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 from aura.tools.ask_user import QuestionAsker
-
-_DEFAULT_SESSION = "default"
 
 # Substring signatures that identify provider-level "context length exceeded"
 # errors. We match on stringified message — not exception type — so we don't

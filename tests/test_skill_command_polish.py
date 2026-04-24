@@ -30,7 +30,6 @@ from aura.core.commands.types import CommandResult, CommandSource
 from aura.core.persistence import journal as journal_module
 from aura.core.persistence.storage import SessionStorage
 from aura.core.skills.command import SkillCommand
-from aura.core.skills.registry import SkillRegistry
 from aura.core.skills.types import Skill
 from aura.tools.skill import SkillTool
 from tests.conftest import FakeChatModel

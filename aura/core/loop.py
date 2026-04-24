@@ -260,6 +260,12 @@ class AgentLoop:
         sink_obj = self._state.custom.get(DENIALS_SINK_KEY)
         if isinstance(sink_obj, list):
             sink_obj.clear()
+        # Reset the permission-hook per-turn ResolveOnce cache. Decisions
+        # made on this turn should not silently pre-allow the model's next
+        # turn where behavior may have drifted. Pop-not-clear so subsequent
+        # hook calls repopulate via ``setdefault`` — avoids sharing a stale
+        # dict reference if the hook mis-captures across turns.
+        self._state.custom.pop("_perm_turn_ask_cache", None)
         while True:
             journal.write("turn_begin", turn=self._state.turn_count + 1)
             ai = await self._invoke_model(history)

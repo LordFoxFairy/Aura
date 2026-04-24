@@ -41,6 +41,7 @@ Each does exactly one thing.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +63,28 @@ from aura.schemas.tool import ToolResult, resolve_is_destructive
 
 # Shared empty immutable RuleSet — safe as a default (frozen, no mutable state).
 _EMPTY_RULESET = RuleSet()
+
+# state.custom key for the per-turn ResolveOnce cache. Scoped per turn so a
+# user "accept" on call 1 of a batch doesn't silently carry over to turn 2
+# (where the user might want a fresh prompt if the model acts differently).
+# ``AgentLoop.run_turn`` clears this at turn start; within a turn the cache
+# dedupes same-signature ask branches so the user isn't re-prompted for the
+# same tool+args twice. "Always" decisions go through the Rule path and never
+# reach this cache (step 5 auto-allows on the stored rule).
+_PERM_DEDUP_CACHE_KEY = "_perm_turn_ask_cache"
+
+
+def _dedup_key(tool_name: str, args: dict[str, Any]) -> str:
+    """Canonical ``(tool, args)`` signature for the per-turn ask cache.
+
+    ``json.dumps(..., sort_keys=True, default=str)`` produces a stable string
+    across argument-order permutations and handles non-JSON types (Paths,
+    tuples cast to lists) without raising. Cache correctness assumes the
+    *semantically-identical* invocations produce structurally-identical
+    argument dicts; if a tool normalizes input (e.g., trailing-slash on
+    paths) it must do so BEFORE the hook sees ``args``.
+    """
+    return f"{tool_name}::{json.dumps(args, sort_keys=True, default=str)}"
 
 # Tools whose invocation ``accept_edits`` mode auto-allows (once safety has
 # cleared). Deliberately a tight closed set: the user opts into "yes, keep
@@ -311,6 +334,7 @@ def make_permission_hook(
             project_root=project_root,
             mode=_mode_provider(),
             safety=safety,
+            state=state,
         )
         # Journal the decision. ``feedback`` is only ever non-empty when
         # the user typed a note via the widget's Tab-to-amend flow;
@@ -385,6 +409,7 @@ async def _decide(
     project_root: Path,
     mode: Mode,
     safety: SafetyPolicy,
+    state: LoopState,
 ) -> tuple[Decision, str]:
     """Decide whether to allow + return (decision, feedback).
 
@@ -446,7 +471,29 @@ async def _decide(
     if matched is not None:
         return Decision(allow=True, reason="rule_allow", rule=matched), ""
 
-    # 6. Ask.
+    # 6. Ask — with per-turn ResolveOnce dedup.
+    #
+    # Before prompting, check the per-turn cache: if the user already
+    # decided on this (tool, args) signature earlier in the same turn,
+    # reuse that decision silently. Prevents the "model emits 3 identical
+    # web_fetch calls in a batch, user sees the same prompt 3 times"
+    # UX regression. Scoped per-turn (cleared by ``AgentLoop.run_turn``)
+    # so turn 2 gets a fresh prompt if behavior is worth re-confirming.
+    # "Always" decisions never reach here — they went through the Rule
+    # path at step 5, so the cache only holds ``user_accept`` /
+    # ``user_deny`` outcomes.
+    cache_key = _dedup_key(tool.name, args)
+    cache = state.custom.setdefault(_PERM_DEDUP_CACHE_KEY, {})
+    cached = cache.get(cache_key)
+    if cached is not None:
+        cached_decision, cached_feedback = cached
+        journal.write(
+            "permission_dedup_hit",
+            tool=tool.name,
+            reason=cached_decision.reason,
+        )
+        return cached_decision, cached_feedback
+
     rule_hint = Rule(tool=tool.name, content=None)
     try:
         response = await asker(tool=tool, args=args, rule_hint=rule_hint)
@@ -459,14 +506,20 @@ async def _decide(
             tool=tool.name,
             detail=f"{type(exc).__name__}: {exc}",
         )
+        # Don't cache asker failures — a transient widget crash shouldn't
+        # deny every same-signature call for the rest of the turn.
         return Decision(allow=False, reason="user_deny"), ""
 
     feedback = response.feedback
     match response.choice:
         case "accept":
-            return Decision(allow=True, reason="user_accept"), feedback
+            decision = Decision(allow=True, reason="user_accept")
+            cache[cache_key] = (decision, feedback)
+            return decision, feedback
         case "deny":
-            return Decision(allow=False, reason="user_deny"), feedback
+            decision = Decision(allow=False, reason="user_deny")
+            cache[cache_key] = (decision, feedback)
+            return decision, feedback
         case "always":
             _install_always(
                 response,
@@ -474,7 +527,12 @@ async def _decide(
                 project_root=project_root,
                 tool_name=tool.name,
             )
-            return (
-                Decision(allow=True, reason="user_always", rule=response.rule),
-                feedback,
+            decision = Decision(
+                allow=True, reason="user_always", rule=response.rule,
             )
+            # Don't cache — the installed rule is the persistent source of
+            # truth now; subsequent same-signature calls hit step 5's
+            # rule-allow path and never reach the ask branch. Caching here
+            # would be redundant and make test assertions about "rule was
+            # installed AND later call hit rule_allow" harder to write.
+            return decision, feedback

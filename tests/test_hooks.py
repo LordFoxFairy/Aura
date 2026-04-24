@@ -664,6 +664,7 @@ async def test_run_task_fires_post_subagent_on_completion(
         def spawn(
             self, prompt: str, allowed_tools: list[str] | None = None,
             *, agent_type: str = "general-purpose",
+            task_id: str | None = None,
         ) -> Agent:
             return Agent(
                 config=_minimal_config(),
@@ -713,6 +714,7 @@ async def test_run_task_fires_post_subagent_on_failure(tmp_path: Path) -> None:
         def spawn(
             self, prompt: str, allowed_tools: list[str] | None = None,
             *, agent_type: str = "general-purpose",
+            task_id: str | None = None,
         ) -> Agent:
             raise RuntimeError("spawn boom")
 

@@ -56,6 +56,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
 
@@ -139,6 +140,7 @@ class SubagentFactory:
         allowed_tools: list[str] | None = None,
         *,
         agent_type: str = "general-purpose",
+        task_id: str | None = None,
     ) -> Agent:
         # Import locally to avoid a circular import: Agent's module pulls in
         # aura.tools.task_create, which pulls in this factory.
@@ -251,12 +253,31 @@ class SubagentFactory:
             )
             child_hooks = HookChain(pre_tool=[perm_hook])
 
+        # Storage race fix (audit Tier S): every subagent MUST have its own
+        # session_id. The old literal ``"subagent"`` made two concurrent
+        # children share a storage key — ``SessionStorage.save`` is
+        # DELETE-then-INSERT, so whichever child flushed last wiped the
+        # other's transcript. It also made ``session="subagent"`` in every
+        # journal event, destroying forensic traceability.
+        #
+        # Prefer the caller-supplied ``task_id`` — it ties the session to
+        # the observable :class:`TaskRecord` so ``/tasks`` + journal +
+        # storage all line up. Fallback to a short uuid for legacy callers
+        # (``factory.spawn("prompt")`` without kwargs) so the invariant
+        # "every child has a unique session" holds unconditionally.
+        # Storage layer parameterises the string safely, so no sanitization
+        # is needed on task_id.
+        child_session_id = (
+            f"subagent-{task_id}"
+            if task_id is not None
+            else f"subagent-{uuid4().hex[:8]}"
+        )
         return Agent(
             config=child_cfg,
             model=model,
             storage=storage,
             hooks=child_hooks,
-            session_id="subagent",
+            session_id=child_session_id,
             session_rules=child_session,
             pre_loaded_skills=self._parent_skills,
             system_prompt_suffix=type_def.system_prompt_suffix,

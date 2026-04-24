@@ -155,6 +155,7 @@ async def run_task(
         agent = factory.spawn(
             record.prompt,
             agent_type=record.agent_type or "general-purpose",
+            task_id=task_id,
         )
         # ``asyncio.timeout(None)`` is a no-op context — the escape hatch
         # (env / kwarg set ``<= 0``) flows through as ``None`` and we get
@@ -174,7 +175,14 @@ async def run_task(
         store.mark_cancelled(task_id)
         journal.write("subagent_cancelled", task_id=task_id)
         if agent is not None:
-            agent.close()
+            # ``aclose`` is the async-safe teardown. ``close()`` on a live
+            # event loop raises ``RuntimeError`` when the child Agent has
+            # an MCP manager — today subagents don't wire MCP so the old
+            # sync ``close()`` happened to work, but the moment a subagent
+            # inherits MCP (an expected near-future change) every terminal
+            # branch here would crash ``run_task`` mid-cleanup, orphaning
+            # connections and leaving the TaskRecord in ``running``.
+            await agent.aclose()
         # Fire BEFORE re-raising so the hook sees the cancellation even
         # when the parent is tearing down.
         await _fire_post_subagent(
@@ -208,7 +216,14 @@ async def run_task(
             cause=f"{type(exc).__name__}: {exc}",
         )
         if agent is not None:
-            agent.close()
+            # ``aclose`` is the async-safe teardown. ``close()`` on a live
+            # event loop raises ``RuntimeError`` when the child Agent has
+            # an MCP manager — today subagents don't wire MCP so the old
+            # sync ``close()`` happened to work, but the moment a subagent
+            # inherits MCP (an expected near-future change) every terminal
+            # branch here would crash ``run_task`` mid-cleanup, orphaning
+            # connections and leaving the TaskRecord in ``running``.
+            await agent.aclose()
         await _fire_post_subagent(
             parent_hooks,
             task_id=task_id,
@@ -221,7 +236,14 @@ async def run_task(
         store.mark_failed(task_id, err_msg)
         journal.write("subagent_failed", task_id=task_id, error=err_msg)
         if agent is not None:
-            agent.close()
+            # ``aclose`` is the async-safe teardown. ``close()`` on a live
+            # event loop raises ``RuntimeError`` when the child Agent has
+            # an MCP manager — today subagents don't wire MCP so the old
+            # sync ``close()`` happened to work, but the moment a subagent
+            # inherits MCP (an expected near-future change) every terminal
+            # branch here would crash ``run_task`` mid-cleanup, orphaning
+            # connections and leaving the TaskRecord in ``running``.
+            await agent.aclose()
         await _fire_post_subagent(
             parent_hooks,
             task_id=task_id,
@@ -232,7 +254,14 @@ async def run_task(
     else:
         journal.write("subagent_completed", task_id=task_id)
         if agent is not None:
-            agent.close()
+            # ``aclose`` is the async-safe teardown. ``close()`` on a live
+            # event loop raises ``RuntimeError`` when the child Agent has
+            # an MCP manager — today subagents don't wire MCP so the old
+            # sync ``close()`` happened to work, but the moment a subagent
+            # inherits MCP (an expected near-future change) every terminal
+            # branch here would crash ``run_task`` mid-cleanup, orphaning
+            # connections and leaving the TaskRecord in ``running``.
+            await agent.aclose()
         await _fire_post_subagent(
             parent_hooks,
             task_id=task_id,

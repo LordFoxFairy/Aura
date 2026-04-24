@@ -327,9 +327,13 @@ async def test_task_create_explore_restricts_child_tools(tmp_path: Path) -> None
             allowed_tools: list[str] | None = None,
             *,
             agent_type: str = "general-purpose",
+            task_id: str | None = None,
         ) -> Agent:
             child = super().spawn(
-                prompt, allowed_tools, agent_type=agent_type,
+                prompt,
+                allowed_tools,
+                agent_type=agent_type,
+                task_id=task_id,
             )
             captured.append(child)
             return child

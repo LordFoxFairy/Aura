@@ -2,16 +2,75 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [0.12.0] — Stability + claude-code skill/UX parity
+
+One-session wave of 12 commits targeting stability (no latent crashes, no half-wired extensibility, no test pollution) and polish (skill UX aligned with claude-code, permission prompts deduped). Lands as one `v0.12.0` tag at the session's natural endpoint per the release-cadence rule. `make check` 1846 green (+37 from v0.11.0 baseline), mypy strict clean, zero sibling regressions.
 
 ### Added
 
-- **G2 — microcompact layer** (`aura/core/compact/microcompact.py`, 327 LoC): per-turn prompt-view compression of old `tool_use`/`tool_result` pair payloads. Sits between `auto_compact` and `reactive_compact` in the compact hierarchy and targets the mid-session context pressure that forces reactive compact too aggressively. Parity with claude-code v2.1.88 `src/query.ts:412-468` `messagesForQuery` semantic — **storage keeps full payloads**, only the outgoing model prompt drops them, so session resume / export / replay still sees original tool results. No LLM call: literal marker substitution (`"[Old tool result content cleared]"`), matching claude-code. Pair-count trigger with keep-recent-N policy (defaults: trigger at 8 compactable pairs, keep the latest 5, clear oldest; hard floor of ≥1 pair always kept mirrors `Math.max(1, keepRecent)`). Compactable tool allowlist is file/shell/search/web I/O only — subagent/task/MCP/todo/skill results are excluded so high-signal low-volume traffic isn't trimmed. Configurable via three new `Agent.__init__` kwargs (`auto_microcompact_enabled: bool = True`, `microcompact_trigger_pairs: int = 8`, `microcompact_keep_recent: int = 5`); misconfig (`keep >= trigger` with feature enabled) raises `AuraConfigError` at construction. Emits a `microcompact_applied` journal event (`session`, `turn`, `cleared_pair_count`, `cleared_tool_call_ids`) only when clears actually happen. No `settings.json` surface yet — matches `auto_compact_threshold`'s current parity. Public API re-exported from `aura.core.compact`: `apply_microcompact`, `MicrocompactPolicy`, `MicrocompactResult`, `ToolPair`, `find_tool_pairs`, `select_clear_ids`, `apply_clear`, plus four new constants.
+- **G2 — microcompact layer** (`aura/core/compact/microcompact.py`, 327 LoC, `f532777`): per-turn prompt-view compression of old `tool_use`/`tool_result` pair payloads. Sits between `auto_compact` and `reactive_compact` in the compact hierarchy. Parity with claude-code v2.1.88 `src/query.ts:412-468` `messagesForQuery` semantic — **storage keeps full payloads**, only the outgoing model prompt drops them, so session resume / export / replay still sees original tool results. No LLM call: literal marker substitution (`"[Old tool result content cleared]"`). Pair-count trigger with keep-recent-N policy (defaults: 5/3 — tuned for Aura's leaner turn-cycle vs claude-code's 8/5; hard floor of ≥1 pair always kept mirrors `Math.max(1, keepRecent)`). Compactable tool allowlist is file/shell/search/web I/O only. Configurable via three `Agent.__init__` kwargs (`auto_microcompact_enabled`, `microcompact_trigger_pairs`, `microcompact_keep_recent`); misconfig (`keep >= trigger`) raises `AuraConfigError` at construction. Emits `microcompact_applied` journal event with `cleared_pair_count`, `cleared_tool_call_ids`, `cleared_positions`.
+
+- **B4 — batch wall-clock timeout** (`aura/core/loop.py`, `5730481`): concurrent tool batches gated by `AURA_BATCH_TIMEOUT_SEC` (env, default 60s, ≤0 disables) or `AgentLoop(batch_timeout_sec=...)` kwarg. Only applied to `len(batch) > 1` (size-1 batches own their ladder). On timeout, in-flight siblings cancelled, synthesized `ToolResult(error="batch timeout after Ns")` preserves tool_call ordering. `batch_timeout` journal event carries cancelled + completed ids. Closes a real pain point on long-running concurrent web_fetch/read_file batches.
+
+- **Skills: claude-code format compat** (`e4a8789`): Aura now loads `~/.claude/skills/<name>/SKILL.md` verbatim as a third user-layer scan source. Dual-namespace placeholder substitution — both `${AURA_SKILL_DIR}` / `${AURA_SESSION_ID}` AND `${CLAUDE_SKILL_DIR}` / `${CLAUDE_SESSION_ID}` resolve correctly, so authors don't have to edit imported skills. Inline shell-exec syntax (`` !`cmd` ``) stays unsupported (deliberate security boundary) but emits a `skill_inline_cmd_unsupported` journal warning on load so mismatches are auditable.
+
+- **Skills: slash completion polish** (`00f9822`): argument_hint surfaced dimmed after the command name in the tab-complete dropdown (e.g., `/skill-name <topic>`); multi-line descriptions collapsed to first non-empty line so LLM-authored skills don't break the meta column.
+
+- **Skills: `/help` grouping** (`e35e198`): output now grouped by source (Builtins / Skills / MCP) instead of interleaved alphabetically. Multi-line descriptions in `/help` also collapsed to first line.
+
+- **Skills: `skill_invoked` journal event** (`008be6c`): every slash-path AND tool-path skill invocation now emits an audit event carrying `name`, `invocation` (slash/tool), `source` (Skill.layer), `allowed_tools`. Enforcement of `allowed_tools` is honestly documented as deferred to v0.13; the audit event captures intent now so post-hoc reviews have complete data.
+
+- **Permission: ResolveOnce per-turn dedup** (`a5f69ca`): same-signature `(tool, canonical_args)` calls that reach the ask branch only prompt the user once per turn; subsequent calls reuse the cached `user_accept`/`user_deny` decision silently. `user_always` keeps going through the Rule path (persistent). `permission_dedup_hit` journal event on cache reuse. Cache cleared at each turn start so semantics don't silently carry across turns.
+
+### Changed / Refactored
+
+- **Hooks: 5 unwired session-cycle hooks deleted** (`5dc3aee`): `pre_session`, `post_session`, `post_subagent`, `pre_compact`, `pre_user_prompt` — all had Protocol + HookChain slot + runner + guard + `_hook_failed` journal branch, but **zero production consumers**. Removing the full plumbing removes 5 "will it fire?" confusion sources and 5 always-unreachable exception branches. `Agent.bootstrap()` / `Agent.shutdown()` methods deleted (no-op after removal); `cli/__main__.py` now calls `aclose()` directly.
+
+- **Hooks: bash safety emits only `permission_decision`** (`5b76c0a`): the legacy `bash_safety_blocked` event is removed. Single unified audit channel for both bash and path-based safety blocks.
+
+- **Skills: `user_invocable=False` now honored** (`ff3112c`): skills that declare `user_invocable: false` no longer register a slash command but remain invocable via `SkillTool` (model-only). Previously the field was parsed but the filter was never applied to slash registration.
+
+- **Skills: slash-path arg validation parity with tool path** (`8adf19e`): missing-required-arg case on `SkillCommand.handle` now emits the same error format as `SkillTool._invoke` (shared helper `format_missing_args_error`). Slash users no longer get silently empty-rendered bodies.
+
+- **Tasks: subagent per-task `session_id` isolation + async close** (`64a2439`): `SubagentFactory.spawn` now threads `task_id` into `Agent(session_id=f"subagent-{task_id}")`, so concurrent subagents under the same parent no longer race on SQLite rows for the hardcoded literal `"subagent"`. `tasks/run.py`'s four `agent.close()` calls migrated to `await agent.aclose()` — closes a latent crash if subagents ever acquire MCP.
+
+- **Permission: `bash_background` routed through the unified safety hook** (`dd5c1b8`): previously bypassed the hook chain entirely, missing `permission_decision` journal + denials sink + bypass-mode honouring. Same-shape audit parity with `bash` now.
+
+- **Loop + Agent: shared `DEFAULT_SESSION` constant** (`172bc36`): drops a duplicate `"default"` literal.
+
+- **Hooks: `PreCompactHook.trigger` typed as `Literal["manual", "auto", "reactive"]`** (part of `5dc3aee`'s CompactTrigger work — the literal is kept for compact.py but the hook was deleted).
+
+### Fixed
+
+- **Test isolation: `HOME` redirected per test** (`9948737`): autouse fixture in root conftest redirects `HOME` to a fresh tmp dir so the real user's `~/.claude/skills/` (freshly loaded as a compat source this release) doesn't leak into Agent-constructing tests. Closes off-by-1 in microcompact position assertions + conditional-skill activation test pollution.
+
+- **Tests: 140 `agent.close()` migrated to `await agent.aclose()` in async contexts** (`b0c4f1b`): closes the latent "one config change away from 140 tests simultaneously raising B3 `RuntimeError`" exposure. 52 genuinely-sync sites intentionally left as `close()`; 5 deliberate-sync-semantics sites preserved (bash subprocess driver strings etc.).
+
+### Removed
+
+- **`SUMMARY_BUDGET` compact constant** (part of `6164f53`): declared since v0.4.0, zero consumers across 8 releases. Dropped.
+
+### Documentation
+
+- **`allowed_tools` field**: "DATA ONLY in v0.7" comment removed. Docstring now honestly says "inspected by the audit layer; NOT enforced as a runtime allowlist in v0.12 — enforcement tracked as v0.13 work".
 
 ### Verification
 
-- `make check`: 1809 tests green (21 new unit + 6 new integration, zero regressions across existing compact / loop / agent suites). mypy strict clean on `aura/core/loop.py` + `aura/core/agent.py` + new module.
-- Integration tests prove the view-vs-history invariant end-to-end: after 10 pairs and a forced compression, `SessionStorage.load()` still returns all 10 original `ToolMessage` contents, while the outgoing model prompt contains 5 clear-marker payloads + 5 originals.
+- `make check`: 1846 tests green (+37 from v0.11.0's baseline of 1809). mypy strict clean across all 246+ source files. Zero sibling regressions across compact, loop, hooks, permission, skills, tasks suites.
+- Three in-session audit passes (G2 focused, dead-code sweep, parallel-channel sweep, hook lifecycle) surfaced 17 concrete findings; 12 fixed this release, 5 triaged to v0.13 (FRC memory tier, hook catalog expansion, StreamingToolExecutor, Token `/stats`, Pet MVP).
+- Git history rewritten this session to subject-only commit messages across 214 commits (via `git-filter-repo`); `docs/` and `tasks/` now gitignored — planning/research artifacts stay local, release trace stays in `CHANGELOG.md`.
+
+### Migration notes (SDK consumers)
+
+- **Breaking — 5 session-cycle hooks removed**: callers that registered `pre_session` / `post_session` / `post_subagent` / `pre_compact` / `pre_user_prompt` hooks must remove them. No replacement; the hook types + HookChain slots + runners are gone. Re-add when a real consumer lands.
+
+- **Breaking — `Agent.bootstrap()` / `Agent.shutdown()` removed**: the CLI now calls `aclose()` directly after `asyncio.run()` returns. SDK callers that imported these should migrate to `await agent.aclose()`.
+
+- **Breaking — `PreCompactHook` / related failure journal events removed**: `pre_session_hook_failed` / `post_session_hook_failed` / `post_subagent_hook_failed` / `pre_compact_hook_failed` / `pre_user_prompt_hook_failed` events are deleted (they were unreachable anyway).
+
+- **Breaking — `bash_safety_blocked` journal event removed**: downstream scrapers should filter `permission_decision` with `reason="safety_blocked"` + `tool="bash"` / `tool="bash_background"` instead.
+
+- **Non-breaking additions**: `AURA_BATCH_TIMEOUT_SEC` env var + `batch_timeout_sec` kwarg on `AgentLoop`, `auto_microcompact_enabled` / `microcompact_trigger_pairs` / `microcompact_keep_recent` kwargs on `Agent`, `MicrocompactPolicy` / `MicrocompactResult` / `ToolPair` re-exported from `aura.core.compact`, `skill_invoked` / `microcompact_applied` / `batch_timeout` / `permission_dedup_hit` / `skill_inline_cmd_unsupported` journal events.
 
 ## [0.11.0] — Main channel claude-code parity
 

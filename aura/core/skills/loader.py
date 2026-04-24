@@ -45,8 +45,28 @@ from aura.core.skills.registry import SkillRegistry
 from aura.core.skills.types import Skill, SkillLayer
 
 _AURA_DIR = ".aura"
+_CLAUDE_DIR = ".claude"
 _SKILLS_DIR = "skills"
 _SKILL_FILE = "SKILL.md"
+
+# Claude-code-compat namespace: skills written for claude-code reference
+# ``${CLAUDE_SKILL_DIR}`` / ``${CLAUDE_SESSION_ID}`` in their body. We accept
+# both namespaces at render time so a user can drop a claude-code skill into
+# ``~/.aura/skills/`` or ``~/.claude/skills/`` and it renders correctly
+# without edits. New Aura-native skills should still prefer ``${AURA_*}``.
+_PLACEHOLDER_PAIRS: tuple[tuple[str, str], ...] = (
+    ("${AURA_SKILL_DIR}", "base_dir"),
+    ("${CLAUDE_SKILL_DIR}", "base_dir"),
+    ("${AURA_SESSION_ID}", "session_id"),
+    ("${CLAUDE_SESSION_ID}", "session_id"),
+)
+
+# Inline shell-execution syntax used by claude-code (``!`cmd` `` inside the
+# skill body). Deliberately NOT supported in Aura — security surface we don't
+# need in v1. Detected at load time so an imported skill that relies on it
+# surfaces a journal warning instead of silently mis-rendering to literal
+# text that confuses the model.
+_INLINE_CMD_PATTERN = "!`"
 
 # Module-global conditional-skill registry. Mirrors claude-code's
 # ``conditionalSkills`` map + ``activatedConditionalSkillNames`` set. Lives
@@ -73,12 +93,25 @@ def load_skills(cwd: Path, *, home: Path | None = None) -> SkillRegistry:
     registry = SkillRegistry()
     seen_source_paths: set[Path] = set()
 
-    # --- Layer 1: user ---
+    # --- Layer 1a: user (Aura-native) ---
     # User layer goes first so it wins on name collisions — matches TS
     # ``allSkillsWithPaths = [...userSkills, ...projectSkills]`` ordering.
     user_skills_root = home_dir / _AURA_DIR / _SKILLS_DIR
     for skill in _load_layer(user_skills_root, layer="user"):
         _install_or_drop(skill, registry, seen_source_paths)
+
+    # --- Layer 1b: user (claude-code-compat) ---
+    # ``~/.claude/skills/`` holds skills a user already authored for
+    # claude-code. Aura loads them verbatim — dir-per-skill, same frontmatter
+    # schema, dual-namespace placeholders handled at render time. Realpath
+    # dedup against the Aura-native layer (first-seen wins), so symlinking
+    # ``~/.claude/skills/foo -> ~/.aura/skills/foo`` won't double-register.
+    # ``user`` layer tag kept so collision semantics are uniform — both
+    # locations are user-owned.
+    claude_user_skills_root = home_dir / _CLAUDE_DIR / _SKILLS_DIR
+    if claude_user_skills_root.resolve() != user_skills_root.resolve():
+        for skill in _load_layer(claude_user_skills_root, layer="user"):
+            _install_or_drop(skill, registry, seen_source_paths)
 
     # --- Layer 2: project (walk up from cwd to home exclusive) ---
     # Closer-to-cwd dirs are visited LAST so they lose on collisions against
@@ -174,8 +207,15 @@ def render_skill_body(
     session_id: str,
     argument_values: list[str] | None = None,
 ) -> str:
-    """Substitute ``${AURA_SKILL_DIR}``, ``${AURA_SESSION_ID}``, and per-arg
-    placeholders in ``skill.body``.
+    """Substitute skill-dir / session-id / per-arg placeholders in the body.
+
+    Dual-namespace: ``${AURA_SKILL_DIR}`` and ``${CLAUDE_SKILL_DIR}`` both
+    substitute to the skill's base_dir; ``${AURA_SESSION_ID}`` and
+    ``${CLAUDE_SESSION_ID}`` both substitute to the session id. This lets a
+    claude-code skill (which references the ``CLAUDE_*`` names) drop into
+    ``~/.aura/skills/`` or be picked up from ``~/.claude/skills/`` and
+    render without edits. New Aura-native skills should still prefer the
+    ``AURA_*`` names — the claude-code names stay as a compat escape hatch.
 
     Claude-code performs this substitution inside ``getPromptForCommand``
     (loadSkillsDir.ts:344-369). We do it at invocation time (tool / slash
@@ -184,8 +224,9 @@ def render_skill_body(
     """
     body = skill.body
     base_dir = skill.base_dir if skill.base_dir is not None else skill.source_path.parent
-    body = body.replace("${AURA_SKILL_DIR}", str(base_dir))
-    body = body.replace("${AURA_SESSION_ID}", session_id)
+    replacements = {"base_dir": str(base_dir), "session_id": session_id}
+    for placeholder, key in _PLACEHOLDER_PAIRS:
+        body = body.replace(placeholder, replacements[key])
     values = argument_values or []
     for i, arg_name in enumerate(skill.arguments):
         placeholder = "${" + arg_name + "}"
@@ -392,6 +433,22 @@ def _build_skill(skill_file: Path, *, layer: SkillLayer) -> Skill | None:
     disable_model_invocation = _coerce_bool(
         parsed.get("disable-model-invocation"), default=False,
     )
+
+    # Compat check: claude-code allows inline ``!`cmd`` `` shell execution
+    # inside skill bodies (``executeShellCommandsInPrompt``). Aura does NOT
+    # execute these — the body is handed to the model as literal text. If a
+    # user imports a claude-code skill that relies on it, the model will see
+    # the unexecuted command syntax and likely do the wrong thing. Emit a
+    # journal warning so the mismatch is auditable rather than silent.
+    if _INLINE_CMD_PATTERN in body:
+        from aura.core.persistence import journal
+
+        journal.write(
+            "skill_inline_cmd_unsupported",
+            name=resolved_name,
+            source_path=str(source),
+            layer=layer,
+        )
 
     return Skill(
         name=resolved_name,

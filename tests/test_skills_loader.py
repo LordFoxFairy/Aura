@@ -526,3 +526,139 @@ def test_home_defaults_to_path_home(
     reg = load_skills(cwd=cwd)
     names = {s.name for s in reg.list()}
     assert names == {"from-home"}
+
+
+# ---------------------------------------------------------------------------
+# Claude-code compat (V12-G) — load ``~/.claude/skills/<name>/SKILL.md``
+# verbatim, accept both ``${CLAUDE_*}`` and ``${AURA_*}`` placeholders, and
+# surface a journal warning on inline ``!`cmd` `` usage (unsupported here).
+# ---------------------------------------------------------------------------
+
+
+def test_claude_code_skills_dir_loads(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    # Drop a vanilla claude-code skill under ~/.claude/skills/ — same
+    # dir-per-skill convention, frontmatter identical to what claude-code
+    # authors write.
+    _write(
+        home / ".claude" / "skills" / "imported-skill" / "SKILL.md",
+        "---\ndescription: imported from claude-code\n---\nbody here\n",
+    )
+    reg = load_skills(cwd=cwd, home=home)
+    names = {s.name for s in reg.list()}
+    assert "imported-skill" in names
+
+
+def test_claude_and_aura_skill_dirs_merge_without_double_load(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    _write(
+        home / ".aura" / "skills" / "aura-native" / "SKILL.md",
+        "---\ndescription: a\n---\nb\n",
+    )
+    _write(
+        home / ".claude" / "skills" / "claude-native" / "SKILL.md",
+        "---\ndescription: c\n---\nb\n",
+    )
+    reg = load_skills(cwd=cwd, home=home)
+    names = {s.name for s in reg.list()}
+    assert names == {"aura-native", "claude-native"}
+
+
+def test_aura_wins_over_claude_on_name_collision(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    _write(
+        home / ".aura" / "skills" / "shared" / "SKILL.md",
+        "---\ndescription: aura version\n---\nb\n",
+    )
+    _write(
+        home / ".claude" / "skills" / "shared" / "SKILL.md",
+        "---\ndescription: claude version\n---\nb\n",
+    )
+    reg = load_skills(cwd=cwd, home=home)
+    winner = reg.get("shared")
+    assert winner is not None
+    # Aura-native layer is scanned first → first-seen-wins keeps it.
+    assert winner.description == "aura version"
+
+
+def test_render_skill_body_substitutes_claude_skill_dir_namespace(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "SKILL.md",
+        "---\ndescription: d\n---\n"
+        "aura: ${AURA_SKILL_DIR}/x\n"
+        "claude: ${CLAUDE_SKILL_DIR}/y\n",
+    )
+    from aura.core.skills.types import Skill
+    skill = Skill(
+        name="n",
+        description="d",
+        body=(
+            "aura: ${AURA_SKILL_DIR}/x\n"
+            "claude: ${CLAUDE_SKILL_DIR}/y\n"
+        ),
+        source_path=tmp_path / "SKILL.md",
+        layer="user",
+    )
+    out = render_skill_body(skill, session_id="sess")
+    assert f"aura: {tmp_path}/x" in out
+    assert f"claude: {tmp_path}/y" in out
+
+
+def test_render_skill_body_substitutes_claude_session_id_namespace(
+    tmp_path: Path,
+) -> None:
+    from aura.core.skills.types import Skill
+    skill = Skill(
+        name="n",
+        description="d",
+        body=(
+            "aura: ${AURA_SESSION_ID}\n"
+            "claude: ${CLAUDE_SESSION_ID}\n"
+        ),
+        source_path=tmp_path / "SKILL.md",
+        layer="user",
+    )
+    out = render_skill_body(skill, session_id="session-abc")
+    assert "aura: session-abc" in out
+    assert "claude: session-abc" in out
+
+
+def test_inline_cmd_in_body_emits_journal_warning(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        _write(
+            home / ".aura" / "skills" / "uses-inline-cmd" / "SKILL.md",
+            # Body references inline shell-exec syntax — claude-code would
+            # expand it, Aura renders literally + journals the mismatch.
+            "---\ndescription: uses !`date`\n---\n"
+            "Today's date: !`date +%Y-%m-%d`\n",
+        )
+        load_skills(cwd=cwd, home=home)
+        events = _events(log)
+        warnings = [
+            e for e in events if e["event"] == "skill_inline_cmd_unsupported"
+        ]
+        assert len(warnings) == 1
+        assert warnings[0]["name"] == "uses-inline-cmd"
+        assert warnings[0]["layer"] == "user"
+    finally:
+        journal_module.reset()

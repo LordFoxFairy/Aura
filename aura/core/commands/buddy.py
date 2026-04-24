@@ -13,18 +13,21 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aura.cli.buddy import (
-    _MOOD_LABEL,
-    _env_opt_out,
-    current_user_seed,
-    generate_buddy,
-    get_mood,
-)
-from aura.cli.buddy_sprites import compose_sprite
 from aura.core.commands.types import CommandResult, CommandSource
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
+
+# NB: ``aura.cli.buddy`` / ``aura.cli.buddy_sprites`` are imported lazily
+# inside ``handle`` to break a circular import. The package chain
+# ``aura.cli/__init__.py`` imports ``aura.cli.commands`` (the façade),
+# which in turn imports this module to register ``BuddyCommand``. If we
+# imported ``aura.cli.buddy`` at module top, ``aura.cli.__init__`` would
+# re-enter itself before its exports were assigned, raising
+# ``ImportError: cannot import name 'BuddyCommand' ...``. The deferred
+# import runs at handle-time when ``aura.cli`` is fully initialised.
+# Pattern mirrors ``aura.core.hooks.must_read_first`` + ``bash_safety`` —
+# journal writes deferred to avoid module-load-time side-effects.
 
 
 class BuddyCommand:
@@ -37,6 +40,18 @@ class BuddyCommand:
     argument_hint: str | None = None
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
+        # Deferred import: see module-level note. Must run at handle-time so
+        # ``aura.cli``'s __init__ has finished loading before we pull
+        # ``aura.cli.buddy`` symbols.
+        from aura.cli.buddy import (
+            _MOOD_LABEL,
+            _env_opt_out,
+            current_user_seed,
+            generate_buddy,
+            get_mood,
+        )
+        from aura.cli.buddy_sprites import compose_sprite
+
         # Opt-out precedence mirrors ``buddy_status_fragment`` — env var
         # first (cheapest), then config flag. Either one disabled → the
         # command prints a single-line "disabled" marker instead of the
@@ -64,12 +79,20 @@ class BuddyCommand:
         # eye + hat stamped in. Hats skip frames whose line 0 is already
         # occupied — frame 0 is always hat-ready by construction of the
         # BODIES table, so this always renders the hat if one was rolled.
-        sprite = compose_sprite(
-            species=buddy.species,
-            frame_idx=0,
-            eye=buddy.eye or "·",  # defensive: fall back to the first EYE
-            hat=buddy.hat or "none",
-        )
+        # ``compose_sprite`` only knows the 9 claude-code-ported species
+        # names; Aura's 10-species list includes ``dog`` which is also
+        # sprited. Any unknown species falls back to the species name as
+        # a single-line placeholder so `/buddy` doesn't crash.
+        sprite: tuple[str, ...]
+        try:
+            sprite = compose_sprite(
+                species=buddy.species,
+                frame_idx=0,
+                eye=buddy.eye or "·",
+                hat=buddy.hat or "none",
+            )
+        except KeyError:
+            sprite = (f"  ({buddy.species} — no sprite)",)
 
         lines = [
             f"Your buddy — {buddy.emoji} {buddy.species} ({buddy.rarity})",

@@ -336,6 +336,16 @@ class Agent:
                     session_id_provider=(
                         lambda: getattr(self, "_session_id", _DEFAULT_SESSION)
                     ),
+                    # v0.13 ``allowed-tools`` enforcement: hand the tool a
+                    # live view into this Agent's SessionRuleSet so skill
+                    # invocation can install permissive auto-allow rules
+                    # for its declared tools (matches
+                    # ``SkillCommand.handle`` on the slash path). Closure
+                    # over ``self._session_rules`` — ``/clear`` calls
+                    # ``.clear()`` on the same instance, so the tool
+                    # automatically sees the fresh (empty) ruleset on the
+                    # next invocation without re-wiring.
+                    session_rules_provider=lambda: self._session_rules,
                 )
             else:  # pragma: no cover — guardrail for future additions
                 raise RuntimeError(f"unwired stateful tool: {name}")

@@ -35,6 +35,8 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from aura.core.permissions.session import SessionRuleSet
+from aura.core.skills.command import install_skill_allow_rules
 from aura.core.skills.errors import format_missing_args_error
 from aura.core.skills.loader import render_skill_body
 from aura.core.skills.registry import SkillRegistry
@@ -43,6 +45,7 @@ from aura.schemas.tool import ToolError, tool_metadata
 
 SkillRecorder = Callable[[Skill], None]
 SessionIdProvider = Callable[[], str]
+SessionRulesProvider = Callable[[], "SessionRuleSet | None"]
 
 
 class SkillParams(BaseModel):
@@ -109,6 +112,7 @@ class SkillTool(BaseTool):
     _recorder: SkillRecorder = PrivateAttr()
     _registry: SkillRegistry = PrivateAttr()
     _session_id_provider: SessionIdProvider = PrivateAttr()
+    _session_rules_provider: SessionRulesProvider = PrivateAttr()
 
     def __init__(
         self,
@@ -116,6 +120,7 @@ class SkillTool(BaseTool):
         recorder: SkillRecorder,
         registry: SkillRegistry,
         session_id_provider: SessionIdProvider | None = None,
+        session_rules_provider: SessionRulesProvider | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -125,6 +130,16 @@ class SkillTool(BaseTool):
         # wired — keeps unit tests that construct SkillTool directly (no
         # Agent) simple; Agent.__init__ always passes a real provider.
         self._session_id_provider = session_id_provider or (lambda: "default")
+        # ``session_rules_provider`` lets the tool install allow-rules on
+        # the same ``SessionRuleSet`` the permission hook consults (v0.13
+        # runtime enforcement of ``allowed-tools``). ``None`` → no-op,
+        # same contract as ``SkillCommand`` when the Agent was built
+        # without a ruleset (unit tests / SDK callers that don't wire
+        # permissions). Closure-over-self in Agent.__init__ so /clear
+        # (which drops rules) stays in sync with the live instance.
+        self._session_rules_provider = (
+            session_rules_provider or (lambda: None)
+        )
 
     def _run(
         self, name: str, arguments: list[str] | None = None,
@@ -177,13 +192,18 @@ class SkillTool(BaseTool):
         )
         invoked_skill = dataclasses.replace(skill, body=rendered_body)
         self._recorder(invoked_skill)
+        # v0.13 enforcement: install session-scoped allow-rules for each
+        # declared tool. Permissive (auto-allow) — matches claude-code's
+        # ``context.alwaysAllowRules.command``. Symmetric with
+        # ``SkillCommand.handle`` so slash and tool invocation paths have
+        # identical permission-layer side effects.
+        install_skill_allow_rules(skill, self._session_rules_provider())
         # Mirror SkillCommand.handle's audit emit — same event shape,
         # same ``allowed_tools`` and origin-layer ``source`` — so the
         # audit trail captures declared intent regardless of which path
         # (slash vs tool) invoked the skill. ``invocation="tool"``
         # distinguishes the model-driven path from the user's slash
-        # command. Enforcement of ``allowed_tools`` remains a v0.13
-        # concern (see ``Command.allowed_tools`` docstring).
+        # command.
         from aura.core.persistence import journal
 
         journal.write(

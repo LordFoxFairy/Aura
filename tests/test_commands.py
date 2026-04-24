@@ -46,6 +46,7 @@ def test_default_registry_has_builtin_set() -> None:
         "/stats",
         "/tasks", "/task-get", "/task-stop",
         "/status", "/diff", "/log", "/mcp",
+        "/buddy",
     }
 
 

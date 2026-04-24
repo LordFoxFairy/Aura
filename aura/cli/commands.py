@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from aura.core.agent import Agent
 from aura.core.commands import Command, CommandRegistry, CommandResult
+from aura.core.commands.buddy import BuddyCommand
 from aura.core.commands.builtin import (
     ClearCommand,
     CompactCommand,
@@ -62,6 +63,7 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     r.register(GitDiffCommand())
     r.register(GitLogCommand())
     r.register(MCPCommand())
+    r.register(BuddyCommand())
     if agent is not None:
         # Only skills with ``user_invocable=True`` get a ``/<name>`` slash
         # command — claude-code parity. Skills flagged ``user-invocable:

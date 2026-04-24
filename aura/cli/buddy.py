@@ -178,11 +178,20 @@ class Buddy:
     of :data:`RARITIES`; ``emoji`` is the corresponding entry from
     :data:`SPECIES_EMOJI`. Frozen so callers can safely stash it on
     state without worrying about accidental mutation.
+
+    ``eye`` / ``hat`` (T2B-sprites, v0.13) drive the ASCII portrait
+    rendered by ``/buddy``. Defaults are empty strings so older pickled
+    states (pre-sprite) still construct cleanly — generate_buddy always
+    fills them with real values from
+    :data:`aura.cli.buddy_sprites.EYES` /
+    :data:`aura.cli.buddy_sprites.HAT_LINES`.
     """
 
     species: str
     rarity: Rarity
     emoji: str
+    eye: str = ""
+    hat: str = ""
 
 
 def _roll_rarity(rng: Callable[[], float]) -> Rarity:
@@ -214,7 +223,18 @@ def generate_buddy(seed: str) -> Buddy:
     Aura's namespace of buddies is disjoint from claude-code's, even
     for operators who happen to share the same username. Hashing goes
     FNV-1a → mulberry32 to match the claude-code port bit-for-bit.
+
+    Roll order (matches claude-code ``companion.ts:92-100``): rarity →
+    species → eye → hat. Rarity-first so the hat picker can short-
+    circuit to ``"none"`` on common buddies without spending an rng
+    tick that would perturb downstream draws.
     """
+    # Local import avoids a module-init cycle: buddy_sprites imports nothing
+    # from this file, but keeping the import lazy mirrors the style the rest
+    # of this module uses for ``aura.schemas`` and keeps the top-of-file
+    # dependency list focused on the core status-bar surface.
+    from aura.cli.buddy_sprites import EYES, HAT_LINES
+
     effective = seed if seed else "default"
     rng = _mulberry32(_fnv1a(effective + _SALT))
 
@@ -224,7 +244,31 @@ def generate_buddy(seed: str) -> Buddy:
     # impossible since we divide by 2**32, but belt-and-braces).
     species_idx = min(species_idx, len(SPECIES) - 1)
     species = SPECIES[species_idx]
-    return Buddy(species=species, rarity=rarity, emoji=SPECIES_EMOJI[species])
+
+    eye_idx = min(int(rng() * len(EYES)), len(EYES) - 1)
+    eye = EYES[eye_idx]
+
+    # Common buddies always go bare-headed — mirrors claude-code
+    # ``companion.ts:97`` (``rarity === 'common' ? 'none' : pick(...)``).
+    # For non-common buddies we pick uniformly from the 7 non-``none``
+    # hats so the hat is always present and the roll never lands on
+    # ``none`` twice (which would waste the rarity upgrade).
+    if rarity == "common":
+        hat = "none"
+    else:
+        # Build the non-``none`` hat list lazily so reordering
+        # HAT_LINES doesn't silently re-skew every existing seed.
+        non_none_hats = tuple(h for h in HAT_LINES if h != "none")
+        hat_idx = min(int(rng() * len(non_none_hats)), len(non_none_hats) - 1)
+        hat = non_none_hats[hat_idx]
+
+    return Buddy(
+        species=species,
+        rarity=rarity,
+        emoji=SPECIES_EMOJI[species],
+        eye=eye,
+        hat=hat,
+    )
 
 
 def current_user_seed() -> str:

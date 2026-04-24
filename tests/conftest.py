@@ -41,6 +41,39 @@ def clear_aura_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AURA_CONFIG", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Redirect HOME to a fresh tmp dir for every test.
+
+    Before V12-G, the skills loader only scanned ``~/.aura/skills/`` which
+    was rarely populated on dev machines. V12-G added ``~/.claude/skills/``
+    as a claude-code-compat source — typically populated with superpowers +
+    other real skills. Without isolation, every Agent-constructing test
+    would transitively load those real skills, polluting ``Context.build``
+    output and breaking position-sensitive assertions (``cleared_positions``
+    in microcompact tests, the conditional-skill promotion test, etc).
+
+    Redirect the ``HOME`` env var only — ``Path.home()`` resolves through
+    ``HOME`` on POSIX, so we get isolation without having to monkeypatch
+    the method directly. This matters because some tests deliberately
+    monkeypatch only ``HOME`` (e.g. ``test_history_file_path_under_aura_home``)
+    and expect ``Path.home()`` to reflect their override — if we overrode
+    the method here, the test's env-var monkeypatch would no-op against
+    our lambda and the assertion would compare against the wrong dir.
+
+    - Skills loader sees empty user + claude-compat layers
+    - History / session storage default paths go to disposable dirs
+    - Tests that deliberately want real HOME can ``monkeypatch.setenv(HOME, ...)``
+      within the test — pytest's monkeypatch stack runs LIFO so the inner
+      override wins over this autouse fixture.
+    """
+    iso = tmp_path_factory.mktemp("iso-home")
+    monkeypatch.setenv("HOME", str(iso))
+
+
 @dataclass
 class FakeTurn:
     message: AIMessage

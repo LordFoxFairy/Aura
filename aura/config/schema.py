@@ -58,6 +58,13 @@ class UIConfig(BaseModel):
     # actually contains markdown.
     markdown: bool = True
 
+    # When True (default), the status bar renders a deterministic pet
+    # buddy (species + mood) as a trailing fragment. Set False for a
+    # persistent opt-out; the ``AURA_NO_BUDDY=1`` env var is also
+    # honored for one-shot disabling. Pure cosmetic — the buddy has no
+    # effect on agent behavior.
+    buddy_enabled: bool = True
+
 
 class LogConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")

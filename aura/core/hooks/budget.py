@@ -156,6 +156,40 @@ def make_usage_tracking_hook() -> PostModelHook:
             cache_read_tokens=per_turn["cache_read_tokens"],
         )
 
+        # Update the pet-buddy mood now that the turn has landed. The
+        # buddy observer is deliberately the LAST thing in this hook —
+        # it's pure display state, never load-bearing, and mustn't
+        # interfere with the journal write above if it somehow raises.
+        from aura.cli import buddy as _buddy
+
+        await _buddy.observe_post_model(state=state)
+
+    return _hook
+
+
+def make_buddy_observer_hook() -> PostToolHook:
+    """post_tool observer wired alongside the size-budget hook.
+
+    Updates :mod:`aura.cli.buddy` mood based on tool success/failure
+    (failure → worried, success → clear worry flag) and passes the
+    result through unmodified. Pure observation: never mutates
+    ``result`` so ordering against ``make_size_budget_hook`` is
+    irrelevant.
+    """
+
+    async def _hook(
+        *,
+        tool: BaseTool,
+        args: dict[str, Any],
+        result: ToolResult,
+        state: LoopState,
+        **_: Any,
+    ) -> ToolResult:
+        from aura.cli import buddy as _buddy
+
+        await _buddy.observe_post_tool(state=state, result=result)
+        return result
+
     return _hook
 
 
@@ -166,5 +200,10 @@ def default_hooks(
 ) -> HookChain:
     return HookChain(
         post_model=[make_usage_tracking_hook()],
-        post_tool=[make_size_budget_hook(max_chars=max_result_size_chars, spill_dir=spill_dir)],
+        post_tool=[
+            make_size_budget_hook(
+                max_chars=max_result_size_chars, spill_dir=spill_dir,
+            ),
+            make_buddy_observer_hook(),
+        ],
     )

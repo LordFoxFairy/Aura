@@ -318,6 +318,9 @@ def _make_bottom_toolbar(
     subprocess. pt gets told to ``invalidate()`` when the refresh
     completes so the new text shows on the very next paint.
     """
+    from prompt_toolkit.formatted_text import HTML
+
+    from aura.cli import buddy as _buddy
     from aura.cli.status_bar import render_bottom_toolbar_html
 
     # Cache for hook-driven bars: holds the LAST successful hook render
@@ -326,6 +329,33 @@ def _make_bottom_toolbar(
     # it rewrites this cell and invalidates the pt app.
     hook_cache: list[Any] = [None]
     refresh_in_flight: list[bool] = [False]
+
+    def _buddy_suffix_html() -> str:
+        """Return a pt-HTML fragment for the buddy, or empty string.
+
+        The buddy module returns a plain ``"🦆 happy"`` string; we wrap
+        it in ``<ansigray>`` so it matches the rest of the dim bar.
+        Reads the ``ui.buddy_enabled`` flag off ``agent.config`` when
+        that attribute exists — defaults to ``True`` otherwise so
+        pre-config bare Agent tests still get the default-on behavior.
+        Any failure (missing attribute, unexpected emoji in an HTML
+        entity position, etc.) silently returns ``""`` — the buddy is
+        eye candy, never load-bearing."""
+        try:
+            enabled = True
+            cfg = getattr(agent, "config", None)
+            if cfg is not None:
+                ui = getattr(cfg, "ui", None)
+                if ui is not None:
+                    enabled = bool(getattr(ui, "buddy_enabled", True))
+            frag = _buddy.buddy_status_fragment(
+                state=agent.state, enabled=enabled,
+            )
+            if not frag:
+                return ""
+            return f" · <ansigray>{frag}</ansigray>"
+        except Exception:  # noqa: BLE001 — display path must never crash
+            return ""
 
     def _snapshot() -> dict[str, Any]:
         stats = agent.state.custom.get("_token_stats", {})
@@ -343,7 +373,7 @@ def _make_bottom_toolbar(
         }
 
     def _render_default(snap: dict[str, Any]) -> Any:
-        return render_bottom_toolbar_html(
+        base = render_bottom_toolbar_html(
             model=snap["model"] or None,
             input_tokens=snap["input_tokens"],
             cache_read_tokens=snap["cache_tokens"],
@@ -353,6 +383,14 @@ def _make_bottom_toolbar(
             cwd=snap["cwd"],
             last_turn_seconds=snap["last_secs"],
         )
+        # Append buddy fragment AFTER all existing pieces so the normal
+        # status bar is never visually disrupted; when the user opts out
+        # (env var / config flag) the suffix is empty and we return the
+        # original HTML untouched.
+        suffix = _buddy_suffix_html()
+        if not suffix:
+            return base
+        return HTML(base.value + suffix)
 
     hook_active = statusline is not None and statusline.is_active
 

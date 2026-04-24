@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +53,44 @@ from aura.tools.progress import (
 _AUTO_ALLOW_REASONS: frozenset[str] = frozenset(
     {"rule_allow", "mode_bypass"},
 )
+
+# B4 — batch wall-clock timeout. Env override for
+# ``AgentLoop(batch_timeout_sec=...)``; default 60.0s; ``<= 0`` disables.
+# Resolved once in ``AgentLoop.__init__`` so an env flip mid-session does
+# NOT race against the outer wait — mirrors the ``subagent_timeout`` pattern
+# in :mod:`aura.core.tasks.run`.
+_BATCH_TIMEOUT_ENV_VAR = "AURA_BATCH_TIMEOUT_SEC"
+_DEFAULT_BATCH_TIMEOUT_SEC: float = 60.0
+
+
+def _resolve_batch_timeout(override: float | None) -> float:
+    """Pick the effective batch wallclock deadline, in seconds.
+
+    Precedence (highest first):
+
+    1. Explicit ``override`` kwarg to :class:`AgentLoop` — the test suite
+       injects sub-second deadlines so it can observe the cancel branch.
+    2. ``AURA_BATCH_TIMEOUT_SEC`` environment variable.
+    3. :data:`_DEFAULT_BATCH_TIMEOUT_SEC` (60s).
+
+    Returns ``0.0`` when the resolved value is ``<= 0`` — the dispatch path
+    treats "value <= 0" as "feature disabled" (parity with the ``0``
+    disables pattern used elsewhere, e.g. ``auto_compact_threshold=0``).
+    Malformed env strings fall through to the default rather than raising.
+    """
+    if override is not None:
+        return override if override > 0 else 0.0
+    raw = os.environ.get(_BATCH_TIMEOUT_ENV_VAR)
+    if raw is not None:
+        try:
+            parsed = float(raw)
+        except ValueError:
+            # Malformed env → default. The loop constructor is a hot path;
+            # raising here would break unrelated sessions on a typo.
+            return _DEFAULT_BATCH_TIMEOUT_SEC
+        return parsed if parsed > 0 else 0.0
+    return _DEFAULT_BATCH_TIMEOUT_SEC
+
 
 # 成功调用后需把路径反馈给 Context progressive 状态的工具 → 其 path 参数名。
 # bash（shell 语义不固定）和 web_fetch（URL 而非文件系统）刻意排除。
@@ -137,6 +176,7 @@ class AgentLoop:
         retry_config: RetryConfig | None = None,
         session_id: str = "default",
         microcompact_policy: MicrocompactPolicy | None = None,
+        batch_timeout_sec: float | None = None,
     ) -> None:
         self._registry = registry
         self._hooks = hooks or HookChain()
@@ -168,6 +208,11 @@ class AgentLoop:
         # bind_tools 只在构造时调一次：schema 在 registry 固定后不变，多 turn 共享同一 bound model。
         # 空 registry 跳过 bind_tools —— 某些 provider 对 tools=[] 行为不一致，直接不绑更稳。
         self._bound = model.bind_tools(registry.tools()) if len(registry) > 0 else model
+        # B4 — batch wall-clock deadline. Resolved ONCE per loop so an env
+        # flip mid-session does not race against the outer wait. ``0.0``
+        # sentinel = feature disabled; ``_run_batch`` gates on
+        # ``len(batch) > 1 AND _batch_timeout_sec > 0``.
+        self._batch_timeout_sec = _resolve_batch_timeout(batch_timeout_sec)
 
     def _rebind_tools(self, tools: list[BaseTool]) -> None:
         """Rebind the loop's model with an updated tool set.
@@ -361,10 +406,92 @@ class AgentLoop:
             finally:
                 reset_progress_callback(token)
 
+        # B4 gate — batch wall-clock deadline applies ONLY to size > 1
+        # batches with a positive deadline resolved. Size-1 batches (bash,
+        # bash_background, short-circuited steps) always pass through:
+        # bash owns its own SIGTERM/SIGKILL ladder, short-circuited steps
+        # never awaited a coroutine, and a single-tool batch has no
+        # "slowest sibling" problem to fix.
+        batch_deadline = (
+            self._batch_timeout_sec
+            if len(batch) > 1 and self._batch_timeout_sec > 0
+            else 0.0
+        )
+
         async def _gather_all() -> list[ToolResult]:
-            return list(await asyncio.gather(
-                *(_execute_with_progress(s) for s in batch),
-            ))
+            if batch_deadline <= 0:
+                return list(await asyncio.gather(
+                    *(_execute_with_progress(s) for s in batch),
+                ))
+            # B4 — bounded wait. Each step runs in its own Task so we can
+            # cancel the slow ones individually while preserving completed
+            # results. Batch order is load-bearing: the caller's
+            # ``zip(batch, results, strict=True)`` below relies on
+            # positional alignment with ``batch``.
+            tasks: list[asyncio.Task[ToolResult]] = [
+                asyncio.create_task(_execute_with_progress(s)) for s in batch
+            ]
+            done, pending = await asyncio.wait(tasks, timeout=batch_deadline)
+            if pending:
+                # Cancel every pending task, then await them for clean
+                # shutdown so we don't leak "Task was destroyed but it
+                # is pending" warnings from the event loop. ``_execute_step``
+                # catches Exception (not BaseException) so CancelledError
+                # bubbles up here — exactly what we want.
+                for t in pending:
+                    t.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+            results: list[ToolResult] = []
+            cancelled_ids: list[str] = []
+            completed_ids: list[str] = []
+            for step, t in zip(batch, tasks, strict=True):
+                # ``ToolCall["id"]`` is a NotRequired TypedDict field; all
+                # production callers populate it and the journal fields
+                # below are string lists, so coerce defensively to keep
+                # the audit payload homogeneous.
+                tc_id = step.tool_call["id"] or ""
+                if t in pending:
+                    # Synthesise the timeout result. Run ``post_tool`` on
+                    # it so consumers (size-budget, logger) see a consistent
+                    # ToolResult shape for cancelled tasks too. This runs
+                    # sequentially here — the cancel path is the slow path,
+                    # and hook side-effects prefer deterministic order.
+                    synthesised = ToolResult(
+                        ok=False,
+                        error=f"batch timeout after {batch_deadline}s",
+                    )
+                    final: ToolResult
+                    if step.tool is not None and step.args is not None:
+                        final = await self._hooks.run_post_tool(
+                            tool=step.tool,
+                            args=step.args,
+                            result=synthesised,
+                            state=self._state,
+                        )
+                    else:
+                        final = synthesised
+                    results.append(final)
+                    cancelled_ids.append(tc_id)
+                else:
+                    # Completed path — task.result() is already the
+                    # post_tool output produced inside ``_execute_step``.
+                    results.append(t.result())
+                    completed_ids.append(tc_id)
+            # Emit the audit event ONLY when at least one task was
+            # cancelled. Clean-completion batches stay quiet to avoid
+            # polluting the journal.
+            if cancelled_ids:
+                journal.write(
+                    "batch_timeout",
+                    session=self._session_id,
+                    turn=self._state.turn_count,
+                    size=len(batch),
+                    timeout_sec=batch_deadline,
+                    cancelled_count=len(cancelled_ids),
+                    cancelled_tool_call_ids=cancelled_ids,
+                    completed_tool_call_ids=completed_ids,
+                )
+            return results
 
         gather_task = asyncio.create_task(_gather_all())
         # Sentinel pusher: queue a None once gather completes so the drain

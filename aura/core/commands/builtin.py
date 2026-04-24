@@ -32,16 +32,31 @@ class HelpCommand:
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         commands = self._registry.list()
-        # Column-align name -> description; width 14 covers "/model <spec>".
-        # When a command declares ``argument_hint``, tack it onto the name
-        # column (e.g. "/debug <bug_description>") so users see the call
-        # shape alongside the summary. Parity with claude-code's slash-
-        # command picker which shows the hint inline.
+        # Group by source so the picker mirrors claude-code: Builtins →
+        # Skills → MCP. Skipping an empty group keeps the output tight for
+        # users who haven't wired any skills or MCP yet. Alignment is
+        # preserved WITHIN each group (24-col label column, same as the
+        # pre-grouping format); descriptions collapse to the first
+        # non-empty line so a multi-line ``description:`` frontmatter
+        # doesn't shatter the column. Mirrors the slash-completer fix
+        # that already applies ``.split("\n", 1)[0].strip()`` to
+        # ``display_meta``.
+        sections: list[tuple[str, CommandSource]] = [
+            ("Builtins", "builtin"),
+            ("Skills", "skill"),
+            ("MCP", "mcp"),
+        ]
         lines = ["Available commands:"]
-        for cmd in commands:
-            hint = getattr(cmd, "argument_hint", None)
-            label = f"{cmd.name} {hint}" if hint else cmd.name
-            lines.append(f"  {label:<24} {cmd.description}")
+        for heading, source in sections:
+            group = [c for c in commands if c.source == source]
+            if not group:
+                continue
+            lines.append("")
+            lines.append(f"  {heading}:")
+            for cmd in group:
+                hint = getattr(cmd, "argument_hint", None)
+                label = f"{cmd.name} {hint}" if hint else cmd.name
+                lines.append(f"    {label:<24} {cmd.description}")
         lines.append("")
         lines.append(
             "Keybindings: shift+tab cycles permission mode "

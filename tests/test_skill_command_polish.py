@@ -370,18 +370,22 @@ async def test_help_maintains_alignment_within_group(tmp_path: Path) -> None:
     try:
         result = await r.dispatch("/help", agent)
         lines = result.text.splitlines()
-        # Find the two skill lines — they start with ``    /`` (4-space
-        # indent: 2 for outer section, 2 for the builtin "  ``…`` formatter?
-        # We use 4 (indented under "Skills:" header) below).
-        skill_lines = [ln for ln in lines if ln.startswith("    /")]
+        # Locate the Skills: section and take command lines until the next
+        # blank line / section header.
+        skill_idx = next(
+            i for i, ln in enumerate(lines) if ln.strip() == "Skills:"
+        )
+        skill_lines: list[str] = []
+        for ln in lines[skill_idx + 1:]:
+            if not ln.strip() or ln.strip().endswith(":"):
+                break
+            skill_lines.append(ln)
         assert len(skill_lines) == 2
-        # Every skill line is at least wide enough to have the label column
-        # padded to 24 chars (same width the old format used). We check the
-        # description text starts at a consistent column across the lines.
+        # Every skill line pads the label column to a consistent width;
+        # the description must therefore start at the same column across
+        # the two lines.
         desc_cols = []
         for ln in skill_lines:
-            # Name ends at first whitespace run after 4 leading spaces.
-            # Finding position where "short desc" / "long desc" starts.
             for token in ("short desc", "long desc"):
                 idx = ln.find(token)
                 if idx != -1:

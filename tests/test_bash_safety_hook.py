@@ -110,11 +110,14 @@ async def test_journal_event_on_block(tmp_path: Path) -> None:
             state=LoopState(),
         )
         events = [json.loads(line) for line in log.read_text().splitlines()]
-        blocked = [e for e in events if e["event"] == "bash_safety_blocked"]
+        blocked = [
+            e for e in events
+            if e["event"] == "permission_decision"
+            and e.get("reason") == "safety_blocked"
+        ]
         assert len(blocked) == 1
-        assert blocked[0]["reason"] == "zsh_dangerous_command"
+        assert blocked[0]["tool"] == "bash"
         assert "detail" in blocked[0]
-        assert blocked[0]["command"] == "zmodload zsh/system"
     finally:
         journal_module.reset()
 

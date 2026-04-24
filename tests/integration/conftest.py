@@ -289,10 +289,14 @@ def _reset_prompt_mutex() -> Generator[None, None, None]:
     plugin creates a fresh event loop per test, so a leftover lock bound to
     the previous loop would raise ``Lock is bound to a different event loop``
     the moment any concurrent-ask test tried to use it. Reset both sides of
-    the test boundary to be defensive.
+    the test boundary to be defensive. Scope stays integration/ because
+    hoisting to root conftest surfaced order-dependent side effects in
+    unit-scope tests — the module-global's blast radius is narrow in
+    practice; the reset matches that narrowness.
     """
     from aura.cli._coordination import _reset_prompt_mutex_for_tests
 
     _reset_prompt_mutex_for_tests()
     yield
     _reset_prompt_mutex_for_tests()
+

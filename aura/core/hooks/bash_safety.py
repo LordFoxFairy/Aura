@@ -26,14 +26,11 @@ The OS remains the final floor for genuinely catastrophic commands
 Audit surface
 -------------
 
-Every safety-blocked call emits TWO journal events:
-
-1. ``bash_safety_blocked`` — legacy event, kept so existing audit
-   scrapers continue to work. Carries the full command + reason + detail.
-2. ``permission_decision`` with ``reason="safety_blocked"`` — same event
-   the permission hook emits for path-based safety violations, so
-   downstream consumers that filter on ``permission_decision`` see a
-   uniform denial record regardless of which safety axis fired.
+Every safety-blocked call emits a single ``permission_decision`` journal
+event with ``reason="safety_blocked"`` — the same event the permission
+hook emits for path-based safety violations. Downstream consumers that
+filter on ``permission_decision`` see a uniform denial record regardless
+of which safety axis fired; the ``tool`` field disambiguates.
 
 Additionally, the hook populates the per-turn denials sink
 (``state.custom[DENIALS_SINK_KEY]``) with a :class:`PermissionDenial`,
@@ -123,22 +120,12 @@ def make_bash_safety_hook(
         # dependency out of the module-load path.
         from aura.core.persistence import journal
 
-        # 1. Legacy event kept so existing audit scrapers continue to
-        #    work. Carries the full command (local audit trail only —
-        #    ``events.jsonl`` is not shipped anywhere).
-        journal.write(
-            "bash_safety_blocked",
-            reason=violation.reason,
-            detail=violation.detail,
-            command=command,
-        )
-        # 2. Parity event — same shape the permission hook emits for
-        #    path-based safety blocks. Downstream consumers that filter
-        #    on ``permission_decision`` see a uniform denial record.
-        #    ``target`` stays ``None`` because bash safety is
-        #    command-shape, not path-based; keeping the field in the
-        #    event for consistency with the other ``safety_blocked``
-        #    emits.
+        # Unified safety audit event — same shape the permission hook
+        # emits for path-based safety blocks. ``target`` stays ``None``
+        # because bash safety is command-shape, not path-based; ``tool``
+        # disambiguates (bash vs bash_background). ``detail`` carries
+        # the full violation context so audit readers don't need the
+        # raw command reconstructed separately.
         journal.write(
             "permission_decision",
             tool=tool.name,
@@ -146,6 +133,7 @@ def make_bash_safety_hook(
             rule=None,
             mode=_mode_provider(),
             target=None,
+            detail=violation.detail,
         )
 
         # G5: populate the per-turn denials sink so

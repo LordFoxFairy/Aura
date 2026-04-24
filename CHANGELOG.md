@@ -2,6 +2,17 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **G2 — microcompact layer** (`aura/core/compact/microcompact.py`, 327 LoC): per-turn prompt-view compression of old `tool_use`/`tool_result` pair payloads. Sits between `auto_compact` and `reactive_compact` in the compact hierarchy and targets the mid-session context pressure that forces reactive compact too aggressively. Parity with claude-code v2.1.88 `src/query.ts:412-468` `messagesForQuery` semantic — **storage keeps full payloads**, only the outgoing model prompt drops them, so session resume / export / replay still sees original tool results. No LLM call: literal marker substitution (`"[Old tool result content cleared]"`), matching claude-code. Pair-count trigger with keep-recent-N policy (defaults: trigger at 8 compactable pairs, keep the latest 5, clear oldest; hard floor of ≥1 pair always kept mirrors `Math.max(1, keepRecent)`). Compactable tool allowlist is file/shell/search/web I/O only — subagent/task/MCP/todo/skill results are excluded so high-signal low-volume traffic isn't trimmed. Configurable via three new `Agent.__init__` kwargs (`auto_microcompact_enabled: bool = True`, `microcompact_trigger_pairs: int = 8`, `microcompact_keep_recent: int = 5`); misconfig (`keep >= trigger` with feature enabled) raises `AuraConfigError` at construction. Emits a `microcompact_applied` journal event (`session`, `turn`, `cleared_pair_count`, `cleared_tool_call_ids`) only when clears actually happen. No `settings.json` surface yet — matches `auto_compact_threshold`'s current parity. Public API re-exported from `aura.core.compact`: `apply_microcompact`, `MicrocompactPolicy`, `MicrocompactResult`, `ToolPair`, `find_tool_pairs`, `select_clear_ids`, `apply_clear`, plus four new constants.
+
+### Verification
+
+- `make check`: 1809 tests green (21 new unit + 6 new integration, zero regressions across existing compact / loop / agent suites). mypy strict clean on `aura/core/loop.py` + `aura/core/agent.py` + new module.
+- Integration tests prove the view-vs-history invariant end-to-end: after 10 pairs and a forced compression, `SessionStorage.load()` still returns all 10 original `ToolMessage` contents, while the outgoing model prompt contains 5 clear-marker payloads + 5 originals.
+
 ## [0.11.0] — Main channel claude-code parity
 
 Single-session parity sweep against the `docs/specs/2026-04-23-aura-main-channel-parity.md` contract. Every gap surfaced in the audit round (10 workstreams: G1/G4/G5/G8 parity, B1/B3/U4 reliability, U1/U2/U3 UX, plus a pty-driven E2E scenario) was closed in-tree with the real implementation — no stubs, no `NotImplementedError`, no "real impl later" pointers. Lands as one `v0.11.0` tag at the session's natural endpoint per the release-cadence rule.

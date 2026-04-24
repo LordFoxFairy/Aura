@@ -27,3 +27,49 @@ SUMMARY_BUDGET = 50_000
 # a post_model observer would mark a pending compact. Wired as a config
 # field in a later release (0.4.1). 0 = disabled.
 AUTO_COMPACT_THRESHOLD = 150_000
+
+# --- Microcompact (G2, v0.12) -----------------------------------------------
+# Per-turn prompt-view compression of old tool_use/tool_result pair payloads.
+# These knobs tune the *view transform* applied between ``Context.build`` and
+# ``self._bound.ainvoke`` in the loop; they do NOT mutate stored history.
+#
+# Pair-count trigger: once the outgoing prompt contains more than this many
+# compactable tool_use/tool_result pairs, the oldest ones get their payloads
+# replaced with ``MICROCOMPACT_CLEAR_MARKER``. Mirrors claude-code's default.
+MICROCOMPACT_TRIGGER_PAIRS = 8
+
+# Number of most-recent compactable pairs to keep raw when the trigger fires.
+# Claude-code enforces ``Math.max(1, keep_recent)`` — we mirror that floor in
+# ``select_clear_ids`` so a misconfiguration of 0 never clears *everything*.
+MICROCOMPACT_KEEP_RECENT = 5
+
+# Literal string that replaces the old ToolMessage.content payload. Chosen to
+# be unambiguous + compact; claude-code uses the same wording.
+MICROCOMPACT_CLEAR_MARKER = "[Old tool result content cleared]"
+
+# Allowlist of tool names whose pair payloads are eligible for compression.
+# Rationale:
+#   - INCLUDE: high-volume / low-signal I/O — file read/write/edit, shell
+#     (bash + bash_background), grep, glob, web_fetch, web_search. The model
+#     rarely needs to re-read these mid-session; a one-line marker is enough
+#     context to know the call happened.
+#   - EXCLUDE: high-signal / low-volume — subagent lifecycle (task_*),
+#     todo_write (authoritative state), skill (mid-turn instruction
+#     injection), ask_user_question (user text), plan-mode transitions,
+#     MCP reads (user-facing resources). These carry small payloads whose
+#     content materially affects subsequent reasoning, and compressing them
+#     corrupts the model's view of session state.
+# Names here must exactly match each tool's ``BaseTool.name`` attribute —
+# see ``aura/tools/{read_file,write_file,edit_file,bash,bash_background,
+# grep,glob,web_fetch,web_search}.py``.
+MICROCOMPACT_COMPACTABLE_TOOLS: frozenset[str] = frozenset({
+    "read_file",
+    "write_file",
+    "edit_file",
+    "bash",
+    "bash_background",
+    "grep",
+    "glob",
+    "web_fetch",
+    "web_search",
+})

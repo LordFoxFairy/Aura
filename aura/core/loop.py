@@ -20,6 +20,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
 
 from aura.config.schema import RetryConfig
+from aura.core.compact import MicrocompactPolicy, apply_microcompact
 from aura.core.hooks import HookChain
 from aura.core.memory.context import Context
 from aura.core.permissions.decision import Decision
@@ -134,6 +135,8 @@ class AgentLoop:
         state: LoopState | None = None,
         max_turns: int | None = 50,
         retry_config: RetryConfig | None = None,
+        session_id: str = "default",
+        microcompact_policy: MicrocompactPolicy | None = None,
     ) -> None:
         self._registry = registry
         self._hooks = hooks or HookChain()
@@ -144,6 +147,15 @@ class AgentLoop:
         # :class:`aura.config.schema.RetryConfig`. Stored as a concrete
         # RetryConfig so ``_invoke_model`` does not branch per call.
         self._retry_config = retry_config or RetryConfig()
+        # G2 microcompact: view-only compression of old tool_use/tool_result
+        # pairs applied per turn between ``Context.build`` and ``ainvoke``.
+        # ``None`` = feature disabled (pass-through). Threaded as a kwarg
+        # (mirroring ``retry_config``) rather than read through ``_state``
+        # so the loop does not need an Agent back-reference. Session id is
+        # threaded separately so journal events carry the same ``session=``
+        # field as Agent-level events (auto_compact_triggered et al.).
+        self._session_id = session_id
+        self._microcompact_policy = microcompact_policy
         # Mirror claude-code query.ts:1705. Default 50 is Aura policy: claude-code
         # leaves this to the caller, we ship a sane default to stop runaway
         # tool-call loops. Explicit None disables the cap (no-cap semantics).
@@ -244,6 +256,23 @@ class AgentLoop:
         # Context.build 是整个代码库中唯一组装 messages 的构造点 ——
         # 不要在别处拼 SystemMessage/HumanMessage 传给模型。
         messages = self._context.build(history)
+        # G2 microcompact — view-only compression of old tool_use/tool_result
+        # pairs. Stored history keeps full payloads; only the outgoing
+        # prompt is trimmed. Matches claude-code's ``messagesForQuery``
+        # semantic (query.ts:412-468). We rebind the LOCAL ``messages``
+        # only — ``history`` (Agent-owned, persisted in storage) is never
+        # touched here.
+        if self._microcompact_policy is not None:
+            mc_result = apply_microcompact(messages, self._microcompact_policy)
+            if mc_result.cleared_pair_count > 0:
+                messages = mc_result.messages
+                journal.write(
+                    "microcompact_applied",
+                    session=self._session_id,
+                    turn=self._state.turn_count,
+                    cleared_pair_count=mc_result.cleared_pair_count,
+                    cleared_tool_call_ids=list(mc_result.cleared_tool_call_ids),
+                )
         # Wrap ONLY the SDK call — not tool dispatch, not hook run, not
         # history.append — so retries are surgical and tool semantics stay
         # untouched. Transient 429 / 503 / connection drops become

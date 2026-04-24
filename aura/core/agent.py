@@ -14,7 +14,13 @@ from langchain_core.tools import BaseTool
 
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core import llm
-from aura.core.compact import CompactResult, run_compact
+from aura.core.compact import (
+    MICROCOMPACT_KEEP_RECENT,
+    MICROCOMPACT_TRIGGER_PAIRS,
+    CompactResult,
+    MicrocompactPolicy,
+    run_compact,
+)
 from aura.core.compact.constants import AUTO_COMPACT_THRESHOLD
 from aura.core.hooks import HookChain
 from aura.core.hooks.bash_safety import make_bash_safety_hook
@@ -89,6 +95,9 @@ class Agent:
         session_rules: SessionRuleSet | None = None,
         question_asker: QuestionAsker | None = None,
         auto_compact_threshold: int = AUTO_COMPACT_THRESHOLD,
+        auto_microcompact_enabled: bool = True,
+        microcompact_trigger_pairs: int = MICROCOMPACT_TRIGGER_PAIRS,
+        microcompact_keep_recent: int = MICROCOMPACT_KEEP_RECENT,
         session_log_dir: Path | None = None,
         pre_loaded_skills: SkillRegistry | None = None,
         mode: str = "default",
@@ -158,6 +167,31 @@ class Agent:
         # successfully and total_tokens_used crosses the threshold, astream
         # calls self.compact(source="auto") before returning. 0 disables it.
         self._auto_compact_threshold = auto_compact_threshold
+        # G2 microcompact configuration. Parity with auto_compact's
+        # "zero disables" pattern: ``trigger_pairs <= 0`` OR
+        # ``auto_microcompact_enabled=False`` disables the feature
+        # entirely (``_build_loop`` passes ``None`` to AgentLoop in that
+        # case). Validation runs at construction — fail fast on a
+        # misconfig that would silently never clear anything. The guard
+        # is skipped on the disabled paths so explicit ``trigger_pairs=0``
+        # (the documented "zero disables" handle) doesn't trip it.
+        if (
+            auto_microcompact_enabled
+            and microcompact_trigger_pairs > 0
+            and microcompact_keep_recent >= microcompact_trigger_pairs
+        ):
+            raise AuraConfigError(
+                source="AgentConfig",
+                detail=(
+                    "microcompact_keep_recent "
+                    f"({microcompact_keep_recent}) must be strictly less than "
+                    f"microcompact_trigger_pairs ({microcompact_trigger_pairs}); "
+                    "otherwise the trigger can never fire any clears."
+                ),
+            )
+        self._auto_microcompact_enabled = auto_microcompact_enabled
+        self._microcompact_trigger_pairs = microcompact_trigger_pairs
+        self._microcompact_keep_recent = microcompact_keep_recent
         # Skills: user-layer (~/.aura/skills/) + project-layer (<cwd>/.aura/skills/).
         # Loaded once at Agent init; not re-scanned on /clear (v0.2.0 MVP — no
         # hot reload). Collision resolution inside the loader logs to journal.
@@ -757,6 +791,17 @@ class Agent:
         return tuple(self._turn_denials)
 
     def _build_loop(self) -> AgentLoop:
+        policy: MicrocompactPolicy | None
+        if (
+            self._auto_microcompact_enabled
+            and self._microcompact_trigger_pairs > 0
+        ):
+            policy = MicrocompactPolicy(
+                trigger_pairs=self._microcompact_trigger_pairs,
+                keep_recent=self._microcompact_keep_recent,
+            )
+        else:
+            policy = None
         return AgentLoop(
             model=self._model,
             registry=self._registry,
@@ -764,6 +809,8 @@ class Agent:
             hooks=self._hooks,
             state=self._state,
             retry_config=self._config.retry,
+            session_id=self._session_id,
+            microcompact_policy=policy,
         )
 
     def _build_context(

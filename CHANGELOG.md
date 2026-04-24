@@ -2,6 +2,39 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.13.0] — Observability + delight
+
+One-session wave of 6 commits building on v0.12.0's stability foundation. Focus: user-visible observability (`/stats` command, subagent lifecycle events, pet buddy with mood observer), one hardened invariant (attachments envelope now lives next to Context), and one real feature v0.12 had parked as honest-deferred (`allowed_tools` runtime enforcement). `make check` 1885 green (+39 from v0.12.0 baseline of 1846), mypy strict clean, zero sibling regressions.
+
+### Added
+
+- **`/stats` command** (`aura/core/commands/stats.py`, `b503e0d`): prints current-session token usage — total input/output/cache + latest-turn breakdown. Reads `state.custom["_token_stats"]` populated by the always-on usage-tracking hook. No `--log` opt-in required. Historical aggregation across sessions intentionally deferred to v0.14; for now the `turn_usage` journal event (also new — see below) captures the data so replay is possible later without losing today.
+- **`turn_usage` journal event** (`b503e0d`): always-on per-turn event carrying `turn`, `model`, `input_tokens`, `output_tokens`, `cache_read_tokens`. Wired inside `make_usage_tracking_hook` (default-registered via `default_hooks()`), so every Aura session produces the data without opt-in. Model name extracted best-effort from `response_metadata['model_name' | 'model' | 'model_id']`.
+- **`subagent_start` journal event + `duration_sec` on terminal events** (`655028f`): `subagent_start` fires before `factory.spawn` carrying `task_id` + `agent_type` + `prompt_chars`. Every terminal event (`subagent_completed` / `subagent_cancelled` / `subagent_timeout` / `subagent_failed`) now carries `duration_sec` (round-3 float) measured from just-before-spawn. `subagent_completed` additionally carries `final_text_chars`. Closes the "which subagent took 4 minutes?" audit gap from v0.11.0's G5 work.
+- **Pet buddy with deterministic species + mood observer** (`aura/cli/buddy.py`, `7dc8c76`): new module ports claude-code's buddy (which shipped half-done in v2.1.88 with missing `observer.ts`) as a complete, pt-native, pure-logic module. Species + rarity generated deterministically from `Path.home().name` via mulberry32 PRNG + FNV-1a hash. 10 species (`duck cat dog owl turtle rabbit octopus penguin dragon axolotl`) with 4 rarity tiers (common 60% / uncommon 25% / rare 12% / legendary 3%). Mood state machine on `state.custom["_buddy_state"]`: `idle` / `thinking` / `happy` / `worried`, updated by `post_model` and `post_tool` observer hooks registered via `default_hooks()`. Status bar appends ` · 🦆` (dimmed, tinted by rarity) after existing token counts. Opt-out via `AURA_NO_BUDDY=1` env or `config.ui.buddy_enabled=False`. 16 new tests (determinism, rarity distribution, mood transitions, opt-out paths).
+- **`skill_auto_allow_installed` journal event** (`611f08f`): emitted once per tool-rule the skill installs, carrying `skill_name`, `tool`, `source_layer`. Audits the permission-layer side-effect of skill invocation separately from the `skill_invoked` "skill ran" signal (v0.12).
+
+### Changed / Refactored
+
+- **`allowed_tools` enforced at runtime** (`611f08f`): skill frontmatter's `allowed-tools: [read_file, grep]` now installs session-scoped `Rule(tool=..., content=None)` entries on invocation — the declared tools are auto-allowed without prompting for the rest of the session (matches claude-code's `context.alwaysAllowRules.command` semantic, *permissive* not restrictive). Idempotent (re-invoking the same skill doesn't duplicate rules). Both slash path (`SkillCommand.handle`) and tool path (`SkillTool._invoke`) install symmetrically via shared helper `install_skill_allow_rules()`. `SkillTool` takes a new `session_rules_provider: Callable[[], SessionRuleSet | None]` kwarg threaded by `Agent` from `self._session_rules` — so `/clear` (which calls `.clear()` on the same instance) stays in sync automatically. Undeclared tools still prompt/deny normally. Docstring at `aura/core/commands/types.py` rewritten to reflect the enforced contract; the honest-deferred v0.12 comment is gone. A separate `restrict_tools` whitelist semantic (deny-by-default) is explicit v0.14+ work — this release stays permissive to preserve v0.12's imported-skill compat.
+- **Attachment envelope construction moved into `aura/core/memory/attachments.py`** (`99acd4e`): `HumanMessage`-with-`<mcp-resource>`-envelope construction extracted from `aura/cli/attachments.py` into a new pure-function module alongside Context. CLI layer (`cli/attachments.py`) delegates to `build_mcp_resource_message`. `Context.build` and `agent.py` ingress path unchanged — G1 persistence-before-ainvoke behavior is identical. Strengthens the "messages the LLM sees are assembled in `aura/core/memory/`" invariant (memory `project_memory_architecture.md`) without changing behavior. 7 new unit tests cover the envelope shape (headers, unicode, empty content, 100 KB bodies).
+
+### Fixed
+
+- **`.gitignore` anchored to repo root** (`a994cc6`): `docs/` and `tasks/` now use `/docs/` and `/tasks/` forms. The unanchored pattern accidentally matched **any** directory named `docs` or `tasks` at any depth — including `aura/core/tasks/` which is real production code. Subagents working in that tree had to `git add -f` to stage modifications; the fix makes those paths tracked cleanly.
+
+### Verification
+
+- `make check`: 1885 tests green (+39 from v0.12.0). mypy strict clean across all 252+ source files. Zero sibling regressions.
+- Four parallel subagent rounds during implementation (three in one batch — `allowed_tools`, pet, attachments — plus two solo). Each tested in isolation first, cross-verified at full `make check` after all landed.
+
+### Migration notes (SDK consumers)
+
+- **`SkillTool.__init__` signature widened** (non-breaking): new optional `session_rules_provider: Callable[[], SessionRuleSet | None] = lambda: None` kwarg. Existing callers that construct `SkillTool` directly without this kwarg keep working — the default returns `None` and `install_skill_allow_rules` becomes a no-op. CLI / Agent-constructed paths wire it automatically.
+- **`AuraConfig.ui` gained `buddy_enabled: bool = True`**: existing settings.json files keep working; set to `false` to silence the buddy glyph persistently (env var `AURA_NO_BUDDY=1` works per-session).
+- **New journal events added**: `turn_usage`, `subagent_start`, `skill_auto_allow_installed`. Existing events gained fields: `subagent_{completed,cancelled,timeout,failed}` each carry `duration_sec`; `subagent_completed` additionally carries `final_text_chars`. Audit scrapers that did strict schema checks should be extended, not rewritten.
+- **No breaking changes** otherwise.
+
 ## [0.12.0] — Stability + claude-code skill/UX parity
 
 One-session wave of 12 commits targeting stability (no latent crashes, no half-wired extensibility, no test pollution) and polish (skill UX aligned with claude-code, permission prompts deduped). Lands as one `v0.12.0` tag at the session's natural endpoint per the release-cadence rule. `make check` 1846 green (+37 from v0.11.0 baseline), mypy strict clean, zero sibling regressions.

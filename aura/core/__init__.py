@@ -31,6 +31,7 @@ from aura.core.llm import (
     UnknownModelSpecError,
 )
 from aura.core.loop import AgentLoop, ToolStep
+from aura.core.permissions.denials import PermissionDenial
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
@@ -57,6 +58,7 @@ __all__ = [
     "MissingCredentialError",
     "MissingProviderDependencyError",
     "PermissionAsker",
+    "PermissionDenial",
     "PostModelHook",
     "PostSessionHook",
     "PostSubagentHook",

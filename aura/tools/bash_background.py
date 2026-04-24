@@ -23,10 +23,12 @@ Semantics mirror claude-code's ``LocalShellTask``:
   ``failed`` otherwise; ``final_result`` holds the exit_code + a
   truncated tail of recent output so the LLM has something to read.
 
-Safety: reuses :func:`check_bash_safety` inline. We don't route through
-the global ``make_bash_safety_hook`` because that hook's closure matches
-on ``tool.name == 'bash'`` specifically; the policy is pure (no I/O,
-no state) so calling it here is cheap and keeps the two tools decoupled.
+Safety: routed through :func:`aura.core.hooks.bash_safety.make_bash_safety_hook`
+which matches BOTH ``bash`` and ``bash_background`` tool names. That
+keeps the audit surface uniform (one ``permission_decision`` event per
+denial, one ``PermissionDenial`` in the per-turn sink) and honors
+``mode == "bypass"`` identically across the two shell tools. The tool
+itself is a dumb executor — no inline policy check.
 """
 
 from __future__ import annotations
@@ -39,11 +41,10 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.core.permissions.bash_safety import check_bash_safety
 from aura.core.permissions.matchers import exact_match_on
 from aura.core.persistence import journal
 from aura.core.tasks.store import TasksStore
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import tool_metadata
 from aura.tools.bash import _is_bash_destructive
 
 # Hard ceiling on the caller-supplied timeout. 24h — a single agent
@@ -162,23 +163,13 @@ class BashBackground(BaseTool):
         timeout_sec: int = _DEFAULT_TIMEOUT_SECONDS,
         cwd: str | None = None,
     ) -> dict[str, Any]:
-        # Safety: identical policy to the blocking bash tool. Inlined
-        # rather than routed through the hook chain because the hook
-        # matches on tool.name=='bash' and we want a single source of
-        # truth for the policy — ``check_bash_safety`` is pure.
-        violation = check_bash_safety(command)
-        if violation is not None:
-            journal.write(
-                "bash_background_safety_blocked",
-                reason=violation.reason,
-                detail=violation.detail,
-                command=command,
-            )
-            raise ToolError(
-                f"bash safety blocked: {violation.detail} "
-                f"(reason={violation.reason})"
-            )
-
+        # Safety lives entirely in the pre_tool hook chain — the bash
+        # safety hook matches BOTH ``bash`` and ``bash_background`` so a
+        # dangerous command is short-circuited before this method is
+        # called. Duplicating the check here would cause double-audit
+        # (two ``permission_decision`` events per block) and would
+        # override the user's ``mode == "bypass"`` opt-in which the hook
+        # correctly honors.
         rec = self.store.create(
             description=f"bg: {command[:80]}",
             prompt=command,

@@ -21,9 +21,10 @@ from typing import Any
 
 import pytest
 
+from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.tasks.store import TasksStore
 from aura.core.tasks.types import _SHELL_RECENT_ACTIVITIES_CAP
-from aura.schemas.tool import ToolError
+from aura.schemas.state import LoopState
 from aura.tools.bash_background import BashBackground
 from aura.tools.task_get import TaskGet
 from aura.tools.task_stop import TaskStop
@@ -172,14 +173,25 @@ async def test_stdout_captured_with_out_prefix() -> None:
 
 @pytest.mark.asyncio
 async def test_safety_rejects_command_substitution() -> None:
+    """Safety is a hook-chain concern: dangerous commands routed through
+    the bash safety hook are short-circuited with a ToolResult and never
+    reach the tool's ``_arun``. The tool itself is a dumb executor after
+    the Option-A refactor (see ``test_bash_background_permission.py``
+    for the per-channel parity assertions)."""
     tool, store, _, _ = _make_tool()
-    with pytest.raises(ToolError, match="command substitution"):
-        await tool.ainvoke({"command": "echo $(whoami)"})
-    with pytest.raises(ToolError, match="command substitution"):
-        await tool.ainvoke({"command": "echo `whoami`"})
-    with pytest.raises(ToolError, match="command substitution"):
-        await tool.ainvoke({"command": "bash -c 'echo hi'"})
-    # No task records should have been created for these rejects.
+    hook = make_bash_safety_hook()
+    for bad in ("echo $(whoami)", "echo `whoami`", "bash -c 'echo hi'"):
+        outcome = await hook(
+            tool=tool,
+            args={"command": bad},
+            state=LoopState(),
+        )
+        assert outcome.short_circuit is not None, bad
+        assert outcome.short_circuit.ok is False
+        assert outcome.short_circuit.error is not None
+        assert "command substitution" in outcome.short_circuit.error
+    # No task records should have been created — the hook blocks the
+    # call before the tool runs.
     assert store.list() == []
 
 

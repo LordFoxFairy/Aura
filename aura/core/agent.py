@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -32,6 +32,7 @@ from aura.core.memory import project_memory, rules
 from aura.core.memory.context import Context, _ReadRecord
 from aura.core.memory.system_prompt import build_system_prompt
 from aura.core.permissions.denials import DENIALS_SINK_KEY, PermissionDenial
+from aura.core.permissions.mode import Mode
 from aura.core.permissions.safety import SafetyPolicy
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.persistence import journal
@@ -388,7 +389,17 @@ class Agent:
         # safety is a separate axis from permission and CANNOT be overridden
         # by rules or ``--bypass-permissions``. Stateless; tracked as a field
         # so clear_session can re-insert it at position 0 idempotently.
-        self._bash_safety_hook = make_bash_safety_hook()
+        # Live mode provider: safety hook must honor ``mode == "bypass"``
+        # (user opted in) and track mid-session ``set_mode`` changes, same
+        # as the permission hook. Closing over ``self`` means a shift+tab
+        # / enter_plan_mode mid-turn is visible on the next tool call.
+        # ``self._mode`` is typed ``str`` on Agent (no circular dep on
+        # permissions.mode); cast here since every writer guarantees a
+        # valid Mode literal — same pattern used in ``aura/cli/__main__.py``
+        # for the permission hook's ``_live_mode``.
+        self._bash_safety_hook = make_bash_safety_hook(
+            mode_provider=lambda: cast("Mode", self._mode),
+        )
         self._hooks.pre_tool.insert(0, self._bash_safety_hook)
         # Tool-intrinsic invariant (matches claude-code FileEditTool): edit_file
         # rejects before any user-supplied gate would run. Appended AFTER the
@@ -612,7 +623,9 @@ class Agent:
         # could skip this, but the swap keeps the invariant "safety is first"
         # independent of any future list mutations in clear_session.
         self._hooks.pre_tool.remove(self._bash_safety_hook)
-        self._bash_safety_hook = make_bash_safety_hook()
+        self._bash_safety_hook = make_bash_safety_hook(
+            mode_provider=lambda: cast("Mode", self._mode),
+        )
         self._hooks.pre_tool.insert(0, self._bash_safety_hook)
         self._loop = self._build_loop()
         journal.write("session_cleared", session=self._session_id)

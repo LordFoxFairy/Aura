@@ -294,7 +294,7 @@ async def test_agent_bash_background_safety_end_to_end_populates_denials(
         assert len(decisions) == 1
         assert decisions[0]["reason"] == "safety_blocked"
 
-        agent.close()
+        await agent.aclose()
     finally:
         journal_module.reset()
 
@@ -346,8 +346,8 @@ async def test_agent_bash_background_bypass_mode_skips_safety(
         assert safety_denials == [], safety_denials
 
         # Let the background watcher drain so we don't leak tasks; cleanup
-        # happens inside agent.close(), which also cancels running shells.
-        agent.close()
+        # happens inside agent.aclose(), which also cancels running shells.
+        await agent.aclose()
         # Give pending subprocess cleanup a moment.
         await asyncio.sleep(0.1)
     finally:

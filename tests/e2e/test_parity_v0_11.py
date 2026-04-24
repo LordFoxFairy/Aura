@@ -372,7 +372,7 @@ _DENIALS_DRIVER = textwrap.dedent(
             for d in denials
         ]
         Path(out_path).write_text(json.dumps(payload))
-        agent.close()
+        await agent.aclose()
 
     asyncio.run(main())
     """
@@ -608,7 +608,7 @@ _LIVE_MODE_DRIVER = textwrap.dedent(
         agent.set_mode("plan")
         async for _ in agent.astream("write something"):
             pass
-        agent.close()
+        await agent.aclose()
 
     asyncio.run(main())
     """

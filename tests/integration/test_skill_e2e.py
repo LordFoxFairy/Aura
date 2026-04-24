@@ -120,7 +120,7 @@ async def test_skill_invocation_injects_body_into_next_turn(
     try:
         events = await drain(agent, "use debug")
     finally:
-        agent.close()
+        await agent.aclose()
 
     # Tool call completed successfully.
     completed = [e for e in events if isinstance(e, ToolCallCompleted)]
@@ -183,7 +183,7 @@ async def test_skill_invocation_substitutes_arguments(
     try:
         await drain(agent, "fix auth")
     finally:
-        agent.close()
+        await agent.aclose()
 
     assert len(capture_model.received_messages) == 2
     turn2_msgs = capture_model.received_messages[1]
@@ -237,7 +237,7 @@ async def test_skill_unknown_returns_tool_error_llm_pivots(
     try:
         events = await drain(agent, "try a skill")
     finally:
-        agent.close()
+        await agent.aclose()
 
     completed = [e for e in events if isinstance(e, ToolCallCompleted)]
     assert len(completed) == 1
@@ -307,7 +307,7 @@ async def test_conditional_skill_activation_promotes_to_registry(
         assert [s.name for s in agent1._skill_registry.list()] == []
         assert [s.name for s in get_conditional_skills()] == ["pyhelp"]
     finally:
-        agent1.close()
+        await agent1.aclose()
 
     # Activate: a tool-style "touch src/foo.py" promotes the skill.
     activated = activate_conditional_skills_for_paths(
@@ -334,4 +334,4 @@ async def test_conditional_skill_activation_promotes_to_registry(
         assert skill is not None
         assert skill.body.strip() == "PY-BODY"
     finally:
-        agent2.close()
+        await agent2.aclose()

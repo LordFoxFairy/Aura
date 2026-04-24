@@ -81,7 +81,7 @@ async def test_auto_compact_fires_when_threshold_crossed(tmp_path: Path) -> None
             pass
 
     assert compact_calls == ["auto"]
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_auto_compact_not_fired_below_threshold(tmp_path: Path) -> None:
             pass
 
     assert compact_calls == []
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -126,7 +126,7 @@ async def test_auto_compact_disabled_when_threshold_zero(tmp_path: Path) -> None
             pass
 
     assert compact_calls == []
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -163,7 +163,7 @@ async def test_auto_compact_journal_event(tmp_path: Path) -> None:
         assert ev["threshold"] == 10
         assert ev["session"] == "default"
         assert compact_calls == ["auto"]
-        agent.close()
+        await agent.aclose()
     finally:
         journal.reset()
 
@@ -217,4 +217,4 @@ async def test_auto_compact_skipped_on_cancel(tmp_path: Path) -> None:
             await task
 
     assert compact_calls == []
-    agent.close()
+    await agent.aclose()

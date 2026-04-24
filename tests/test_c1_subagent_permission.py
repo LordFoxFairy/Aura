@@ -128,7 +128,7 @@ async def test_subagent_denies_tool_requiring_user_prompt() -> None:
         assert outcome.short_circuit.ok is False
         assert "subagent_auto_deny" in (outcome.short_circuit.error or "")
     finally:
-        child.close()
+        await child.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +158,7 @@ async def test_subagent_honors_parent_allow_rule() -> None:
         assert outcome.decision.allow is True
         assert outcome.decision.reason == "rule_allow"
     finally:
-        child.close()
+        await child.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +199,7 @@ async def test_subagent_does_not_pollute_parent_session_rules() -> None:
         child_rules = child._session_rules.rules()
         assert any(r.tool == "echo_tool" for r in child_rules)
     finally:
-        child.close()
+        await child.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -228,7 +228,7 @@ async def test_subagent_inherits_bypass_mode_from_parent() -> None:
         assert outcome.decision.allow is True
         assert outcome.decision.reason == "mode_bypass"
     finally:
-        child.close()
+        await child.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -290,4 +290,4 @@ async def test_subagent_still_denies_on_safety_violation(tmp_path: Path) -> None
         assert outcome.decision.allow is False
         assert outcome.decision.reason == "safety_blocked"
     finally:
-        child.close()
+        await child.aclose()

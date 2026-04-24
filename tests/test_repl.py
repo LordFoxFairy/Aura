@@ -51,7 +51,7 @@ async def test_exit_command_returns(tmp_path: Path) -> None:
     await run_repl_async(
         agent, input_fn=_ScriptedInput(["/exit"]), console=console,
     )
-    agent.close()
+    await agent.aclose()
 
 
 async def test_help_then_exit(tmp_path: Path) -> None:
@@ -62,7 +62,7 @@ async def test_help_then_exit(tmp_path: Path) -> None:
         agent, input_fn=_ScriptedInput(["/help", "/exit"]), console=console,
     )
     assert "/exit" in buf.getvalue()
-    agent.close()
+    await agent.aclose()
 
 
 async def test_non_slash_line_forwards_to_agent(tmp_path: Path) -> None:
@@ -78,7 +78,7 @@ async def test_non_slash_line_forwards_to_agent(tmp_path: Path) -> None:
         console=console,
     )
     assert "hello back" in buf.getvalue()
-    agent.close()
+    await agent.aclose()
 
 
 async def test_eof_exits_cleanly(tmp_path: Path) -> None:
@@ -88,7 +88,7 @@ async def test_eof_exits_cleanly(tmp_path: Path) -> None:
     await run_repl_async(
         agent, input_fn=_ScriptedInput([]), console=console,
     )
-    agent.close()
+    await agent.aclose()
 
 
 async def test_empty_input_does_not_reach_agent(tmp_path: Path) -> None:
@@ -106,7 +106,7 @@ async def test_empty_input_does_not_reach_agent(tmp_path: Path) -> None:
     # Agent's single queued turn was never consumed — the empty inputs
     # skipped the astream path entirely.
     assert "should not fire" not in buf.getvalue()
-    agent.close()
+    await agent.aclose()
 
 
 async def test_verbose_prints_turn_summary(tmp_path: Path) -> None:
@@ -126,7 +126,7 @@ async def test_verbose_prints_turn_summary(tmp_path: Path) -> None:
     out = buf.getvalue()
     assert "turn 1" in out
     assert "tokens" in out
-    agent.close()
+    await agent.aclose()
 
 
 async def test_non_verbose_does_not_print_summary(tmp_path: Path) -> None:
@@ -145,7 +145,7 @@ async def test_non_verbose_does_not_print_summary(tmp_path: Path) -> None:
 
     out = buf.getvalue()
     assert "turn 1" not in out
-    agent.close()
+    await agent.aclose()
 
 
 async def test_bypass_mode_prompt_carries_bypass_marker(tmp_path: Path) -> None:
@@ -167,7 +167,7 @@ async def test_bypass_mode_prompt_carries_bypass_marker(tmp_path: Path) -> None:
     )
     assert seen_prompts
     assert "bypass" in seen_prompts[0]
-    agent.close()
+    await agent.aclose()
 
 
 async def test_non_bypass_mode_uses_plain_prompt(tmp_path: Path) -> None:
@@ -182,7 +182,7 @@ async def test_non_bypass_mode_uses_plain_prompt(tmp_path: Path) -> None:
     await run_repl_async(agent, input_fn=_capture_prompt, console=console)
     assert seen_prompts
     assert "bypass" not in seen_prompts[0]
-    agent.close()
+    await agent.aclose()
 
 
 async def test_welcome_banner_shows_core_info_compactly(tmp_path: Path) -> None:
@@ -222,7 +222,7 @@ async def test_welcome_banner_shows_core_info_compactly(tmp_path: Path) -> None:
     # Tip line matches one of the curated options (exact substring).
     assert any(tip in out for tip in _STARTUP_TIPS)
 
-    agent.close()
+    await agent.aclose()
 
 
 def test_welcome_banner_spinner_frames_are_non_empty_and_include_settle_glyph(
@@ -397,7 +397,7 @@ async def test_welcome_banner_renders_even_with_odd_version(
     out = buf.getvalue()
     assert "v9.9.9+dev" in out
     assert "✱ Aura" in out
-    agent.close()
+    await agent.aclose()
 
 
 def test_prompt_session_no_toolbar_when_agent_not_passed(tmp_path: Path) -> None:
@@ -469,7 +469,7 @@ async def test_alt_enter_inserts_newline_in_prompt_buffer(
         )
         result = await session.prompt_async("> ")
     assert result == "line1\nline2"
-    agent.close()
+    await agent.aclose()
 
 
 async def test_ctrl_j_inserts_newline_in_prompt_buffer(
@@ -494,7 +494,7 @@ async def test_ctrl_j_inserts_newline_in_prompt_buffer(
         )
         result = await session.prompt_async("> ")
     assert result == "a\nb"
-    agent.close()
+    await agent.aclose()
 
 
 async def test_multiline_slash_command_uses_first_line_only(
@@ -513,7 +513,7 @@ async def test_multiline_slash_command_uses_first_line_only(
         console=console,
     )
     # Reached the exit path without hitting EOFError (i.e. /exit handled).
-    agent.close()
+    await agent.aclose()
 
 
 async def test_multiline_non_slash_input_reaches_agent_intact(
@@ -562,7 +562,7 @@ async def test_multiline_non_slash_input_reaches_agent_intact(
         console=console,
     )
     assert any("first line\nsecond line" in c for c in captured)
-    agent.close()
+    await agent.aclose()
 
 
 async def test_single_line_slash_command_unchanged(tmp_path: Path) -> None:
@@ -574,7 +574,7 @@ async def test_single_line_slash_command_unchanged(tmp_path: Path) -> None:
         agent, input_fn=_ScriptedInput(["/help", "/exit"]), console=console,
     )
     assert "/exit" in buf.getvalue()
-    agent.close()
+    await agent.aclose()
 
 
 def test_post_turn_status_is_slim_done_marker(tmp_path: Path) -> None:
@@ -678,7 +678,7 @@ async def test_shift_tab_cycles_mode_silently_no_scrollback_spam(
     out = buf.getvalue()
     assert "mode:" not in out
     assert "shift+tab to cycle" not in out
-    agent.close()
+    await agent.aclose()
 
 
 async def test_ctrl_c_with_text_clears_buffer_and_does_not_exit(
@@ -706,7 +706,7 @@ async def test_ctrl_c_with_text_clears_buffer_and_does_not_exit(
         result = await session.prompt_async("> ")
     # Ctrl+C cleared the "abc" — result only carries post-Ctrl-C typing.
     assert result == "q"
-    agent.close()
+    await agent.aclose()
 
 
 async def test_ctrl_c_empty_buffer_single_press_does_not_exit(
@@ -735,7 +735,7 @@ async def test_ctrl_c_empty_buffer_single_press_does_not_exit(
         )
         result = await session.prompt_async("> ")
     assert result == "hi"
-    agent.close()
+    await agent.aclose()
 
 
 async def test_ctrl_c_double_press_empty_buffer_raises_keyboard_interrupt(
@@ -761,7 +761,7 @@ async def test_ctrl_c_double_press_empty_buffer_raises_keyboard_interrupt(
         )
         with pytest.raises(KeyboardInterrupt):
             await session.prompt_async("> ")
-    agent.close()
+    await agent.aclose()
 
 
 async def test_ctrl_c_second_press_outside_window_does_not_exit(
@@ -794,7 +794,7 @@ async def test_ctrl_c_second_press_outside_window_does_not_exit(
         )
         result = await session.prompt_async("> ")
     assert result == "ok"
-    agent.close()
+    await agent.aclose()
 
 
 async def test_ctrl_c_text_present_does_not_arm_double_press(
@@ -829,7 +829,7 @@ async def test_ctrl_c_text_present_does_not_arm_double_press(
     # exit window remains inactive.
     assert state.last_press_at == 0.0
     assert not state.hint_active(_time.monotonic())
-    agent.close()
+    await agent.aclose()
 
 
 async def test_escape_resets_mode_silently_no_scrollback_spam(
@@ -859,7 +859,7 @@ async def test_escape_resets_mode_silently_no_scrollback_spam(
     assert agent.mode == "default"
     out = buf.getvalue()
     assert "mode:" not in out
-    agent.close()
+    await agent.aclose()
 
 
 async def test_mention_preprocessor_injects_attachment_into_turn(
@@ -1002,7 +1002,7 @@ async def test_prompt_without_mentions_skips_attachment_path(
         input_fn=_ScriptedInput(["just a plain prompt", "/exit"]),
         console=console,
     )
-    agent.close()
+    await agent.aclose()
 
     assert captured
     sent = captured[0]
@@ -1046,4 +1046,4 @@ async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:
     out = buf.getvalue()
     assert "turn failed" in out
     assert "network went sideways" in out
-    agent.close()
+    await agent.aclose()

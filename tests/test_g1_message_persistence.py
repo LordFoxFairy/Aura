@@ -135,7 +135,7 @@ async def test_user_message_persisted_before_model_call(tmp_path: Path) -> None:
     assert "BODY" in str(saved[0].content)
     assert isinstance(saved[1], HumanMessage)
     assert saved[1].content == "please read the doc"
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -161,7 +161,7 @@ async def test_user_message_persisted_before_model_call_no_attachments(
     assert len(saved) == 1
     assert isinstance(saved[0], HumanMessage)
     assert saved[0].content == "find the bug"
-    agent.close()
+    await agent.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +267,7 @@ async def test_reactive_compact_retains_attachments_idempotently(
     assert envelopes_first[0].content == envelopes_retry[0].content, (
         "attachment content drifted between first attempt and retry"
     )
-    agent.close()
+    await agent.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +512,7 @@ async def test_save_happens_before_turn_begin_in_journal(
         )
         async for _ in agent.astream("hi"):
             pass
-        agent.close()
+        await agent.aclose()
 
         events = [
             json.loads(line)

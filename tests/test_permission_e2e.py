@@ -170,7 +170,7 @@ async def test_first_run_asker_always_persists_rule_to_disk(tmp_path: Path) -> N
     try:
         await _drain(agent, "run npm test please")
     finally:
-        agent.close()
+        await agent.aclose()
 
     assert asker.call_count == 1
     assert run_counter == [1]
@@ -205,7 +205,7 @@ async def test_second_agent_honours_persisted_rule_without_prompting(
     try:
         await _drain(agent, "run npm test")
     finally:
-        agent.close()
+        await agent.aclose()
 
     assert asker.call_count == 0, "persisted rule must short-circuit the asker"
     assert run_counter == [1], "tool must have run"
@@ -236,7 +236,7 @@ async def test_end_to_end_persist_then_auto_allow_across_two_agents(
     try:
         await _drain(agent1, "first run")
     finally:
-        agent1.close()
+        await agent1.aclose()
     assert asker1.call_count == 1
     assert (tmp_path / ".aura" / "settings.json").exists()
 
@@ -254,7 +254,7 @@ async def test_end_to_end_persist_then_auto_allow_across_two_agents(
     try:
         await _drain(agent2, "second run")
     finally:
-        agent2.close()
+        await agent2.aclose()
     assert asker2.call_count == 0
     assert run_counter == [1, 1]
 
@@ -284,7 +284,7 @@ async def test_clear_session_does_not_nuke_disk_rules(tmp_path: Path) -> None:
         # /clear on the first Agent — disk must be untouched.
         agent1.clear_session()
     finally:
-        agent1.close()
+        await agent1.aclose()
 
     cfg = store.load(tmp_path)
     assert "bash(npm test)" in cfg.allow, (
@@ -304,7 +304,7 @@ async def test_clear_session_does_not_nuke_disk_rules(tmp_path: Path) -> None:
     try:
         await _drain(agent3, "post-clear")
     finally:
-        agent3.close()
+        await agent3.aclose()
 
     assert asker3.call_count == 0
 
@@ -329,7 +329,7 @@ async def test_bypass_mode_skips_asker_entirely(tmp_path: Path) -> None:
     try:
         await _drain(agent, "bypass run")
     finally:
-        agent.close()
+        await agent.aclose()
 
     assert asker.call_count == 0
     assert run_counter == [1]

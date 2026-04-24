@@ -116,7 +116,7 @@ async def test_reactive_compact_on_context_length_error(tmp_path: Path) -> None:
     assert compact_calls == ["reactive"]
     # Second attempt completed — at least one event yielded after retry.
     assert finals, "expected the retry turn to yield events"
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -144,7 +144,7 @@ async def test_reactive_compact_only_retries_once(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="still too long"):
         async for _ in agent.astream("hi"):
             pass
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -176,7 +176,7 @@ async def test_reactive_compact_other_error_passthrough(tmp_path: Path) -> None:
             pass
 
     assert compact_calls == []
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -221,6 +221,6 @@ async def test_reactive_compact_journal_event(tmp_path: Path) -> None:
         ev = triggered[0]
         assert "context_length_exceeded" in ev["error"]
         assert ev["session"] == "default"
-        agent.close()
+        await agent.aclose()
     finally:
         journal.reset()

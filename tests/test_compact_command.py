@@ -82,4 +82,4 @@ async def test_compact_command_end_to_end_with_real_agent(tmp_path: Path) -> Non
     after = agent._storage.load(agent.session_id)
     # Tail (last 6) + summary (1) = 7 messages.
     assert len(after) == 7
-    agent.close()
+    await agent.aclose()

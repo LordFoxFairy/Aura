@@ -97,7 +97,7 @@ async def test_bash_permission_allow_tool_runs_llm_sees_stdout(
         # connection down, so deferred reads blow up with "closed database".
         history = agent._storage.load(agent.session_id)
     finally:
-        agent.close()
+        await agent.aclose()
 
     # Asker was consulted exactly once.
     assert len(perm_asker.calls) == 1
@@ -167,7 +167,7 @@ async def test_bash_permission_deny_tool_refused_llm_sees_feedback(
         events = await drain(agent, "rm things")
         history = agent._storage.load(agent.session_id)
     finally:
-        agent.close()
+        await agent.aclose()
 
     completed = [e for e in events if isinstance(e, ToolCallCompleted)]
     assert len(completed) == 1
@@ -284,7 +284,7 @@ async def test_plan_mode_exit_approval_flow_flips_mode_and_user_deny(
     try:
         events = await drain(agent, "write a file")
     finally:
-        agent.close()
+        await agent.aclose()
 
     completed = [e for e in events if isinstance(e, ToolCallCompleted)]
     assert [e.name for e in completed] == [
@@ -370,7 +370,7 @@ async def test_accept_edits_auto_allows_write_bash_still_prompts(
     try:
         events = await drain(agent, "edit then shell")
     finally:
-        agent.close()
+        await agent.aclose()
 
     completed = [e for e in events if isinstance(e, ToolCallCompleted)]
     assert len(completed) == 2

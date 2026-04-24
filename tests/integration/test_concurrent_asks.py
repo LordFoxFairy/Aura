@@ -159,8 +159,8 @@ async def test_two_parallel_permission_asks_serialize_fifo(
             drain(agent_b, "run B"),
         )
     finally:
-        agent_a.close()
-        agent_b.close()
+        await agent_a.aclose()
+        await agent_b.aclose()
 
     # Exactly two asks happened.
     assert len(inner.timings) == 2
@@ -249,8 +249,8 @@ async def test_fifo_ordering_holds_under_contention(
         task2 = asyncio.create_task(drain(agent_second, "run second"))
         await asyncio.gather(task1, task2)
     finally:
-        agent_first.close()
-        agent_second.close()
+        await agent_first.aclose()
+        await agent_second.aclose()
 
     assert [c["args"]["command"] for c in inner.calls] == ["first", "second"]
 
@@ -376,8 +376,8 @@ async def test_asker_timeout_is_per_call_not_shared(tmp_path: Path) -> None:
         await asyncio.wait_for(drain(agent_hang, "hang"), timeout=2.0)
         await asyncio.wait_for(drain(agent_ok, "ok"), timeout=2.0)
     finally:
-        agent_hang.close()
-        agent_ok.close()
+        await agent_hang.aclose()
+        await agent_ok.aclose()
 
     # The first bash call was denied (tool did NOT run).
     # The second bash call succeeded (tool DID run).

@@ -41,7 +41,7 @@ async def test_astream_emits_layered_events(tmp_path: Path) -> None:
 
     async for _ in agent.astream("hello"):
         pass
-    agent.close()
+    await agent.aclose()
 
     events = [json.loads(line) for line in log.read_text().splitlines()]
     event_names = [e["event"] for e in events]

@@ -91,7 +91,7 @@ async def test_export_with_no_args_writes_default_md(tmp_path: Path) -> None:
     assert len(files) == 1
     body = files[0].read_text(encoding="utf-8")
     assert body.startswith("# Aura session export")
-    agent.close()
+    await agent.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ async def test_export_writes_markdown_to_specified_path(
     assert "## Turn 1 (user)" in body
     assert "## Turn 1 (assistant)" in body
     assert "## Turn 2 (user)" in body
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -134,7 +134,7 @@ async def test_export_writes_json_to_specified_path(tmp_path: Path) -> None:
     assert isinstance(parsed["messages"], list)
     assert len(parsed["messages"]) == 6
     assert parsed["messages"][0] == {"role": "human", "content": "hello"}
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -154,7 +154,7 @@ async def test_export_format_json_flag_no_path(tmp_path: Path) -> None:
     assert len(files) == 1
     parsed = json.loads(files[0].read_text(encoding="utf-8"))
     assert "messages" in parsed
-    agent.close()
+    await agent.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +176,7 @@ async def test_markdown_includes_envelope_metadata(tmp_path: Path) -> None:
     assert "turns: 2" in body
     # Envelope + section separator.
     assert "\n---\n" in body
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -198,7 +198,7 @@ async def test_markdown_includes_tool_calls_and_results(
     # fenced code body containing the file contents.
     assert "## Turn 2 (tool: read_file)" in body
     assert "# My project" in body
-    agent.close()
+    await agent.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ async def test_json_parses_back_and_preserves_tool_calls(
     tool_msg = parsed["messages"][4]
     assert tool_msg["role"] == "tool"
     assert tool_msg["tool_call_id"] == "tc-1"
-    agent.close()
+    await agent.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +245,7 @@ async def test_export_empty_session_does_not_crash(tmp_path: Path) -> None:
     body = out.read_text(encoding="utf-8")
     assert "# Aura session export" in body
     assert "turns: 0" in body
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -263,7 +263,7 @@ async def test_export_bad_path_returns_error_result(tmp_path: Path) -> None:
     assert result.handled is True
     assert result.kind == "print"
     assert result.text.startswith("error:")
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -280,7 +280,7 @@ async def test_export_unknown_extension_falls_back_to_markdown(
     assert "note:" in result.text
     body = out.read_text(encoding="utf-8")
     assert body.startswith("# Aura session export")
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -289,7 +289,7 @@ async def test_export_rejects_unknown_flag(tmp_path: Path) -> None:
     result = await ExportCommand().handle("--bogus", agent)
     assert result.handled is True
     assert result.text.startswith("error:")
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -299,4 +299,4 @@ async def test_export_rejects_bad_format_value(tmp_path: Path) -> None:
     assert result.handled is True
     assert result.text.startswith("error:")
     assert "yaml" in result.text
-    agent.close()
+    await agent.aclose()

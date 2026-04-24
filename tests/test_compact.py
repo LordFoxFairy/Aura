@@ -78,7 +78,7 @@ async def test_compact_noop_when_short_history(tmp_path: Path) -> None:
     # History unchanged.
     history = agent._storage.load(agent.session_id)
     assert len(history) == 4
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -102,7 +102,7 @@ async def test_compact_replaces_middle_with_summary_preserves_tail(
     # Tail preserved in order — last 6 messages of original 20.
     assert str(history[1].content) == "user-7"
     assert str(history[-1].content) == "assistant-9"
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -122,7 +122,7 @@ async def test_compact_keeps_last_n_turns_raw(tmp_path: Path) -> None:
     assert all(
         ("<session-summary>" not in str(m.content)) for m in tail
     )
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -140,7 +140,7 @@ async def test_compact_preserves_read_records(tmp_path: Path) -> None:
     # After compact: new Context is in place but the fresh read fingerprint
     # must survive — claude-code parity for the must-read-first invariant.
     assert agent._context.read_status(target) == "fresh"
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -167,7 +167,7 @@ async def test_compact_preserves_invoked_skills(tmp_path: Path) -> None:
     blob_after = " ".join(str(m.content) for m in agent._context.build([]))
     assert '<skill-invoked name="ping">' in blob_after
     assert "PING-BODY" in blob_after
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -186,7 +186,7 @@ async def test_compact_preserves_todos(tmp_path: Path) -> None:
     todos = agent._state.custom.get("todos", [])
     assert len(todos) == 1
     assert todos[0].content == "TASK-A"
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -208,7 +208,7 @@ async def test_compact_clears_nested_memory_fragments(tmp_path: Path) -> None:
 
     assert agent._context._nested_fragments == []
     assert agent._context._loaded_nested_paths == set()
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -231,7 +231,7 @@ async def test_compact_clears_matched_rules(tmp_path: Path) -> None:
 
     assert agent._context._matched_rules == []
     assert agent._context._matched_rule_paths == set()
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -276,7 +276,7 @@ async def test_compact_reruns_must_read_first_hook_with_new_context(
     )
     # Preserved record = fresh → no short_circuit (no block).
     assert outcome.short_circuit is None
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -301,7 +301,7 @@ async def test_compact_journal_event(tmp_path: Path, monkeypatch: pytest.MonkeyP
     # Integer-ish token counts present.
     assert "before_tokens" in ev
     assert "after_tokens" in ev
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -321,7 +321,7 @@ async def test_compact_result_dataclass_shape(tmp_path: Path) -> None:
     # after_tokens exists and is an integer (same or increased; summary turn
     # may add usage if a usage hook were wired — here it isn't, so equal).
     assert isinstance(result.after_tokens, int)
-    agent.close()
+    await agent.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +371,7 @@ async def test_compact_reinjects_top_n_recent_files_by_mtime(
     # Older files skipped.
     for i in (1, 0):
         assert f"BODY-{i}" not in joined
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -393,7 +393,7 @@ async def test_compact_skips_partial_reads_in_reinjection(tmp_path: Path) -> Non
     blob = "\n".join(str(m.content) for m in history)
     assert "FULL-BODY" in blob
     assert "PART-BODY" not in blob
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -419,7 +419,7 @@ async def test_compact_handles_deleted_file_during_reinjection(
     blob = "\n".join(str(m.content) for m in history)
     assert "ALIVE-BODY" in blob
     assert "DEAD-BODY" not in blob
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -451,7 +451,7 @@ async def test_compact_caps_file_body_at_max_tokens_per_file(
     assert "(truncated)" in blob
     # Total payload roughly bounded — tag + truncated body stays close to max_chars.
     assert len(blob) <= max_chars + 1_000
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -482,4 +482,4 @@ async def test_compact_recent_files_rendered_before_preserved_tail(
         and "<session-summary>" not in str(m.content)
         for m in tail
     )
-    agent.close()
+    await agent.aclose()

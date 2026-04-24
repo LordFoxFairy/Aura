@@ -63,7 +63,7 @@ async def test_skill_command_handle_calls_record_invocation(tmp_path: Path) -> N
     messages = agent._context.build([])
     contents = " ".join(str(m.content) for m in messages)
     assert '<skill-invoked name="sk">' in contents
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -84,7 +84,7 @@ async def test_skill_command_registers_via_command_registry_and_dispatches(
     messages = agent._context.build([])
     contents = " ".join(str(m.content) for m in messages)
     assert '<skill-invoked name="helper">' in contents
-    agent.close()
+    await agent.aclose()
 
 
 def test_skill_command_propagates_allowed_tools_and_argument_hint(

@@ -137,7 +137,7 @@ async def test_single_subagent_roundtrip_parent_sees_result(tmp_path: Path) -> N
         else:
             pytest.fail("subagent never reached a terminal state")
     finally:
-        agent.close()
+        await agent.aclose()
 
     # The child ran and wrote its final result.
     rec = store.list()[0]
@@ -288,7 +288,7 @@ async def test_parallel_three_subagents_parent_reads_all(tmp_path: Path) -> None
                 f"{[(r.agent_type, r.status) for r in store.list()]}"
             )
     finally:
-        agent.close()
+        await agent.aclose()
 
     recs = store.list()
     assert len(recs) == 3
@@ -409,7 +409,7 @@ async def test_task_stop_cancels_running_subagent(tmp_path: Path) -> None:
         # unwind with a ~2s internal budget. We assert completion within 3s.
         await asyncio.wait_for(drain(agent, "spawn then stop"), timeout=3.0)
     finally:
-        agent.close()
+        await agent.aclose()
 
     recs = store.list()
     assert len(recs) == 1

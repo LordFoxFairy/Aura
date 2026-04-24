@@ -413,7 +413,7 @@ async def test_agent_close_closes_storage(tmp_path: Path) -> None:
     model = FakeChatModel(turns=[])
     agent = Agent(config=cfg, model=model, storage=storage)
 
-    agent.close()
+    await agent.aclose()
 
     with pytest.raises(sqlite3.ProgrammingError):
         storage.load("default")
@@ -448,7 +448,7 @@ async def test_agent_respects_custom_session_id(tmp_path: Path) -> None:
     assert storage.load("default") == []
     loaded = storage.load("my-session")
     assert len(loaded) == 2
-    agent.close()
+    await agent.aclose()
 
 
 def test_build_agent_forwards_available_tools(
@@ -507,7 +507,7 @@ async def test_clear_session_also_resets_state_counters(tmp_path: Path) -> None:
 
     agent.clear_session()
     assert agent.state.turn_count == 0
-    agent.close()
+    await agent.aclose()
 
 
 def test_agent_current_model_reads_router_default(tmp_path: Path) -> None:
@@ -553,7 +553,7 @@ async def test_agent_builds_system_prompt(tmp_path: Path) -> None:
     assert "Aura" in agent._system_prompt
     async for _ in agent.astream("hello"):
         pass
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -582,7 +582,7 @@ async def test_system_prompt_prepended_to_model_messages(tmp_path: Path) -> None
     )
     async for _ in agent.astream("hello"):
         pass
-    agent.close()
+    await agent.aclose()
 
     assert received
     first_call_messages = received[0]
@@ -640,7 +640,7 @@ async def test_agent_loads_primary_memory_from_cwd_AURA_md(
 
     agent = _agent(tmp_path, turns=[])
     assert "MEMO" in agent._primary_memory
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -658,7 +658,7 @@ async def test_agent_loads_conditional_rules_from_aura_rules_dir(
     agent = _agent(tmp_path, turns=[])
     sources = [r.source_path for r in agent._rules.conditional]
     assert rule_path.resolve() in sources
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -669,7 +669,8 @@ async def test_agent_reuses_cache_on_repeat_construction(
     (tmp_path / "AURA.md").write_text("V1", encoding="utf-8")
 
     # First construction populates caches.
-    _agent(tmp_path, turns=[]).close()
+    agent1 = _agent(tmp_path, turns=[])
+    await agent1.aclose()
 
     # Mutate the on-disk file; a second construction that re-reads disk would
     # see V2, but cache hits should still return V1.
@@ -678,7 +679,7 @@ async def test_agent_reuses_cache_on_repeat_construction(
     agent2 = _agent(tmp_path, turns=[])
     assert "V1" in agent2._primary_memory
     assert "V2" not in agent2._primary_memory
-    agent2.close()
+    await agent2.aclose()
 
 
 @pytest.mark.asyncio
@@ -696,7 +697,7 @@ async def test_clear_session_refreshes_primary_memory_from_disk(
 
     assert "V2-FRESH" in agent._primary_memory
     assert "V1" not in agent._primary_memory
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -724,7 +725,7 @@ async def test_storage_does_not_persist_context_memory_human_messages(
     assert any(isinstance(m, HumanMessage) and m.content == "go" for m in saved)
     assert any(isinstance(m, AIMessage) and m.content == "hi" for m in saved)
     assert not any(isinstance(m, ToolMessage) for m in saved)
-    agent.close()
+    await agent.aclose()
 
 
 class _CapturingFakeChatModel(FakeChatModel):
@@ -797,7 +798,7 @@ async def test_todo_write_tool_call_injects_todos_on_next_turn(tmp_path: Path) -
     assert "SMOKE" in body
     assert "pending" in body
     assert "Running SMOKE" in body
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -819,7 +820,7 @@ async def test_clear_session_drops_session_rules_when_supplied(tmp_path: Path) -
 
     agent.clear_session()
     assert session_rules.rules() == ()
-    agent.close()
+    await agent.aclose()
 
 
 def test_clear_session_is_noop_when_session_rules_not_supplied(tmp_path: Path) -> None:
@@ -889,7 +890,7 @@ async def test_ask_user_question_without_asker_raises_ToolError_on_invoke(
     tool = agent._available_tools["ask_user_question"]
     with pytest.raises(ToolError, match="no CLI asker"):
         await tool.ainvoke({"question": "hi?"})
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -913,7 +914,7 @@ async def test_ask_user_question_with_injected_asker_delegates(tmp_path: Path) -
     out = await tool.ainvoke({"question": "ready?", "options": ["yes", "no"]})
     assert out == {"answer": "stub answer"}
     assert captured == [("ready?", ["yes", "no"], None)]
-    agent.close()
+    await agent.aclose()
 
 
 def test_build_agent_threads_question_asker(
@@ -995,7 +996,7 @@ async def test_bash_safety_hook_blocks_zmodload_even_with_permission_allow(
     blob = " ".join(str(m.content) for m in tool_msgs)
     assert "bash safety blocked" in blob
     assert "zsh_dangerous_command" in blob
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -1016,7 +1017,7 @@ async def test_bash_safety_hook_installed_at_position_zero(tmp_path: Path) -> No
     )
     # The safety hook closure is stored on the agent for clear_session swap.
     assert agent._hooks.pre_tool[0] is agent._bash_safety_hook
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -1040,7 +1041,7 @@ async def test_bash_safety_hook_survives_clear_session_at_position_zero(
     assert agent._hooks.pre_tool[0] is agent._bash_safety_hook
     # And the noop / must_read_first hooks still live somewhere in the chain.
     assert _noop in agent._hooks.pre_tool
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -1083,7 +1084,7 @@ async def test_clear_session_wipes_todos(tmp_path: Path) -> None:
         if isinstance(m, HumanMessage) and str(m.content).startswith("<todos>")
     ]
     assert todo_humans == []
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -1109,7 +1110,7 @@ async def test_agent_skills_loaded_at_init_from_cwd_and_home(
     agent = _agent(tmp_path, turns=[])
     names = {s.name for s in agent._skill_registry.list()}
     assert names == {"user-skill", "proj-skill"}
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -1132,7 +1133,7 @@ async def test_agent_record_skill_invocation_reaches_context(
     blob = " ".join(str(m.content) for m in messages)
     assert '<skill-invoked name="ping">' in blob
     assert "PING-BODY" in blob
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -1148,7 +1149,7 @@ async def test_agent_aconnect_noop_when_no_mcp_servers(tmp_path: Path) -> None:
     await agent.aconnect()
     assert getattr(agent, "_mcp_manager", None) is None
     assert getattr(agent, "_mcp_commands", []) == []
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -1259,7 +1260,7 @@ async def test_agent_close_cancels_running_subagent_tasks(tmp_path: Path) -> Non
     rec = agent._tasks_store.create(description="phantom", prompt="hang")
     agent._running_tasks[rec.id] = hung
 
-    agent.close()
+    await agent.aclose()
     # Give the cancellation a tick to propagate.
     await asyncio.sleep(0)
     assert hung.cancelled() or hung.done()
@@ -1308,7 +1309,7 @@ async def test_agent_aconnect_graceful_on_manager_failure(
     # Agent is still usable.
     events = await _collect(agent, "hi")
     assert any(isinstance(e, Final) for e in events)
-    agent.close()
+    await agent.aclose()
 
 
 # --------------------------------------------------------------------------

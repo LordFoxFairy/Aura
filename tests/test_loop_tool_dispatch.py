@@ -188,7 +188,7 @@ async def test_parallel_safe_tools_run_concurrently(tmp_path: Path) -> None:
     async for _ in agent.astream("go"):
         pass
     elapsed = time.monotonic() - start
-    agent.close()
+    await agent.aclose()
 
     assert elapsed < 0.35, f"expected parallel <0.35s, got {elapsed:.2f}s"
 

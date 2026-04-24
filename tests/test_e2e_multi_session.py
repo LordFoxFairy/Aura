@@ -101,5 +101,5 @@ async def test_two_agents_same_process_write_to_separate_logs(
     assert "beta" in b_log
     assert "beta" not in a_log
 
-    agent_a.close()
-    agent_b.close()
+    await agent_a.aclose()
+    await agent_b.aclose()

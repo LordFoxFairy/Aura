@@ -39,7 +39,7 @@ async def test_tasks_command_prints_placeholder_when_empty(tmp_path: Path) -> No
     assert result.handled is True
     assert result.kind == "print"
     assert result.text == "(no tasks)"
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -51,7 +51,7 @@ async def test_tasks_command_lists_running_tasks(tmp_path: Path) -> None:
     assert result.handled is True
     assert "scan repo" in result.text
     assert "running" in result.text
-    agent.close()
+    await agent.aclose()
 
 
 @pytest.mark.asyncio
@@ -67,4 +67,4 @@ async def test_tasks_command_sorts_newest_first(tmp_path: Path) -> None:
     lines = result.text.splitlines()
     assert lines[0].endswith("newer")
     assert lines[1].endswith("older")
-    agent.close()
+    await agent.aclose()

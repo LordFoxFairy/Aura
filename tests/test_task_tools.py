@@ -370,7 +370,7 @@ async def test_task_create_explore_restricts_child_tools(tmp_path: Path) -> None
     rec = store.get(task_id)
     assert rec is not None
     assert rec.agent_type == "explore"
-    child.close()
+    await child.aclose()
 
 
 def test_factory_spawn_verify_appends_verdict_system_prompt() -> None:

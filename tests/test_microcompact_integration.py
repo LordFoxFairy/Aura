@@ -193,7 +193,7 @@ async def test_auto_microcompact_enabled_false_disables_feature(
         async for _ in agent.astream("next"):
             pass
     finally:
-        agent.close()
+        await agent.aclose()
 
     assert len(model.captured_messages) == 1
     sent = model.captured_messages[0]
@@ -234,7 +234,7 @@ async def test_trigger_pairs_zero_disables_feature(tmp_path: Path) -> None:
         async for _ in agent.astream("next"):
             pass
     finally:
-        agent.close()
+        await agent.aclose()
 
     assert len(model.captured_messages) == 1
     sent = model.captured_messages[0]
@@ -274,7 +274,7 @@ async def test_microcompact_applied_journal_event_emitted(tmp_path: Path) -> Non
             async for _ in agent.astream("next"):
                 pass
         finally:
-            agent.close()
+            await agent.aclose()
 
         events = [
             json.loads(line)
@@ -320,7 +320,7 @@ async def test_stored_history_unchanged_by_microcompact(tmp_path: Path) -> None:
         async for _ in agent.astream("next"):
             pass
     finally:
-        agent.close()
+        await agent.aclose()
 
     # Reload storage — the astream flow re-saved history at end-of-turn.
     # Even with microcompact clearing 5 old payloads in the OUTGOING prompt,
@@ -363,7 +363,7 @@ async def test_ai_message_tool_calls_preserved_in_outgoing_prompt(
         async for _ in agent.astream("next"):
             pass
     finally:
-        agent.close()
+        await agent.aclose()
 
     assert len(model.captured_messages) == 1
     sent = model.captured_messages[0]

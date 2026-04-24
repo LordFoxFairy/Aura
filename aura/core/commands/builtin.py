@@ -56,7 +56,14 @@ class HelpCommand:
             for cmd in group:
                 hint = getattr(cmd, "argument_hint", None)
                 label = f"{cmd.name} {hint}" if hint else cmd.name
-                lines.append(f"    {label:<24} {cmd.description}")
+                # Collapse multi-line description to its first non-empty
+                # line so a stray ``description:`` that spans multiple
+                # paragraphs (common when skills are authored by LLMs)
+                # doesn't shatter the 24-col alignment. Mirrors the
+                # slash-completer fix at ``aura/cli/completion.py``
+                # (``display_meta`` gets the same treatment).
+                description = cmd.description.split("\n", 1)[0].strip()
+                lines.append(f"    {label:<24} {description}")
         lines.append("")
         lines.append(
             "Keybindings: shift+tab cycles permission mode "

@@ -2,6 +2,30 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [Unreleased] — Pet ASCII sprites + modal command UX
+
+Post-v0.13.0 work accumulated on `main`. Not tagged yet — next session decides whether this becomes `v0.13.1` (point release) or rolls into `v0.14.0` alongside the larger sidebar-buddy work. `make check` 1898 green.
+
+### Added
+
+- **`/buddy` command + claude-code-ported ASCII sprites** (`f90e18b`): port of claude-code's 9 overlapping species sprites (`duck`, `cat`, `owl`, `turtle`, `rabbit`, `octopus`, `penguin`, `dragon`, `axolotl`) verbatim from `src/buddy/sprites.ts` (5 lines × 12 cols, 3 frames each, `{E}` eye-placeholder substitution). Custom `dog` sprite for Aura's 10th species. 6 hat variants (`crown` / `tophat` / `propeller` / `halo` / `wizard` / `beanie` / `tinyduck`) + 6 eye glyphs (`·` `✦` `×` `◉` `@` `°`) ported as composition tables. Hat compositing skips frames whose line 0 is non-empty (matches claude-code's animation-data-protection contract). `Buddy` dataclass extended with `eye` + `hat` fields; `generate_buddy` rolls them via the same mulberry32 PRNG with the existing `had_recent_error` short-circuit preserved. New `tests/test_buddy_sprites.py` (9 tests) + `tests/test_buddy_command.py` (4 tests) cover dimension invariants and command output.
+- **Continuous IDLE_SEQUENCE animation in `/buddy`** (`26997b8` + `409c0cb`): `/buddy` runs claude-code's exact `IDLE_SEQUENCE = [0, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 2, 0, 0, 0]` fidget cycle indefinitely until the user dismisses with Enter. Two concurrent asyncio tasks race: an animation loop that rewrites the 5-line sprite area with ANSI cursor-up escapes (`\033[F`), and a `sys.stdin.readline` waiter offloaded to the executor. First to finish wins; the other is cancelled and drained. 250 ms tick (claude-code uses 500 ms — Aura's modal feels more lively at 250). Matches claude-code's "always moving" visual feel without needing a true sidebar (which would require pt Layout work; deferred to v0.14). Static fallback (`/buddy still`) on non-TTY contexts.
+- **Buddy `thinking` mood now reachable** (`89f139b`): `pre_model` observer flips mood to `thinking` the moment a user submits a prompt, transitions out automatically when `post_model` lands. Worry-preserving — sticks worried through thinking transition. Closes the half-wire from v0.13.0 where the `_MOOD_LABEL["thinking"]` slot existed but no observer fired into it. `default_hooks()` now ships a `pre_model` entry alongside the existing `post_model` + `post_tool` defaults.
+
+### Changed
+
+- **`CommandKind` literal expanded with `"view"`** (`c189b94` + `6be1b36`): display-heavy commands now render their output as a framed modal (rich.Panel + dim border) and block until the user hits Enter. Replaces the old fire-and-forget `kind="print"` for `/help`, `/stats`, `/buddy` (animated + static), `/tasks` listing, `/task-get` detail, `/status`, `/diff`, `/log`, `/mcp` status. Action-only commands (`/exit`, `/clear`, `/compact`, `/model`, `/task-stop`, all error / usage messages) keep `kind="print"` since they don't have content worth pinning to the screen. Matches claude-code's modal UX for info commands without pulling in a full pt Dialog widget. `Ctrl+C` / `Ctrl+D` / pytest's stdin-capture `OSError` all silently dismiss the view.
+
+### Fixed
+
+- **Circular import on `/buddy` registration** (`06c371d`): `aura.core.commands.buddy` now imports `aura.cli.buddy` lazily inside `handle()` rather than at module load. Prevents the package chain `aura.cli.__init__` → `aura.cli.commands` → `aura.core.commands.buddy` → `aura.cli.buddy` from re-entering `aura.cli` before its exports are assigned. Pattern mirrors `aura.core.hooks.must_read_first` and `bash_safety` — defer side-effect imports to call-time.
+
+### Migration notes (SDK consumers)
+
+- **`CommandKind` Literal extended**: callers pattern-matching on `result.kind` should add a `"view"` arm (or a pass-through to whatever default branch handles `"print"`). Existing `"print"` branches still work for the action commands that didn't migrate.
+- **`Buddy` dataclass gained `eye` + `hat` fields**: the new fields default to `""` for backward compat with pickled / cached state from v0.13.0. New invocations of `generate_buddy` populate them.
+- **`AURA_BUDDY_TICK_MS` env var**: tunes `/buddy` animation tick rate (default 250 ms). Demos / CI runs can speed it up to 80–100 ms.
+
 ## [0.13.0] — Observability + delight
 
 One-session wave of 6 commits building on v0.12.0's stability foundation. Focus: user-visible observability (`/stats` command, subagent lifecycle events, pet buddy with mood observer), one hardened invariant (attachments envelope now lives next to Context), and one real feature v0.12 had parked as honest-deferred (`allowed_tools` runtime enforcement). `make check` 1885 green (+39 from v0.12.0 baseline of 1846), mypy strict clean, zero sibling regressions.

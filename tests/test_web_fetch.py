@@ -144,9 +144,9 @@ def test_web_fetch_timeout_bounds() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        WebFetchParams(url="https://example.com", timeout=121)
+        WebFetchParams(url="https://example.com", prompt="x", timeout=121)
     with pytest.raises(ValidationError):
-        WebFetchParams(url="https://example.com", timeout=0)
+        WebFetchParams(url="https://example.com", prompt="x", timeout=0)
 
 
 def test_web_fetch_metadata_includes_matcher_and_preview() -> None:

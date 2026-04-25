@@ -58,6 +58,8 @@ class PermissionsConfig(BaseModel):
 
     mode: Literal["default", "bypass", "plan", "accept_edits"] = "default"
     allow: list[str] = Field(default_factory=list)
+    deny: list[str] = Field(default_factory=list)
+    ask: list[str] = Field(default_factory=list)
     safety_exempt: list[str] = Field(default_factory=list)
     statusline: StatusLineConfig | None = None
     prompt_timeout_sec: float | None = Field(

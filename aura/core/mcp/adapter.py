@@ -42,6 +42,13 @@ if TYPE_CHECKING:
 
 _MCP_PREFIX = "mcp__"
 _MAX_MCP_RESULT_CHARS = 30_000
+
+# F-06-005 — cap MCP-supplied tool descriptions to mirror claude-code's
+# constant ``MAX_MCP_DESCRIPTION_LENGTH = 2048`` (``src/services/mcp/client.ts:218``).
+# OpenAPI-generated MCP servers can dump 15-60 KB of endpoint docs into
+# ``tool.description``; forwarding that verbatim bleeds tokens on every
+# turn AND breaks prompt-cache stability.
+_MCP_DESCRIPTION_CAP = 2048
 # Default per-operation timeout for client-facing MCP calls made from the
 # slash-command surface. Must stay in sync with manager.py's
 # ``_DEFAULT_OP_TIMEOUT_SEC`` — duplicated here so that prompt commands
@@ -63,6 +70,23 @@ def _args_preview(args: dict[str, Any]) -> str:
     return "args: " + ", ".join(sorted(args.keys()))
 
 
+def _cap_description(text: str) -> tuple[str, bool, int]:
+    """Cap ``text`` at :data:`_MCP_DESCRIPTION_CAP` chars, returning
+    ``(capped_text, was_truncated, original_len)``.
+
+    Within-cap input is returned verbatim (``was_truncated=False``).
+    Oversize input is sliced at ``_MCP_DESCRIPTION_CAP - 64`` and
+    suffixed with a one-line marker that names the original length so
+    operators can reason about the cap aggressiveness.
+    """
+    original_len = len(text)
+    if original_len <= _MCP_DESCRIPTION_CAP:
+        return text, False, original_len
+    head = text[: _MCP_DESCRIPTION_CAP - 64]
+    marker = f"\n[truncated; original was {original_len} chars]"
+    return head + marker, True, original_len
+
+
 def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
     """Mutate *tool* in-place: namespace the name and attach Aura metadata.
 
@@ -70,12 +94,32 @@ def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
     has already applied a prefix (tools coming back already namespaced), we
     detect the ``mcp__`` prefix and leave the name alone.
 
+    Description is capped at :data:`_MCP_DESCRIPTION_CAP` chars to mirror
+    claude-code's constant. Truncation emits a journal event so operators
+    see when an MCP server is shipping oversized docs.
+
     Returns the same object for call-site convenience.
     """
     # StructuredTool.name / metadata are plain pydantic fields — mutating
     # them is supported by langchain-core. No reflection needed.
     if not tool.name.startswith(_MCP_PREFIX):
         tool.name = f"{_MCP_PREFIX}{server_name}__{tool.name}"
+    capped_desc, truncated, original_len = _cap_description(
+        tool.description or ""
+    )
+    if truncated:
+        tool.description = capped_desc
+        try:
+            from aura.core import journal  # noqa: PLC0415
+            journal.write(
+                "mcp_description_truncated",
+                tool_name=tool.name,
+                server=server_name,
+                original_len=original_len,
+                truncated_len=len(capped_desc),
+            )
+        except Exception:  # noqa: BLE001
+            pass
     tool.metadata = tool_metadata(
         is_read_only=False,
         is_destructive=True,
@@ -85,6 +129,58 @@ def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
         args_preview=_args_preview,
     )
     return tool
+
+
+# ---------------------------------------------------------------------------
+# F-06-002 — ``${VAR}`` / ``${VAR:-default}`` expansion in MCP config strings.
+#
+# Mirrors claude-code's expansion in ``src/services/mcp/`` and the shell
+# ``${VAR:-default}`` semantics: empty-string env values use the default,
+# missing references expand to "" (with a one-shot warning to the caller's
+# ``_missing_log`` list). Output is NOT recursively re-expanded — a
+# deliberate security choice so a value containing ``${...}`` cannot read
+# another env variable on use.
+# ---------------------------------------------------------------------------
+
+
+def _expand_env_vars(
+    text: str,
+    *,
+    _missing_log: list[str] | None = None,
+) -> str:
+    """Expand ``${VAR}`` / ``${VAR:-default}`` references in *text*.
+
+    Grammar:
+    - ``${VAR}`` — replaced with ``os.environ[VAR]``; if unset, replaced
+      with empty string AND ``VAR`` is appended to ``_missing_log`` (when
+      provided) so the caller can warn once per file.
+    - ``${VAR:-default}`` — replaced with the env value when *non-empty*,
+      otherwise the literal default text. Empty string in env counts as
+      "missing" (matches shell + claude-code).
+
+    Output is NOT recursively re-expanded.
+    """
+    import os
+    import re
+
+    if "${" not in text:
+        return text
+
+    pattern = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+    def _sub(match: re.Match[str]) -> str:
+        name = match.group(1)
+        default = match.group(2)
+        val = os.environ.get(name, "")
+        if val:
+            return val
+        if default is not None:
+            return default
+        if _missing_log is not None and name not in _missing_log:
+            _missing_log.append(name)
+        return ""
+
+    return pattern.sub(_sub, text)
 
 
 class _MCPPromptCommand:

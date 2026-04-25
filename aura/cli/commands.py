@@ -18,6 +18,7 @@ from aura.core.commands.builtin import (
     ExitCommand,
     HelpCommand,
     ModelCommand,
+    ResumeCommand,
 )
 from aura.core.commands.export import ExportCommand
 from aura.core.commands.git_commands import (
@@ -28,6 +29,7 @@ from aura.core.commands.git_commands import (
 from aura.core.commands.mcp_cmd import MCPCommand
 from aura.core.commands.stats import StatsCommand
 from aura.core.commands.tasks import TaskGetCommand, TasksCommand, TaskStopCommand
+from aura.core.commands.team import TeamCommand
 from aura.core.skills.command import SkillCommand
 
 __all__ = [
@@ -64,6 +66,8 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     r.register(GitLogCommand())
     r.register(MCPCommand())
     r.register(BuddyCommand())
+    r.register(ResumeCommand())
+    r.register(TeamCommand())
     if agent is not None:
         # Only skills with ``user_invocable=True`` get a ``/<name>`` slash
         # command — claude-code parity. Skills flagged ``user-invocable:

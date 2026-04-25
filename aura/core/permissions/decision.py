@@ -34,6 +34,7 @@ from aura.core.permissions.rule import Rule
 
 DecisionReason = Literal[
     "rule_allow",
+    "rule_deny",
     "user_accept",
     "user_always",
     "mode_bypass",
@@ -51,7 +52,13 @@ _ALLOW_REASONS: frozenset[str] = frozenset(
     {"rule_allow", "user_accept", "user_always", "mode_bypass", "mode_accept_edits"}
 )
 _DENY_REASONS: frozenset[str] = frozenset(
-    {"user_deny", "safety_blocked", "plan_mode_blocked", "restrict_tools_blocked"}
+    {
+        "rule_deny",
+        "user_deny",
+        "safety_blocked",
+        "plan_mode_blocked",
+        "restrict_tools_blocked",
+    }
 )
 _RULE_REQUIRED_REASONS: frozenset[str] = frozenset({"rule_allow", "user_always"})
 
@@ -97,6 +104,10 @@ class Decision:
             case "rule_allow":
                 assert self.rule is not None  # invariant
                 return f"auto-allowed: rule `{self.rule.to_string()}`"
+            case "rule_deny":
+                if self.rule is not None:
+                    return f"blocked: deny rule `{self.rule.to_string()}`"
+                return "blocked: deny rule"
             case "mode_bypass":
                 return "allowed: mode_bypass"
             case "mode_accept_edits":

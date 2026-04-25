@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from collections.abc import AsyncIterator
@@ -21,6 +22,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
 
 from aura.config.schema import RetryConfig
+from aura.core.abort import AbortController, AbortException, current_abort_signal
 from aura.core.compact import MicrocompactPolicy, apply_microcompact
 from aura.core.hooks import HookChain
 from aura.core.memory.context import Context
@@ -170,6 +172,8 @@ def partition_batches(steps: list[ToolStep]) -> list[list[ToolStep]]:
 
 
 class AgentLoop:
+    _DEFAULT_MAX_TURNS: int | None = None
+
     def __init__(
         self,
         *,
@@ -178,7 +182,7 @@ class AgentLoop:
         context: Context,
         hooks: HookChain | None = None,
         state: LoopState | None = None,
-        max_turns: int | None = 50,
+        max_turns: int | None = _DEFAULT_MAX_TURNS,
         retry_config: RetryConfig | None = None,
         session_id: str = DEFAULT_SESSION,
         microcompact_policy: MicrocompactPolicy | None = None,
@@ -241,6 +245,7 @@ class AgentLoop:
         self,
         *,
         history: list[BaseMessage],
+        abort: AbortController | None = None,
     ) -> AsyncIterator[AgentEvent]:
         # Contract (G1): ``history`` already contains the user's
         # HumanMessage (+ any attachments), appended by the caller BEFORE
@@ -260,51 +265,145 @@ class AgentLoop:
         sink_obj = self._state.custom.get(DENIALS_SINK_KEY)
         if isinstance(sink_obj, list):
             sink_obj.clear()
-        # Reset the permission-hook per-turn ResolveOnce cache. Decisions
-        # made on this turn should not silently pre-allow the model's next
-        # turn where behavior may have drifted. Pop-not-clear so subsequent
-        # hook calls repopulate via ``setdefault`` — avoids sharing a stale
-        # dict reference if the hook mis-captures across turns.
+        # Reset the permission-hook per-turn ResolveOnce cache.
         self._state.custom.pop("_perm_turn_ask_cache", None)
-        while True:
-            journal.write("turn_begin", turn=self._state.turn_count + 1)
-            ai = await self._invoke_model(history)
+        # F-01-001 abort plumbing — install the controller into the
+        # contextvar so tools (and any spawned subagent on the same task
+        # tree) inherit the same signal. Tests that drive AgentLoop
+        # directly without an Agent pass abort=None — we tolerate that.
+        ctx_token = None
+        if abort is not None:
+            ctx_token = current_abort_signal.set(abort)
+        try:
+            while True:
+                journal.write("turn_begin", turn=self._state.turn_count + 1)
+                # Pre-invoke abort gate: a cancellation between turns
+                # synthesises one consistent shutdown path instead of
+                # racing the next ainvoke against the contextvar.
+                if abort is not None and abort.aborted:
+                    self._synthesise_missing_tool_messages(history, set())
+                    raise AbortException(abort.reason or "aborted")
+                ai = await self._invoke_model_with_abort(history, abort)
 
-            if ai.content:
-                yield AssistantDelta(text=str(ai.content))
-            if not ai.tool_calls:
-                journal.write("turn_end", turn=self._state.turn_count, ended_with="final")
-                yield Final(message=str(ai.content))
-                return
+                if ai.content:
+                    yield AssistantDelta(text=str(ai.content))
+                if not ai.tool_calls:
+                    journal.write(
+                        "turn_end",
+                        turn=self._state.turn_count, ended_with="final",
+                    )
+                    yield Final(message=str(ai.content))
+                    return
 
-            async for event in self._dispatch_tool_calls(ai.tool_calls, history):
-                yield event
-            journal.write(
-                "turn_end",
-                turn=self._state.turn_count,
-                ended_with="tool_loop",
-                tool_count=len(ai.tool_calls),
-            )
-
-            # max_turns cap — mirrors claude-code query.ts:1705. Check runs
-            # AFTER the tool batch is gathered (not mid-batch) and BEFORE the
-            # next model invoke. Natural stops (no tool_calls) hit the branch
-            # above and never reach here — Final.reason stays "natural" there.
-            if (
-                self._max_turns is not None
-                and self._state.turn_count >= self._max_turns
-            ):
+                # F-01-001 mid-batch abort: synthesise one ToolMessage per
+                # unanswered tool_call_id so the next turn's history is
+                # balanced (provider 400's on a tool_use without a
+                # matching tool_result).
+                try:
+                    async for event in self._dispatch_tool_calls(
+                        ai.tool_calls, history,
+                    ):
+                        yield event
+                except (AbortException, asyncio.CancelledError):
+                    answered = {
+                        m.tool_call_id for m in history
+                        if isinstance(m, ToolMessage)
+                    }
+                    self._synthesise_missing_tool_messages(history, answered)
+                    raise
                 journal.write(
                     "turn_end",
                     turn=self._state.turn_count,
-                    ended_with="max_turns_reached",
-                    max_turns=self._max_turns,
+                    ended_with="tool_loop",
+                    tool_count=len(ai.tool_calls),
                 )
-                yield Final(
-                    message=f"max turns reached ({self._max_turns})",
-                    reason="max_turns",
-                )
+
+                # max_turns cap — mirrors claude-code query.ts:1705.
+                if (
+                    self._max_turns is not None
+                    and self._state.turn_count >= self._max_turns
+                ):
+                    journal.write(
+                        "turn_end",
+                        turn=self._state.turn_count,
+                        ended_with="max_turns_reached",
+                        max_turns=self._max_turns,
+                    )
+                    yield Final(
+                        message=f"max turns reached ({self._max_turns})",
+                        reason="max_turns",
+                    )
+                    return
+        finally:
+            if ctx_token is not None:
+                current_abort_signal.reset(ctx_token)
+
+    def _synthesise_missing_tool_messages(
+        self,
+        history: list[BaseMessage],
+        answered_ids: set[str],
+    ) -> None:
+        """Append a synthetic ToolMessage for every unanswered tool_call_id.
+
+        On cancel, every ``tool_use`` block in the trailing AIMessage
+        must be paired with a ``tool_result`` for the next provider
+        request to validate. We append ``status="error"`` ToolMessages
+        with a short "(aborted by user)" body so a subsequent astream
+        sees a balanced history. Idempotent on already-answered ids.
+        """
+        for msg in reversed(history):
+            if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+                for tc in msg.tool_calls:
+                    tc_id = tc.get("id")
+                    if not tc_id or tc_id in answered_ids:
+                        continue
+                    history.append(
+                        ToolMessage(
+                            content="(aborted by user)",
+                            tool_call_id=tc_id,
+                            name=tc.get("name", "?"),
+                            status="error",
+                        ),
+                    )
+                    answered_ids.add(tc_id)
                 return
+
+    async def _invoke_model_with_abort(
+        self,
+        history: list[BaseMessage],
+        abort: AbortController | None,
+    ) -> AIMessage:
+        """Race ``_invoke_model`` against ``abort.signal``.
+
+        - ``abort is None`` → passthrough (legacy / SDK call sites).
+        - Abort fires first → cancel the in-flight invoke, raise
+          :class:`AbortException` so the outer loop balances history.
+        - Invoke completes first → cancel the watcher and return.
+        """
+        if abort is None:
+            return await self._invoke_model(history)
+        invoke_task: asyncio.Task[AIMessage] = asyncio.ensure_future(
+            self._invoke_model(history),
+        )
+        abort_task: asyncio.Task[bool] = asyncio.ensure_future(
+            abort.signal.wait(),
+        )
+        try:
+            done, _pending = await asyncio.wait(
+                {invoke_task, abort_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            invoke_task.cancel()
+            abort_task.cancel()
+            raise
+        if abort_task in done and invoke_task not in done:
+            invoke_task.cancel()
+            with contextlib.suppress(BaseException):
+                await invoke_task
+            raise AbortException(abort.reason or "aborted")
+        abort_task.cancel()
+        return invoke_task.result()
 
     async def _invoke_model(self, history: list[BaseMessage]) -> AIMessage:
         # turn_count 先于 pre_model hook 递增，hook 看到的是"即将开始的第 N 轮"。
@@ -510,6 +609,21 @@ class AgentLoop:
         # loop below can exit cleanly without racing on gather_task.done().
         gather_task.add_done_callback(lambda _t: progress_queue.put_nowait(None))
 
+        # F-01-001 abort watchdog. If the contextvar carries a live
+        # AbortController and it fires while the batch is still running,
+        # cancel the gather_task so every pending tool task unwinds
+        # immediately. ``_dispatch_tool_calls`` then raises
+        # CancelledError up to the run_turn try/except, which synthesises
+        # the missing ToolMessages for an unbalanced trailing AIMessage.
+        abort_signal = current_abort_signal.get()
+        watchdog_task: asyncio.Task[None] | None = None
+        if abort_signal is not None and not abort_signal.aborted:
+            async def _abort_watchdog() -> None:
+                await abort_signal.signal.wait()
+                if not gather_task.done():
+                    gather_task.cancel()
+            watchdog_task = asyncio.ensure_future(_abort_watchdog())
+
         while True:
             item = await progress_queue.get()
             if item is None:
@@ -524,7 +638,11 @@ class AgentLoop:
                 chunk=chunk,
             )
 
-        results: list[ToolResult] = await gather_task
+        try:
+            results: list[ToolResult] = await gather_task
+        finally:
+            if watchdog_task is not None and not watchdog_task.done():
+                watchdog_task.cancel()
 
         for step, result in zip(batch, results, strict=True):
             tc = step.tool_call

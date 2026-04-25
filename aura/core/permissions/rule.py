@@ -7,9 +7,9 @@ Spec: ``docs/specs/2026-04-19-aura-permission.md`` §3.1.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from langchain_core.tools import BaseTool
 
@@ -22,11 +22,16 @@ class InvalidRuleError(AuraError):
 
 _RuleMatcher = Callable[[dict[str, Any], str], bool]
 
+# F-04-001 — rules carry a kind so the precedence ladder
+# (deny > ask > allow) can fire deterministically.
+RuleKind = Literal["allow", "deny", "ask"]
+
 
 @dataclass(frozen=True)
 class Rule:
     tool: str
     content: str | None
+    kind: RuleKind = field(default="allow")
 
     def matches(self, tool_name: str, args: dict[str, Any], tool: BaseTool) -> bool:
         """True iff this rule covers a call of ``tool_name`` with ``args``.
@@ -65,13 +70,13 @@ class Rule:
         return f"{self.tool}({escaped})"
 
     @classmethod
-    def parse(cls, raw: str) -> Rule:
+    def parse(cls, raw: str, *, kind: RuleKind = "allow") -> Rule:
         if not raw:
             raise InvalidRuleError("rule", "empty string is not a valid rule")
 
         # Tool-wide: no parens at all.
         if "(" not in raw:
-            return cls(tool=raw, content=None)
+            return cls(tool=raw, content=None, kind=kind)
 
         # Pattern: `tool(content)`. Tool name is everything before the first
         # `(`; content follows, terminated by the first unescaped `)`; nothing
@@ -96,7 +101,7 @@ class Rule:
                         "rule",
                         f"trailing characters after close paren: {trailing!r}",
                     )
-                return cls(tool=tool, content="".join(chars))
+                return cls(tool=tool, content="".join(chars), kind=kind)
             chars.append(ch)
             i += 1
 

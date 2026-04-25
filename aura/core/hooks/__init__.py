@@ -21,6 +21,10 @@ from aura.schemas.tool import ToolResult
 
 FileChangeKind = Literal["created", "modified", "deleted"]
 
+# F-04-014 (Round 5H): lifecycle event discriminators.
+NotificationKind = Literal["permission_prompt", "ask_user", "error"]
+StopReason = Literal["user_exit", "clear", "max_turns", "error"]
+
 
 @dataclass(frozen=True)
 class PreToolOutcome:
@@ -172,6 +176,68 @@ class CwdChangedHook(Protocol):
     ) -> None: ...
 
 
+# F-04-014 (Round 5H) lifecycle Protocols.
+
+@dataclass(frozen=True)
+class UserPromptSubmitOutcome:
+    """Return value of a :class:`UserPromptSubmitHook`.
+
+    ``prompt`` is the rewritten user message. ``None`` (default) is
+    passthrough; ``str`` replaces the prompt for downstream hooks AND
+    for the model. The chain is left-to-right composing.
+    """
+    prompt: str | None = None
+
+
+class SessionStartHook(Protocol):
+    async def __call__(
+        self,
+        *,
+        session_id: str,
+        mode: str,
+        cwd: Path,
+        model_name: str,
+        state: LoopState,
+        **kwargs: Any,
+    ) -> None: ...
+
+
+class UserPromptSubmitHook(Protocol):
+    async def __call__(
+        self,
+        *,
+        session_id: str,
+        turn_count: int,
+        user_text: str,
+        state: LoopState,
+        **kwargs: Any,
+    ) -> UserPromptSubmitOutcome: ...
+
+
+class NotificationHook(Protocol):
+    async def __call__(
+        self,
+        *,
+        session_id: str,
+        kind: NotificationKind,
+        body: str,
+        state: LoopState,
+        **kwargs: Any,
+    ) -> None: ...
+
+
+class StopHook(Protocol):
+    async def __call__(
+        self,
+        *,
+        session_id: str,
+        reason: StopReason,
+        turn_count: int,
+        state: LoopState,
+        **kwargs: Any,
+    ) -> None: ...
+
+
 @dataclass
 class HookChain:
     pre_model: list[PreModelHook] = field(default_factory=list)
@@ -184,6 +250,11 @@ class HookChain:
     # symmetric with the four turn-cycle slots.
     file_changed: list[FileChangedHook] = field(default_factory=list)
     cwd_changed: list[CwdChangedHook] = field(default_factory=list)
+    # F-04-014 (Round 5H) lifecycle slots.
+    session_start: list[SessionStartHook] = field(default_factory=list)
+    user_prompt_submit: list[UserPromptSubmitHook] = field(default_factory=list)
+    notification: list[NotificationHook] = field(default_factory=list)
+    stop: list[StopHook] = field(default_factory=list)
 
     async def run_pre_model(
         self, *, history: list[BaseMessage], state: LoopState,
@@ -330,6 +401,121 @@ class HookChain:
         for hook in self.cwd_changed:
             await hook(old_cwd=old_cwd, new_cwd=new_cwd, state=state)
 
+    # ------------------------------------------------------------------
+    # F-04-014 lifecycle runners — exception-isolated so a broken hook
+    # MUST NOT take down the lifecycle event.
+    # ------------------------------------------------------------------
+
+    async def run_session_start(
+        self,
+        *,
+        session_id: str,
+        mode: str,
+        cwd: Path,
+        model_name: str,
+        state: LoopState,
+    ) -> None:
+        from aura.core.persistence import journal
+        for hook in self.session_start:
+            try:
+                await hook(
+                    session_id=session_id,
+                    mode=mode,
+                    cwd=cwd,
+                    model_name=model_name,
+                    state=state,
+                )
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "lifecycle_hook_error",
+                    slot="session_start",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+
+    async def run_user_prompt_submit(
+        self,
+        *,
+        session_id: str,
+        turn_count: int,
+        user_text: str,
+        state: LoopState,
+    ) -> str:
+        """Compose the user_prompt_submit chain left-to-right.
+
+        Each hook sees the previous hook's output as ``user_text``. A
+        non-None ``UserPromptSubmitOutcome.prompt`` rewrites; ``None``
+        passes through. A hook that raises has its outcome discarded —
+        the previous prompt survives.
+        """
+        from aura.core.persistence import journal
+        current = user_text
+        for hook in self.user_prompt_submit:
+            try:
+                outcome = await hook(
+                    session_id=session_id,
+                    turn_count=turn_count,
+                    user_text=current,
+                    state=state,
+                )
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "lifecycle_hook_error",
+                    slot="user_prompt_submit",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+                continue
+            if outcome is not None and outcome.prompt is not None:
+                current = outcome.prompt
+        return current
+
+    async def run_notification(
+        self,
+        *,
+        session_id: str,
+        kind: NotificationKind,
+        body: str,
+        state: LoopState,
+    ) -> None:
+        from aura.core.persistence import journal
+        for hook in self.notification:
+            try:
+                await hook(
+                    session_id=session_id,
+                    kind=kind,
+                    body=body,
+                    state=state,
+                )
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "lifecycle_hook_error",
+                    slot="notification",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+
+    async def run_stop(
+        self,
+        *,
+        session_id: str,
+        reason: StopReason,
+        turn_count: int,
+        state: LoopState,
+    ) -> None:
+        from aura.core.persistence import journal
+        for hook in self.stop:
+            try:
+                await hook(
+                    session_id=session_id,
+                    reason=reason,
+                    turn_count=turn_count,
+                    state=state,
+                )
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "lifecycle_hook_error",
+                    slot="stop",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+
     def merge(self, other: HookChain) -> HookChain:
         # 非破坏性拼接：self 优先 other 后；不修改任何一方的原始列表。
         return HookChain(
@@ -339,4 +525,10 @@ class HookChain:
             post_tool=[*self.post_tool, *other.post_tool],
             file_changed=[*self.file_changed, *other.file_changed],
             cwd_changed=[*self.cwd_changed, *other.cwd_changed],
+            session_start=[*self.session_start, *other.session_start],
+            user_prompt_submit=[
+                *self.user_prompt_submit, *other.user_prompt_submit,
+            ],
+            notification=[*self.notification, *other.notification],
+            stop=[*self.stop, *other.stop],
         )

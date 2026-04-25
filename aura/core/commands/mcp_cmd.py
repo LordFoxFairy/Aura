@@ -64,7 +64,9 @@ class MCPCommand:
             return self._list(agent)
         if sub == "help":
             return _help()
-        if sub in {"enable", "disable", "reconnect"}:
+        if sub == "reload":
+            return await self._reload(agent)
+        if sub in {"enable", "disable", "reconnect", "approve", "revoke"}:
             if not rest:
                 return CommandResult(
                     handled=True,
@@ -74,6 +76,25 @@ class MCPCommand:
             target = " ".join(rest).strip()
             return await self._toggle(agent, sub, target)
         return _unknown_subcommand(sub)
+
+    async def _reload(self, agent: Agent) -> CommandResult:
+        manager = agent._mcp_manager
+        if manager is None:
+            return CommandResult(
+                handled=True,
+                kind="print",
+                text="no MCP manager attached (no servers configured)",
+            )
+        from aura.config import mcp_store
+        try:
+            configs = mcp_store.load()
+        except Exception as exc:  # noqa: BLE001
+            return CommandResult(
+                handled=True, kind="print",
+                text=f"reload failed: {exc}",
+            )
+        text = await manager.reload(configs)
+        return CommandResult(handled=True, kind="print", text=text)
 
     # ------------------------------------------------------------------
     # list view
@@ -115,6 +136,10 @@ class MCPCommand:
             text = await manager.enable(target)
         elif action == "disable":
             text = await manager.disable(target)
+        elif action == "approve":
+            text = await manager.approve(target)
+        elif action == "revoke":
+            text = await manager.revoke(target)
         else:  # reconnect
             text = await manager.reconnect(target)
         return CommandResult(handled=True, kind="print", text=text)
@@ -133,6 +158,9 @@ def _render_table(statuses: list[MCPServerStatus]) -> str:
     (``error: <msg>``) so the operator doesn't need a second command to
     see why a server is down. Long error messages are truncated at 60
     chars to keep rows printable; the full message stays in the journal.
+
+    A footer CTA names every ``unapproved`` row so the operator knows
+    to run ``/mcp approve <name>`` to bring it online.
     """
     header = ("NAME", "TRANSPORT", "STATUS", "TOOLS", "RESOURCES", "PROMPTS")
     rows: list[tuple[str, str, str, str, str, str]] = [header]
@@ -153,6 +181,13 @@ def _render_table(statuses: list[MCPServerStatus]) -> str:
     for row in rows:
         lines.append(
             "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip()
+        )
+    unapproved = [s.name for s in statuses if s.state == "unapproved"]
+    if unapproved:
+        lines.append("")
+        lines.append(
+            f"unapproved project-layer servers: {', '.join(unapproved)}. "
+            f"Run /mcp approve <name> to load."
         )
     return "\n".join(lines)
 

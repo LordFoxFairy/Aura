@@ -1,4 +1,13 @@
-"""write_file tool — create or overwrite UTF-8 text files."""
+"""write_file tool — create or overwrite UTF-8 text files.
+
+Round 3B (F-02-007) — must-read-first staleness gate. The actual mtime
+check that rejects writes when the on-disk file is newer than the
+parent's last read lives in :mod:`aura.core.hooks.must_read_first`,
+not here: the tool itself is dumb-by-design (open + write + return),
+which keeps the no-permission-bypass invariant trivially auditable.
+The hook fires BEFORE this tool runs and short-circuits the call
+whenever the read fingerprint is missing or stale.
+"""
 
 from __future__ import annotations
 

@@ -135,6 +135,7 @@ def _has_startup_block(stdout: str, stderr: str) -> bool:
     return (
         "MissingProviderDependencyError" in blob
         or "MissingCredentialError" in blob
+        or "AuraConfigError" in blob
     )
 
 
@@ -604,11 +605,12 @@ def _skip_if_startup_blocked(output: str) -> None:
     if (
         "MissingProviderDependencyError" in output
         or "MissingCredentialError" in output
+        or "AuraConfigError" in output
     ):
         pytest.skip(
             "aura could not reach the REPL under pty "
-            "(missing provider SDK or credential); pt render path "
-            "cannot be exercised end-to-end here"
+            "(missing provider SDK or credential or config error); "
+            "pt render path cannot be exercised end-to-end here"
         )
 
 

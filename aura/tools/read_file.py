@@ -5,6 +5,18 @@ claude-code uses 1-indexed; we normalize to 0 for parity with Python slice
 semantics) and `limit` (max lines). `partial` in the return dict flips true
 when the caller saw less than the full file; the must-read-first invariant
 uses it to reject edit_file after a sliced read.
+
+Round 1C — device path block. Reading from ``/dev/stdin`` /
+``/dev/random`` etc. either hangs the process forever (stdin / tty),
+returns garbage that wastes the LLM's context (zero / random), or
+exposes kernel memory (``/proc/kcore``). Reject the closed set so the
+LLM can't accidentally tunnel into one even if the path is constructed
+indirectly.
+
+Round 3B — token budget. A perfectly valid 1 MB UTF-8 text file is
+still ~250k tokens — enough to evict every other context message. Cap
+at :data:`_TOKEN_BUDGET` and reject (rather than silently truncate) so
+the LLM sees a clear error and learns to slice.
 """
 
 from __future__ import annotations
@@ -19,6 +31,85 @@ from aura.core.permissions.matchers import path_prefix_on
 from aura.schemas.tool import ToolError, tool_metadata
 
 _MAX_BYTES = 1024 * 1024
+
+# Round 3B token budget. 25k tokens is generous (~100 KB of text) but
+# still well within a single-turn context. The standard char/token
+# heuristic (4 chars per token) is a low-end estimate — actual
+# tokenisers vary, but biased-low here means we reject only when the
+# file is unambiguously oversized rather than borderline.
+_TOKEN_BUDGET = 25_000
+_CHARS_PER_TOKEN_HEURISTIC = 4
+
+# Round 1C — closed set of paths the tool always refuses, irrespective
+# of permission rules. Three categories:
+#   1. Interactive endpoints (``/dev/stdin``, ``/dev/tty``, ``/dev/console``)
+#      — read() blocks forever on these in a non-interactive process.
+#   2. Pseudo-files that produce useless input (``/dev/zero``,
+#      ``/dev/random``, ``/dev/urandom``, ``/dev/full``) — would just
+#      burn the tool's 1 MB cap on garbage / never return.
+#   3. Kernel memory (``/proc/kcore``, ``/proc/kmem``) — sensitive
+#      contents, also typically unreadable as user but worth listing
+#      so a SUID context doesn't accidentally exfil.
+# ``/dev/fd/*`` and ``/proc/self/fd/*`` cover the "stdin via /dev/fd"
+# trick that bypasses a literal ``/dev/stdin`` allowlist.
+_BLOCKED_DEVICE_PATHS: frozenset[str] = frozenset({
+    "/dev/stdin",
+    "/dev/tty",
+    "/dev/console",
+    "/dev/stdout",
+    "/dev/stderr",
+    "/dev/zero",
+    "/dev/random",
+    "/dev/urandom",
+    "/dev/full",
+    "/dev/fd/0",
+    "/dev/fd/1",
+    "/dev/fd/2",
+    "/proc/self/fd/0",
+    "/proc/self/fd/1",
+    "/proc/self/fd/2",
+    "/proc/kcore",
+    "/proc/kmem",
+})
+
+
+def _reject_blocked_device(path: str) -> None:
+    """Refuse to read paths that point at non-file kernel surfaces.
+
+    Resolves the path WITHOUT requiring it to exist (``strict=False``)
+    so a missing file gets the existing "not found" diagnostic from the
+    main read path rather than this device-block error. Comparing the
+    resolved string against the closed set catches both literal paths
+    and symlink chains that point at the same target.
+    """
+    try:
+        resolved = str(Path(path).resolve(strict=False))
+    except (OSError, RuntimeError):
+        # Resolution itself failed (cycle, permission). Fall through —
+        # the main read will surface the OS error verbatim.
+        return
+    if resolved in _BLOCKED_DEVICE_PATHS:
+        raise ToolError(
+            f"refusing to read {resolved!r} — kernel/interactive device "
+            "endpoint (would block, return garbage, or expose kernel memory)",
+        )
+
+
+def _validate_content_tokens(content: str) -> None:
+    """Reject reads that would blow the token budget.
+
+    Applied to BOTH the full-file read and any sliced (offset+limit)
+    read — a slice is still a slice, but if the user requested 30k
+    lines via ``limit=`` we should still refuse rather than truncate
+    silently. The error message tells the LLM to slice; the standard
+    self-correction is ``read_file(path, offset=, limit=)``.
+    """
+    estimated_tokens = len(content) // _CHARS_PER_TOKEN_HEURISTIC
+    if estimated_tokens > _TOKEN_BUDGET:
+        raise ToolError(
+            f"file content too large: ~{estimated_tokens} tokens "
+            f"exceeds budget {_TOKEN_BUDGET}; use offset+limit to slice",
+        )
 
 
 class ReadFileParams(BaseModel):
@@ -60,6 +151,10 @@ class ReadFile(BaseTool):
     def _run(
         self, path: str, offset: int = 0, limit: int | None = None,
     ) -> dict[str, Any]:
+        # Round 1C — block the kernel/interactive device set BEFORE the
+        # filesystem touch. Catches direct paths and symlink chains;
+        # missing files fall through to the main read path's "not found".
+        _reject_blocked_device(path)
         p = Path(path)
         if not p.exists():
             raise ToolError(f"not found: {path}")
@@ -91,6 +186,10 @@ class ReadFile(BaseTool):
         end = offset + limit if limit is not None else None
         sliced = all_lines[offset:end]
         joined = "".join(sliced)
+
+        # Round 3B — apply the token budget to the slice we're about to
+        # return (covers both full reads and oversized slices).
+        _validate_content_tokens(joined)
 
         partial = offset > 0 or (
             limit is not None and offset + limit < total_lines

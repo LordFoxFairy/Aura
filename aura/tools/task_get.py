@@ -62,12 +62,25 @@ def _serialize(rec: TaskRecord, *, include_messages: bool) -> dict[str, Any]:
         "parent_id": rec.parent_id,
         "description": rec.description,
         "kind": rec.kind,
+        # Round 7R — surface the resolved spec so the parent's polling
+        # loop can reason about which model the child ran on (cheap
+        # tier vs. main vs. external override).
+        "model_spec": rec.model_spec,
+        # Round 1A / 6L — agent_type for subagents (None for shell);
+        # mirrored as a string so JSON tool results round-trip cleanly.
+        "agent_type": rec.agent_type or "general-purpose",
         "status": rec.status,
         "started_at": rec.started_at,
         "finished_at": rec.finished_at,
         "duration_seconds": duration,
         "final_result": rec.final_result,
         "error": rec.error,
+        # Round 4F — on-disk transcript path (None when run_task wasn't
+        # given a ``transcript_storage`` or when flush failed). Stringified
+        # to keep the payload JSON-safe.
+        "transcript_path": (
+            str(rec.transcript_path) if rec.transcript_path is not None else None
+        ),
         "progress": {
             "tool_count": rec.progress.tool_count,
             "token_count": rec.progress.token_count,
@@ -75,6 +88,11 @@ def _serialize(rec: TaskRecord, *, include_messages: bool) -> dict[str, Any]:
             "last_activity_at": rec.progress.last_activity_at,
             # Copy — caller should not be able to mutate the live ring.
             "recent_activities": list(rec.progress.recent_activities),
+            # Round 7QS — token breakdown + summary visibility.
+            "input_tokens": rec.progress.input_tokens,
+            "output_tokens": rec.progress.output_tokens,
+            "latest_summary": rec.progress.latest_summary,
+            "summary_updated_at": rec.progress.summary_updated_at,
         },
     }
     if include_messages:

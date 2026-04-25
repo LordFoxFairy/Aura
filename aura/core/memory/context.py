@@ -20,13 +20,14 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from aura.core.memory import project_memory
 from aura.core.memory.rules import Rule, RulesBundle
 from aura.core.memory.rules import match as match_rules
+from aura.core.persistence import journal
 from aura.core.skills.types import Skill
 from aura.schemas.todos import TodoItem
 
@@ -60,7 +61,9 @@ class Context:
         rules: RulesBundle,
         skills: list[Skill] | None = None,
         todos_provider: Callable[[], list[TodoItem]] | None = None,
+        notifications_drainer: Callable[[], list[Any]] | None = None,
         inherited_reads: Mapping[Path, _ReadRecord] | None = None,
+        model: Any | None = None,
     ) -> None:
         self._cwd = cwd.resolve()
         self._system_prompt = system_prompt
@@ -98,6 +101,15 @@ class Context:
         )
         # Provider snapshot each build (mutability lives in LoopState, not here).
         self._todos_provider = todos_provider
+        # Round 4F — notification drainer; returns + clears the parent's
+        # queued TaskNotification list per build. ``None`` for tests /
+        # subagents that don't surface terminal pushes.
+        self._notifications_drainer = notifications_drainer
+        # Model is held only to sniff its provider type for cache_control
+        # stamping at build() time. We never call ainvoke / bind_tools etc.
+        # through it — the loop owns the live invocation site. ``None``
+        # is the test-default and means "no Anthropic-shaped breakpoints".
+        self._model = model
 
     # ------------------------------------------------------------------
     # Progressive state mutation (append-only within a session)
@@ -225,13 +237,35 @@ class Context:
     # ------------------------------------------------------------------
 
     def build(self, history: list[BaseMessage]) -> list[BaseMessage]:
-        messages: list[BaseMessage] = [SystemMessage(self._system_prompt)]
+        # Anthropic providers honour a ``cache_control`` marker on a
+        # message's content; up to four breakpoints per request define
+        # the cached prefix. We stamp at three points (Round 3A + 5J):
+        #   1. End of system prompt        (SystemMessage)
+        #   2. End of <project-memory>     (eager HumanMessage)
+        #   3. End of <skills-available>   (skills HumanMessage)
+        # Skipped for non-Anthropic providers — OpenAI / generic stubs
+        # would either error on the unknown kwarg or just ignore it; we
+        # play it safe and only stamp when the provider name matches.
+        is_anthropic = _is_anthropic_provider(self._model)
+        breakpoint_count = 0
+
+        sys_msg = SystemMessage(self._system_prompt)
+        if is_anthropic:
+            sys_msg.additional_kwargs["cache_control"] = {"type": "ephemeral"}
+            breakpoint_count += 1
+        messages: list[BaseMessage] = [sys_msg]
 
         eager = _joined_eager(self._primary_memory, self._rules.unconditional)
         if eager:
-            messages.append(
-                HumanMessage(f"<project-memory>\n{eager}\n</project-memory>")
+            project_memory_msg = HumanMessage(
+                f"<project-memory>\n{eager}\n</project-memory>"
             )
+            if is_anthropic:
+                project_memory_msg.additional_kwargs["cache_control"] = {
+                    "type": "ephemeral",
+                }
+                breakpoint_count += 1
+            messages.append(project_memory_msg)
 
         for fragment in self._nested_fragments:
             messages.append(
@@ -257,6 +291,10 @@ class Context:
         # turn following invocation. <skills-available> is rendered once
         # (the full catalogue), then one <skill-invoked> per distinct skill.
         #
+        # Round 5J: skills are sorted by name so a registry mutation that
+        # preserves the SET of skills doesn't perturb the rendered text
+        # — keeping the prompt-cache prefix stable across reorderings.
+        #
         # Filter: hide ``disable_model_invocation`` skills (user-only, not
         # the LLM's to auto-pick) and conditional skills still in the lazy
         # bucket (they enter the list only after
@@ -269,10 +307,13 @@ class Context:
         # been activated (loader flips ``activated=True`` on promotion),
         # so after a matching path touch an activated skill renders here
         # normally. Unactivated conditionals stay out.
-        visible_skills = [
-            s for s in self._skills_available
-            if not s.disable_model_invocation and not s.is_conditional()
-        ]
+        visible_skills = sorted(
+            (
+                s for s in self._skills_available
+                if not s.disable_model_invocation and not s.is_conditional()
+            ),
+            key=lambda s: s.name,
+        )
         if visible_skills:
             available_lines: list[str] = []
             for s in visible_skills:
@@ -280,13 +321,17 @@ class Context:
                 if s.when_to_use:
                     line += f" [when to use: {s.when_to_use}]"
                 available_lines.append(line)
-            messages.append(
-                HumanMessage(
-                    "<skills-available>\n"
-                    + "\n".join(available_lines)
-                    + "\n</skills-available>"
-                )
+            skills_msg = HumanMessage(
+                "<skills-available>\n"
+                + "\n".join(available_lines)
+                + "\n</skills-available>"
             )
+            if is_anthropic:
+                skills_msg.additional_kwargs["cache_control"] = {
+                    "type": "ephemeral",
+                }
+                breakpoint_count += 1
+            messages.append(skills_msg)
         for skill in self._invoked_skills:
             messages.append(
                 HumanMessage(
@@ -304,7 +349,41 @@ class Context:
                 body = _render_todos_body(todos)
                 messages.append(HumanMessage(f"<todos>\n{body}\n</todos>"))
 
+        # Round 4F — drain queued task notifications into a single
+        # ``<task-notification>`` block. Drains on every build so the
+        # next prompt envelope flushes; the queue is bounded at 5
+        # entries (overflow shows ``(N more earlier)`` to keep the
+        # block size sane).
+        if self._notifications_drainer is not None:
+            drained = list(self._notifications_drainer())
+            if drained:
+                cap = 5
+                head = drained[:cap] if len(drained) > cap else drained
+                lines: list[str] = []
+                for n in head:
+                    task_id = getattr(n, "task_id", "?")
+                    status = getattr(n, "status", "?")
+                    desc = getattr(n, "description", "")
+                    summary = getattr(n, "summary", None)
+                    line = f"- {task_id[:8]} [{status}] {desc}"
+                    if summary:
+                        line += f": {summary}"
+                    lines.append(line)
+                if len(drained) > cap:
+                    lines.append(f"({len(drained) - cap} more earlier)")
+                body = "\n".join(lines)
+                messages.append(HumanMessage(
+                    f"<task-notification>\n{body}\n</task-notification>"
+                ))
+
         messages.extend(history)
+
+        if is_anthropic and breakpoint_count > 0:
+            journal.write(
+                "cache_breakpoints_set",
+                count=breakpoint_count,
+                provider=_provider_type(self._model),
+            )
         return messages
 
 
@@ -322,6 +401,27 @@ def _joined_eager(primary: str, unconditional: list[Rule]) -> str:
         if rule.content:
             pieces.append(rule.content)
     return "\n\n".join(pieces)
+
+
+def _provider_type(model: Any | None) -> str:
+    """Best-effort introspection of the model's provider type tag."""
+    if model is None:
+        return ""
+    try:
+        return str(model._llm_type)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _is_anthropic_provider(model: Any | None) -> bool:
+    """True iff ``model._llm_type`` looks like an Anthropic provider tag.
+
+    LangChain's :class:`BaseChatModel` exposes ``_llm_type`` as a string
+    such as ``"anthropic-chat"``. We accept any tag that starts with
+    ``"anthropic"`` so future Anthropic-shaped wrappers (e.g. routing
+    proxies that prepend a tier name) still get prompt caching.
+    """
+    return _provider_type(model).lower().startswith("anthropic")
 
 
 def _is_under(path: Path, parent: Path) -> bool:

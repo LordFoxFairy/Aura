@@ -69,6 +69,7 @@ class _CompletingFactory(SubagentFactory):
         *,
         agent_type: str = "general-purpose",
         task_id: str | None = None,
+        model_spec: str | None = None,
     ) -> Agent:
         tmp_path = Path("/tmp/aura-subagent-lifecycle-tests")
         tmp_path.mkdir(parents=True, exist_ok=True)
@@ -92,6 +93,7 @@ class _FailingFactory(SubagentFactory):
         *,
         agent_type: str = "general-purpose",
         task_id: str | None = None,
+        model_spec: str | None = None,
     ) -> Agent:
         raise RuntimeError("spawn boom")
 
@@ -194,6 +196,7 @@ async def test_subagent_cancelled_carries_duration(tmp_path: Path) -> None:
             *,
             agent_type: str = "general-purpose",
             task_id: str | None = None,
+            model_spec: str | None = None,
         ) -> Agent:
             _spin_path = Path("/tmp/aura-subagent-lifecycle-cancel")
             _spin_path.mkdir(parents=True, exist_ok=True)

@@ -278,7 +278,15 @@ def test_unknown_tool_name_in_config_raises_AuraConfigError(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_state_turn_count_accumulates_across_astream_calls(tmp_path: Path) -> None:
+async def test_state_turn_count_resets_per_astream_call(tmp_path: Path) -> None:
+    """F-01-003 / Bug 2 — turn_count is per-user-turn, not lifetime.
+
+    Pre-fix this asserted accumulation; the per-Agent-lifetime counter
+    silently shrunk the per-prompt budget after every prior astream
+    call so a long prior session would pre-trip max_turns. Now
+    ``Agent.astream`` zeroes the counter at entry, matching claude-code's
+    local ``turnCount = 1`` initialisation.
+    """
     agent = _agent(
         tmp_path,
         turns=[
@@ -291,7 +299,9 @@ async def test_state_turn_count_accumulates_across_astream_calls(tmp_path: Path)
     assert agent.state.turn_count == 1
 
     await _collect(agent, "second")
-    assert agent.state.turn_count == 2
+    # Reset on each astream entry — second astream's single round
+    # leaves the counter at 1, not 2.
+    assert agent.state.turn_count == 1
 
 
 @pytest.mark.asyncio

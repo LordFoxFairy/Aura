@@ -10,6 +10,14 @@ Inheritance rules (matches claude-code's Task tool):
   concrete model. Resolving a fresh model per subagent is deliberate — the
   chat model classes are stateful (seen_bound_tools etc.) and sharing one
   across agents risks cross-talk.
+- Round 7R per-spawn override: ``spawn(model_spec=...)`` swaps the
+  inherited spec for this child only. ``None`` (the default) keeps the
+  inherited parent spec; an explicit string runs through
+  :func:`llm.make_model_for_spec` so router aliases (``"haiku"``) and
+  ``provider:model`` form both resolve. Unknown specs raise
+  :class:`UnknownModelSpecError` from :meth:`validate_model_spec` — the
+  task_create tool calls this BEFORE creating a TaskRecord so a typo
+  doesn't strand an orphan record in ``running``.
 - Skills ARE inherited: the parent's pre-loaded :class:`SkillRegistry` is
   handed through to the child's Agent constructor so the subagent has exact
   parity with parent skill set without a redundant disk scan.
@@ -18,33 +26,23 @@ Inheritance rules (matches claude-code's Task tool):
   langchain-mcp-adapters spawns a fresh session per ``get_tools`` call, so
   parent and subagent end up with INDEPENDENT MCP connections to the same
   servers. That's the simplest + correct-enough design.
-- Recursion guard: ``task_create`` / ``task_output`` are stripped from the
-  child's tools.enabled — a subagent CANNOT spawn further subagents in
-  0.5.x (dispatch not wired into child Agents yet). The inspection tools
-  ``task_get`` / ``task_list`` / ``task_stop`` ARE inherited: they operate
-  on the shared :class:`TasksStore` held by the parent Agent, so a
-  subagent can poll its siblings. Each child gets its own TasksStore
-  instance in practice (spawn builds a fresh Agent, which builds a fresh
-  store), so ``task_get("sibling-id")`` from a subagent will see an empty
-  store and return ``unknown task_id`` — that's intentional: siblings
-  aren't visible across the parent/child boundary, and we don't want to
-  leak parent state into the child. Keeping the tools enabled means the
-  LLM inside the subagent doesn't hallucinate "maybe task_get exists"
-  without a way to verify.
+- Recursion guard: ``task_create`` / ``task_output`` / ``task_get`` /
+  ``task_list`` / ``task_stop`` are stripped from the child's
+  tools.enabled — a subagent CANNOT spawn or inspect further subagents
+  in 0.5.x (dispatch not wired into child Agents yet).
 - Parent budget hooks are NOT inherited. Safety hooks (bash_safety +
   must_read_first) are re-installed inside the child's ``__init__`` via
   the same code path as the parent, so the subagent is safe even though
   parent-authored hooks don't cross the boundary.
 - Permission IS inherited — via a freshly-built hook that reuses the
-  parent's :class:`RuleSet` + :class:`SafetyPolicy` + live mode, but
-  hands the child a private :class:`SessionRuleSet` and a
-  :class:`SubagentAutoDenyAsker` (C1, parity with claude-code's
-  ``shouldAvoidPermissionPrompts: true`` — subagents have no UI so
-  any would-be ask path silently denies). Parent rules still let
-  ``read_file`` etc. auto-allow without a prompt. Plan / accept_edits
-  modes don't make sense on a non-interactive subagent; those collapse
-  to ``default``. ``bypass`` is the one mode that *does* inherit
-  verbatim.
+  parent's :class:`RuleSet` + :class:`SafetyPolicy` + live mode +
+  optional deny_rules / ask_rules, but hands the child a private
+  :class:`SessionRuleSet` and a :class:`SubagentAutoDenyAsker` (C1,
+  parity with claude-code's ``shouldAvoidPermissionPrompts: true`` —
+  subagents have no UI so any would-be ask path silently denies).
+  Plan / accept_edits modes don't make sense on a non-interactive
+  subagent; those collapse to ``default``. ``bypass`` is the one mode
+  that *does* inherit verbatim.
 
 Storage defaults to an in-memory sqlite connection so the subagent's
 transcript doesn't pollute the parent's on-disk session DB. Tests inject a
@@ -80,6 +78,22 @@ if TYPE_CHECKING:
 # every tool call is cheap and matches the "no I/O" contract.
 _SUBAGENT_AUTO_DENY_ASKER = SubagentAutoDenyAsker()
 
+# Tools the child must NEVER see — recursion guard + inspection-of-self
+# isolation. Stripping ``task_get`` / ``task_list`` / ``task_stop`` from
+# the child mirrors claude-code's "subagents cannot dispatch further
+# subagents" rule + closes the loophole where a child could observe its
+# own running record (the child's TasksStore is fresh + empty, so the
+# inspection tools would just return ``unknown task_id`` for every id;
+# stripping them is cleaner than letting the LLM hallucinate state that
+# isn't there).
+_RECURSION_BAN: frozenset[str] = frozenset({
+    "task_create",
+    "task_output",
+    "task_get",
+    "task_list",
+    "task_stop",
+})
+
 
 def _default_storage() -> SessionStorage:
     # sqlite3.connect(":memory:") works; Path(":memory:").parent == Path(".")
@@ -103,6 +117,8 @@ class SubagentFactory:
         parent_safety: SafetyPolicy | None = None,
         parent_mode_provider: Callable[[], str] | None = None,
         parent_session: SessionRuleSet | None = None,
+        parent_deny_rules: RuleSet | None = None,
+        parent_ask_rules: RuleSet | None = None,
         model_factory: Callable[[], BaseChatModel] | None = None,
         storage_factory: Callable[[], SessionStorage] | None = None,
     ) -> None:
@@ -123,6 +139,14 @@ class SubagentFactory:
         # is NOT inherited — it's recorded here purely so a caller that
         # wants to verify "child.session is fresh / not parent.session"
         # has something to compare against. ``spawn`` ignores it.
+        #
+        # ``parent_deny_rules`` / ``parent_ask_rules`` (Round 3C) — the
+        # parent's deny + ask layered rulesets. Threaded into
+        # :func:`make_permission_hook` so the child enforces the SAME
+        # deny / ask matrix. ``None`` means "inherit no extra layered
+        # rules" — the make_permission_hook signature accepts only
+        # ``rules=`` today, so deny / ask flow through that same param
+        # (see _build_permission_hook).
         self._parent_config = parent_config
         self._parent_model_spec = parent_model_spec
         self._parent_skills = parent_skills
@@ -131,8 +155,35 @@ class SubagentFactory:
         self._parent_safety = parent_safety
         self._parent_mode_provider = parent_mode_provider
         self._parent_session = parent_session
+        self._parent_deny_rules = parent_deny_rules
+        self._parent_ask_rules = parent_ask_rules
         self._model_factory = model_factory
         self._storage_factory = storage_factory or _default_storage
+
+    @property
+    def parent_model_spec(self) -> str:
+        """Read-only view of the inherited parent spec.
+
+        Surfaced so ``task_create`` can read the spec the child WOULD
+        run on without an override + pin it onto the TaskRecord at
+        create time. Returning the stored value (rather than re-routing
+        through ``cfg.router``) keeps the property a cheap dict get.
+        """
+        return self._parent_model_spec
+
+    def validate_model_spec(self, spec: str) -> None:
+        """Raise :class:`UnknownModelSpecError` if ``spec`` cannot resolve.
+
+        Called by ``task_create`` BEFORE the TaskRecord is created so a
+        typo / unknown alias / unknown provider surfaces as a clean
+        ToolError rather than stranding an orphan record in
+        ``running``. Pure validation: no side effects, no SDK
+        construction.
+        """
+        # ``llm.resolve`` is sync + does only dict lookups; no SDK
+        # touch. It raises :class:`UnknownModelSpecError` on any
+        # unknown alias / unknown provider.
+        llm.resolve(spec, cfg=self._parent_config)
 
     def spawn(
         self,
@@ -141,6 +192,7 @@ class SubagentFactory:
         *,
         agent_type: str = "general-purpose",
         task_id: str | None = None,
+        model_spec: str | None = None,
     ) -> Agent:
         # Import locally to avoid a circular import: Agent's module pulls in
         # aura.tools.task_create, which pulls in this factory.
@@ -181,7 +233,7 @@ class SubagentFactory:
         child_tools = ToolsConfig(
             enabled=[
                 name for name in parent_enabled
-                if name not in {"task_create", "task_output"}
+                if name not in _RECURSION_BAN
                 and (allowed_tools is None or name in allowed_tools)
                 and (effective_allow is None or name in effective_allow)
             ]
@@ -189,8 +241,21 @@ class SubagentFactory:
         child_cfg = self._parent_config.model_copy(
             update={"tools": child_tools}
         )
+        # Per-spawn model resolution. Precedence:
+        #   1. Explicit ``model_factory`` (test injection — full bypass).
+        #   2. ``model_spec`` kwarg (Round 7R) → make_model_for_spec.
+        #   3. Inherited ``parent_model_spec`` → resolve + create.
         if self._model_factory is not None:
             model = self._model_factory()
+        elif model_spec is not None:
+            # ``make_model_for_spec`` runs through llm.resolve + llm.create
+            # — same path as the parent's startup model build. Raises
+            # :class:`UnknownModelSpecError` on bad spec; propagates so
+            # the caller (run_task) marks the record failed. task_create
+            # validates BEFORE creating the record so the failure here
+            # is reserved for genuine post-create races (config swapped
+            # mid-run, etc.).
+            model = llm.make_model_for_spec(model_spec, self._parent_config)
         else:
             provider, model_name = llm.resolve(
                 self._parent_model_spec, cfg=self._parent_config,

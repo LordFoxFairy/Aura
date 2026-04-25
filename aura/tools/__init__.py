@@ -27,6 +27,7 @@ from aura.tools.glob import Glob, glob
 from aura.tools.grep import Grep, grep
 from aura.tools.mcp_read_resource import MCPReadResourceTool
 from aura.tools.read_file import ReadFile, read_file
+from aura.tools.send_message import SendMessage
 from aura.tools.skill import SkillTool
 from aura.tools.task_create import TaskCreate
 from aura.tools.task_get import TaskGet
@@ -61,6 +62,10 @@ BUILTIN_STATEFUL_TOOLS: dict[str, type[BaseTool]] = {
     "exit_plan_mode": ExitPlanMode,
     "bash_background": BashBackground,
     "skill": SkillTool,
+    # Round 6L / 7P teams — opt-in: outside a team, the tool errors on
+    # invocation. Auto-enabled on ``Agent.join_team`` so the LLM sees
+    # the schema for the next turn (see Agent._wire_send_message).
+    "send_message": SendMessage,
 }
 
 __all__ = [
@@ -76,6 +81,7 @@ __all__ = [
     "Grep",
     "MCPReadResourceTool",
     "ReadFile",
+    "SendMessage",
     "SkillTool",
     "TaskCreate",
     "TaskGet",

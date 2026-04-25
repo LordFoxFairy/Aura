@@ -328,12 +328,14 @@ async def test_task_create_explore_restricts_child_tools(tmp_path: Path) -> None
             *,
             agent_type: str = "general-purpose",
             task_id: str | None = None,
+            model_spec: str | None = None,
         ) -> Agent:
             child = super().spawn(
                 prompt,
                 allowed_tools,
                 agent_type=agent_type,
                 task_id=task_id,
+                model_spec=model_spec,
             )
             captured.append(child)
             return child

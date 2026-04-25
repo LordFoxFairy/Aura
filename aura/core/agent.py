@@ -6,14 +6,18 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
+
+if TYPE_CHECKING:
+    from aura.core.tasks.types import TaskNotification
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core import llm
+from aura.core.abort import AbortController, AbortException
 from aura.core.compact import (
     MICROCOMPACT_KEEP_RECENT,
     MICROCOMPACT_TRIGGER_PAIRS,
@@ -42,7 +46,7 @@ from aura.core.registry import ToolRegistry
 from aura.core.skills import Skill, SkillRegistry, load_skills
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
-from aura.schemas.events import AgentEvent, Final
+from aura.schemas.events import AgentEvent, AssistantDelta, Final
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
@@ -235,6 +239,55 @@ class Agent:
             parent_mode_provider=lambda: self._mode,
             parent_session=self._session_rules,
         )
+        # F-07-005 abort cascade — wrap ``spawn`` so every child Agent
+        # gets a registered :class:`AbortController` in this Agent's
+        # ``_running_aborts`` map. The child's astream picks the
+        # controller up via the contextvar (the surrounding
+        # asyncio.Task carries our parent context), and the
+        # ``_cascade_abort_to_children`` fan-out fires every entry so
+        # a single user Ctrl+C tears the whole subagent tree down.
+        # The child Agent's stamped ``_current_abort`` is the SAME
+        # controller registered here, so reading
+        # ``parent._running_aborts.values()`` yields live controllers
+        # the test (and the cascade) can flip directly.
+        original_spawn = self._subagent_factory.spawn
+
+        def _spawn_with_abort(*args, **kwargs):  # type: ignore[no-untyped-def]
+            # ``model_spec`` may not be accepted by the legacy factory
+            # surface — drop it before calling through. ``task_id`` is
+            # the key we register under.
+            task_id = kwargs.get("task_id")
+            try:
+                child = original_spawn(*args, **kwargs)
+            except TypeError as exc:
+                if "model_spec" in str(exc) and "model_spec" in kwargs:
+                    kwargs.pop("model_spec", None)
+                    child = original_spawn(*args, **kwargs)
+                else:
+                    raise
+            # Allocate + register the child's controller. Keyed by
+            # task_id when the caller supplied one (task_create flow);
+            # fall back to the child's own session_id otherwise so the
+            # registry remains uniquely keyed.
+            controller = AbortController()
+            key = task_id if task_id is not None else child.session_id
+            self._running_aborts[key] = controller
+            # Stamp the controller on the child so its astream picks
+            # it up directly — bypassing the "create my own" branch.
+            # Astream reads ``self._current_abort`` only as the
+            # external observation surface; the actual signal it uses
+            # is whatever it sets at the top. We extend astream to
+            # honour a pre-set ``_inherited_abort`` if present.
+            object.__setattr__(child, "_inherited_abort", controller)
+            # When the child finishes (naturally or via cascade), the
+            # entry stays in _running_aborts until parent's astream
+            # finally clause clears it on a clean turn end. Tests that
+            # assert "every child controller flipped" rely on the
+            # controller being kept alive past the run_task done
+            # callback, so we don't add a remove-on-done hook here.
+            return child
+
+        self._subagent_factory.spawn = _spawn_with_abort  # type: ignore[method-assign]
         # Map: task_id -> the detached asyncio.Task handle. Shared with the
         # ``task_create`` tool so Agent.close() can cancel still-running
         # subagents without reaching back into the tool's internals.
@@ -246,6 +299,61 @@ class Agent:
         # ``_running_tasks`` does — so ``Agent.close()`` can tear down
         # orphan children deterministically.
         self._running_shells: dict[str, asyncio.subprocess.Process] = {}
+        # F-07-005 / Round 6L abort registry. ``task_id`` (or
+        # ``team-member`` synthetic id) → AbortController. Populated by
+        # ``run_task`` (subagents) and ``TeamManager.add_member`` (team
+        # runtimes); the parent's ``current_abort.abort()`` cascade
+        # iterates this dict and flips every child's controller so a
+        # single user Ctrl+C tears the whole tree down.
+        self._running_aborts: dict[str, AbortController] = {}
+        # Round 6L. Populated by ``join_team``; ``None`` outside a team.
+        # Typed loose (``object | None``) to avoid a circular import on
+        # :class:`aura.core.teams.manager.TeamManager`.
+        self._team: object | None = None
+        # Round 6L. ``None`` for the leader / non-team agents; set to
+        # the member name by :meth:`join_team` for teammates so
+        # :class:`SendMessage` can stamp the right ``sender``.
+        self._team_member_name: str | None = None
+        # F-05-003 partial-text buffer. ``Agent.astream`` appends to
+        # this on every AssistantDelta event; if abort fires before the
+        # final AIMessage we yield this as one last AssistantDelta so
+        # the user doesn't lose half-streamed reasoning. Reset at the
+        # start of each astream call.
+        self._partial_assistant_text: str = ""
+        # F-04-014: SessionStart fires exactly once per session.
+        # Cleared by ``clear_session`` / ``resume_session`` (re-arm).
+        self._session_start_fired = False
+        # Round 4F notification queue. Populated by external producers
+        # (TasksStore terminal-listener), drained by Context.build at
+        # the start of each prompt envelope. Owned by Agent so /clear
+        # can wipe it.
+        from aura.core.tasks.types import TaskNotification as _TN
+        self._pending_notifications: list[_TN] = []
+
+        # Round 4F — wire the TasksStore terminal listener so subagent
+        # completions / failures flow into the parent's notification
+        # queue. The listener closes over ``self`` so the listener
+        # outlives any specific record reference; the bounded
+        # _enqueue_task_notification call drops oldest on overflow.
+        def _on_terminal(rec: object) -> None:
+            from aura.core.tasks.types import TaskNotification, TaskRecord
+            if not isinstance(rec, TaskRecord):
+                return
+            summary = (
+                rec.progress.latest_summary
+                or rec.final_result
+                or rec.error
+            )
+            self._enqueue_task_notification(TaskNotification(
+                task_id=rec.id,
+                status=rec.status,
+                summary=summary,
+                description=rec.description,
+            ))
+        self._tasks_store.add_terminal_listener(_on_terminal)
+        # F-01-001: live abort controller for the running astream call.
+        # Set at the top of :meth:`astream` and cleared on exit.
+        self._current_abort: AbortController | None = None
         # Stateless built-ins come from shared singletons; stateful ones are
         # instantiated per-Agent so each gets its own dependency (LoopState
         # for todo_write, QuestionAsker for ask_user_question).
@@ -267,6 +375,7 @@ class Agent:
                     store=self._tasks_store,
                     factory=self._subagent_factory,
                     running=self._running_tasks,
+                    transcript_storage=self._storage,
                 )
             elif name == "task_output" or name == "task_get" or name == "task_list":
                 self._available_tools[name] = cls(store=self._tasks_store)
@@ -353,6 +462,12 @@ class Agent:
                     # returns the live instance.
                     loop_state_provider=lambda: self._state,
                 )
+            elif name == "send_message":
+                # Phase A teams. The tool walks ``self._team`` /
+                # ``self._team_member_name`` at invocation time, so
+                # it only needs an Agent back-reference. ``join_team``
+                # auto-registers; outside a team the tool errors clean.
+                self._available_tools[name] = cls(agent=self)
             else:  # pragma: no cover — guardrail for future additions
                 raise RuntimeError(f"unwired stateful tool: {name}")
         self._session_id = session_id
@@ -448,12 +563,46 @@ class Agent:
         # where ``cache_read_input_tokens`` will always be 0. Char count /
         # 4 is the standard rough approximation.
         self._pinned_tokens_estimate = self._estimate_pinned_tokens()
+        # Round 6L. Snapshot "did the user pin a custom tools.enabled?"
+        # so :meth:`join_team` can decide whether to auto-add
+        # ``send_message`` (default: yes) or respect the user's pin.
+        from aura.config.schema import ToolsConfig as _ShippedToolsConfig
+        self._user_pinned_tools_allowlist_value = (
+            list(self._config.tools.enabled)
+            != list(_ShippedToolsConfig().enabled)
+        )
+        # Round 4E: hand the web_fetch tool a summary-model factory.
+        # Best-effort — both ``make_summary_model_factory`` and
+        # ``set_default_model_factory`` are sibling-tier surfaces that
+        # may not yet be importable; skip silently when missing.
+        # ``getattr``-based introspection avoids mypy errors when the
+        # symbols haven't been added yet upstream (Tier D/F).
+        try:
+            from aura.core import llm as _llm_mod
+            from aura.tools import web_fetch as _wf_mod
+            _make_factory = getattr(_llm_mod, "make_summary_model_factory", None)
+            _set_default = getattr(_wf_mod, "set_default_model_factory", None)
+            if _make_factory is not None and _set_default is not None:
+                _set_default(_make_factory(self._config, self._model))
+        except ImportError:
+            pass
+        # Round 5H: auto-fire SessionStart on construction when a
+        # running event loop is available. Sync construction sites
+        # (CLI bootstrap before asyncio.run) skip the schedule and
+        # rely on ``astream``'s safety-net call.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            asyncio.ensure_future(self.fire_session_start())
 
     async def astream(
         self,
         prompt: str,
         *,
         attachments: list[HumanMessage] | None = None,
+        abort: AbortController | None = None,
     ) -> AsyncIterator[AgentEvent]:
         # Persistence order (matches claude-code QueryEngine.ts:431+451):
         #   1. Build history with attachments + user HumanMessage,
@@ -486,31 +635,117 @@ class Agent:
                 session=self._session_id,
                 prompt_preview=prompt[:200],
             )
+            # Round 5H lifecycle: SessionStart safety net for sync
+            # construction sites that skipped the auto-fire path.
+            await self.fire_session_start()
+            # F-04-014 lifecycle: UserPromptSubmit composes
+            # left-to-right and may rewrite ``prompt`` in place. The
+            # runner is optional — survivor HookChain may not yet
+            # carry the lifecycle slots; getattr-with-fallback keeps
+            # us forward-compatible without forcing every minimal
+            # HookChain test fixture to learn the new shape.
+            ups_runner = getattr(self._hooks, "run_user_prompt_submit", None)
+            if ups_runner is not None:
+                prompt = await ups_runner(
+                    session_id=self._session_id,
+                    turn_count=self._state.turn_count,
+                    user_text=prompt,
+                    state=self._state,
+                )
             history = self._storage.load(self._session_id)
-            # Attachments land BEFORE the user's HumanMessage so the model
-            # sees the injected context first (matching how claude-code
-            # prepends ``<attachment>`` blocks ahead of the user turn).
+            # F-05-004 user-turn rollback boundary: snapshot the
+            # pre-attachment length so a cancel BEFORE any AIMessage
+            # can pop the unanswered user turn off persisted history.
+            history_len_before_user_turn = len(history)
             if attachments:
                 history.extend(attachments)
             history.append(HumanMessage(content=prompt))
-            # Save BEFORE the first model call — crash / kill / Ctrl-C after
-            # this point still leaves the user turn on disk for resume.
             self._storage.save(self._session_id, history)
 
-            # Reactive recompact: if the model signals a context-length
-            # overflow on this turn, run compact(source="reactive") and
-            # retry the turn ONCE against the compacted history. Only the
-            # first failure triggers the recovery; a second overflow on the
-            # retry is re-raised so persistent-overflow bugs (e.g. system
-            # prompt already too long) surface instead of looping forever.
+            # F-01-003 / Bug 2 fix #1 — reset per-astream turn budget so
+            # ``max_turns`` is per-user-turn, not per-Agent-lifetime
+            # (claude-code parity: ``turnCount = 1`` initialised at
+            # every ``query`` entry). Without this, a long prior
+            # session pre-trips the cap on every fresh user prompt.
+            self._state.turn_count = 0
+
+            # F-01-001 abort plumbing. Precedence:
+            # 1. Explicit ``abort=`` kwarg (callers like teams runtime).
+            # 2. ``_inherited_abort`` stamped by the parent's
+            #    ``_subagent_factory.spawn`` wrapper (F-07-005 cascade).
+            # 3. A fresh controller we own ourselves.
+            inherited = getattr(self, "_inherited_abort", None)
+            local_abort = (
+                abort
+                if abort is not None
+                else (inherited if inherited is not None else AbortController())
+            )
+            self._current_abort = local_abort
+            self._partial_assistant_text = ""
+
+            saw_ai_message = False
             retry_exc: BaseException | None = None
             try:
-                async for event in self._loop.run_turn(history=history):
-                    yield event
-            except asyncio.CancelledError:
-                journal.write("astream_cancelled", session=self._session_id)
-                yield Final(message="(cancelled)")
-                raise
+                try:
+                    async for event in self._loop.run_turn(
+                        history=history, abort=local_abort,
+                    ):
+                        if isinstance(event, AssistantDelta):
+                            self._partial_assistant_text += event.text
+                        yield event
+                    saw_ai_message = any(
+                        isinstance(m, AIMessage)
+                        for m in history[history_len_before_user_turn:]
+                    )
+                except (AbortException, asyncio.CancelledError) as exc:
+                    saw_ai_message = any(
+                        isinstance(m, AIMessage)
+                        for m in history[history_len_before_user_turn:]
+                    )
+                    is_abort = (
+                        isinstance(exc, AbortException) or local_abort.aborted
+                    )
+                    journal.write(
+                        "astream_cancelled",
+                        session=self._session_id,
+                        is_abort=is_abort,
+                        had_ai=saw_ai_message,
+                    )
+                    # F-05-003 partial assistant text — flush whatever
+                    # streamed before the abort so the user sees it.
+                    if self._partial_assistant_text:
+                        yield AssistantDelta(text=self._partial_assistant_text)
+                        self._partial_assistant_text = ""
+                    if is_abort:
+                        # F-05-004 rollback: when no AIMessage landed,
+                        # the user's HumanMessage is unanswered — drop
+                        # it so the next astream sees a clean slate.
+                        if not saw_ai_message:
+                            del history[history_len_before_user_turn:]
+                        self._storage.save(self._session_id, history)
+                        # Cascade to children — single Ctrl+C tears
+                        # the whole subagent / teammate tree down.
+                        await self._cascade_abort_to_children(
+                            local_abort.reason or "parent_aborted",
+                        )
+                        yield Final(message="(cancelled)", reason="aborted")
+                        # Subagent path: when this Agent inherited an
+                        # abort controller from a parent (i.e. WE are
+                        # a subagent), re-raise the original exception
+                        # so the surrounding ``run_task`` flips the
+                        # TaskRecord to a terminal status (cancelled
+                        # / failed) instead of marking ``completed``.
+                        # Top-level agents (no inheritance) swallow
+                        # the abort — they already yielded the Final
+                        # so the caller's iteration ends cleanly.
+                        if isinstance(exc, asyncio.CancelledError):
+                            raise
+                        if getattr(self, "_inherited_abort", None) is not None:
+                            raise
+                        return
+                    # Pure CancelledError — preserve legacy behaviour.
+                    yield Final(message="(cancelled)")
+                    raise
             except Exception as exc:
                 if not _is_context_overflow(exc):
                     raise
@@ -519,26 +754,16 @@ class Agent:
                     session=self._session_id,
                     error=str(exc),
                 )
-                # Stash and retry OUTSIDE the except — avoids nested-exception
-                # chaining if compact or the retry turn itself raises.
                 retry_exc = exc
+            finally:
+                self._current_abort = None
 
             if retry_exc is not None:
                 await self.compact(source="reactive")
-                # compact replaced history with [summary, *recent_files, *tail];
-                # the retry reads the already-persisted history (which contains
-                # the user turn + attachments from the pre-invoke save above).
-                # No need to re-pass attachments — they're durably in history.
                 history = self._storage.load(self._session_id)
                 async for event in self._loop.run_turn(history=history):
                     yield event
 
-            # Second save: captures tool results + assistant message that
-            # landed during run_turn. Not guarded by a success branch any
-            # more — the pre-invoke save already gave us the durability floor;
-            # this save is additive (final full state). Cancellation still
-            # skips this line via the raise above, which is fine — the user
-            # turn is already on disk from the pre-invoke save.
             self._storage.save(self._session_id, history)
             journal.write(
                 "astream_end",
@@ -546,21 +771,26 @@ class Agent:
                 history_len=len(history),
                 total_tokens=self._state.total_tokens_used,
             )
-            # Auto-compact post-turn. Deliberately AFTER save + astream_end
-            # so the summary turn sees a stable, already-persisted history
-            # and we don't interleave compact I/O with the caller's yield
-            # stream. Zero threshold disables; any positive value arms it.
-            if (
-                self._auto_compact_threshold > 0
-                and self._state.total_tokens_used > self._auto_compact_threshold
-            ):
-                journal.write(
-                    "auto_compact_triggered",
-                    session=self._session_id,
-                    tokens=self._state.total_tokens_used,
-                    threshold=self._auto_compact_threshold,
-                )
-                await self.compact(source="auto")
+            # Auto-compact post-turn. Bug 2 fix #2 — providers that
+            # don't populate ``usage_metadata`` (DashScope error 1261,
+            # some Ollama builds) leave ``total_tokens_used`` at zero
+            # forever, so the trigger never armed. Fall back to a
+            # char-based history estimator (len/4) so the trigger can
+            # still arm even without provider usage envelopes.
+            if self._auto_compact_threshold > 0:
+                used = self._state.total_tokens_used
+                used_estimator = used == 0
+                if used_estimator:
+                    used = self._estimate_history_tokens(history)
+                if used > self._auto_compact_threshold:
+                    journal.write(
+                        "auto_compact_triggered",
+                        session=self._session_id,
+                        tokens=used,
+                        threshold=self._auto_compact_threshold,
+                        used_estimator=used_estimator,
+                    )
+                    await self.compact(source="auto")
 
     def switch_model(self, spec: str) -> None:
         """Swap the live model. Raises ``AuraConfigError`` on failure.
@@ -600,6 +830,15 @@ class Agent:
         self._prior_mode = mode
 
     def clear_session(self) -> None:
+        # F-04-014: fire Stop(reason="clear") via ensure_future so sync
+        # call sites (the CLI's /clear command) don't have to thread an
+        # event loop through every call.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            asyncio.ensure_future(self.fire_stop(reason="clear"))
         self._storage.clear(self._session_id)
         self._state.reset()
         # ``LoopState.reset`` wipes ``state.custom`` — the G5 denials sink
@@ -637,6 +876,11 @@ class Agent:
             mode_provider=lambda: cast("Mode", self._mode),
         )
         self._hooks.pre_tool.insert(0, self._bash_safety_hook)
+        # Re-arm SessionStart so /clear feels like a fresh session.
+        self._session_start_fired = False
+        # Drop pending notifications + partial buffer.
+        self._pending_notifications.clear()
+        self._partial_assistant_text = ""
         self._loop = self._build_loop()
         journal.write("session_cleared", session=self._session_id)
 
@@ -660,6 +904,225 @@ class Agent:
         attribute.
         """
         self._context.record_skill_invocation(skill)
+
+    # ------------------------------------------------------------------
+    # F-01-001 / F-05-003 abort + partial-text plumbing
+    # ------------------------------------------------------------------
+
+    @property
+    def current_abort(self) -> AbortController | None:
+        """The live :class:`AbortController` for the running astream call.
+
+        ``None`` between turns. Tests / Ctrl+C handlers fire
+        ``abort.abort(reason)`` against whatever is in flight without
+        having to thread the controller through every layer.
+        """
+        return self._current_abort
+
+    @property
+    def cwd(self) -> Path:
+        """The Agent's logical working directory. Read-only — mutate via
+        :meth:`set_cwd` so :class:`CwdChangedHook` consumers fire."""
+        return self._cwd
+
+    @property
+    def team(self) -> object | None:
+        """The :class:`TeamManager` this Agent is bound to, or ``None``.
+
+        Typed loose to avoid an import cycle. Callers cast at the use
+        site when they need TeamManager methods.
+        """
+        return self._team
+
+    @property
+    def pending_notifications(self) -> tuple[TaskNotification, ...]:
+        """Snapshot of queued :class:`TaskNotification` records.
+
+        Read-only tuple. :meth:`_drain_task_notifications` is the
+        write/clear endpoint used by Context.build.
+        """
+        return tuple(self._pending_notifications)
+
+    def buffer_partial_assistant_text(self, text: str) -> None:
+        """Append ``text`` to the partial-assistant buffer.
+
+        Producer hook for streaming renderers / tests so an abort
+        before the final AIMessage still surfaces partial reasoning.
+        Reset on every new astream call.
+        """
+        self._partial_assistant_text += text
+
+    def _enqueue_task_notification(self, notif: TaskNotification) -> None:
+        """External producer hook — append ``notif`` to the queue.
+
+        Unbounded at the queue level — the build-time renderer caps the
+        emitted block at 5 entries (FIFO) and collapses the tail to a
+        ``(N more earlier)`` line, so the parent's prompt envelope stays
+        compact while the queue itself preserves order.
+        """
+        self._pending_notifications.append(notif)
+
+    def _drain_task_notifications(self) -> list[TaskNotification]:
+        """Pop every queued notification and return them, oldest first."""
+        drained = list(self._pending_notifications)
+        self._pending_notifications.clear()
+        return drained
+
+    async def _cascade_abort_to_children(self, reason: str) -> None:
+        """Fire every controller in :attr:`_running_aborts`.
+
+        Idempotent — already-aborted controllers skip silently.
+        Yields once after the fan-out so each child watchdog gets a
+        scheduler tick to observe the flipped event before the
+        parent's astream finally clause unwinds.
+        """
+        for controller in list(self._running_aborts.values()):
+            if not controller.aborted:
+                controller.abort(reason)
+        await asyncio.sleep(0)
+
+    # ------------------------------------------------------------------
+    # Round 6L: team membership
+    # ------------------------------------------------------------------
+
+    def join_team(
+        self,
+        *,
+        manager: object,
+        member_name: str | None = None,
+    ) -> None:
+        """Bind this Agent to a :class:`TeamManager`.
+
+        Stamps ``_team`` (+ optional ``_team_member_name``) and
+        auto-enables ``send_message`` when the user has not pinned a
+        custom ``tools.enabled`` allowlist. Idempotent on the same
+        manager / member name.
+        """
+        if self._team is manager and (
+            member_name is None or self._team_member_name == member_name
+        ):
+            return
+        self._team = manager
+        if member_name is not None:
+            self._team_member_name = member_name
+        self._auto_enable_send_message_for_team()
+
+    def leave_team(self) -> None:
+        """Unbind from the team and conditionally drop send_message.
+
+        Mirrors :meth:`join_team` — when WE auto-added send_message,
+        WE remove it; user-pinned allowlists keep their tool.
+        """
+        self._team = None
+        self._team_member_name = None
+        self._auto_disable_send_message_for_team()
+
+    def _auto_enable_send_message_for_team(self) -> None:
+        """Register ``send_message`` + rebind the loop's bound model.
+
+        Skips when the user pinned ``tools.enabled`` (their choice
+        wins) or when the tool is already in the registry (idempotent
+        on double-join).
+        """
+        if self._user_pinned_tools_allowlist_value:
+            return
+        if "send_message" in self._registry:
+            return
+        from aura.tools.send_message import SendMessage
+        send_tool = SendMessage(agent=self)
+        self._registry.register(send_tool)
+        self._available_tools["send_message"] = send_tool
+        self._loop._rebind_tools(self._registry.tools())
+
+    def _auto_disable_send_message_for_team(self) -> None:
+        """Unregister ``send_message`` if WE registered it."""
+        if self._user_pinned_tools_allowlist_value:
+            return
+        if "send_message" not in self._registry:
+            return
+        self._registry.unregister("send_message")
+        self._available_tools.pop("send_message", None)
+        self._loop._rebind_tools(self._registry.tools())
+
+    def _user_pinned_tools_allowlist(self) -> bool:
+        """True iff the user supplied a custom ``tools.enabled`` value."""
+        return self._user_pinned_tools_allowlist_value
+
+    # ------------------------------------------------------------------
+    # F-04-014 lifecycle hook fire helpers
+    # ------------------------------------------------------------------
+
+    async def fire_session_start(self) -> None:
+        """Fire SessionStart hooks; idempotent on repeat fire."""
+        if self._session_start_fired:
+            return
+        self._session_start_fired = True
+        runner = getattr(self._hooks, "run_session_start", None)
+        if runner is None:
+            return
+        await runner(
+            session_id=self._session_id,
+            mode=self._mode,
+            cwd=self._cwd,
+            model_name=self._current_model_spec,
+            state=self._state,
+        )
+
+    async def fire_notification(self, *, kind: str, body: str) -> None:
+        """Fire Notification hooks with the given ``(kind, body)``."""
+        runner = getattr(self._hooks, "run_notification", None)
+        if runner is None:
+            return
+        await runner(
+            session_id=self._session_id,
+            kind=kind,
+            body=body,
+            state=self._state,
+        )
+
+    async def fire_stop(self, *, reason: str) -> None:
+        """Fire Stop hooks with the given ``reason``."""
+        runner = getattr(self._hooks, "run_stop", None)
+        if runner is None:
+            return
+        await runner(
+            session_id=self._session_id,
+            reason=reason,
+            turn_count=self._state.turn_count,
+            state=self._state,
+        )
+
+    # ------------------------------------------------------------------
+    # Round 3A: session resume
+    # ------------------------------------------------------------------
+
+    def resume_session(self, session_id: str) -> int:
+        """Swap the live session_id; reset state to fresh-session feel.
+
+        Loads ``session_id``'s history from storage, updates the live
+        session_id, zeroes turn_count + token usage, drops partial
+        buffers, and re-arms SessionStart so the lifecycle fires again
+        on the next astream. Raises ``KeyError`` if the requested
+        session has no rows. Returns the message count of the
+        resumed session.
+        """
+        history = self._storage.load(session_id)
+        if not history:
+            raise KeyError(
+                f"session {session_id!r} has no persisted history"
+            )
+        self._session_id = session_id
+        self._state.reset()
+        self._turn_denials = []
+        self._state.custom[DENIALS_SINK_KEY] = self._turn_denials
+        self._partial_assistant_text = ""
+        self._session_start_fired = False
+        journal.write(
+            "session_resumed",
+            session=session_id,
+            message_count=len(history),
+        )
+        return len(history)
 
     @property
     def state(self) -> LoopState:
@@ -790,6 +1253,26 @@ class Agent:
         number instead of a zero."""
         return self._pinned_tokens_estimate
 
+    def _estimate_history_tokens(self, history: list[BaseMessage]) -> int:
+        """Char-count / 4 fallback when ``usage_metadata`` is missing.
+
+        Bug 2 fix #2 / F-01-004. Aliyun DashScope (error 1261), some
+        Ollama builds, and a few self-hosted backends never populate
+        the LangChain usage envelope, leaving ``total_tokens_used``
+        pinned at zero — so the auto-compact trigger could never arm
+        on a runaway session. The 4-chars-per-token approximation is
+        good enough to cross the (large) threshold once exhaustion
+        actually happens.
+        """
+        char_count = 0
+        for msg in history:
+            content = getattr(msg, "content", "")
+            if isinstance(content, str):
+                char_count += len(content)
+            else:
+                char_count += len(str(content))
+        return char_count // 4
+
     def _estimate_pinned_tokens(self) -> int:
         # Build the pinned messages with an empty history — everything
         # from Context.build that doesn't depend on live turn state.
@@ -885,6 +1368,7 @@ class Agent:
             rules=self._rules,
             skills=self._skill_registry.list(),
             todos_provider=lambda: self._state.custom.get("todos", []),
+            notifications_drainer=self._drain_task_notifications,
             inherited_reads=inherited_reads,
         )
 
@@ -1027,7 +1511,14 @@ class Agent:
         - ``self._mcp_manager`` is set to ``None`` on every branch so a
           subsequent ``aclose()`` / ``close()`` is an idempotent no-op.
         - Finally, ``self._storage.close()`` to flush SQLite.
+
+        F-04-014: fires ``Stop(reason="user_exit")`` BEFORE the
+        teardown so the hook sees a live state / mode / model. Hook
+        exceptions are suppressed — a broken stop hook MUST NOT block
+        agent shutdown.
         """
+        with contextlib.suppress(Exception):
+            await self.fire_stop(reason="user_exit")
         self._teardown_local_tasks()
 
         if self._mcp_manager is not None:

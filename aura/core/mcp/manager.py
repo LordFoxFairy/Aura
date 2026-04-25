@@ -74,7 +74,49 @@ if TYPE_CHECKING:
     from aura.core.commands.types import Command
 
 
-MCPServerState = Literal["connected", "disabled", "error", "never_started"]
+MCPServerState = Literal[
+    "connected",
+    "connecting",
+    "disabled",
+    "error",
+    "needs_auth",
+    "never_started",
+    "unapproved",
+]
+
+
+# ---------------------------------------------------------------------------
+# F-06-003 — needs-auth classifier
+#
+# Routes auth-failure exceptions to the ``needs_auth`` state so the
+# manager can:
+#   - skip auto-reconnect (retrying a 401 burns rate budget without
+#     learning anything new);
+#   - journal a distinct ``mcp_connect_needs_auth`` event so operators
+#     spot it amid generic connect failures.
+# Detection mirrors claude-code: the spec'd JSON-RPC code -32001
+# ("Authentication required") plus a substring fallback for SDKs that
+# stringify auth errors instead of carrying the code field.
+# ---------------------------------------------------------------------------
+
+_NEEDS_AUTH_CODE = -32001
+_NEEDS_AUTH_HINTS = ("oauth", "unauthorized", "401", "403")
+
+
+def _is_needs_auth_error(exc: BaseException) -> bool:
+    """Return True iff *exc* indicates an MCP authentication failure.
+
+    Matches:
+    - ``exc.code == -32001`` (the MCP-spec'd JSON-RPC auth code).
+    - Lowercase ``str(exc)`` containing any of "oauth", "unauthorized",
+      "401", "403" — covers SDKs that stringify auth errors without
+      preserving the structured code field.
+    """
+    code = getattr(exc, "code", None)
+    if code == _NEEDS_AUTH_CODE:
+        return True
+    text = str(exc).lower()
+    return any(hint in text for hint in _NEEDS_AUTH_HINTS)
 
 
 # Exponential-backoff reconnect constants. Schedule (seconds): 1, 2, 4, 8, 16
@@ -165,6 +207,7 @@ class MCPManager:
         configs: list[MCPServerConfig],
         *,
         op_timeout_sec: float | None = None,
+        project_server_names: set[str] | None = None,
     ) -> None:
         # Keep ALL configs (enabled + disabled) so ``status()`` /
         # ``/mcp list`` can still show a disabled-by-config server as
@@ -207,13 +250,47 @@ class MCPManager:
         # behaviour within one session.
         self._op_timeout_sec: float = _resolve_op_timeout(op_timeout_sec)
 
+        # F-06-001 — project-server approval gate. ``project_server_names``
+        # tags which entries came from a project-layer ``mcp_servers.json``
+        # (the RCE channel). Auto-detect from :mod:`aura.config.mcp_store`
+        # when caller didn't supply the set.
+        if project_server_names is None:
+            try:
+                from aura.config import mcp_store as _store  # noqa: PLC0415
+                project_server_names = _store.project_layer_names()
+            except Exception:  # noqa: BLE001
+                project_server_names = set()
+        self._project_server_names: set[str] = set(project_server_names)
+
+        # Pre-compute the unapproved set: any project-layer name whose
+        # approval is missing or whose fingerprint doesn't match the live
+        # config. Re-checked / mutated by approve / revoke / reload.
+        self._unapproved: set[str] = set()
+        from aura.config import mcp_approvals as _approvals  # noqa: PLC0415
+        from aura.core import journal as _j  # noqa: PLC0415
+        for cfg in self._configs_all:
+            if cfg.name not in self._project_server_names:
+                continue
+            if not _approvals.is_approved(cfg):
+                self._unapproved.add(cfg.name)
+                with suppress(Exception):
+                    _j.write(
+                        "mcp_server_unapproved",
+                        server=cfg.name,
+                        project=_approvals.project_key(),
+                    )
+
         for cfg in self._configs_all:
             # enabled=False in config is the "disabled" state from the
             # operator's perspective; enabled=True but not yet connected
-            # is "never_started".
-            self._state[cfg.name] = (
-                "never_started" if cfg.enabled else "disabled"
-            )
+            # is "never_started". Unapproved project-layer entries get
+            # their own state so ``/mcp list`` surfaces a CTA.
+            if cfg.name in self._unapproved:
+                self._state[cfg.name] = "unapproved"
+            else:
+                self._state[cfg.name] = (
+                    "never_started" if cfg.enabled else "disabled"
+                )
             self._tool_counts[cfg.name] = 0
             self._prompt_counts[cfg.name] = 0
             self._resource_counts[cfg.name] = 0
@@ -305,18 +382,26 @@ class MCPManager:
 
         Per-server failures are caught and journalled; successful servers'
         tools and prompt commands are returned. Returns ``([], [])`` if no
-        servers are configured.
+        servers are configured. Unapproved project-layer servers are
+        skipped — see :meth:`approve` / :meth:`unapproved_server_names`.
         """
-        if not self._configs:
+        approved_configs = [
+            c for c in self._configs if c.name not in self._unapproved
+        ]
+        if not approved_configs:
             return [], []
 
-        connections = self._build_connections()
+        # Build connections only for approved servers — never instantiate
+        # a transport for an unapproved entry.
+        connections: dict[str, Any] = {}
+        for cfg in approved_configs:
+            connections.update(self._build_one_connection(cfg))
         self._client = MultiServerMCPClient(connections)
 
         all_tools: list[BaseTool] = []
         all_commands: list[Command] = []
 
-        for cfg in self._configs:
+        for cfg in approved_configs:
             tools, commands = await self._connect_one(cfg)
             all_tools.extend(tools)
             all_commands.extend(commands)
@@ -362,22 +447,34 @@ class MCPManager:
                 server=cfg.name,
             )
         except Exception as exc:  # noqa: BLE001
-            journal.write(
-                "mcp_connect_failed",
-                server=cfg.name,
-                error=f"{type(exc).__name__}: {exc}",
-            )
-            self._state[cfg.name] = "error"
-            self._errors[cfg.name] = f"{type(exc).__name__}: {exc}"
+            err_text = f"{type(exc).__name__}: {exc}"
+            if _is_needs_auth_error(exc):
+                # Auth failure — distinct journal event + state, NO
+                # auto-reconnect (a 401 doesn't heal on retry).
+                journal.write(
+                    "mcp_connect_needs_auth",
+                    server=cfg.name,
+                    error=err_text,
+                )
+                self._state[cfg.name] = "needs_auth"
+                self._errors[cfg.name] = err_text
+            else:
+                journal.write(
+                    "mcp_connect_failed",
+                    server=cfg.name,
+                    error=err_text,
+                )
+                self._state[cfg.name] = "error"
+                self._errors[cfg.name] = err_text
+                # Remote transports get auto-reconnect; stdio does not
+                # (see module docstring for rationale). Guard against
+                # double-scheduling: if an attempt is already pending
+                # for this server, leave it alone.
+                if cfg.transport in ("sse", "streamable_http"):
+                    self._schedule_reconnect(cfg)
             self._tool_counts[cfg.name] = 0
             self._prompt_counts[cfg.name] = 0
             self._resource_counts[cfg.name] = 0
-            # Remote transports get auto-reconnect; stdio does not (see
-            # module docstring for rationale). Guard against double-
-            # scheduling: if an attempt is already pending for this
-            # server, leave it alone.
-            if cfg.transport in ("sse", "streamable_http"):
-                self._schedule_reconnect(cfg)
             return [], []
 
         for t in tools:
@@ -905,7 +1002,11 @@ class MCPManager:
         for cfg in self._configs_all:
             name = cfg.name
             state = self._state.get(name, "never_started")
-            err = self._errors.get(name) if state == "error" else None
+            err = (
+                self._errors.get(name)
+                if state in ("error", "needs_auth")
+                else None
+            )
             out.append(
                 MCPServerStatus(
                     name=name,
@@ -918,3 +1019,143 @@ class MCPManager:
                 )
             )
         return out
+
+    # ------------------------------------------------------------------
+    # F-06-001 — approval gate API
+    # ------------------------------------------------------------------
+
+    def unapproved_server_names(self) -> set[str]:
+        """Return the set of project-layer server names awaiting approval."""
+        return set(self._unapproved)
+
+    def needs_auth_server_names(self) -> set[str]:
+        """Return server names whose latest connect failed with a 401/oauth."""
+        return {
+            name for name, state in self._state.items()
+            if state == "needs_auth"
+        }
+
+    async def approve(self, name: str) -> str:
+        """Approve a project-layer server: persist + (re)connect.
+
+        Unknown-name returns a textual error shape (no exception). A
+        user-scope server (not in ``project_server_names``) returns a
+        friendly no-op — there's nothing to approve.
+        """
+        cfg = self._config_by_name(name)
+        if cfg is None:
+            known = self.known_server_names()
+            return (
+                f"no MCP server named {name!r}; "
+                f"known: {known}"
+            )
+        if name not in self._project_server_names:
+            return (
+                f"MCP server {name!r} is user-scope; approval is not required"
+            )
+        from aura.config import mcp_approvals as _approvals  # noqa: PLC0415
+        _approvals.approve(cfg)
+        self._unapproved.discard(name)
+        # Flip from ``unapproved`` to ``never_started`` so the connect
+        # path will pick it up. Then attempt a connect immediately so the
+        # user sees the result.
+        self._state[name] = "never_started"
+        if cfg.enabled and cfg not in self._configs:
+            self._configs.append(cfg)
+        if cfg.enabled:
+            await self._connect_one(cfg)
+        new_state = self._state.get(name, "never_started")
+        if new_state == "connected":
+            return f"MCP server {name!r} approved and connected"
+        return f"MCP server {name!r} approved (state: {new_state})"
+
+    async def revoke(self, name: str) -> str:
+        """Revoke approval and tear down any live connection."""
+        cfg = self._config_by_name(name)
+        if cfg is None:
+            known = self.known_server_names()
+            return (
+                f"no MCP server named {name!r}; "
+                f"known: {known}"
+            )
+        from aura.config import mcp_approvals as _approvals  # noqa: PLC0415
+        _approvals.revoke(name)
+        self._unapproved.add(name)
+        # Tear the live connection down.
+        self._configs = [c for c in self._configs if c.name != name]
+        if self._client is not None:
+            self._client.connections.pop(name, None)
+        self._resources = {
+            k: v for k, v in self._resources.items() if k[0] != name
+        }
+        self._cancel_reconnect_task(name)
+        self._state[name] = "unapproved"
+        self._errors.pop(name, None)
+        self._tool_counts[name] = 0
+        self._prompt_counts[name] = 0
+        self._resource_counts[name] = 0
+        return f"MCP server {name!r} approval revoked and disconnected"
+
+    async def reload(
+        self,
+        configs: list[MCPServerConfig],
+        *,
+        project_server_names: set[str] | None = None,
+    ) -> str:
+        """Re-seed the manager from a freshly-loaded config list.
+
+        Returns a one-line summary like ``"+1 -0"`` describing what
+        changed (added / removed). New entries default to
+        ``never_started``; removed entries vanish from status. Existing
+        entries keep their current state.
+        """
+        if project_server_names is None:
+            try:
+                from aura.config import mcp_store as _store  # noqa: PLC0415
+                project_server_names = _store.project_layer_names()
+            except Exception:  # noqa: BLE001
+                project_server_names = set()
+
+        before_names = {c.name for c in self._configs_all}
+        after_names = {c.name for c in configs}
+        added = sorted(after_names - before_names)
+        removed = sorted(before_names - after_names)
+
+        # Drop removed servers entirely.
+        for name in removed:
+            self._state.pop(name, None)
+            self._errors.pop(name, None)
+            self._tool_counts.pop(name, None)
+            self._prompt_counts.pop(name, None)
+            self._resource_counts.pop(name, None)
+            self._unapproved.discard(name)
+            self._cancel_reconnect_task(name)
+            if self._client is not None:
+                self._client.connections.pop(name, None)
+            self._resources = {
+                k: v for k, v in self._resources.items() if k[0] != name
+            }
+
+        # Replace the config list.
+        self._configs_all = list(configs)
+        self._configs = [c for c in configs if c.enabled]
+        self._project_server_names = set(project_server_names)
+
+        # Recompute approval state for new entries.
+        from aura.config import mcp_approvals as _approvals  # noqa: PLC0415
+        for cfg in self._configs_all:
+            if cfg.name in added:
+                if (
+                    cfg.name in self._project_server_names
+                    and not _approvals.is_approved(cfg)
+                ):
+                    self._unapproved.add(cfg.name)
+                    self._state[cfg.name] = "unapproved"
+                else:
+                    self._state[cfg.name] = (
+                        "never_started" if cfg.enabled else "disabled"
+                    )
+                self._tool_counts[cfg.name] = 0
+                self._prompt_counts[cfg.name] = 0
+                self._resource_counts[cfg.name] = 0
+        return f"+{len(added)} -{len(removed)}"

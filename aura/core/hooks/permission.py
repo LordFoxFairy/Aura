@@ -235,6 +235,10 @@ def _deny_message(decision: Decision, *, feedback: str = "") -> str:
             return (
                 "denied: tool not in active skill's restrict-tools whitelist"
             )
+        case "rule_deny":
+            if decision.rule is not None:
+                return f"denied: deny rule `{decision.rule.to_string()}`"
+            return "denied: deny rule"
         case "user_deny":
             if feedback:
                 return f"denied: user — note: {feedback}"
@@ -299,6 +303,8 @@ def make_permission_hook(
     asker: PermissionAsker,
     session: SessionRuleSet,
     rules: RuleSet = _EMPTY_RULESET,
+    deny_rules: RuleSet = _EMPTY_RULESET,
+    ask_rules: RuleSet = _EMPTY_RULESET,
     project_root: Path,
     mode: Mode | Callable[[], Mode] = DEFAULT_MODE,
     safety: SafetyPolicy = DEFAULT_SAFETY,
@@ -336,6 +342,8 @@ def make_permission_hook(
             asker=asker,
             session=session,
             rules=rules,
+            deny_rules=deny_rules,
+            ask_rules=ask_rules,
             project_root=project_root,
             mode=_mode_provider(),
             safety=safety,
@@ -353,6 +361,7 @@ def make_permission_hook(
             tool=tool.name,
             reason=decision.reason,
             rule=decision.rule.to_string() if decision.rule is not None else None,
+            rule_kind=decision.rule.kind if decision.rule is not None else None,
             # Resolve the Callable/literal via the same provider used by
             # _decide above so the audit trail records the *live* mode
             # string (not the captured Callable object, which would serialize
@@ -411,6 +420,8 @@ async def _decide(
     asker: PermissionAsker,
     session: SessionRuleSet,
     rules: RuleSet,
+    deny_rules: RuleSet = _EMPTY_RULESET,
+    ask_rules: RuleSet = _EMPTY_RULESET,
     project_root: Path,
     mode: Mode,
     safety: SafetyPolicy,
@@ -436,6 +447,14 @@ async def _decide(
     # lookup.
     if has_active_lease(state) and not tool_allowed_by_lease(state, tool.name):
         return Decision(allow=False, reason="restrict_tools_blocked"), ""
+
+    # 0.5 Deny rules — fire BEFORE bypass / safety / allow / ask. Deny is
+    # bypass-immune by spec (F-04-001 + F-04-006): ``mode=bypass`` is the
+    # user's "skip the prompt UX" consent, not a license to run a
+    # forever-forbidden command.
+    deny_match = deny_rules.matches(tool.name, args, tool)
+    if deny_match is not None:
+        return Decision(allow=False, reason="rule_deny", rule=deny_match), ""
 
     # 1. Bypass mode — loud and first. Note: bypass deliberately does NOT
     # run through safety here; the safety floor for bypass lives at the
@@ -481,6 +500,47 @@ async def _decide(
     # so side-effecting calls still require explicit consent.
     if mode == "accept_edits" and tool.name in _ACCEPT_EDITS_TOOLS:
         return Decision(allow=True, reason="mode_accept_edits"), ""
+
+    # 4.5 Ask rules — force the prompt path even if a sibling allow /
+    # session rule would have auto-allowed. F-04-001 contract: ask
+    # overrides allow but is overridden by deny.
+    ask_match = ask_rules.matches(tool.name, args, tool)
+    if ask_match is not None:
+        journal.write(
+            "permission_ask_rule_forced",
+            tool=tool.name,
+            rule=ask_match.to_string(),
+        )
+        # Skip the per-turn dedup cache — ask rules contract is
+        # "always prompt, every call".
+        rule_hint = Rule(tool=tool.name, content=None)
+        try:
+            response = await asker(tool=tool, args=args, rule_hint=rule_hint)
+        except Exception as exc:  # noqa: BLE001
+            journal.write(
+                "permission_asker_failed",
+                tool=tool.name,
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+            return Decision(allow=False, reason="user_deny"), ""
+        feedback = response.feedback
+        match response.choice:
+            case "accept":
+                return Decision(allow=True, reason="user_accept"), feedback
+            case "deny":
+                return Decision(allow=False, reason="user_deny"), feedback
+            case "always":
+                _install_always(
+                    response,
+                    session=session,
+                    project_root=project_root,
+                    tool_name=tool.name,
+                )
+                return Decision(
+                    allow=True,
+                    reason="user_always",
+                    rule=response.rule,
+                ), feedback
 
     # 5. Rule match — project first (includes built-in defaults), session second.
     matched = rules.matches(tool.name, args, tool)

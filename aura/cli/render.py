@@ -210,15 +210,22 @@ class Renderer:
         if isinstance(event, Final):
             # Final carries no new text under normal (natural) stops — the
             # body was already streamed via AssistantDelta and flushed
-            # above. Synthetic Finals (e.g. max_turns_reached) are dropped
-            # here too; the REPL owns rendering the "stopped: max turns"
-            # line itself.
+            # above.
             if self._pending_tool is not None:
                 # Defensive: a Final arriving while a tool header is still
                 # buffered (tool started but never completed — e.g. the
                 # stream broke mid-call) — flush the header as running so
                 # the transcript still shows the invocation.
                 self._flush_pending_tool_as_running()
+            # Round 3A — surface non-natural stop reasons inline. ``natural``
+            # stops stay quiet (the body was the answer); ``max_turns`` and
+            # ``aborted`` get a dim one-liner so the operator sees WHY the
+            # turn ended without having to read the journal.
+            reason = getattr(event, "reason", "natural")
+            if reason == "aborted":
+                self._console.print(Text(" cancelled by user", style="dim"))
+            elif reason == "max_turns":
+                self._console.print(Text(" max turns reached", style="dim"))
             return
 
     def finish(self) -> None:

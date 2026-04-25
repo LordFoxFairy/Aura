@@ -393,16 +393,15 @@ async def test_default_budget_hooks_do_not_cap_before_loop_level() -> None:
     assert finals[0].reason == "natural"
 
 
-def test_max_turns_default_is_50() -> None:
-    # Aura policy: when claude-code leaves max_turns to the caller, we ship
-    # a sane default. 50 is deep enough for real multi-turn work, low enough
-    # to stop runaway loops.
+def test_max_turns_default_is_unlimited() -> None:
+    # User-requested 2026-04-25: claude-code does not cap turns; Aura matches.
+    # Default is None (no cap). Caller may still pass an explicit int to bound.
     model = FakeChatModel(turns=[])
     loop = AgentLoop(
         model=model, registry=ToolRegistry(()), context=make_minimal_context(),
         hooks=HookChain(),
     )
-    assert loop.max_turns == 50
+    assert loop.max_turns is None
 
 
 @pytest.mark.asyncio

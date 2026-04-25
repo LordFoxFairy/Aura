@@ -81,6 +81,30 @@ def project_path(cwd: Path | None = None) -> Path:
     return base / ".aura" / "mcp_servers.json"
 
 
+def _expand_in_place(item: dict[str, object], missing: list[str]) -> dict[str, object]:
+    """Recursively expand ``${VAR}`` / ``${VAR:-default}`` in *item*'s string values.
+
+    Operates on a fresh copy so the caller's source data is never mutated.
+    String leaves go through :func:`_expand_env_vars`; missing references
+    accumulate in *missing* (deduplicated by the expander itself).
+    Non-string leaves (ints, bools, None) pass through unchanged.
+    """
+    from aura.core.mcp.adapter import _expand_env_vars  # noqa: PLC0415
+
+    def _walk(node: object) -> object:
+        if isinstance(node, str):
+            return _expand_env_vars(node, _missing_log=missing)
+        if isinstance(node, dict):
+            return {k: _walk(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [_walk(v) for v in node]
+        return node
+
+    out = _walk(item)
+    assert isinstance(out, dict)
+    return out
+
+
 def _load_layer(path: Path) -> list[MCPServerConfig]:
     """Parse and validate a single MCP store file.
 
@@ -105,8 +129,29 @@ def _load_layer(path: Path) -> list[MCPServerConfig]:
         raise ValueError(
             f"{path}: 'servers' must be a list, got {type(raw_servers).__name__}"
         )
+    # Round 6N — expand env vars in every string leaf before validation
+    # so a ``${TOKEN}`` reference in command/args/env/url/headers
+    # round-trips through the loader transparently. Missing references
+    # accumulate per file and produce a single advisory journal warning.
+    missing: list[str] = []
+    expanded: list[dict[str, object]] = []
+    for item in raw_servers:
+        if isinstance(item, dict):
+            expanded.append(_expand_in_place(item, missing))
+        else:
+            expanded.append(item)
+    if missing:
+        try:
+            from aura.core import journal  # noqa: PLC0415
+            journal.write(
+                "mcp_env_var_missing",
+                path=str(path),
+                missing=sorted(set(missing)),
+            )
+        except Exception:  # noqa: BLE001
+            pass
     try:
-        return [MCPServerConfig.model_validate(item) for item in raw_servers]
+        return [MCPServerConfig.model_validate(item) for item in expanded]
     except ValidationError as exc:
         raise ValueError(f"{path}: invalid server entry: {exc}") from exc
 

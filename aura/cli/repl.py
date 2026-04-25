@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import random
+import re
 import sys
 import time
 from collections.abc import Awaitable, Callable
@@ -14,6 +15,7 @@ from typing import Any
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.panel import Panel
@@ -43,6 +45,114 @@ _MODE_CYCLE: tuple[str, ...] = ("default", "accept_edits", "plan")
 #: ``src/hooks/useDoublePress.ts`` — fast enough that accidental double-
 #: presses don't exit, slow enough that intentional double-taps succeed.
 _CTRL_C_DOUBLE_PRESS_SECONDS: float = 0.8
+
+
+# ---------------------------------------------------------------------------
+# Bracketed-paste handling (Round 6M).
+#
+# A real terminal emits ``\x1b[200~ … \x1b[201~`` around any pasted
+# block; pt's vt100 parser collapses that into a single
+# ``Keys.BracketedPaste`` event whose ``data`` is the raw paste body.
+# We treat anything past either threshold as "large enough that
+# inserting verbatim would dominate the buffer / drown the completion
+# menu" — collapse to a one-line placeholder, stash the original under
+# an integer id, and re-substitute at submit time so the agent never
+# sees the placeholder. Below threshold we insert verbatim — the common
+# 5-line snippet copy/paste path is unchanged.
+# ---------------------------------------------------------------------------
+
+#: Line-count threshold; any paste with more than this many newlines collapses.
+_PASTE_LINE_THRESHOLD: int = 100
+
+#: Byte threshold (UTF-8 encoded length); any paste larger collapses.
+_PASTE_BYTE_THRESHOLD: int = 8 * 1024  # 8 KB
+
+#: Match the placeholder shape we emit. Captures size, unit, line count,
+#: paste id so the inverse function can look up the stash and substitute
+#: back. ``re.compile`` once at import time — the inverse runs on every
+#: submit and re-compiling per call is wasted work.
+_PASTE_PLACEHOLDER_RE: re.Pattern[str] = re.compile(
+    r"\[paste · ([0-9]+) (B|KB|MB) · ([0-9]+) lines · #([0-9]+)\]"
+)
+
+
+def _should_collapse_paste(content: str) -> bool:
+    """Return True iff ``content`` exceeds either paste threshold."""
+    if content.count("\n") + 1 > _PASTE_LINE_THRESHOLD:
+        return True
+    return len(content.encode("utf-8")) > _PASTE_BYTE_THRESHOLD
+
+
+def _format_size(byte_count: int) -> tuple[int, str]:
+    """Return ``(value, unit)`` rounded to the nearest sensible unit."""
+    if byte_count < 1024:
+        return byte_count, "B"
+    if byte_count < 1024 * 1024:
+        return max(1, byte_count // 1024), "KB"
+    return max(1, byte_count // (1024 * 1024)), "MB"
+
+
+def _build_paste_placeholder(content: str, *, paste_id: int) -> str:
+    """Return the ``[paste · …]`` token for a stashed paste.
+
+    Shape: ``[paste · 12 KB · 312 lines · #N]`` — fixed glyph order so
+    :data:`_PASTE_PLACEHOLDER_RE` can recover ``(size, unit, lines, id)``
+    on submit. Visible width stays bounded so the input buffer doesn't
+    overflow on a 200-line paste.
+    """
+    size, unit = _format_size(len(content.encode("utf-8")))
+    line_count = content.count("\n") + (
+        0 if content.endswith("\n") or not content else 1
+    )
+    if not content.endswith("\n") and content:
+        # Ensure trailing-newline-less content still reports correctly:
+        # "abc\ndef" → 2 lines. The arithmetic above already does that
+        # but we re-affirm here so the literal "abc" (no \n) reports 1.
+        pass
+    return f"[paste · {size} {unit} · {line_count} lines · #{paste_id}]"
+
+
+class _PasteStore:
+    """In-REPL stash of bracketed-paste bodies, keyed by integer id.
+
+    Lives for the duration of one REPL session. ``stash`` returns the
+    new id; ``get`` is used by :func:`_expand_paste_placeholders` at
+    submit time to recover the original text. We deliberately avoid
+    LRU / size caps — a single user session is bounded by their
+    typing rate, and dropping a stash mid-buffer would resurface the
+    placeholder in the agent's view (the worst possible UX).
+    """
+
+    __slots__ = ("_bodies", "_next_id")
+
+    def __init__(self) -> None:
+        self._bodies: dict[int, str] = {}
+        self._next_id: int = 0
+
+    def stash(self, content: str) -> int:
+        """Stash ``content`` and return its new id (1-based)."""
+        self._next_id += 1
+        self._bodies[self._next_id] = content
+        return self._next_id
+
+    def get(self, paste_id: int) -> str | None:
+        """Look up a stashed body by id; ``None`` if unknown."""
+        return self._bodies.get(paste_id)
+
+
+def _expand_paste_placeholders(line: str, store: _PasteStore) -> str:
+    """Replace every ``[paste · … · #N]`` token in ``line`` with its body.
+
+    Unknown ids are left verbatim — the user may have pasted a literal
+    placeholder string they typed themselves; we shouldn't eat that.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        paste_id = int(match.group(4))
+        body = store.get(paste_id)
+        return body if body is not None else match.group(0)
+
+    return _PASTE_PLACEHOLDER_RE.sub(_replace, line)
 
 
 class _CtrlCState:
@@ -107,8 +217,9 @@ def _cycle_mode(current: str) -> str:
 
 def _build_mode_key_bindings(
     agent: Agent,
-    console: Console,
+    console: Console | None,
     ctrl_c_state: _CtrlCState | None = None,
+    paste_store: _PasteStore | None = None,
 ) -> KeyBindings:
     """Build a KeyBindings carrying Aura's prompt-level bindings.
 
@@ -223,6 +334,30 @@ def _build_mode_key_bindings(
         state.last_press_at = now
         event.app.invalidate()
 
+    # Bracketed-paste handler — Round 6M. Small pastes are inserted
+    # verbatim (default behavior); large pastes get collapsed to a
+    # placeholder and the original is stashed in ``paste_store`` for
+    # submit-time substitution. The completion menu is reset before
+    # the insert so a long paste can't trigger a per-keystroke menu
+    # storm — see :func:`test_paste_disables_autocomplete_during_event`.
+    store = paste_store
+    if store is not None:
+        @kb.add(Keys.BracketedPaste)
+        def _(event: Any) -> None:
+            data = event.data
+            buffer = event.current_buffer
+            # Reset any in-flight completion menu first so the insert
+            # doesn't trigger a per-character match cycle on a 200-line
+            # paste. ``complete_state = None`` is pt's documented "menu
+            # closed" sentinel.
+            buffer.complete_state = None
+            if not _should_collapse_paste(data):
+                buffer.insert_text(data)
+                return
+            paste_id = store.stash(data)
+            placeholder = _build_paste_placeholder(data, paste_id=paste_id)
+            buffer.insert_text(placeholder)
+
     return kb
 
 
@@ -232,6 +367,7 @@ def _build_prompt_session(
     last_turn_seconds_getter: Callable[[], float] | None = None,
     console: Console | None = None,
     statusline: StatusLineConfig | None = None,
+    paste_store: _PasteStore | None = None,
 ) -> PromptSession[str]:
     """Construct a PromptSession wired with history, completion, and an
     informational bottom toolbar.
@@ -281,7 +417,9 @@ def _build_prompt_session(
     # (to print confirmation). Missing either falls back to pt's default
     # bindings (tests that only exercise history/completion won't trip).
     key_bindings = (
-        _build_mode_key_bindings(agent, console, ctrl_c_state)
+        _build_mode_key_bindings(
+            agent, console, ctrl_c_state, paste_store=paste_store,
+        )
         if agent is not None and console is not None
         else None
     )
@@ -294,10 +432,19 @@ def _build_prompt_session(
     refresh_interval = (
         _buddy_module.BUDDY_FRAME_INTERVAL if agent is not None else 0.0
     )
+    # Bracketed-paste mode is enabled by default in pt 3.x for any
+    # terminal that advertises support — the vt100 parser surfaces
+    # ``Keys.BracketedPaste`` events for our keybinding handler
+    # regardless of how PromptSession is constructed. No explicit
+    # toggle needed here (Round 6M).
     return PromptSession(
         history=history,
         completer=completer,
-        complete_while_typing=False,
+        # ``complete_while_typing=True`` lets the slash-menu trigger
+        # the moment the user types ``/`` (Round 6L) instead of
+        # waiting for an explicit Tab. The completer itself filters
+        # by leading slash so plain prose typing never spawns the menu.
+        complete_while_typing=True,
         search_ignore_case=True,
         bottom_toolbar=bottom_toolbar,
         style=style,
@@ -528,6 +675,12 @@ async def run_repl_async(
     # in the REPL closure — deliberately NOT on agent state.
     last_turn_seconds: list[float] = [0.0]
 
+    # Bracketed-paste stash, scoped to one REPL session. Allocating
+    # here (rather than module-level) means each invocation of
+    # ``run_repl_async`` gets a fresh id counter — matters for tests
+    # that run multiple sessions back-to-back.
+    paste_store = _PasteStore()
+
     # Resolution order for the input function:
     # 1. Explicit ``input_fn`` override (tests / non-interactive callers) —
     #    always wins. Keeps the scripted test harness working verbatim.
@@ -545,6 +698,7 @@ async def run_repl_async(
                 last_turn_seconds_getter=lambda: last_turn_seconds[0],
                 console=_console,
                 statusline=statusline,
+                paste_store=paste_store,
             )
         )
     else:
@@ -566,6 +720,14 @@ async def run_repl_async(
             journal.write("repl_exit", reason="eof_or_ctrlc")
             _console.print()
             return
+
+        # Expand any bracketed-paste placeholders BEFORE the empty-line
+        # short-circuit so a buffer that's purely a placeholder still
+        # gets dispatched (the placeholder text is non-empty, but a
+        # caller might paste an all-whitespace block — letting it
+        # expand here keeps the agent's view consistent with what the
+        # user pasted).
+        line = _expand_paste_placeholders(line, paste_store)
 
         # Empty / whitespace-only input: reprompt silently. Sending an empty
         # HumanMessage to the model always 400s (providers reject empty user

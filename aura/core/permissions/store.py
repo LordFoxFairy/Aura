@@ -152,6 +152,14 @@ def load(project_root: Path) -> PermissionsConfig:
             list(project_raw.get("allow") or [])
             + list(local_raw.get("allow") or [])
         ),
+        "deny": (
+            list(project_raw.get("deny") or [])
+            + list(local_raw.get("deny") or [])
+        ),
+        "ask": (
+            list(project_raw.get("ask") or [])
+            + list(local_raw.get("ask") or [])
+        ),
         "safety_exempt": (
             list(project_raw.get("safety_exempt") or [])
             + list(local_raw.get("safety_exempt") or [])
@@ -185,13 +193,53 @@ def load_ruleset(project_root: Path) -> RuleSet:
     parsed: list[Rule] = []
     for raw in cfg.allow:
         try:
-            parsed.append(Rule.parse(raw))
+            parsed.append(Rule.parse(raw, kind="allow"))
         except InvalidRuleError as exc:
             raise AuraConfigError(
                 source=str(_settings_path(project_root)),
                 detail=f"invalid rule string {raw!r}: {exc}",
             ) from exc
     return RuleSet(rules=tuple(parsed))
+
+
+def _load_kind_ruleset(
+    project_root: Path,
+    *,
+    field: Literal["deny", "ask"],
+) -> RuleSet:
+    """Shared body for ``load_deny_ruleset`` / ``load_ask_ruleset``.
+
+    Malformed entries journal a ``permission_rule_parse_failed`` event
+    and are skipped — a typo in deny / ask must not crash startup.
+    """
+    import contextlib
+
+    cfg = load(project_root)
+    raw_list = cfg.deny if field == "deny" else cfg.ask
+    parsed: list[Rule] = []
+    from aura.core import journal as _j  # noqa: PLC0415
+    for raw in raw_list:
+        try:
+            parsed.append(Rule.parse(raw, kind=field))
+        except InvalidRuleError as exc:
+            with contextlib.suppress(Exception):
+                _j.write(
+                    "permission_rule_parse_failed",
+                    kind=field,
+                    rule=raw,
+                    detail=str(exc),
+                )
+    return RuleSet(rules=tuple(parsed))
+
+
+def load_deny_ruleset(project_root: Path) -> RuleSet:
+    """Load deny rules. Malformed entries journal + skip (no raise)."""
+    return _load_kind_ruleset(project_root, field="deny")
+
+
+def load_ask_ruleset(project_root: Path) -> RuleSet:
+    """Load ask rules. Malformed entries journal + skip (no raise)."""
+    return _load_kind_ruleset(project_root, field="ask")
 
 
 def _write_rule_to_file(settings: Path, rule: Rule) -> None:

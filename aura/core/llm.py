@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import os
+from collections.abc import Callable
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -224,3 +225,59 @@ def create(provider: ProviderConfig, model_name: str) -> BaseChatModel:
         protocol=provider.protocol,
     )
     return model
+
+
+def make_model_for_spec(spec: str, cfg: AuraConfig) -> BaseChatModel:
+    """One-shot resolve+create for a model spec string.
+
+    Used by Round 7R per-spawn model overrides — ``task_create(model="...")``
+    routes through here so the spec passed by the LLM resolves identically
+    to the parent's startup path. Failures bubble:
+    :class:`UnknownModelSpecError` from :func:`resolve` (typo / unknown
+    alias / unknown provider), :class:`MissingProviderDependencyError`
+    from :func:`_load_class`, :class:`MissingCredentialError` from
+    :func:`_resolve_api_key`. Callers that need pre-flight validation
+    (the task_create tool) should call :meth:`SubagentFactory.validate_model_spec`
+    first, which is :func:`resolve`-only and does NOT touch the SDK.
+    """
+    provider, model_name = resolve(spec, cfg=cfg)
+    return create(provider, model_name)
+
+
+def make_summary_model_factory(
+    cfg: AuraConfig,
+    main_model: BaseChatModel,
+    *,
+    summary_spec: str | None = None,
+) -> Callable[[], BaseChatModel]:
+    """Return a memoized factory that yields the model used for summaries.
+
+    Two summary consumers share this factory shape (web_fetch + Round 7QS
+    AgentSummarizer): both want a CHEAP model when the user has wired
+    one (``cfg.web_fetch.summary_model`` / explicit ``summary_spec``),
+    and graceful fallback to the main model otherwise. The factory is
+    memoized — a single SDK instance survives the lifetime of the
+    Agent process, matching how the parent's main model is built once
+    at startup.
+
+    ``summary_spec`` precedence: explicit kwarg wins; otherwise the
+    factory falls back to the main_model (calling code passes
+    ``cfg.web_fetch.summary_model`` etc. as the kwarg). When a spec
+    is supplied but resolution fails, the error surfaces on the FIRST
+    invocation (lazy build) — ``make_summary_model_factory`` itself
+    is pure config.
+    """
+    cached: list[BaseChatModel] = []
+
+    def _factory() -> BaseChatModel:
+        if cached:
+            return cached[0]
+        if summary_spec is None:
+            cached.append(main_model)
+            return main_model
+        provider, model_name = resolve(summary_spec, cfg=cfg)
+        m = create(provider, model_name)
+        cached.append(m)
+        return m
+
+    return _factory

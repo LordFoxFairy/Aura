@@ -6,11 +6,14 @@ Protocol by duck-typing (no ABC inheritance).
 
 from __future__ import annotations
 
+import warnings
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from aura.config.schema import AuraConfigError
 from aura.core.commands.registry import CommandRegistry
 from aura.core.commands.types import CommandResult, CommandSource
+from aura.core.persistence.storage import SessionMeta
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
@@ -169,3 +172,116 @@ def _model_status(agent: Agent) -> str:
                 f"  {alias:<{width}} → {agent.router_aliases[alias]}"
             )
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Resume session — Round 3A built-in slash command.
+# ---------------------------------------------------------------------------
+
+
+def format_relative_time(when: datetime, now: datetime | None = None) -> str:
+    """Return a coarse human-readable "X ago" label for ``when``.
+
+    Resolves to claude-code's relative buckets:
+
+    - <10 s → ``"just now"``
+    - <1 min → ``"<n>s ago"``
+    - <1 h  → ``"<n> minute(s) ago"``
+    - <1 d  → ``"<n> hour(s) ago"``
+    - else  → ``"<n> day(s) ago"``
+
+    Tolerates ``when > now`` (clock skew between SQLite host and caller)
+    by clamping to ``"just now"`` instead of raising.
+    """
+    current = now or datetime.now()
+    diff = (current - when).total_seconds()
+    if diff < 10:
+        return "just now"
+    if diff < 60:
+        return f"{int(diff)}s ago"
+    if diff < 3600:
+        minutes = int(diff // 60)
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    if diff < 86400:
+        hours = int(diff // 3600)
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = int(diff // 86400)
+    return f"{days} day{'s' if days != 1 else ''} ago"
+
+
+def session_label(meta: SessionMeta) -> str:
+    """Compose a one-line picker label for a session.
+
+    Shape: ``<short-id>  <first-prompt-preview>``. The id is truncated
+    to its first 8 hex chars so the label fits the picker viewport even
+    on a 40-col terminal; the picker's :func:`_truncate_to_width` then
+    handles any further overflow per render.
+    """
+    short = meta.session_id[:8]
+    preview = meta.first_user_prompt or "(no prompt)"
+    return f"session-{short}  {preview}"
+
+
+class ResumeCommand:
+    """``/resume [session_id]`` — restore a previously persisted session.
+
+    Without an arg this prints a list-style summary of recent sessions
+    (the picker UI lives in the CLI layer; built-in commands stay UI-
+    free). With an explicit id it short-circuits to
+    :meth:`Agent.resume_session` and reports the message count.
+    """
+
+    name = "/resume"
+    description = "resume a saved session (no arg lists recent sessions)"
+    source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = "[session_id]"
+
+    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+        target = arg.strip()
+        if not target:
+            sessions = agent._storage.list_sessions(limit=10)
+            if not sessions:
+                return CommandResult(
+                    handled=True, kind="print",
+                    text="(no saved sessions)",
+                )
+            now = datetime.now()
+            lines = ["recent sessions:"]
+            for meta in sessions:
+                lines.append(
+                    f"  {session_label(meta)}  "
+                    f"({format_relative_time(meta.last_used_at, now)})"
+                )
+            lines.append("")
+            lines.append("/resume <session_id> to restore one.")
+            return CommandResult(
+                handled=True, kind="view", text="\n".join(lines),
+            )
+        try:
+            count = agent.resume_session(target)
+        except KeyError:
+            return CommandResult(
+                handled=True, kind="print",
+                text=f"session {target!r} not found",
+            )
+        return CommandResult(
+            handled=True, kind="print",
+            text=f"resumed session {target} ({count} messages)",
+        )
+
+
+def restore_session_into(agent: Agent, session_id: str) -> int:
+    """Deprecated: forwards to :meth:`Agent.resume_session`.
+
+    Kept as a transitional alias so older callers (skill / MCP shims
+    written against pre-v0.13 names) keep working. New code should call
+    :meth:`Agent.resume_session` directly.
+    """
+    warnings.warn(
+        "restore_session_into() is deprecated; "
+        "use Agent.resume_session() instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return agent.resume_session(session_id)

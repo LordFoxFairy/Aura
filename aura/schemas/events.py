@@ -54,12 +54,14 @@ class Final:
     """Final concatenated text response from the agent loop.
 
     ``reason`` marks WHY the loop stopped — ``"natural"`` (model emitted no
-    more tool_calls) or ``"max_turns"`` (the loop hit its turn cap). The CLI
-    dims a "stopped: max turns reached" line when reason != natural.
+    more tool_calls), ``"max_turns"`` (the loop hit its turn cap), or
+    ``"aborted"`` (an :class:`AbortController` fired mid-turn — user
+    Ctrl+C, parent cascade). The CLI dims a "stopped: <reason>" line
+    when reason != natural.
     """
 
     message: str
-    reason: Literal["natural", "max_turns"] = "natural"
+    reason: Literal["natural", "max_turns", "aborted"] = "natural"
 
 
 @dataclass(frozen=True)

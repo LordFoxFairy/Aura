@@ -342,6 +342,29 @@ def reset(state: LoopState) -> None:
     state.custom.pop(_MOOD_KEY, None)
 
 
+async def observe_pre_model(*, state: LoopState, **_: object) -> None:
+    """pre_model observer: flip to ``thinking`` while the model is busy.
+
+    Fires AFTER the user's HumanMessage has been appended to history but
+    BEFORE ``ainvoke`` returns. From the operator's perspective the
+    buddy "starts thinking" the instant they hit Enter on a prompt.
+    The transition out happens automatically: ``observe_post_model``
+    overwrites mood to ``happy`` (or ``worried`` if a tool errored)
+    when the model reply lands.
+
+    Worry preservation: if ``had_recent_error`` is set we DON'T overwrite
+    the mood. A user who just saw a tool fail expects continuity —
+    seeing the buddy switch to "thinking" between "worried" and the
+    next "worried" would be more confusing than helpful. Worry sticks
+    until a successful tool clears the flag.
+    """
+    slot = _buddy_state(state)
+    slot["last_event_ts"] = time.time()
+    if slot.get("had_recent_error"):
+        return
+    slot["mood"] = "thinking"
+
+
 async def observe_post_model(*, state: LoopState, **_: object) -> None:
     """post_model observer: flip to ``happy`` unless a recent tool error
     kept us in ``worried``.

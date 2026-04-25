@@ -10,7 +10,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
-from aura.core.hooks import HookChain, PostModelHook, PostToolHook
+from aura.core.hooks import HookChain, PostModelHook, PostToolHook, PreModelHook
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 
@@ -193,12 +193,40 @@ def make_buddy_observer_hook() -> PostToolHook:
     return _hook
 
 
+def make_buddy_thinking_hook() -> PreModelHook:
+    """pre_model observer that flips the buddy to ``thinking`` mood.
+
+    Fires AFTER the user's HumanMessage is appended (G1 contract) but
+    BEFORE ``ainvoke`` blocks. Status-bar render between this hook and
+    the model reply will show the buddy in its "thinking" mood, giving
+    the operator instant feedback that the prompt was received and is
+    in flight. ``observe_post_model`` flips it out again on reply.
+
+    Worry-preserving: if a recent tool error left ``had_recent_error``
+    set, the buddy stays worried — see ``observe_pre_model`` for the
+    rationale (continuity over micro-state-change visibility).
+    """
+
+    async def _hook(
+        *,
+        history: list[BaseMessage],
+        state: LoopState,
+        **_: Any,
+    ) -> None:
+        from aura.cli import buddy as _buddy
+
+        await _buddy.observe_pre_model(state=state)
+
+    return _hook
+
+
 def default_hooks(
     *,
     max_result_size_chars: int = 50_000,
     spill_dir: Path | None = None,
 ) -> HookChain:
     return HookChain(
+        pre_model=[make_buddy_thinking_hook()],
         post_model=[make_usage_tracking_hook()],
         post_tool=[
             make_size_budget_hook(

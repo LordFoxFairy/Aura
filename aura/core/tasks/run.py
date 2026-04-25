@@ -61,6 +61,7 @@ import contextlib
 import json
 import os
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,7 @@ from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
+from aura.core.tasks.types import TaskRecord
 from aura.schemas.events import Final, ToolCallStarted
 
 # Default wall-clock ceiling for a single subagent run. 5 minutes is loose
@@ -221,6 +223,101 @@ def _flush_transcript(
         return None
 
 
+def _flush_metadata(
+    *,
+    transcript_storage: SessionStorage,
+    record: TaskRecord,
+    parent_session_id: str,
+    cwd: str,
+) -> Path | None:
+    """Write a ``.meta.json`` companion file alongside the transcript.
+
+    Claude-code parity (``src/services/SubagentTranscriptStorage.ts``):
+    each subagent's JSONL transcript is shadowed by a sibling
+    ``agent-<task_id>.meta.json`` carrying the small header metadata
+    operators want when scanning a session directory — agent_type,
+    started_at, status, token totals — without having to load the full
+    transcript.
+
+    Track A coordination: the on-disk path is owned by
+    :class:`SessionStorage` via ``subagent_metadata_path(task_id, *,
+    parent_session_id, cwd)``. Until A lands the method, this helper
+    no-ops with a journal warning so the parent loop never blocks on
+    the missing API.
+
+    Failures here MUST NOT block the agent loop — every exception is
+    caught + journaled. Losing the meta companion is strictly less bad
+    than stranding the child's terminal mark on a write error.
+    """
+    try:
+        path_fn = getattr(transcript_storage, "subagent_metadata_path", None)
+        if path_fn is None:
+            # Track A hasn't landed the storage-side path API yet —
+            # journal once + skip. The transcript JSONL is still on
+            # disk; the meta is purely a parity convenience.
+            journal.write(
+                "subagent_metadata_skipped",
+                task_id=record.id,
+                reason="storage_missing_subagent_metadata_path",
+            )
+            return None
+        # Track A's signature accepts ``cwd: Path | None`` and
+        # ``parent_session_id: str | None``. Coerce defensively so a
+        # caller passing a plain string or empty value doesn't trip a
+        # type mismatch deep in storage path construction.
+        cwd_arg: Path | None = Path(cwd) if cwd else None
+        parent_arg: str | None = parent_session_id or None
+        meta_path: Path = path_fn(
+            record.id,
+            parent_session_id=parent_arg,
+            cwd=cwd_arg,
+        )
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        # ISO-8601 timestamps for the human-readable surface; keep the
+        # raw epoch numbers too so a programmatic consumer doesn't have
+        # to re-parse the formatted string.
+        started_iso = datetime.fromtimestamp(
+            record.started_at, tz=UTC,
+        ).isoformat()
+        ended_iso: str | None = None
+        if record.finished_at is not None:
+            ended_iso = datetime.fromtimestamp(
+                record.finished_at, tz=UTC,
+            ).isoformat()
+        meta = {
+            "agent_type": record.agent_type or "general-purpose",
+            "task_id": record.id,
+            "description": record.description,
+            "model_spec": record.model_spec or "",
+            "parent_session_id": parent_session_id or "",
+            "cwd": cwd or "",
+            "started_at": record.started_at,
+            "started_at_iso": started_iso,
+            "ended_at": record.finished_at,
+            "ended_at_iso": ended_iso,
+            "status": record.status,
+            "input_tokens": record.progress.input_tokens,
+            "output_tokens": record.progress.output_tokens,
+        }
+        # Atomic rename: write to ``.tmp`` then ``replace`` so a torn
+        # write can't leave a half-serialized JSON on disk that
+        # downstream tooling would choke on.
+        tmp = meta_path.with_suffix(meta_path.suffix + ".tmp")
+        tmp.write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+        tmp.replace(meta_path)
+        return meta_path
+    except Exception as exc:  # noqa: BLE001
+        journal.write(
+            "subagent_metadata_flush_error",
+            task_id=record.id,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return None
+
+
 async def run_task(
     store: TasksStore,
     factory: SubagentFactory,
@@ -229,10 +326,19 @@ async def run_task(
     timeout_sec: float | None = None,
     transcript_storage: SessionStorage | None = None,
     summary_interval_sec: float | None = None,
+    parent_session_id: str | None = None,
+    cwd: str | None = None,
 ) -> None:
     record = store.get(task_id)
     if record is None:
         return
+    # ``parent_session_id`` / ``cwd`` are claude-code parity metadata
+    # passed through to the ``.meta.json`` companion. Default ``cwd`` to
+    # ``os.getcwd()`` so callers that don't yet thread the value through
+    # still produce a useful meta file; ``parent_session_id`` defaults
+    # to empty string (the storage layer disambiguates by task_id).
+    resolved_parent_session_id = parent_session_id or ""
+    resolved_cwd = cwd or os.getcwd()
     # Resolve the ceiling ONCE per call so an env flip mid-run doesn't
     # race against the timeout context manager. Pass the resolved number
     # into the error message + journal so the operator sees exactly how
@@ -373,6 +479,12 @@ async def run_task(
                 messages=_load_child_messages(agent, store, task_id),
                 store=store,
             )
+            _flush_metadata(
+                transcript_storage=transcript_storage,
+                record=record,
+                parent_session_id=resolved_parent_session_id,
+                cwd=resolved_cwd,
+            )
         if summarizer is not None:
             await summarizer.stop()
         if agent is not None:
@@ -416,6 +528,12 @@ async def run_task(
                 messages=_load_child_messages(agent, store, task_id),
                 store=store,
             )
+            _flush_metadata(
+                transcript_storage=transcript_storage,
+                record=record,
+                parent_session_id=resolved_parent_session_id,
+                cwd=resolved_cwd,
+            )
         if summarizer is not None:
             await summarizer.stop()
         if agent is not None:
@@ -441,6 +559,12 @@ async def run_task(
                 messages=_load_child_messages(agent, store, task_id),
                 store=store,
             )
+            _flush_metadata(
+                transcript_storage=transcript_storage,
+                record=record,
+                parent_session_id=resolved_parent_session_id,
+                cwd=resolved_cwd,
+            )
         if summarizer is not None:
             await summarizer.stop()
         if agent is not None:
@@ -458,6 +582,12 @@ async def run_task(
                 task_id=task_id,
                 messages=_load_child_messages(agent, store, task_id),
                 store=store,
+            )
+            _flush_metadata(
+                transcript_storage=transcript_storage,
+                record=record,
+                parent_session_id=resolved_parent_session_id,
+                cwd=resolved_cwd,
             )
         if summarizer is not None:
             await summarizer.stop()

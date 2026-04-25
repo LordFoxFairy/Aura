@@ -1,16 +1,22 @@
-"""F-07-012: persistent on-disk subagent transcripts.
+"""F-07-012 / V14-Persistence-V3: persistent on-disk subagent transcripts.
 
-Each subagent's full message history is written to JSONL under
-``<storage_root>/subagents/subagent-<task_id>.jsonl`` so a failed
-child's diagnostic trail survives the parent process exit. This file
-exercises:
+Each subagent's full message history is persisted as JSONL so a failed
+child's diagnostic trail survives the parent process exit. Under the
+v3 layout, transcripts live nested under the parent session
+(``<projects>/<encoded-cwd>/<parent-session>/subagents/agent-<task_id>.jsonl``)
+when ``parent_session_id`` is supplied, with a flat fallback at
+``<storage_root>/subagents/agent-<task_id>.jsonl`` for callers that
+haven't yet threaded the parent attribution through.
 
-- The transcript path is captured on the TaskRecord.
-- The file persists after the subagent terminates.
-- One JSONL line per message; the full transcript round-trips.
-- ``list_subagent_transcripts`` returns recent transcripts newest-first.
-- The transcripts are ISOLATED from the user-session resume picker
-  (``list_sessions``).
+This file pins:
+
+- The transcript file is on disk after ``run_task`` returns.
+- ``list_subagent_transcripts`` enumerates the file regardless of which
+  layout (flat or nested) the writer chose.
+- One JSONL line per message; the full transcript round-trips through
+  ``load_subagent_transcript``.
+- Subagent transcripts are ISOLATED from the user-session resume picker
+  (``list_sessions``) — their files never appear in the session index.
 """
 
 from __future__ import annotations
@@ -44,9 +50,27 @@ def _make_factory() -> SubagentFactory:
     )
 
 
+def _candidate_transcript_paths(
+    storage: SessionStorage, task_id: str,
+) -> list[Path]:
+    """Return every path Track A's storage could have written under.
+
+    Track B (run.py) currently writes a file directly at the legacy
+    flat path AND calls back into ``storage.write_subagent_transcript``
+    (which writes at Track A's canonical flat fallback path). Either
+    file existing satisfies the "transcript persisted" invariant.
+    """
+    return [
+        # Track A fallback when no parent_session_id is wired through.
+        storage.subagent_transcript_path(task_id),
+        # Run.py legacy filename (still present on disk).
+        storage._path.parent / "subagents" / f"subagent-{task_id}.jsonl",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_subagent_writes_transcript_to_disk(tmp_path: Path) -> None:
-    parent_storage = SessionStorage(tmp_path / "parent.db")
+    parent_storage = SessionStorage(tmp_path / "parent.db", cwd=tmp_path)
     store = TasksStore()
     factory = _make_factory()
     rec = store.create(description="d", prompt="hello world")
@@ -55,14 +79,16 @@ async def test_subagent_writes_transcript_to_disk(tmp_path: Path) -> None:
         store, factory, rec.id, transcript_storage=parent_storage,
     )
 
-    expected = tmp_path / "subagents" / f"subagent-{rec.id}.jsonl"
-    assert expected.exists()
-    assert expected.stat().st_size > 0
+    candidates = _candidate_transcript_paths(parent_storage, rec.id)
+    written = [p for p in candidates if p.exists() and p.stat().st_size > 0]
+    assert written, (
+        f"expected a transcript at one of {candidates}; none exist"
+    )
 
 
 @pytest.mark.asyncio
 async def test_transcript_path_captured_in_task_record(tmp_path: Path) -> None:
-    parent_storage = SessionStorage(tmp_path / "parent.db")
+    parent_storage = SessionStorage(tmp_path / "parent.db", cwd=tmp_path)
     store = TasksStore()
     factory = _make_factory()
     rec = store.create(description="d", prompt="hi")
@@ -73,7 +99,10 @@ async def test_transcript_path_captured_in_task_record(tmp_path: Path) -> None:
     rec_after = store.get(rec.id)
     assert rec_after is not None
     assert rec_after.transcript_path is not None
-    assert rec_after.transcript_path.name == f"subagent-{rec.id}.jsonl"
+    # The captured path embeds the task id and lives under a
+    # ``subagents/`` directory regardless of which writer pinned it.
+    assert rec.id in rec_after.transcript_path.name
+    assert rec_after.transcript_path.parent.name == "subagents"
     assert rec_after.transcript_path.exists()
 
 
@@ -82,31 +111,30 @@ async def test_transcript_persists_after_subagent_completes(
     tmp_path: Path,
 ) -> None:
     """Transcript file outlives both subagent and parent process simulation."""
-    parent_storage = SessionStorage(tmp_path / "parent.db")
+    parent_storage = SessionStorage(tmp_path / "parent.db", cwd=tmp_path)
     store = TasksStore()
     factory = _make_factory()
     rec = store.create(description="d", prompt="hi")
     await run_task(
         store, factory, rec.id, transcript_storage=parent_storage,
     )
-    path = (
-        tmp_path / "subagents" / f"subagent-{rec.id}.jsonl"
-    )
+    candidates = _candidate_transcript_paths(parent_storage, rec.id)
 
     # Simulate process exit: drop in-memory references.
     parent_storage.close()
     del store
     del factory
 
-    # The file must still be on disk and readable.
-    assert path.exists()
-    text = path.read_text(encoding="utf-8")
-    assert text.strip(), "transcript file is empty"
+    surviving = [p for p in candidates if p.exists()]
+    assert surviving, f"no transcript survived among {candidates}"
+    for p in surviving:
+        text = p.read_text(encoding="utf-8")
+        assert text.strip(), f"transcript file {p} is empty"
 
 
 @pytest.mark.asyncio
 async def test_list_subagent_transcripts_returns_recent(tmp_path: Path) -> None:
-    parent_storage = SessionStorage(tmp_path / "parent.db")
+    parent_storage = SessionStorage(tmp_path / "parent.db", cwd=tmp_path)
     store = TasksStore()
     factory = _make_factory()
 
@@ -116,6 +144,8 @@ async def test_list_subagent_transcripts_returns_recent(tmp_path: Path) -> None:
     await run_task(store, factory, rec_b.id, transcript_storage=parent_storage)
 
     metas = parent_storage.list_subagent_transcripts()
+    # Dedup by task_id — even if Track B and Track A both wrote files,
+    # the listing surfaces one row per task.
     assert len(metas) == 2
     found_ids = {m.task_id for m in metas}
     assert rec_a.id in found_ids
@@ -131,8 +161,7 @@ async def test_transcripts_isolated_from_user_session_listing(
     tmp_path: Path,
 ) -> None:
     """Subagent transcripts must NOT pollute list_sessions output."""
-    parent_storage = SessionStorage(tmp_path / "parent.db")
-    # Simulate one user session.
+    parent_storage = SessionStorage(tmp_path / "parent.db", cwd=tmp_path)
     parent_storage.save("user-session-1", [HumanMessage(content="hi parent")])
 
     store = TasksStore()
@@ -144,16 +173,13 @@ async def test_transcripts_isolated_from_user_session_listing(
 
     sessions = parent_storage.list_sessions()
     session_ids = {s.session_id for s in sessions}
-    # The subagent transcript must NOT show up as a resumable user
-    # session.
     assert "user-session-1" in session_ids
     assert f"subagent-{rec.id}" not in session_ids
-    # And the listing path's structural source (sqlite messages table)
-    # must not have any subagent-prefixed sessions.
+    assert f"agent-{rec.id}" not in session_ids
     for sid in session_ids:
         assert not sid.startswith("subagent-")
+        assert not sid.startswith("agent-")
 
-    # Still listable via the dedicated transcript surface.
     transcripts = parent_storage.list_subagent_transcripts()
     assert any(m.task_id == rec.id for m in transcripts)
 
@@ -161,7 +187,7 @@ async def test_transcripts_isolated_from_user_session_listing(
 @pytest.mark.asyncio
 async def test_transcript_includes_full_message_stream(tmp_path: Path) -> None:
     """The persisted JSONL contains every message the child saw — one per line."""
-    parent_storage = SessionStorage(tmp_path / "parent.db")
+    parent_storage = SessionStorage(tmp_path / "parent.db", cwd=tmp_path)
     store = TasksStore()
     factory = _make_factory()
     rec = store.create(description="d", prompt="hello universe")
@@ -169,7 +195,9 @@ async def test_transcript_includes_full_message_stream(tmp_path: Path) -> None:
         store, factory, rec.id, transcript_storage=parent_storage,
     )
 
-    path = tmp_path / "subagents" / f"subagent-{rec.id}.jsonl"
+    candidates = _candidate_transcript_paths(parent_storage, rec.id)
+    path = next((p for p in candidates if p.exists()), None)
+    assert path is not None, f"no transcript at any of {candidates}"
     lines = [
         line for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
@@ -184,7 +212,6 @@ async def test_transcript_includes_full_message_stream(tmp_path: Path) -> None:
     # Round-trip: load_subagent_transcript reproduces the same messages.
     loaded = parent_storage.load_subagent_transcript(rec.id)
     assert len(loaded) == len(lines)
-    # The HumanMessage carries the original prompt.
     human_messages = [
         m for m in loaded if isinstance(m, HumanMessage)
     ]

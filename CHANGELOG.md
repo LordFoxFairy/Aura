@@ -2,6 +2,16 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **Persistence layout aligned with claude-code** (BREAKING): sessions and subagent transcripts moved from flat `~/.aura/sessions/` and `~/.aura/subagents/` to per-project nested `~/.aura/projects/<encoded-cwd>/<session-id>/...`. Existing v2 layout is preserved as `*.legacy-<ts>/` directories on first launch. See [docs/persistence-layout.md](docs/persistence-layout.md).
+- Subagent transcripts now write a companion `.meta.json` (agentType, model_spec, started_at, ended_at, status, tokens) — claude-code parity.
+
+### Migration notes
+- Old transcripts are not auto-attributed to projects. After upgrading, listing past sessions returns the new (empty) state plus any sessions you've used post-upgrade. To recover a specific old session, manually copy `<session-id>.jsonl` from `~/.aura/sessions.legacy-<ts>/` into `~/.aura/projects/<encoded-cwd>/`.
+- Teams (`~/.aura/teams/`) and settings are unaffected.
+
 ## [0.14.0] — Animated buddy + restrict_tools + hot-reload hooks
 
 15 commits accumulated post-v0.13.0 across two thematic clusters: (1) buddy/UX polish — sprite-based `/buddy` modal, animated status-bar glyph, `kind="view"` modal commands; (2) v0.14 backlog landed — `restrict_tools` whitelist with turn-scoped lease, FileChanged + CwdChanged hooks with real default consumers, `/stats 7d|all` journal replay. Plus three real bugs surfaced by deep E2E verification (circular import, inline-shell sanitizer fidelity, pre_tool merge semantic). `make check` 1957 green (+59 from v0.13.0); deep E2E 14/14 pass under default + seed=42 + seed=99999 + xdist -n 4.

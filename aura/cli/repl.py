@@ -257,6 +257,8 @@ def _build_prompt_session(
     ``agent=None`` disables the bottom_toolbar (keeps the function usable
     in tests that only exercise history / completion wiring).
     """
+    from aura.cli import buddy as _buddy_module
+
     history = FileHistory(str(resolve_history_path()))
     completer = SlashCommandCompleter(lambda: registry)
     # Ctrl+C double-press state is shared between the key binding and
@@ -283,6 +285,15 @@ def _build_prompt_session(
         if agent is not None and console is not None
         else None
     )
+    # pt re-invokes ``bottom_toolbar`` on every refresh tick. We only
+    # need that when an agent is wired (so the buddy fragment exists);
+    # bare-bones sessions (tests without an agent) keep the default 0
+    # so we don't burn CPU repainting an empty bar. The interval is
+    # aligned with :data:`aura.cli.buddy.BUDDY_FRAME_INTERVAL` so each
+    # tick advances the animation by exactly one glyph.
+    refresh_interval = (
+        _buddy_module.BUDDY_FRAME_INTERVAL if agent is not None else 0.0
+    )
     return PromptSession(
         history=history,
         completer=completer,
@@ -291,6 +302,7 @@ def _build_prompt_session(
         bottom_toolbar=bottom_toolbar,
         style=style,
         key_bindings=key_bindings,
+        refresh_interval=refresh_interval,
     )
 
 
@@ -333,8 +345,13 @@ def _make_bottom_toolbar(
     def _buddy_suffix_html() -> str:
         """Return a pt-HTML fragment for the buddy, or empty string.
 
-        The buddy module returns a plain ``"🦆 happy"`` string; we wrap
+        The buddy module returns a plain ``"✶ 🦆 happy"`` string with a
+        time-cycling leading glyph (V14-SIDEBAR / approach A); we wrap
         it in ``<ansigray>`` so it matches the rest of the dim bar.
+        Combined with pt's ``refresh_interval`` on the session this
+        gives an animated single-line buddy that ticks alongside the
+        input without ever blocking it.
+
         Reads the ``ui.buddy_enabled`` flag off ``agent.config`` when
         that attribute exists — defaults to ``True`` otherwise so
         pre-config bare Agent tests still get the default-on behavior.
@@ -348,8 +365,8 @@ def _make_bottom_toolbar(
                 ui = getattr(cfg, "ui", None)
                 if ui is not None:
                     enabled = bool(getattr(ui, "buddy_enabled", True))
-            frag = _buddy.buddy_status_fragment(
-                state=agent.state, enabled=enabled,
+            frag = _buddy.time_aware_status_fragment(
+                state=agent.state, enabled=enabled, now=time.time(),
             )
             if not frag:
                 return ""

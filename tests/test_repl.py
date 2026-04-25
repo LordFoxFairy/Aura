@@ -444,6 +444,84 @@ def test_prompt_session_bottom_toolbar_shows_context_when_agent_passed(
     agent.close()
 
 
+def test_prompt_session_has_refresh_interval_for_animated_buddy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The session ticks ``refresh_interval`` so the animated buddy
+    fragment visibly cycles in the bottom toolbar even while the user
+    isn't typing. Without this, pt only re-renders on input/invalidate
+    and the buddy looks frozen.
+
+    Mirrors claude-code's ``CompanionStatusBar.tsx`` which schedules its
+    own animation interval; pt's built-in ``refresh_interval`` is the
+    natural Python equivalent — re-runs the bottom_toolbar callable
+    every tick.
+    """
+    from aura.cli.repl import _build_prompt_session
+    from aura.core.agent import Agent
+    from aura.core.commands import CommandRegistry
+    from tests.conftest import FakeChatModel
+    from tests.test_agent import _minimal_config, _storage
+
+    agent = Agent(
+        config=_minimal_config(enabled=[]),
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+    session = _build_prompt_session(CommandRegistry(), agent=agent)
+    # > 0 means pt schedules a periodic UI refresh; 0 disables it. The
+    # exact value isn't pinned (display tuning), but it must be in the
+    # 0.05–2.0s range — fast enough to look animated, slow enough to
+    # avoid CPU churn.
+    assert session.refresh_interval > 0
+    assert session.refresh_interval <= 2.0
+    agent.close()
+
+
+def test_prompt_session_bottom_toolbar_is_time_animated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The toolbar callable returns time-varying content given different
+    ``time.time()`` values — the animation hook actually drives the
+    glyph rotation, not just a static snapshot.
+
+    We monkeypatch ``time.time`` (used by the buddy time-aware hook) so
+    successive callable invocations sample different frames and produce
+    different rendered HTML.
+    """
+    from aura.cli import buddy as _buddy
+    from aura.cli.repl import _build_prompt_session
+    from aura.core.agent import Agent
+    from aura.core.commands import CommandRegistry
+    from tests.conftest import FakeChatModel
+    from tests.test_agent import _minimal_config, _storage
+
+    monkeypatch.delenv("AURA_NO_BUDDY", raising=False)
+
+    agent = Agent(
+        config=_minimal_config(enabled=[]),
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+    session = _build_prompt_session(CommandRegistry(), agent=agent)
+    assert callable(session.bottom_toolbar)
+
+    # Sample one full frame ring; expect ≥2 distinct rendered HTML strs.
+    rendered: set[str] = set()
+    for i in range(len(_buddy.BUDDY_FRAMES)):
+        fake_now = i * _buddy.BUDDY_FRAME_INTERVAL
+        monkeypatch.setattr(
+            "aura.cli.repl.time.time", lambda v=fake_now: v,
+        )
+        html = session.bottom_toolbar()
+        rendered.add(str(html))
+    assert len(rendered) >= 2, (
+        "buddy fragment should cycle frames as time.time() advances; "
+        f"got {len(rendered)} distinct renders"
+    )
+    agent.close()
+
+
 async def test_alt_enter_inserts_newline_in_prompt_buffer(
     tmp_path: Path,
 ) -> None:

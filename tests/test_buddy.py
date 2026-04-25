@@ -204,3 +204,106 @@ def test_species_table_has_at_least_10_entries() -> None:
 def test_rarity_weights_sum_to_100() -> None:
     assert sum(buddy.RARITY_WEIGHTS.values()) == 100
     assert set(buddy.RARITY_WEIGHTS) == set(buddy.RARITIES)
+
+
+# ---------------------------------------------------------------------------
+# Time-aware status fragment — animated single-line buddy (V14-SIDEBAR / A)
+# ---------------------------------------------------------------------------
+
+
+def test_time_aware_fragment_includes_emoji_and_glyph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Animated fragment carries the species emoji AND a cycling glyph.
+
+    The glyph slot is a separate visual channel from the mood label —
+    operators' eyes pick up motion (glyph) faster than text shifts
+    (mood label), so the buddy reads as "alive" even when mood is
+    static. Same-second renders return the same fragment so the bar
+    doesn't visibly shimmer between identical pt repaints.
+    """
+    monkeypatch.delenv("AURA_NO_BUDDY", raising=False)
+    state = LoopState()
+    frag = buddy.time_aware_status_fragment(
+        state=state, seed="alice", now=0.0,
+    )
+    assert frag
+    b = buddy.generate_buddy("alice")
+    assert b.emoji in frag
+    # Some recognizable spinner glyph from the cycle should appear.
+    assert any(g in frag for g in buddy.BUDDY_FRAMES)
+
+
+def test_time_aware_fragment_changes_glyph_over_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Different ``now`` values pick different frames in the cycle.
+
+    Cycle period is :data:`buddy.BUDDY_FRAME_INTERVAL` seconds; sampling
+    at multiples of that interval covers the full frame ring and we
+    expect at least 2 distinct fragments across the ring.
+    """
+    monkeypatch.delenv("AURA_NO_BUDDY", raising=False)
+    state = LoopState()
+    n = len(buddy.BUDDY_FRAMES)
+    fragments = {
+        buddy.time_aware_status_fragment(
+            state=state, seed="alice",
+            now=i * buddy.BUDDY_FRAME_INTERVAL,
+        )
+        for i in range(n)
+    }
+    # Pet emoji + mood label are constant; only the glyph rotates, so
+    # the fragment count equals the frame count.
+    assert len(fragments) >= 2
+
+
+def test_time_aware_fragment_stable_within_same_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Within one frame interval the fragment is identical.
+
+    pt may invoke ``bottom_toolbar`` multiple times per refresh tick
+    (e.g. on every keystroke); rendering different glyphs on those
+    extra calls would cause visible flicker in the bar.
+    """
+    monkeypatch.delenv("AURA_NO_BUDDY", raising=False)
+    state = LoopState()
+    half_interval = buddy.BUDDY_FRAME_INTERVAL / 3.0
+    a = buddy.time_aware_status_fragment(state=state, seed="alice", now=10.0)
+    b = buddy.time_aware_status_fragment(
+        state=state, seed="alice", now=10.0 + half_interval,
+    )
+    assert a == b
+
+
+def test_time_aware_fragment_respects_opt_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same opt-out precedence as :func:`buddy_status_fragment`."""
+    monkeypatch.setenv("AURA_NO_BUDDY", "1")
+    state = LoopState()
+    assert buddy.time_aware_status_fragment(
+        state=state, seed="alice", now=0.0,
+    ) == ""
+
+    monkeypatch.delenv("AURA_NO_BUDDY", raising=False)
+    assert buddy.time_aware_status_fragment(
+        state=state, seed="alice", now=0.0, enabled=False,
+    ) == ""
+
+
+def test_time_aware_fragment_carries_mood_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mood label still sits next to the cycling glyph + emoji.
+
+    The animated fragment is a SUPERSET of :func:`buddy_status_fragment`
+    — same emoji + mood text, plus the glyph. Operators don't lose
+    information by enabling animation.
+    """
+    monkeypatch.delenv("AURA_NO_BUDDY", raising=False)
+    state = LoopState()
+    state.custom["_buddy_state"] = {"mood": "worried", "last_event_ts": 0.0}
+    frag = buddy.time_aware_status_fragment(state=state, seed="alice", now=0.0)
+    assert "worried" in frag

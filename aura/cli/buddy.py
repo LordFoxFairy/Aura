@@ -426,6 +426,72 @@ def _env_opt_out() -> bool:
     return val in ("1", "true", "yes", "on")
 
 
+#: Animation glyph cycle for the time-aware status fragment. Same family
+#: as :data:`aura.cli.spinner._GLYPHS` and ``_BANNER_SPINNER_FRAMES`` in
+#: :mod:`aura.cli.repl` so the buddy's idle motion shares visual language
+#: with the welcome banner and the in-turn thinking spinner — every
+#: animated surface in Aura draws from the same character set.
+#:
+#: Palindromic so the glyph "bounces" back and forth instead of resetting,
+#: matching claude-code's ``CompanionStatusBar.tsx`` (v2.1.88) which uses
+#: the same darwin spinner set with the same bounce pattern.
+BUDDY_FRAMES: tuple[str, ...] = (
+    "·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢",
+)
+
+#: Seconds per glyph. 0.5s is the sweet spot — fast enough to read as
+#: animated, slow enough that pt's ``refresh_interval=0.5`` repaint cost
+#: stays negligible (one full re-render of the bottom toolbar). Aligned
+#: with the REPL's chosen ``refresh_interval`` so each pt tick advances
+#: the animation by exactly one frame.
+BUDDY_FRAME_INTERVAL: float = 0.5
+
+
+def _frame_for_now(now: float) -> str:
+    """Pick the cycle frame for the given wall-clock time.
+
+    ``now / interval`` floored to int gives a stable index that bumps by
+    one every :data:`BUDDY_FRAME_INTERVAL` seconds. Modulo the frame
+    count to wrap. Same ``now`` always yields the same frame (no
+    randomness) so pt invocations within the same tick produce
+    identical fragments and the bar doesn't visibly flicker.
+    """
+    if BUDDY_FRAME_INTERVAL <= 0.0:
+        return BUDDY_FRAMES[0]
+    idx = int(now / BUDDY_FRAME_INTERVAL) % len(BUDDY_FRAMES)
+    return BUDDY_FRAMES[idx]
+
+
+def time_aware_status_fragment(
+    *,
+    state: LoopState,
+    seed: str | None = None,
+    enabled: bool = True,
+    now: float,
+) -> str:
+    """Animated variant of :func:`buddy_status_fragment`.
+
+    Same opt-out precedence and same shape (``"<emoji> <mood>"``) plus a
+    leading cycling glyph drawn from :data:`BUDDY_FRAMES`. The glyph
+    advances every :data:`BUDDY_FRAME_INTERVAL` seconds of ``now`` —
+    callers pass ``time.time()`` (or a fake in tests) and the function
+    is otherwise pure.
+
+    Wired from :mod:`aura.cli.repl` where pt's ``refresh_interval``
+    forces the bottom_toolbar callable to run on a timer; without that
+    timer the glyph would only advance on user keystrokes.
+    """
+    if not enabled:
+        return ""
+    if _env_opt_out():
+        return ""
+    effective_seed = seed if seed is not None else current_user_seed()
+    b = generate_buddy(effective_seed)
+    mood = get_mood(state)
+    glyph = _frame_for_now(now)
+    return f"{glyph} {b.emoji} {_MOOD_LABEL[mood]}"
+
+
 def buddy_status_fragment(
     *,
     state: LoopState,

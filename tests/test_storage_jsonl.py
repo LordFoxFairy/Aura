@@ -309,3 +309,46 @@ def test_in_memory_mode_keeps_messages_in_process(tmp_path: Path) -> None:
     assert any(m.session_id == "s" for m in metas)
     # Nothing on disk under tmp_path — in-memory mode never touches it.
     assert not (tmp_path / "sessions").exists()
+
+
+def test_index_handles_legacy_created_at_schema(tmp_path: Path) -> None:
+    """Regression: NOT NULL constraint failed: sessions.created_at.
+
+    A pre-existing index.sqlite from an older Aura version defined
+    ``sessions(session_id, created_at NOT NULL, last_used_at, message_count,
+    first_user_prompt)``. The new code's ``CREATE TABLE IF NOT EXISTS`` was a
+    no-op on the existing schema, then INSERT without ``created_at``
+    raised ``sqlite3.IntegrityError`` on the very first append.
+
+    Fix: include ``created_at`` in the new schema with a sane DEFAULT, and
+    INSERT explicit ``datetime('now')`` so the column is populated even
+    when the table was created by a future code version that did not list
+    a default.
+    """
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True)
+    legacy_idx = sessions_dir / "index.sqlite"
+    legacy_conn = sqlite3.connect(str(legacy_idx))
+    try:
+        legacy_conn.executescript(
+            """
+            CREATE TABLE sessions (
+                session_id        TEXT PRIMARY KEY,
+                created_at        TEXT NOT NULL,
+                last_used_at      TEXT NOT NULL,
+                message_count     INTEGER NOT NULL DEFAULT 0,
+                first_user_prompt TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        legacy_conn.commit()
+    finally:
+        legacy_conn.close()
+
+    storage = SessionStorage(tmp_path / "sessions.db")
+    try:
+        storage.append("regression-session", HumanMessage(content="hello"))
+        sessions = storage.list_sessions(limit=10)
+        assert any(s.session_id == "regression-session" for s in sessions)
+    finally:
+        storage.close()

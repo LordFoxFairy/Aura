@@ -184,17 +184,33 @@ class SessionStorage:
                             first_prompt = content
         idx = sqlite3.connect(str(index_path))
         try:
+            # Schema includes ``created_at`` so this CREATE matches a
+            # legacy index.sqlite from earlier Aura versions that defined
+            # ``created_at TEXT NOT NULL`` — without this column, INSERT on
+            # a pre-existing legacy DB raised
+            # ``IntegrityError: NOT NULL constraint failed: sessions.created_at``
+            # (CREATE TABLE IF NOT EXISTS is a no-op on existing tables, so
+            # the legacy schema persisted across upgrades).
             idx.executescript(
                 "CREATE TABLE IF NOT EXISTS sessions("
                 "session_id TEXT PRIMARY KEY, "
+                "created_at TEXT NOT NULL DEFAULT (datetime('now')), "
+                "last_used_at TEXT NOT NULL DEFAULT (datetime('now')), "
                 "message_count INTEGER NOT NULL DEFAULT 0, "
-                "first_user_prompt TEXT NOT NULL DEFAULT '', "
-                "last_used_at TEXT NOT NULL DEFAULT (datetime('now')));"
+                "first_user_prompt TEXT NOT NULL DEFAULT '');"
             )
+            # UPSERT instead of INSERT OR REPLACE so ``created_at`` is
+            # preserved on update — REPLACE deletes + reinserts, losing
+            # the original timestamp.
             idx.execute(
-                "INSERT OR REPLACE INTO sessions(session_id, message_count, "
-                "first_user_prompt, last_used_at) "
-                "VALUES (?, ?, ?, datetime('now'))",
+                "INSERT INTO sessions("
+                "session_id, message_count, first_user_prompt, "
+                "created_at, last_used_at"
+                ") VALUES (?, ?, ?, datetime('now'), datetime('now')) "
+                "ON CONFLICT(session_id) DO UPDATE SET "
+                "  message_count = excluded.message_count, "
+                "  first_user_prompt = excluded.first_user_prompt, "
+                "  last_used_at = datetime('now')",
                 (session_id, message_count, first_prompt),
             )
             idx.commit()

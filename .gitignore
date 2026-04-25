@@ -203,3 +203,6 @@ tmp/
 scratch/
 *.bak
 *.orig
+
+# Test artifacts (some tests write to project-root sessions/ instead of tmp_path)
+sessions/

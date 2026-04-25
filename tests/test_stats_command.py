@@ -1,4 +1,4 @@
-"""Tests for ``/stats`` — current-session token usage summary (V13-T2A).
+"""Tests for ``/stats`` — current-session token usage + historical replay.
 
 Covers:
 - Empty-state message when no turn has completed yet (friendly nudge, not a crash).
@@ -8,11 +8,15 @@ Covers:
   /stats shows coherent numbers end-to-end.
 - Journal: ``turn_usage`` event emitted every turn with per-turn counts +
   model name extracted from ``response_metadata``.
+- Historical replay (``/stats 7d`` and ``/stats all``): journal scan, per-model
+  aggregation, cutoff filtering, malformed-line tolerance, friendly errors
+  when no journal is configured.
 """
 
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +32,9 @@ from aura.schemas.state import LoopState
 class _StubAgent:
     """Minimal Agent-shaped object exposing ``_state`` — all /stats needs."""
 
-    def __init__(self, state: LoopState) -> None:
+    def __init__(self, state: LoopState, *, config: object | None = None) -> None:
         self._state = state
+        self._config = config
 
 
 def _ai(
@@ -197,5 +202,180 @@ async def test_turn_usage_event_handles_missing_model(tmp_path: Path) -> None:
         usage = [e for e in events if e["event"] == "turn_usage"]
         assert len(usage) == 1
         assert usage[0]["model"] == ""
+    finally:
+        journal_module.reset()
+
+
+# ---------------------------------------------------------------------------
+# V14-STATS-HISTORY — /stats 7d / /stats all  journal replay
+# ---------------------------------------------------------------------------
+
+
+def _seed_turn_usage(
+    path: Path,
+    *,
+    ts: float,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    turn: int = 1,
+) -> None:
+    """Append one ``turn_usage`` event line to a JSONL journal file."""
+    payload = {
+        "ts": ts,
+        "event": "turn_usage",
+        "turn": turn,
+        "model": model,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_tokens": cache_read_tokens,
+    }
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload) + "\n")
+
+
+@pytest.mark.asyncio
+async def test_stats_history_no_journal_configured_message(
+    tmp_path: Path,
+) -> None:
+    """``/stats 7d`` with no live journal AND no config.log path → friendly hint."""
+    journal_module.reset()
+    state = LoopState()
+    agent = _StubAgent(state)  # config=None → no log path discoverable
+    out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
+    assert out.handled is True
+    assert "No journal configured" in out.text
+
+
+@pytest.mark.asyncio
+async def test_stats_history_journal_missing_friendly_message(
+    tmp_path: Path,
+) -> None:
+    """Configured journal that hasn't been written to yet → "no file" hint."""
+    journal_module.reset()
+    journal_module.configure(tmp_path / "never-written.jsonl")
+    try:
+        state = LoopState()
+        agent = _StubAgent(state)
+        out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
+        assert "not found yet" in out.text
+    finally:
+        journal_module.reset()
+
+
+@pytest.mark.asyncio
+async def test_stats_history_aggregates_per_model(tmp_path: Path) -> None:
+    """``/stats all`` aggregates by model across multiple turns."""
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        now = time.time()
+        _seed_turn_usage(
+            log, ts=now, model="claude-sonnet-4-6",
+            input_tokens=1000, output_tokens=50, cache_read_tokens=500,
+        )
+        _seed_turn_usage(
+            log, ts=now, model="claude-sonnet-4-6",
+            input_tokens=2000, output_tokens=80, cache_read_tokens=1500,
+        )
+        _seed_turn_usage(
+            log, ts=now, model="claude-opus-4-7",
+            input_tokens=500, output_tokens=200, cache_read_tokens=0,
+        )
+        state = LoopState()
+        agent = _StubAgent(state)
+        out = await StatsCommand().handle("all", agent)  # type: ignore[arg-type]
+        assert out.handled is True
+        assert out.kind == "view"
+        # Sonnet sums: input 3000, output 130, cache 2000
+        assert "3,000" in out.text
+        assert "claude-sonnet-4-6" in out.text
+        assert "claude-opus-4-7" in out.text
+        # Grand total row appears only when >1 model — sanity-check it's there.
+        assert "TOTAL" in out.text
+    finally:
+        journal_module.reset()
+
+
+@pytest.mark.asyncio
+async def test_stats_history_7d_filters_old_events(tmp_path: Path) -> None:
+    """``/stats 7d`` excludes events older than 7 days."""
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        now = time.time()
+        eight_days_ago = now - (8 * 86400)
+        _seed_turn_usage(
+            log, ts=eight_days_ago, model="old-model",
+            input_tokens=99999, output_tokens=99999,
+        )
+        _seed_turn_usage(
+            log, ts=now, model="recent-model",
+            input_tokens=100, output_tokens=10,
+        )
+        state = LoopState()
+        agent = _StubAgent(state)
+        out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
+        assert "recent-model" in out.text
+        assert "old-model" not in out.text
+        assert "99,999" not in out.text
+    finally:
+        journal_module.reset()
+
+
+@pytest.mark.asyncio
+async def test_stats_history_tolerates_malformed_lines(tmp_path: Path) -> None:
+    """Mid-write crash / corrupted line / foreign JSON → silently skipped,
+    surrounding valid events still aggregated."""
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        now = time.time()
+        _seed_turn_usage(
+            log, ts=now, model="m1", input_tokens=100, output_tokens=10,
+        )
+        # Append a malformed line (truncated JSON simulating a crash mid-write).
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write('{"ts": 123, "event": "turn_usage", "input_to')  # no newline
+            fh.write("\n")
+            fh.write("not json at all\n")
+            fh.write("\n")  # blank line
+        _seed_turn_usage(
+            log, ts=now, model="m1", input_tokens=200, output_tokens=20,
+        )
+        state = LoopState()
+        agent = _StubAgent(state)
+        out = await StatsCommand().handle("all", agent)  # type: ignore[arg-type]
+        # Two valid events for m1: 100+200 input = 300, 10+20 = 30 output.
+        assert "300" in out.text  # input total
+        assert out.kind == "view"
+    finally:
+        journal_module.reset()
+
+
+@pytest.mark.asyncio
+async def test_stats_history_empty_window_friendly_message(
+    tmp_path: Path,
+) -> None:
+    """Journal exists but has no ``turn_usage`` events in the window →
+    friendly "nothing here yet" message instead of an empty table."""
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        # Write some non-turn_usage events so the file isn't empty but the
+        # filter leaves zero rows.
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "ts": time.time(), "event": "config_loaded",
+            }) + "\n")
+        state = LoopState()
+        agent = _StubAgent(state)
+        out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
+        assert "No ``turn_usage`` events" in out.text
     finally:
         journal_module.reset()

@@ -152,13 +152,12 @@ class BuddyCommand:
             frame_picker=_frame,
             tick_ms=_tick_ms(),
         )
-        # Animation already produced the output; return ``kind="view"``
-        # with empty text so the REPL's view handler shows only the
-        # "press Enter to continue" prompt (no extra panel, since we
-        # have nothing to frame — the sprite is already above the
-        # cursor). This keeps the UX consistent with the static path:
-        # display-then-wait-for-Enter for every ``/buddy`` invocation.
-        return CommandResult(handled=True, kind="view", text="")
+        # Animation already produced the output AND consumed the user's
+        # Enter key (the dismiss signal lives inside ``_animate``'s
+        # stdin race). Return ``kind="print"`` with empty text so the
+        # REPL doesn't double-prompt for another Enter — the buddy
+        # command owns its own dismiss flow end-to-end.
+        return CommandResult(handled=True, kind="print", text="")
 
 
 def _tick_ms() -> int:
@@ -180,17 +179,30 @@ async def _animate(
     frame_picker: _FramePicker,
     tick_ms: int,
 ) -> None:
-    """Run the IDLE_SEQUENCE fidget with in-place sprite rewrites.
+    """Run the IDLE_SEQUENCE fidget on a continuous loop until Enter.
 
-    Contract:
-    - The first frame is printed with regular ``print`` — the cursor ends
-      immediately below ``footer[-1]``.
-    - Subsequent frames cursor-up back to the first sprite line, clear
-      each line, and overwrite with the new frame's content.
-    - On ``CancelledError`` (user hit Ctrl+C mid-animation) we suppress
-      the exception and just stop — the REPL's own cancel handling
-      re-prompts on the next line, and the partially-animated output is
-      not load-bearing state.
+    Two concurrent tasks race each other:
+    1. ``_fidget_forever`` — cycles ``_IDLE_SEQUENCE`` indefinitely,
+       rewriting the sprite area in-place every ``tick_ms``.
+    2. ``_wait_enter`` — blocks (in a thread) on ``sys.stdin.readline``;
+       returns when the user hits Enter (or any newline-terminated
+       input — we treat any line as "dismiss").
+
+    First task to finish wins. ``asyncio.wait`` with
+    ``FIRST_COMPLETED`` then cancels the other; both are drained so
+    no warning shows up about pending tasks.
+
+    Why continuous instead of one IDLE_SEQUENCE pass: claude-code's
+    buddy lives in a sidebar that animates perpetually as ambient
+    motion. Aura's pt-based REPL can't easily do a sidebar (would
+    need ~300 LoC of HSplit/Window/invalidate-loop infrastructure —
+    a v0.14 project), but we CAN match the "always moving" feel
+    within the modal: loop forever, user dismisses with Enter when
+    they've watched enough.
+
+    On ``CancelledError`` (e.g. Ctrl+C from outer scope) we suppress
+    silently — the partial animation output is not load-bearing
+    state; the REPL's cancel handling re-prompts on the next line.
     """
     first_frame = frame_picker(0)
     sprite_lines = len(first_frame)
@@ -198,33 +210,72 @@ async def _animate(
     mood_line = 1
     jumpback = sprite_lines + footer_blank_line + mood_line
 
-    # Initial full render.
+    # Initial full render — header + frame 0 + footer + dismiss hint.
     for line in header:
         sys.stdout.write(line + "\n")
     for line in first_frame:
         sys.stdout.write(line + "\n")
     for line in footer:
         sys.stdout.write(line + "\n")
+    sys.stdout.write("\n  \033[2m(press Enter to dismiss)\033[0m\n")
+    # Leave the cursor on a blank line below the hint so the next
+    # invalidate-cycle's cursor-up doesn't overwrite the hint.
     sys.stdout.flush()
+    # Account for the hint's two extra lines (blank line + hint line)
+    # when calculating the cursor-up jump.
+    jumpback += 2
 
-    with contextlib.suppress(asyncio.CancelledError):
-        # Skip index 0 since we already printed frame 0. Iterate the
-        # remaining 14 ticks; clamp -1 → 0 (Aura has no blink frame).
-        for tick_frame_idx in _IDLE_SEQUENCE[1:]:
-            await asyncio.sleep(tick_ms / 1000)
-            idx = 0 if tick_frame_idx == -1 else tick_frame_idx
-            frame = frame_picker(idx)
-            # Jump cursor up to the first sprite line and rewrite the
-            # sprite + footer area. ``\033[{n}F`` = cursor up N lines
-            # AND move to column 1; ``\033[2K`` = clear entire current
-            # line. Leaving the cursor at end-of-footer so the REPL
-            # re-prompt lands on a fresh line below.
-            sys.stdout.write(f"\033[{jumpback}F")
-            for line in frame:
-                sys.stdout.write("\033[2K" + line + "\n")
-            for line in footer:
-                sys.stdout.write("\033[2K" + line + "\n")
-            sys.stdout.flush()
+    async def _fidget_forever() -> None:
+        # Iterate IDLE_SEQUENCE forever, skipping index 0 on the very
+        # first tick (frame 0 is what we just printed). After the first
+        # full sequence, every tick redraws — including the would-be-
+        # 0-frame ones, which is fine because rewriting frame 0 over
+        # frame 0 is a no-op visually but keeps the timing rhythm.
+        first_pass = True
+        while True:
+            seq = _IDLE_SEQUENCE[1:] if first_pass else _IDLE_SEQUENCE
+            first_pass = False
+            for tick_frame_idx in seq:
+                await asyncio.sleep(tick_ms / 1000)
+                idx = 0 if tick_frame_idx == -1 else tick_frame_idx
+                frame = frame_picker(idx)
+                sys.stdout.write(f"\033[{jumpback}F")
+                for line in frame:
+                    sys.stdout.write("\033[2K" + line + "\n")
+                for line in footer:
+                    sys.stdout.write("\033[2K" + line + "\n")
+                # Repaint the dismiss hint so the cursor-up math stays
+                # consistent across ticks.
+                sys.stdout.write("\033[2K\n")
+                sys.stdout.write(
+                    "\033[2K  \033[2m(press Enter to dismiss)\033[0m\n",
+                )
+                sys.stdout.flush()
+
+    async def _wait_enter() -> None:
+        # ``sys.stdin.readline`` is blocking; offload to the default
+        # executor so the asyncio loop stays free to drive the fidget
+        # task. Whatever line the user typed is discarded — the only
+        # signal we care about is "user hit Enter (or Ctrl+D)".
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, sys.stdin.readline)
+
+    fidget = asyncio.create_task(_fidget_forever())
+    waiter = asyncio.create_task(_wait_enter())
+    try:
+        await asyncio.wait(
+            {fidget, waiter},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
+        for task in (fidget, waiter):
+            if not task.done():
+                task.cancel()
+        # Drain so cancellations don't surface as "Task was destroyed"
+        # warnings on event-loop shutdown.
+        for task in (fidget, waiter):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
 
 
 # Typing alias for the frame picker callback (declared after the function

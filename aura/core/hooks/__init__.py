@@ -220,14 +220,23 @@ class HookChain:
           safety / budget denials take precedence over anything further
           down the chain, and once a ToolResult is decided there's
           nothing for later hooks to add.
-        - ``decision`` is **last-wins** across hooks the chain actually
-          ran. Permission hooks typically sit at the end of the chain
-          (permission is the final gate before a tool executes), so the
-          last non-None decision is the authoritative one. A hook
-          earlier in the chain emitting a decision does not block a
-          later hook from overriding it — if an early hook
-          short-circuits, the later hook never runs so its (potential)
-          decision is naturally not considered.
+        - ``decision`` is **first-deny-wins**. As soon as any hook
+          returns a deny decision (``allow=False``), that decision is
+          locked in: later hooks may continue to run (e.g. to populate
+          their own short-circuits) but cannot promote the merged
+          decision back to allow. If no hook ever denies, the **last
+          non-None allow** wins — matching the typical chain shape
+          where the permission hook is last and gets to stamp its
+          ``rule_allow`` / ``mode_bypass`` reason as the authoritative
+          allow audit trail.
+
+        Audit trail: every hook that emits a non-None decision also
+        triggers a ``pre_tool_hook_decision`` journal event (with the
+        hook's qualified name + tool + reason + allow flag) BEFORE
+        merging. The downstream ``permission_decision`` event in the
+        loop continues to carry the merged outcome — together they let
+        the auditor reconstruct the full chain, not just the final
+        result.
 
         ``**kwargs`` forwards per-call metadata to hooks. Today
         ``tool_call_id`` flows through (G5 uses it to stamp
@@ -237,12 +246,41 @@ class HookChain:
         ``**kwargs`` by protocol so unchanged hooks silently ignore
         new keys.
         """
+        # Lazy-imported: hook chain is core-loaded; the journal module
+        # pulls in storage/config and shouldn't sit on the import path
+        # of the hook protocols themselves.
+        from aura.core.persistence import journal
+
         merged_decision: Decision | None = None
+        merged_decision_locked = False  # set True once a deny is recorded
         for hook in self.pre_tool:
             outcome = await hook(tool=tool, args=args, state=state, **kwargs)
-            # Last-wins: any non-None decision updates the running merge.
             if outcome.decision is not None:
-                merged_decision = outcome.decision
+                # Per-hook audit event — fires for every non-None
+                # decision the chain produces, regardless of merge
+                # outcome, so audit readers can reconstruct what each
+                # hook said even when one was overridden by a later
+                # hook in the merge.
+                hook_name = (
+                    f"{getattr(hook, '__module__', '')}."
+                    f"{getattr(hook, '__qualname__', repr(hook))}"
+                ).lstrip(".")
+                journal.write(
+                    "pre_tool_hook_decision",
+                    hook=hook_name,
+                    tool=tool.name,
+                    allow=outcome.decision.allow,
+                    reason=outcome.decision.reason,
+                )
+                # First-deny-wins: a deny locks the merged decision so
+                # a later hook's allow cannot silently override it.
+                # Among allows (no deny seen yet) we keep last-wins
+                # behavior so the permission hook (typically last) gets
+                # to stamp its reason.
+                if not merged_decision_locked:
+                    merged_decision = outcome.decision
+                    if not outcome.decision.allow:
+                        merged_decision_locked = True
             # First-wins: stop immediately on the first short-circuit.
             if outcome.short_circuit is not None:
                 return PreToolOutcome(

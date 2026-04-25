@@ -128,10 +128,11 @@ async def test_pre_tool_first_short_circuit_wins() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_decision_last_wins() -> None:
-    """Merge semantics: when multiple hooks emit decisions and none
-    short-circuit, the last non-None decision wins. Mirrors the typical
-    chain ordering where the permission hook runs last."""
+async def test_pre_tool_decision_last_allow_wins_when_no_deny() -> None:
+    """Among ALLOW decisions (no hook denies), last-wins applies — the
+    permission hook (typically last in the chain) gets to stamp its
+    ``rule_allow`` / ``mode_bypass`` reason as the authoritative audit
+    line."""
     from aura.core.permissions.decision import Decision
     from aura.core.permissions.rule import Rule
 
@@ -154,6 +155,119 @@ async def test_pre_tool_decision_last_wins() -> None:
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
     assert outcome.decision is last_decision
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_first_deny_beats_later_allow() -> None:
+    """BUG-AUDIT-B1 regression — a deny decision must not be silently
+    overridden by a later allow. Pre-fix the merge was last-wins, which
+    meant a permission hook returning ``mode_bypass`` (allow) would
+    erase a safety hook's earlier ``safety_blocked`` (deny) and an
+    audit reader would only see the allow."""
+    from aura.core.permissions.decision import Decision
+
+    deny_first = Decision(allow=False, reason="safety_blocked")
+    allow_later = Decision(allow=True, reason="mode_bypass")
+
+    async def deny_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        # Deliberately does NOT short_circuit — exercises the merge
+        # path where a later hook would otherwise silently win.
+        return PreToolOutcome(short_circuit=None, decision=deny_first)
+
+    async def allow_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        return PreToolOutcome(short_circuit=None, decision=allow_later)
+
+    chain = HookChain(pre_tool=[deny_hook, allow_hook])
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+
+    assert outcome.decision is deny_first
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_first_deny_wins_regardless_of_position() -> None:
+    """First-deny-wins must hold whether the deny is the first or the
+    last hook to fire. An allow that ran before the deny is replaced
+    by the deny (deny supersedes prior allows); a later allow cannot
+    override the deny."""
+    from aura.core.permissions.decision import Decision
+    from aura.core.permissions.rule import Rule
+
+    allow_first = Decision(
+        allow=True, reason="rule_allow", rule=Rule(tool="stub", content=None),
+    )
+    deny_second = Decision(allow=False, reason="safety_blocked")
+
+    async def allow_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        return PreToolOutcome(short_circuit=None, decision=allow_first)
+
+    async def deny_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        return PreToolOutcome(short_circuit=None, decision=deny_second)
+
+    chain = HookChain(pre_tool=[allow_hook, deny_hook])
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+
+    assert outcome.decision is deny_second
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_per_hook_decision_journaled(tmp_path: Any) -> None:
+    """Every non-None hook decision must emit its own
+    ``pre_tool_hook_decision`` journal event before the merge fires —
+    so even when a later hook overrides an earlier one (or vice-versa
+    under first-deny-wins), the audit trail captures BOTH verdicts."""
+    import json
+
+    from aura.core.permissions.decision import Decision
+    from aura.core.persistence import journal
+
+    deny = Decision(allow=False, reason="safety_blocked")
+    allow = Decision(allow=True, reason="mode_bypass")
+
+    async def deny_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        return PreToolOutcome(short_circuit=None, decision=deny)
+
+    async def allow_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> PreToolOutcome:
+        return PreToolOutcome(short_circuit=None, decision=allow)
+
+    chain = HookChain(pre_tool=[deny_hook, allow_hook])
+    log_path = tmp_path / "audit.jsonl"
+    journal.configure(log_path)
+    try:
+        outcome = await chain.run_pre_tool(
+            tool=_stub_tool, args={}, state=LoopState(),
+        )
+    finally:
+        journal.reset()
+
+    assert outcome.decision is deny  # first-deny-wins
+
+    # Replay the audit trail: BOTH hook decisions must be present.
+    events = [
+        json.loads(line) for line in log_path.read_text().splitlines() if line
+    ]
+    decisions = [e for e in events if e["event"] == "pre_tool_hook_decision"]
+    assert len(decisions) == 2, decisions
+    assert decisions[0]["allow"] is False
+    assert decisions[0]["reason"] == "safety_blocked"
+    assert decisions[1]["allow"] is True
+    assert decisions[1]["reason"] == "mode_bypass"
+    # ``hook`` field must identify the source — closure qualname is
+    # acceptable (matches the production hooks emitted via
+    # make_*_hook factories).
+    assert "deny_hook" in decisions[0]["hook"]
+    assert "allow_hook" in decisions[1]["hook"]
 
 
 @pytest.mark.asyncio

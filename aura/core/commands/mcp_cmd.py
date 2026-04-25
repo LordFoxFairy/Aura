@@ -94,7 +94,7 @@ class MCPCommand:
                 text="(no MCP servers configured)",
             )
         return CommandResult(
-            handled=True, kind="print", text=_render_table(statuses),
+            handled=True, kind="view", text=_render_table(statuses),
         )
 
     # ------------------------------------------------------------------

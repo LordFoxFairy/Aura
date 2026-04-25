@@ -152,7 +152,7 @@ class GitStatusCommand:
             )
 
         return CommandResult(
-            handled=True, kind="print", text=_format_status(stdout),
+            handled=True, kind="view", text=_format_status(stdout),
         )
 
 
@@ -287,8 +287,12 @@ class GitDiffCommand:
                 text="[dim]no changes[/dim]",
             )
 
+        # /diff already wrote the colorized diff to stdout itself —
+        # return ``kind="view"`` with empty text so the REPL just shows
+        # the "press Enter to continue" prompt without re-printing the
+        # diff. Matches /buddy's animated path.
         self._print_ansi(stdout)
-        return CommandResult(handled=True, kind="print", text="")
+        return CommandResult(handled=True, kind="view", text="")
 
     def _print_ansi(self, stdout: str) -> None:
         write = self._writer or sys.stdout.write
@@ -376,7 +380,10 @@ class GitLogCommand:
         # fresh line instead of butting up against the last SHA.
         body = stdout if stdout.endswith("\n") else stdout + "\n"
         write(body)
-        return CommandResult(handled=True, kind="print", text="")
+        # /log already wrote its output directly; ``kind="view"`` with
+        # empty text triggers the "press Enter to continue" pause so the
+        # log stays on screen until the user dismisses it.
+        return CommandResult(handled=True, kind="view", text="")
 
 
 def _parse_log_count(arg: str) -> int | str:

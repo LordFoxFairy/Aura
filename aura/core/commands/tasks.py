@@ -70,7 +70,7 @@ class TasksCommand:
                 f"[{flavor:>15}]  {r.description}"
             )
         return CommandResult(
-            handled=True, kind="print", text="\n".join(lines)
+            handled=True, kind="view", text="\n".join(lines)
         )
 
 
@@ -121,7 +121,7 @@ class TaskGetCommand:
         if rec.error:
             lines.append(f"error       {rec.error}")
         return CommandResult(
-            handled=True, kind="print", text="\n".join(lines),
+            handled=True, kind="view", text="\n".join(lines),
         )
 
 

@@ -33,6 +33,7 @@ import json
 import os
 import re
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from aura.core.abort import AbortController
@@ -59,6 +60,58 @@ if TYPE_CHECKING:
 #: ``-`` / ``_`` so the value is safe as a filesystem path segment on
 #: every platform we support.
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+@dataclass(frozen=True)
+class TeammateMemberStatus:
+    """Per-member projection used by :meth:`TeamManager.view_state`.
+
+    Snapshot fields chosen to match claude-code's
+    ``CoordinatorAgentStatus`` row shape: identity (``name``,
+    ``agent_type``), execution profile (``model_spec``), liveness
+    (``status`` ∈ ``"active"``/``"shutting-down"``/``"dead"``), and a
+    pair of activity counters (``tokens_used``, ``last_active``) for
+    the operator-facing "is this teammate doing anything?" summary.
+
+    ``model_spec`` is the resolved spec the teammate's child Agent
+    runs on (TaskRecord.model_spec); ``None`` when no override was
+    set (the teammate inherits the leader's default). ``last_active``
+    is the wall-clock float from the last journal/progress tick;
+    ``None`` when the teammate has never produced a tracked event.
+    """
+
+    name: str
+    agent_type: str
+    model_spec: str | None
+    status: str
+    tokens_used: int
+    last_active: float | None
+
+
+@dataclass(frozen=True)
+class TeamViewSnapshot:
+    """Aggregated read-only projection of a team's state for ``/team view``.
+
+    Built by :meth:`TeamManager.view_state`. Members come from the
+    in-memory :class:`TeamRecord`; recent messages come from disk
+    (the union of every per-recipient JSONL inbox), sorted by
+    ``sent_at`` descending and capped at ``RECENT_MESSAGE_CAP``.
+    Subagent + transcript counts are best-effort directory walks —
+    the renderer treats them as informational, not load-bearing.
+    """
+
+    team_id: str
+    name: str
+    members: list[TeammateMemberStatus]
+    recent_messages: list[TeamMessage]
+    subagent_count: int
+    transcript_count: int
+
+
+#: Cap on ``recent_messages`` returned by :meth:`TeamManager.view_state`.
+#: Mirrors claude-code's ``TaskListV2`` per-task last-N tail length
+#: (10 lines per pane is the readability sweet spot).
+_RECENT_MESSAGE_CAP: int = 10
 
 
 class TeamError(ValueError):
@@ -624,6 +677,155 @@ class TeamManager:
         return list(self._team.members)
 
     # ------------------------------------------------------------------
+    # Read-only aggregator (powers ``/team view`` UX)
+    # ------------------------------------------------------------------
+
+    def view_state(self, team_id: str | None = None) -> TeamViewSnapshot:
+        """Aggregate a read-only snapshot of a team for the ``/team view`` UX.
+
+        Pure read path — does NOT mutate the manager, the record, or
+        any mailbox. Safe to call from a slash command handler without
+        worrying about racing the runtime loop.
+
+        ``team_id=None`` snapshots the live team (the one this manager
+        owns). An explicit ``team_id`` snapshots a different team's
+        on-disk state (members + inbox JSONLs); used by ``/team view
+        <name>`` when the caller hasn't entered the team yet. Raises
+        :class:`TeamError` when neither path resolves to a real team.
+
+        Members come from the in-memory :class:`TeamRecord` for the
+        live team, or from ``config.json`` for an off-record team.
+        Recent messages are the union of every recipient's inbox JSONL
+        (``leader.jsonl`` + every member's), sorted ``sent_at`` desc
+        and capped at :data:`_RECENT_MESSAGE_CAP`.
+        """
+        if team_id is None:
+            if self._team is None:
+                raise TeamError("no team is active; pass team_id explicitly")
+            record = self._team
+        elif self._team is not None and self._team.team_id == team_id:
+            record = self._team
+        else:
+            # Off-record snapshot — load config.json fresh. We don't
+            # cache the loaded record on the manager; a second view
+            # call should re-read so a concurrent writer's update is
+            # picked up next time.
+            path = self._storage.team_config_path(team_id)
+            if not path.exists():
+                raise TeamError(f"team {team_id!r} not found on disk")
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise TeamError(
+                    f"team {team_id!r} config is unreadable: {exc}",
+                ) from exc
+            record = TeamRecord.model_validate(raw)
+        members = self._build_member_statuses(record)
+        recent = self._collect_recent_messages(record)
+        sub_count, tx_count = self._count_artifacts(record)
+        return TeamViewSnapshot(
+            team_id=record.team_id,
+            name=record.name,
+            members=members,
+            recent_messages=recent,
+            subagent_count=sub_count,
+            transcript_count=tx_count,
+        )
+
+    def _build_member_statuses(
+        self, record: TeamRecord,
+    ) -> list[TeammateMemberStatus]:
+        """Project ``record.members`` into status rows for ``view_state``.
+
+        Live team: cross-reference :class:`TasksStore` for tokens +
+        ``last_activity_at`` so the row reflects what the teammate has
+        actually consumed since spawn. Off-record team: tokens / last
+        active stay zero / ``None`` because the runtime task is gone.
+        Status is ``"active"`` while the membership row is present;
+        ``"dead"`` when ``is_active=False``. ``"shutting-down"`` is
+        reserved for the in-flight ``aremove_member`` window — we
+        approximate that by checking the per-member shutdown waiter.
+        """
+        out: list[TeammateMemberStatus] = []
+        live = self._team is not None and self._team.team_id == record.team_id
+        for m in record.members:
+            tokens = 0
+            last_active: float | None = None
+            model_spec: str | None = m.model_name
+            if live:
+                task_id = self._member_task_ids.get(m.name)
+                if task_id is not None:
+                    rec = self._tasks_store.get(task_id)
+                    if rec is not None:
+                        tokens = int(rec.progress.token_count)
+                        last_active = rec.progress.last_activity_at
+                        # Prefer the actual-resolved model_spec the
+                        # task was spawned on so the operator sees the
+                        # spec the teammate is REALLY running, not the
+                        # override token (which is empty for inherits).
+                        resolved = getattr(rec, "model_spec", None)
+                        if resolved:
+                            model_spec = resolved
+            if not m.is_active:
+                status = "dead"
+            elif live and m.name in self._shutdown_waiters:
+                status = "shutting-down"
+            else:
+                status = "active"
+            out.append(
+                TeammateMemberStatus(
+                    name=m.name,
+                    agent_type=m.agent_type,
+                    model_spec=model_spec,
+                    status=status,
+                    tokens_used=tokens,
+                    last_active=last_active,
+                ),
+            )
+        return out
+
+    def _collect_recent_messages(
+        self, record: TeamRecord,
+    ) -> list[TeamMessage]:
+        """Return last :data:`_RECENT_MESSAGE_CAP` messages across inboxes.
+
+        Reads every per-recipient JSONL (``leader`` + every active
+        member) and merges into one chronological list. Bounded by the
+        cap before return so callers don't have to slice.
+        """
+        mailbox = Mailbox(self._storage, record.team_id)
+        recipients = [TEAM_LEADER_NAME] + [m.name for m in record.members]
+        gathered: list[TeamMessage] = []
+        for rcpt in recipients:
+            gathered.extend(mailbox.read_all(rcpt))
+        gathered.sort(key=lambda m: m.sent_at, reverse=True)
+        return gathered[:_RECENT_MESSAGE_CAP]
+
+    def _count_artifacts(self, record: TeamRecord) -> tuple[int, int]:
+        """Return ``(subagent_count, transcript_count)`` for ``record``.
+
+        Subagent count is the count of distinct transcripts under the
+        leader's storage root (the parent owns the subagents). Per-team
+        transcript count walks the team's own ``transcripts/`` dir so
+        teammate transcripts (one per member) get reported separately.
+        Both are best-effort: missing directories return 0.
+        """
+        sub_count = 0
+        with contextlib.suppress(Exception):
+            sub_count = len(self._storage.list_subagent_transcripts())
+        tx_count = 0
+        try:
+            tx_dir = self._storage.team_root(record.team_id) / "transcripts"
+            if tx_dir.is_dir():
+                tx_count = sum(
+                    1 for p in tx_dir.iterdir()
+                    if p.is_file() and p.suffix == ".jsonl"
+                )
+        except OSError:
+            tx_count = 0
+        return sub_count, tx_count
+
+    # ------------------------------------------------------------------
     # Messaging
     # ------------------------------------------------------------------
 
@@ -737,4 +939,9 @@ class TeamManager:
         return mgr
 
 
-__all__ = ["TeamError", "TeamManager"]
+__all__ = [
+    "TeamError",
+    "TeamManager",
+    "TeammateMemberStatus",
+    "TeamViewSnapshot",
+]

@@ -786,6 +786,13 @@ async def run_repl_async(
         # --verbose (verbose adds the cumulative-totals summary on top).
         _print_post_turn_status(agent, _console, last_turn_seconds[0])
 
+        # V14 — when the user has /team-entered a team, print a thin
+        # status line between prompts so the active context stays
+        # visible without polluting the buddy / bottom_toolbar slots.
+        # The line is silent (skipped) when no team is active so the
+        # common single-agent path is unaffected.
+        _print_active_team_status(agent, _console)
+
         if verbose:
             _print_verbose_summary(agent, _console)
 
@@ -960,6 +967,30 @@ def _print_post_turn_status(
             duration = f"{int(last_turn_seconds)}s"
         text.append(f"  ·  {duration}", style="dim")
     console.print(text)
+
+
+def _print_active_team_status(agent: Agent, console: Console) -> None:
+    """Print a one-line `· in team: <name> ·` reminder when active.
+
+    Reads ``agent.state.custom["active_team_id"]`` (the slot owned by
+    the ``/team enter`` command, see ``aura.core.commands.team``).
+    Resolves the slug to the human-readable team name via the manager
+    when the slug points at the live team; falls back to displaying
+    the slug otherwise (off-record teams). Silent no-op when the slot
+    is absent — the common path. The print is dim + framed by ``·``
+    glyphs so it sits between the post-turn ``done`` line and the
+    next prompt without disrupting the existing layout.
+    """
+    active_id = agent.state.custom.get("active_team_id")
+    if not active_id:
+        return
+    label = active_id
+    mgr = getattr(agent, "_team_manager", None)
+    if mgr is not None:
+        live = getattr(mgr, "team", None)
+        if live is not None and getattr(live, "team_id", None) == active_id:
+            label = live.name
+    console.print(Text(f"· in team: {label} ·", style="dim"))
 
 
 async def _run_turn(

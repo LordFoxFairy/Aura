@@ -662,3 +662,288 @@ def test_inline_cmd_in_body_emits_journal_warning(tmp_path: Path) -> None:
         assert warnings[0]["layer"] == "user"
     finally:
         journal_module.reset()
+
+
+# ---------------------------------------------------------------------------
+# Bug A1 — render-time sanitisation of inline shell-exec syntax
+# ---------------------------------------------------------------------------
+
+
+def _make_skill_with_body(body: str, tmp_path: Path):  # type: ignore[no-untyped-def]
+    """Construct a Skill dataclass directly so render tests don't have to round-trip yaml."""
+    from aura.core.skills.types import Skill
+    return Skill(
+        name="t",
+        description="d",
+        body=body,
+        source_path=tmp_path / "SKILL.md",
+        layer="user",
+    )
+
+
+def test_render_inline_cmd_replaced_with_inert_placeholder(tmp_path: Path) -> None:
+    """A1: ``!`date` `` in body is wrapped in the inert ``[Aura: ...]`` placeholder.
+
+    The original command text is preserved INSIDE the placeholder for context,
+    but no longer reads as a standalone exec contract — model sees ``[Aura:
+    inline shell not supported — original: !`date`]`` instead of bare
+    ``!`date` ``.
+    """
+    body = "Today is !`date +%Y-%m-%d`. Done."
+    skill = _make_skill_with_body(body, tmp_path)
+    out = render_skill_body(skill, session_id="s")
+    # Placeholder present — wraps the original syntax explicitly.
+    assert "[Aura: inline shell not supported — original: !`date +%Y-%m-%d`]" in out
+    # Standalone exec syntax (not enclosed by the placeholder) is gone.
+    # We strip out the placeholder text and assert the residue has no leftover ``!`...```.
+    residue = out.replace(
+        "[Aura: inline shell not supported — original: !`date +%Y-%m-%d`]", ""
+    )
+    assert "!`" not in residue
+
+
+def test_render_multiple_inline_cmds_each_replaced(tmp_path: Path) -> None:
+    """A1: each ``!`cmd` `` occurrence is independently sanitised."""
+    skill = _make_skill_with_body("a !`pwd` && !`whoami` end.", tmp_path)
+    out = render_skill_body(skill, session_id="s")
+    # Both placeholders present.
+    assert "[Aura: inline shell not supported — original: !`pwd`]" in out
+    assert "[Aura: inline shell not supported — original: !`whoami`]" in out
+    # No standalone exec syntax outside the placeholders.
+    residue = (
+        out.replace("[Aura: inline shell not supported — original: !`pwd`]", "")
+        .replace("[Aura: inline shell not supported — original: !`whoami`]", "")
+    )
+    assert "!`" not in residue
+
+
+def test_render_no_inline_cmd_passes_through(tmp_path: Path) -> None:
+    """A1: bodies without the syntax are byte-identical (modulo other substitutions)."""
+    body = "No shell here. Just prose with `inline code` and ${AURA_SESSION_ID}."
+    skill = _make_skill_with_body(body, tmp_path)
+    out = render_skill_body(skill, session_id="abc")
+    assert "No shell here" in out
+    assert "`inline code`" in out
+    assert "abc" in out
+    # Sanity: no spurious placeholders inserted.
+    assert "[Aura:" not in out
+
+
+def test_render_inline_cmd_inside_fenced_block_preserved(tmp_path: Path) -> None:
+    """A1: ``!`cmd` `` inside a ``` fenced block is documentation — leave it alone."""
+    body = (
+        "Outside !`date` here.\n"
+        "```\n"
+        "Example: !`date` should NOT be touched in docs.\n"
+        "```\n"
+        "Outside again !`pwd` here.\n"
+    )
+    skill = _make_skill_with_body(body, tmp_path)
+    out = render_skill_body(skill, session_id="s")
+    # Outside-fence: substituted.
+    assert out.count("[Aura: inline shell not supported") == 2
+    assert "Outside !`date` here" not in out
+    assert "Outside again !`pwd` here" not in out
+    # Inside-fence: preserved verbatim.
+    assert "Example: !`date` should NOT be touched in docs." in out
+
+
+def test_render_skill_body_returns_helper_command_list(tmp_path: Path) -> None:
+    """A1 helper: ``_sanitize_inline_cmds`` exposes the original commands for callers."""
+    from aura.core.skills.loader import _sanitize_inline_cmds
+    sanitized, originals = _sanitize_inline_cmds("a !`x` b !`y` c")
+    # Placeholders inserted; originals captured in order.
+    assert "[Aura: inline shell not supported — original: !`x`]" in sanitized
+    assert "[Aura: inline shell not supported — original: !`y`]" in sanitized
+    assert originals == ["x", "y"]
+
+
+# ---------------------------------------------------------------------------
+# Bug A2 — unsupported claude-code frontmatter fields → journal warning
+# ---------------------------------------------------------------------------
+
+
+def test_unsupported_frontmatter_single_field_journals(tmp_path: Path) -> None:
+    """A2: ``model:`` is parsed but not honored — one ``skill_unsupported_frontmatter`` event."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        _write(
+            home / ".aura" / "skills" / "uses-model" / "SKILL.md",
+            "---\ndescription: uses model\nmodel: claude-opus-4-7\n---\nbody\n",
+        )
+        load_skills(cwd=cwd, home=home)
+        events = [
+            e for e in _events(log)
+            if e["event"] == "skill_unsupported_frontmatter"
+        ]
+        assert len(events) == 1
+        assert events[0]["name"] == "uses-model"
+        assert events[0]["layer"] == "user"
+        assert events[0]["fields"] == ["model"]
+    finally:
+        journal_module.reset()
+
+
+def test_unsupported_frontmatter_lists_all_dropped_fields(tmp_path: Path) -> None:
+    """A2: multiple unsupported fields → single event whose ``fields`` lists them all."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        _write(
+            home / ".aura" / "skills" / "kitchen-sink" / "SKILL.md",
+            (
+                "---\n"
+                "description: kitchen sink\n"
+                "model: opus\n"
+                "context: fork\n"
+                "effort: high\n"
+                "---\nbody\n"
+            ),
+        )
+        load_skills(cwd=cwd, home=home)
+        events = [
+            e for e in _events(log)
+            if e["event"] == "skill_unsupported_frontmatter"
+        ]
+        assert len(events) == 1
+        fields = events[0]["fields"]
+        assert isinstance(fields, list)
+        assert sorted(fields) == ["context", "effort", "model"]
+    finally:
+        journal_module.reset()
+
+
+def test_unsupported_frontmatter_silent_when_only_recognized_fields(
+    tmp_path: Path,
+) -> None:
+    """A2: skills using only known fields produce ZERO ``skill_unsupported_frontmatter`` events."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        _write(
+            home / ".aura" / "skills" / "clean" / "SKILL.md",
+            (
+                "---\n"
+                "name: clean\n"
+                "description: only known fields\n"
+                "when_to_use: always\n"
+                "allowed-tools: [bash]\n"
+                "version: 1.0\n"
+                "---\nbody\n"
+            ),
+        )
+        load_skills(cwd=cwd, home=home)
+        events = [
+            e for e in _events(log)
+            if e["event"] == "skill_unsupported_frontmatter"
+        ]
+        assert events == []
+    finally:
+        journal_module.reset()
+
+
+# ---------------------------------------------------------------------------
+# Integration test — synthetic claude-code skill with all bad shapes
+# ---------------------------------------------------------------------------
+
+
+def test_integration_claude_code_skill_full_bad_shape(tmp_path: Path) -> None:
+    """End-to-end: load a claude-code-style skill with every unsupported feature.
+
+    Asserts:
+    1. Skill still loads (one bad field doesn't break the catalogue).
+    2. ``skill_unsupported_frontmatter`` fires listing all 6 dropped fields.
+    3. ``skill_inline_cmd_unsupported`` still fires (V12-G regression check).
+    4. ``render_skill_body`` strips the inline shell-exec syntax — neither
+       ``!`date`` nor ``!`pwd`` appears literally in the rendered output.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        _write(
+            home / ".claude" / "skills" / "imported" / "SKILL.md",
+            (
+                "---\n"
+                "description: imported skill\n"
+                "model: claude-opus-4-7\n"
+                "context: fork\n"
+                "agent: subagent-delegate\n"
+                "effort: high\n"
+                "shell: bash\n"
+                "hooks:\n"
+                "  pre: notify\n"
+                "allowed-tools: [read_file]\n"
+                "---\n"
+                "Today is !`date +%Y-%m-%d`. Try !`pwd`.\n"
+            ),
+        )
+        reg = load_skills(cwd=cwd, home=home)
+        events = _events(log)
+
+        # 1. Skill loaded.
+        skill = reg.get("imported")
+        assert skill is not None
+        assert skill.description == "imported skill"
+        assert skill.allowed_tools == frozenset({"read_file"})
+
+        # 2. ``skill_unsupported_frontmatter`` event fired with all 6 fields.
+        unsupported_events = [
+            e for e in events if e["event"] == "skill_unsupported_frontmatter"
+        ]
+        assert len(unsupported_events) == 1
+        fields = unsupported_events[0]["fields"]
+        assert isinstance(fields, list)
+        assert sorted(fields) == [
+            "agent", "context", "effort", "hooks", "model", "shell",
+        ]
+        assert unsupported_events[0]["name"] == "imported"
+        assert unsupported_events[0]["layer"] == "user"
+
+        # 3. ``skill_inline_cmd_unsupported`` still fires (V12-G).
+        inline_events = [
+            e for e in events if e["event"] == "skill_inline_cmd_unsupported"
+        ]
+        assert len(inline_events) == 1
+        assert inline_events[0]["name"] == "imported"
+
+        # 4. Rendered body: inline shell-exec replaced with inert placeholder.
+        rendered = render_skill_body(skill, session_id="test-session")
+        assert (
+            "[Aura: inline shell not supported — original: !`date +%Y-%m-%d`]"
+            in rendered
+        )
+        assert "[Aura: inline shell not supported — original: !`pwd`]" in rendered
+        # No standalone ``!``...`` outside the placeholders. We strip the
+        # placeholders and assert the residue has no exec syntax left.
+        residue = (
+            rendered
+            .replace(
+                "[Aura: inline shell not supported — original: !`date +%Y-%m-%d`]",
+                "",
+            )
+            .replace("[Aura: inline shell not supported — original: !`pwd`]", "")
+        )
+        assert "!`" not in residue
+    finally:
+        journal_module.reset()

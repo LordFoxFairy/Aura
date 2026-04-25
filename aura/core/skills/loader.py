@@ -35,6 +35,7 @@ rest of Aura's loader code — one bad skill must not break the catalogue).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,31 @@ _PLACEHOLDER_PAIRS: tuple[tuple[str, str], ...] = (
 # surfaces a journal warning instead of silently mis-rendering to literal
 # text that confuses the model.
 _INLINE_CMD_PATTERN = "!`"
+
+# Regex form of the same syntax — used by ``_sanitize_inline_cmds`` at render
+# time. Captures the command text between the backticks (no embedded ``\``,
+# matching claude-code's ``executeShellCommandsInPrompt`` parser).
+_INLINE_CMD_REGEX = re.compile(r"!`([^`]+)`")
+
+# Frontmatter keys ``_build_skill`` knows how to interpret. Anything else
+# present at the top level of a skill's YAML mapping is silently ignored —
+# we journal those keys at load time so an operator who imports a claude-code
+# skill that relies on (e.g.) ``model:`` / ``hooks:`` sees an audit trail
+# instead of a silent semantic mismatch. Bug A2.
+_RECOGNIZED_FRONTMATTER_FIELDS: frozenset[str] = frozenset({
+    "name",
+    "description",
+    "when_to_use",
+    "when-to-use",  # accepted alias if a user spells it kebab-case
+    "allowed-tools",
+    "restrict-tools",
+    "argument-hint",
+    "arguments",
+    "version",
+    "paths",
+    "user-invocable",
+    "disable-model-invocation",
+})
 
 # Module-global conditional-skill registry. Mirrors claude-code's
 # ``conditionalSkills`` map + ``activatedConditionalSkillNames`` set. Lives
@@ -223,6 +249,14 @@ def render_skill_body(
     dumb string-copier — no session-id leak into the memory module.
     """
     body = skill.body
+    # Bug A1: neutralise ``!`cmd` `` inline shell-exec syntax BEFORE running
+    # placeholder substitution. Aura doesn't execute these — leaving them
+    # in the rendered text would let the model interpret them as a real
+    # exec contract it should respect. Replace with an inert visible note
+    # so the model knows the original intent without acting on it. Only
+    # the rendered string changes; ``skill.body`` storage stays as-is so
+    # the source file's loaded copy is still inspectable for debugging.
+    body, _ = _sanitize_inline_cmds(body)
     base_dir = skill.base_dir if skill.base_dir is not None else skill.source_path.parent
     replacements = {"base_dir": str(base_dir), "session_id": session_id}
     for placeholder, key in _PLACEHOLDER_PAIRS:
@@ -233,6 +267,45 @@ def render_skill_body(
         value = values[i] if i < len(values) else ""
         body = body.replace(placeholder, value)
     return body
+
+
+def _sanitize_inline_cmds(body: str) -> tuple[str, list[str]]:
+    """Replace claude-code-style ``!`cmd` `` syntax with an inert placeholder.
+
+    Returns ``(sanitized_body, original_commands)`` where ``original_commands``
+    lists every command the substitution removed (in source order, possibly
+    with duplicates). Inside fenced ``` ``` ``` code blocks the syntax is
+    preserved — those blocks are documentation, not executable directives,
+    and editing them would corrupt the user's example.
+
+    The scan is stateful: a code-fence marker (``` ``` ``` at column 0 after
+    optional whitespace) toggles "inside fence" mode. We use a line-by-line
+    pass instead of one global regex so the in-fence guard is well-defined.
+    """
+    lines = body.split("\n")
+    in_fence = False
+    fence_marker = "```"
+    out_lines: list[str] = []
+    originals: list[str] = []
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith(fence_marker):
+            # Toggle fence state on every ``` line. claude-code's markdown
+            # rendering uses the same convention.
+            in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        if in_fence:
+            out_lines.append(line)
+            continue
+
+        def _replace(m: re.Match[str]) -> str:
+            cmd = m.group(1)
+            originals.append(cmd)
+            return f"[Aura: inline shell not supported — original: !`{cmd}`]"
+
+        out_lines.append(_INLINE_CMD_REGEX.sub(_replace, line))
+    return "\n".join(out_lines), originals
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +454,33 @@ def _build_skill(skill_file: Path, *, layer: SkillLayer) -> Skill | None:
     if not isinstance(parsed, dict):
         _emit_parse_failed(skill_file, "frontmatter is not a mapping")
         return None
+
+    # Bug A2: claude-code skills carry frontmatter fields that Aura doesn't
+    # implement (``model``, ``context``, ``agent``, ``effort``, ``shell``,
+    # ``hooks`` etc). We don't fail the load — the skill's body is still
+    # useful — but we journal a single audit event listing the dropped keys
+    # so an operator importing a claude-code skill sees the parity gap
+    # rather than mysterious behavioural drift.
+    present_fields = {k for k in parsed if isinstance(k, str)}
+    unsupported_fields = sorted(present_fields - _RECOGNIZED_FRONTMATTER_FIELDS)
+    if unsupported_fields:
+        from aura.core.persistence import journal
+
+        try:
+            unsupported_source = str(skill_file.resolve())
+        except OSError:
+            unsupported_source = str(skill_file)
+        name_field = parsed.get("name")
+        unsupported_name = (
+            name_field if isinstance(name_field, str) else skill_file.parent.name
+        )
+        journal.write(
+            "skill_unsupported_frontmatter",
+            name=unsupported_name,
+            source_path=unsupported_source,
+            layer=layer,
+            fields=unsupported_fields,
+        )
 
     # Directory name IS the skill id; ``name`` in frontmatter is a display
     # override. Match claude-code's ``displayName`` + ``userFacingName()``

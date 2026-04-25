@@ -9,7 +9,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from pathlib import Path
+from typing import Any, Literal, Protocol
 
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
@@ -17,6 +18,8 @@ from langchain_core.tools import BaseTool
 from aura.core.permissions.decision import Decision
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
+
+FileChangeKind = Literal["created", "modified", "deleted"]
 
 
 @dataclass(frozen=True)
@@ -129,12 +132,58 @@ class PostToolHook(Protocol):
     ) -> ToolResult: ...
 
 
+class FileChangedHook(Protocol):
+    """Fires when a file Aura is watching changes on disk.
+
+    Producer: :class:`aura.core.hooks.file_watcher.FileWatcher`.
+    Live-reload of project memory / rules / skills happens via consumers
+    of this hook (see :mod:`aura.core.hooks.auto_reload`); the hook
+    surface lets SDK callers add their own watchers without forking
+    the agent's wiring.
+    """
+
+    async def __call__(
+        self,
+        *,
+        path: Path,
+        kind: FileChangeKind,
+        state: LoopState,
+        **kwargs: Any,
+    ) -> None: ...
+
+
+class CwdChangedHook(Protocol):
+    """Fires when the Agent's working directory changes mid-session.
+
+    Producer: :meth:`aura.core.agent.Agent.set_cwd`. External
+    ``os.chdir`` calls are NOT observed — the contract is "the Agent
+    knows because the Agent moved itself". Consumers refresh project
+    memory + rules from the new cwd (see
+    :mod:`aura.core.hooks.auto_reload`).
+    """
+
+    async def __call__(
+        self,
+        *,
+        old_cwd: Path,
+        new_cwd: Path,
+        state: LoopState,
+        **kwargs: Any,
+    ) -> None: ...
+
+
 @dataclass
 class HookChain:
     pre_model: list[PreModelHook] = field(default_factory=list)
     post_model: list[PostModelHook] = field(default_factory=list)
     pre_tool: list[PreToolHook] = field(default_factory=list)
     post_tool: list[PostToolHook] = field(default_factory=list)
+    # v0.14 V14-HOOK-CATALOG: out-of-band hooks that don't sit on the
+    # turn cycle. ``file_changed`` is fired by FileWatcher; ``cwd_changed``
+    # by Agent.set_cwd. Distinct lists so registration / merge stays
+    # symmetric with the four turn-cycle slots.
+    file_changed: list[FileChangedHook] = field(default_factory=list)
+    cwd_changed: list[CwdChangedHook] = field(default_factory=list)
 
     async def run_pre_model(
         self, *, history: list[BaseMessage], state: LoopState,
@@ -216,6 +265,33 @@ class HookChain:
             )
         return result
 
+    async def run_file_changed(
+        self,
+        *,
+        path: Path,
+        kind: FileChangeKind,
+        state: LoopState,
+    ) -> None:
+        """Fan out a FileChanged event to every registered consumer.
+
+        Each consumer is awaited sequentially; any exception is allowed
+        to surface so a buggy reload hook is loud rather than silent.
+        Order = registration order, matching the turn-cycle runners.
+        """
+        for hook in self.file_changed:
+            await hook(path=path, kind=kind, state=state)
+
+    async def run_cwd_changed(
+        self,
+        *,
+        old_cwd: Path,
+        new_cwd: Path,
+        state: LoopState,
+    ) -> None:
+        """Fan out a CwdChanged event to every registered consumer."""
+        for hook in self.cwd_changed:
+            await hook(old_cwd=old_cwd, new_cwd=new_cwd, state=state)
+
     def merge(self, other: HookChain) -> HookChain:
         # 非破坏性拼接：self 优先 other 后；不修改任何一方的原始列表。
         return HookChain(
@@ -223,4 +299,6 @@ class HookChain:
             post_model=[*self.post_model, *other.post_model],
             pre_tool=[*self.pre_tool, *other.pre_tool],
             post_tool=[*self.post_tool, *other.post_tool],
+            file_changed=[*self.file_changed, *other.file_changed],
+            cwd_changed=[*self.cwd_changed, *other.cwd_changed],
         )

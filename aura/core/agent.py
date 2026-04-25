@@ -346,6 +346,12 @@ class Agent:
                     # automatically sees the fresh (empty) ruleset on the
                     # next invocation without re-wiring.
                     session_rules_provider=lambda: self._session_rules,
+                    # V14 ``restrict-tools`` lease — closure over
+                    # ``self._state`` so install can read the live
+                    # turn_count and stamp the expiry sentinel. /clear
+                    # mutates ``_state`` in place, so the lambda always
+                    # returns the live instance.
+                    loop_state_provider=lambda: self._state,
                 )
             else:  # pragma: no cover — guardrail for future additions
                 raise RuntimeError(f"unwired stateful tool: {name}")
@@ -411,6 +417,22 @@ class Agent:
         # a field so clear_session can swap it when Context is rebuilt.
         self._must_read_first_hook = make_must_read_first_hook(self._context)
         self._hooks.pre_tool.append(self._must_read_first_hook)
+        # V14-HOOK-CATALOG: register the default file_changed +
+        # cwd_changed consumers. These need a back-reference to the
+        # Agent (they refresh ``_primary_memory`` / ``_context`` /
+        # ``_rules`` in place), which is why they can't live in
+        # ``default_hooks()`` (called before the Agent exists). Adding
+        # them here mirrors the bash_safety / must_read_first wiring
+        # above — the Agent is the single owner of its hook chain
+        # post-construction. Imported lazily to avoid an import cycle:
+        # auto_reload imports Agent for type-checking, Agent imports
+        # auto_reload at runtime.
+        from aura.core.hooks.auto_reload import (
+            make_aura_md_reload_hook,
+            make_cwd_rules_reload_hook,
+        )
+        self._hooks.file_changed.append(make_aura_md_reload_hook(self))
+        self._hooks.cwd_changed.append(make_cwd_rules_reload_hook(self))
         self._loop = self._build_loop()
         # MCP is wired at construction to declare the slots, but no
         # connection happens here — aconnect() does that work async. Sync
@@ -670,6 +692,43 @@ class Agent:
         so the bottom status bar can display the current mode without
         re-reading the permission store each render."""
         return self._mode
+
+    async def set_cwd(self, path: Path) -> None:
+        """Move the Agent's working directory and notify ``cwd_changed``.
+
+        V14-HOOK-CATALOG. ``path`` is resolved (so ``~`` and relative
+        forms normalize), the new value lands on ``self._cwd``, a
+        ``cwd_changed`` journal event is emitted, and every registered
+        :class:`CwdChangedHook` consumer fires with ``(old_cwd, new_cwd)``.
+        Default-shipped consumer refreshes project memory + rules from
+        the new cwd (see :func:`aura.core.hooks.auto_reload
+        .make_cwd_rules_reload_hook`).
+
+        We do NOT shell out to ``os.chdir`` here — the Agent's ``_cwd``
+        and the process's CWD are deliberately distinct (the Agent
+        owning a logical workdir is enough for memory + rules + skill
+        loading; mutating the process CWD would race against tools
+        running concurrently). External ``os.chdir`` calls are out of
+        scope by design.
+        """
+        new_cwd = Path(path).expanduser().resolve()
+        old_cwd = self._cwd
+        if new_cwd == old_cwd:
+            # No-op — don't emit a journal event for "moved to the same
+            # place". Same defensiveness as ``set_mode`` returning
+            # without journalling on a same-mode call would have, if
+            # we'd written it that way.
+            return
+        self._cwd = new_cwd
+        journal.write(
+            "cwd_changed",
+            session=self._session_id,
+            old_cwd=str(old_cwd),
+            new_cwd=str(new_cwd),
+        )
+        await self._hooks.run_cwd_changed(
+            old_cwd=old_cwd, new_cwd=new_cwd, state=self._state,
+        )
 
     def set_mode(self, mode: str) -> None:
         """Update the current permission mode.

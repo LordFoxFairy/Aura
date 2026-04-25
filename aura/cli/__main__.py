@@ -416,6 +416,25 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             console.print(f"[yellow]mcp connect error (continuing): {exc}[/yellow]")
             journal.write("mcp_connect_cli_error", error=str(exc))
+        # V14-HOOK-CATALOG: spin up the FileWatcher so AURA.md / skills
+        # changes land on the file_changed hook live. Started here (not
+        # inside the Agent) because the watcher is async and the Agent
+        # constructor is sync; same reason aconnect lives at this layer.
+        from aura.core.hooks.file_watcher import FileWatcher, default_watch_paths
+        watcher = FileWatcher(
+            paths=default_watch_paths(Path.cwd()),
+            chain=agent._hooks,
+            state=agent.state,
+        )
+        try:
+            await watcher.start()
+        except Exception as exc:  # noqa: BLE001
+            # Watcher startup must never block the REPL — if the user's
+            # FS or paths are weird, log + run without live reload.
+            journal.write(
+                "file_watcher_start_error",
+                error=f"{type(exc).__name__}: {exc}",
+            )
         try:
             await run_repl_async(
                 agent, console=console, verbose=args.verbose,
@@ -423,6 +442,9 @@ def main() -> int:
                 statusline=perm_cfg.statusline,
             )
         finally:
+            # Stop the watcher BEFORE aclose so its polling task is gone
+            # by the time we cancel the rest of the world.
+            await watcher.stop()
             # Async teardown inside the event loop — aclose honors the
             # B3 timeout-bounded MCP stop path. The sync ``agent.close()``
             # in the outer finally is the legacy belt-and-braces guard

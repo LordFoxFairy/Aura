@@ -414,6 +414,11 @@ def _build_skill(skill_file: Path, *, layer: SkillLayer) -> Skill | None:
     argument_hint = _coerce_optional_str(parsed.get("argument-hint"))
 
     allowed_tools = _coerce_str_list_field(parsed.get("allowed-tools"))
+    # V14: ``restrict-tools`` is a strict whitelist — separate field from
+    # the permissive ``allowed-tools`` (v0.13). Same parsing shape (list-or-
+    # whitespace-string). Two fields, two semantics: combining them in one
+    # field would silently break v0.12's claude-code-imported skill compat.
+    restrict_tools = _coerce_str_list_field(parsed.get("restrict-tools"))
     arguments = tuple(_coerce_str_list_field(parsed.get("arguments")))
     paths_raw = _coerce_str_list_field(parsed.get("paths"))
     # Normalize "/**" suffix — pathspec treats "src" as matching both the
@@ -459,6 +464,7 @@ def _build_skill(skill_file: Path, *, layer: SkillLayer) -> Skill | None:
         layer=layer,
         when_to_use=when_to_use,
         allowed_tools=frozenset(allowed_tools),
+        restrict_tools=frozenset(restrict_tools),
         arguments=arguments,
         argument_hint=argument_hint,
         version=version,

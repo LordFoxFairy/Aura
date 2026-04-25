@@ -40,12 +40,15 @@ from aura.core.skills.command import install_skill_allow_rules
 from aura.core.skills.errors import format_missing_args_error
 from aura.core.skills.loader import render_skill_body
 from aura.core.skills.registry import SkillRegistry
+from aura.core.skills.restrict import install_restrict_lease
 from aura.core.skills.types import Skill
+from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError, tool_metadata
 
 SkillRecorder = Callable[[Skill], None]
 SessionIdProvider = Callable[[], str]
 SessionRulesProvider = Callable[[], "SessionRuleSet | None"]
+LoopStateProvider = Callable[[], "LoopState | None"]
 
 
 class SkillParams(BaseModel):
@@ -113,6 +116,7 @@ class SkillTool(BaseTool):
     _registry: SkillRegistry = PrivateAttr()
     _session_id_provider: SessionIdProvider = PrivateAttr()
     _session_rules_provider: SessionRulesProvider = PrivateAttr()
+    _loop_state_provider: LoopStateProvider = PrivateAttr()
 
     def __init__(
         self,
@@ -121,6 +125,7 @@ class SkillTool(BaseTool):
         registry: SkillRegistry,
         session_id_provider: SessionIdProvider | None = None,
         session_rules_provider: SessionRulesProvider | None = None,
+        loop_state_provider: LoopStateProvider | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -139,6 +144,12 @@ class SkillTool(BaseTool):
         # (which drops rules) stays in sync with the live instance.
         self._session_rules_provider = (
             session_rules_provider or (lambda: None)
+        )
+        # V14 ``restrict-tools`` lease — needs the live LoopState so the
+        # install can stamp the current turn_count as the expiry sentinel.
+        # ``None`` → no-op (unit tests / SDK callers not running a Loop).
+        self._loop_state_provider = (
+            loop_state_provider or (lambda: None)
         )
 
     def _run(
@@ -198,6 +209,12 @@ class SkillTool(BaseTool):
         # ``SkillCommand.handle`` so slash and tool invocation paths have
         # identical permission-layer side effects.
         install_skill_allow_rules(skill, self._session_rules_provider())
+        # V14 ``restrict-tools`` lease — symmetric with SkillCommand.handle.
+        # Skipped silently when no LoopState provider is wired (unit-test
+        # path).
+        loop_state = self._loop_state_provider()
+        if loop_state is not None:
+            install_restrict_lease(skill, loop_state)
         # Mirror SkillCommand.handle's audit emit — same event shape,
         # same ``allowed_tools`` and origin-layer ``source`` — so the
         # audit trail captures declared intent regardless of which path

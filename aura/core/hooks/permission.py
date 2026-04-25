@@ -58,6 +58,7 @@ from aura.core.permissions.safety import DEFAULT_SAFETY, SafetyPolicy, is_protec
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.permissions.store import PermissionStoreError, save_rule
 from aura.core.persistence import journal
+from aura.core.skills.restrict import has_active_lease, tool_allowed_by_lease
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult, resolve_is_destructive
 
@@ -230,6 +231,10 @@ def _deny_message(decision: Decision, *, feedback: str = "") -> str:
     match decision.reason:
         case "safety_blocked":
             return "denied: protected path (safety policy)"
+        case "restrict_tools_blocked":
+            return (
+                "denied: tool not in active skill's restrict-tools whitelist"
+            )
         case "user_deny":
             if feedback:
                 return f"denied: user — note: {feedback}"
@@ -419,6 +424,19 @@ async def _decide(
     can produce feedback; rule-allow / safety-blocked / mode-bypass
     short-circuits always return ``""``.
     """
+    # 0. V14 ``restrict-tools`` lease — strict whitelist. Fires BEFORE
+    # bypass / safety / rule resolution because the contract is
+    # "while the skill body is being processed, the model can ONLY call
+    # tools the skill declared". Bypass mode is the operator's wide-open
+    # consent for tool calls — restrict_tools is the SKILL's narrow
+    # consent override, which is even stronger. Internal tools
+    # (ask_user_question, plan-mode controls) are exempt — handled inside
+    # ``tool_allowed_by_lease``. Skipped wholesale when no lease is
+    # installed so the common (no-active-skill) path pays only one dict
+    # lookup.
+    if has_active_lease(state) and not tool_allowed_by_lease(state, tool.name):
+        return Decision(allow=False, reason="restrict_tools_blocked"), ""
+
     # 1. Bypass mode — loud and first. Note: bypass deliberately does NOT
     # run through safety here; the safety floor for bypass lives at the
     # tool level (bash_safety_hook) and for path tools is enforced by

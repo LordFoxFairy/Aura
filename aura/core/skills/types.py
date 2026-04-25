@@ -62,6 +62,13 @@ class Skill:
     # Optional frontmatter — all default to the "no special config" values.
     when_to_use: str | None = None
     allowed_tools: frozenset[str] = field(default_factory=frozenset)
+    # ``restrict_tools`` (V14): strict whitelist — while this skill's lease is
+    # active, ONLY tools in this set may be invoked by the model; everything
+    # else short-circuits to ``restrict_tools_blocked`` BEFORE bypass / safety
+    # / rule resolution. Distinct from ``allowed_tools`` (permissive auto-
+    # allow): restrict_tools does not auto-allow declared tools, it just
+    # leaves them unblocked. Empty = no restriction.
+    restrict_tools: frozenset[str] = field(default_factory=frozenset)
     arguments: tuple[str, ...] = ()
     argument_hint: str | None = None
     version: str | None = None

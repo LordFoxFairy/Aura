@@ -41,13 +41,17 @@ DecisionReason = Literal[
     "user_deny",
     "safety_blocked",
     "plan_mode_blocked",
+    # V14: skill ``restrict-tools`` lease blocked an undeclared tool. Fires
+    # BEFORE bypass / safety / rule resolution — restrict is a strict
+    # whitelist that cannot be overridden by any other branch.
+    "restrict_tools_blocked",
 ]
 
 _ALLOW_REASONS: frozenset[str] = frozenset(
     {"rule_allow", "user_accept", "user_always", "mode_bypass", "mode_accept_edits"}
 )
 _DENY_REASONS: frozenset[str] = frozenset(
-    {"user_deny", "safety_blocked", "plan_mode_blocked"}
+    {"user_deny", "safety_blocked", "plan_mode_blocked", "restrict_tools_blocked"}
 )
 _RULE_REQUIRED_REASONS: frozenset[str] = frozenset({"rule_allow", "user_always"})
 
@@ -108,3 +112,5 @@ class Decision:
                 return "blocked: safety"
             case "plan_mode_blocked":
                 return "blocked: plan mode (dry-run)"
+            case "restrict_tools_blocked":
+                return "blocked: skill restrict-tools whitelist"

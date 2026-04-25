@@ -25,6 +25,7 @@ from aura.core.permissions.session import SessionRuleSet
 from aura.core.persistence import journal
 from aura.core.skills.errors import format_missing_args_error
 from aura.core.skills.loader import render_skill_body
+from aura.core.skills.restrict import install_restrict_lease
 from aura.core.skills.types import Skill
 
 if TYPE_CHECKING:
@@ -134,6 +135,12 @@ class SkillCommand:
         # permission-layer side-effect is audited separately from the
         # "skill ran" signal.
         install_skill_allow_rules(self._skill, self._agent._session_rules)
+        # V14 ``restrict-tools`` lease — strict whitelist scoped to the
+        # current turn. No-op when ``restrict_tools`` is empty. Wired
+        # alongside ``install_skill_allow_rules`` so both surfaces (slash
+        # + tool) install lease + auto-allow rules atomically per
+        # invocation.
+        install_restrict_lease(self._skill, self._agent._state)
         # Audit surface for allowed_tools: declared intent captured at
         # invocation time (separate from the per-rule install events
         # above, which audit the runtime effect). ``source`` is the

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/aura.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aura</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="brand">Aura</div>
+        <div id="status" class="status">connecting…</div>
+      </header>
+      <main id="conversation"></main>
+      <footer class="composer">
+        <textarea
+          id="input"
+          placeholder="Type a prompt and press Enter (Shift+Enter for newline)…"
+          rows="3"
+        ></textarea>
+        <button id="send">Send</button>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

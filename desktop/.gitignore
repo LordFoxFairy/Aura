@@ -1,0 +1,14 @@
+# Rust build artifacts
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# Frontend build artifacts
+frontend/dist/
+frontend/node_modules/
+frontend/.vite/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+*.iml

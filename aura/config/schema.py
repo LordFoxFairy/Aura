@@ -123,6 +123,44 @@ class RetryConfig(BaseModel):
     max_delay_s: float = Field(default=30.0, gt=0)
 
 
+class TeamsConfig(BaseModel):
+    """Feature gate for the teams (multi-agent swarm) subsystem.
+
+    Mirrors claude-code's ``isAgentSwarmsEnabled()`` flag (see
+    ``utils/agentSwarmsEnabled.ts`` in the upstream source). When
+    ``enabled`` is False (the default), the entire teams surface is
+    inert:
+
+    - the ``/team`` slash command is NOT registered with the REPL's
+      command registry, so it is invisible to ``/help`` and to tab
+      completion;
+    - :meth:`Agent.join_team` raises ``RuntimeError`` so any attempt
+      to enter a team via the programmatic API fails fast with a
+      pointer at the config flag;
+    - :meth:`Agent._auto_enable_send_message_for_team` early-returns,
+      so the LLM's tool schema never grows a ``send_message`` entry
+      it cannot use.
+
+    Set to True (typically in ``~/.aura/config.json`` or
+    ``<project>/.aura/config.json``) to opt into the full teams
+    surface — ``/team create``, ``/team spawn``, ``/team list``,
+    cross-teammate messaging, etc.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable the teams (multi-agent swarm) subsystem. When False "
+            "(default), /team slash commands are not registered, the "
+            "send_message tool is not registered, and Agent.join_team "
+            "is a no-op. Mirrors claude-code's isAgentSwarmsEnabled() "
+            "feature flag."
+        ),
+    )
+
+
 class MCPServerConfig(BaseModel):
     """One MCP server entry. The ``name`` namespaces tools as
     ``mcp__<name>__<tool>`` and commands as ``/<name>__<prompt>``.
@@ -194,6 +232,12 @@ class AuraConfig(BaseModel):
     log: LogConfig = Field(default_factory=LogConfig)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     web_search: WebSearchConfig | None = None
+    # Feature gate for the teams (multi-agent swarm) subsystem. Default
+    # ``enabled=False`` mirrors claude-code's ``isAgentSwarmsEnabled()``
+    # flag — the /team slash command, send_message auto-enable, and
+    # join_team programmatic entry are all dormant unless this is set
+    # to True. See :class:`TeamsConfig`.
+    teams: TeamsConfig = Field(default_factory=TeamsConfig)
     # Retry policy for transient LLM provider errors (HTTP 429 / 503 / 504,
     # connection drops, "overloaded"). ``None`` = use library defaults from
     # :func:`aura.core.retry.with_retry` (3 attempts, 1s base, 30s cap,

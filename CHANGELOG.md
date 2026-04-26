@@ -2,7 +2,13 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [Unreleased] — Teams feature gate + persistence layout alignment
+
+Headline: the teams (multi-agent swarm) subsystem is now feature-gated, default off, mirroring claude-code's `isAgentSwarmsEnabled()`. Same-release the persistence layout flips to the per-project nested shape that claude-code ships. Version bumps `0.17.0 → 0.18.0`.
+
+### Added
+- **`teams.enabled` feature gate** (claude-code parity with `isAgentSwarmsEnabled()`): the multi-agent swarm subsystem is now dormant by default. When `teams.enabled` is False (the default in `AuraConfig`), the `/team` slash command is not registered with the REPL command registry, `Agent.join_team` raises `RuntimeError` pointing at the config flag, and the `send_message` tool auto-enable on team-join is skipped so the LLM never sees an inert tool. Set `"teams": {"enabled": true}` in `~/.aura/config.json` (or `<project>/.aura/config.json`) to opt in. Existing teams data on disk is unaffected — the gate only governs runtime activation. See `aura/config/schema.py:TeamsConfig`.
+- **`Agent.cwd` public property** stays on the Agent's surface — explicit note here so Track B's TeamManager can rely on `self._leader.cwd` rather than reaching into `self._leader._cwd` private state. (The property was already in place; this release codifies it as part of the public Agent surface.)
 
 ### Changed
 - **Persistence layout aligned with claude-code** (BREAKING): sessions and subagent transcripts moved from flat `~/.aura/sessions/` and `~/.aura/subagents/` to per-project nested `~/.aura/projects/<encoded-cwd>/<session-id>/...`. Existing v2 layout is preserved as `*.legacy-<ts>/` directories on first launch. See [docs/persistence-layout.md](docs/persistence-layout.md).
@@ -10,7 +16,7 @@ Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepa
 
 ### Migration notes
 - Old transcripts are not auto-attributed to projects. After upgrading, listing past sessions returns the new (empty) state plus any sessions you've used post-upgrade. To recover a specific old session, manually copy `<session-id>.jsonl` from `~/.aura/sessions.legacy-<ts>/` into `~/.aura/projects/<encoded-cwd>/`.
-- Teams (`~/.aura/teams/`) and settings are unaffected.
+- Teams (`~/.aura/teams/`) and settings are unaffected on disk. Existing teams users must add `"teams": {"enabled": true}` to their `~/.aura/config.json` to keep `/team` commands available — the default-off gate is the new semantic for parity with claude-code.
 
 ## [0.14.0] — Animated buddy + restrict_tools + hot-reload hooks
 

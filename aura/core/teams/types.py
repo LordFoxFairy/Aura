@@ -28,6 +28,14 @@ BROADCAST_RECIPIENT: str = "broadcast"
 
 TeamMessageKind = Literal["text", "shutdown_request", "shutdown_response"]
 
+#: Backend identifier for a teammate's runtime. ``"in_process"`` runs the
+#: teammate as an asyncio task in the leader's process (default; matches
+#: claude-code's ``InProcessBackend``). ``"pane"`` spawns the teammate as
+#: a separate subprocess inside a tmux pane via ``tmux split-window``,
+#: enabling the visual "switch into team" UX (claude-code's
+#: ``PaneBackend``).
+BackendType = Literal["in_process", "pane"]
+
 
 class TeammateMember(BaseModel):
     """One member entry inside :class:`TeamRecord`.
@@ -36,6 +44,11 @@ class TeammateMember(BaseModel):
     use in :class:`SendMessage`. ``agent_type`` selects the flavor (matches
     :mod:`aura.core.tasks.agent_types`). ``model_name`` overrides the leader's
     model for this teammate; ``None`` inherits.
+
+    ``backend_type`` selects the runtime strategy (default ``"in_process"``).
+    ``tmux_pane_id`` is populated by the pane backend at spawn time
+    (``%<int>`` from ``tmux split-window -P -F '#{pane_id}'``); ``None``
+    for in-process members.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -46,6 +59,8 @@ class TeammateMember(BaseModel):
     model_name: str | None = None
     created_at: float = Field(default_factory=time.time)
     is_active: bool = True
+    backend_type: BackendType = "in_process"
+    tmux_pane_id: str | None = None
 
 
 class TeamRecord(BaseModel):

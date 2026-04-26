@@ -45,10 +45,15 @@ def _stub_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _agent(tmp_path: Path) -> Agent:
+    # ``teams.enabled=True`` is required from v0.18 onwards — the gate
+    # (claude-code parity with isAgentSwarmsEnabled()) defaults to False
+    # and would make ``Agent.join_team`` raise. These tests exercise the
+    # /team enter|leave|view|teammate surface and need the gate open.
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
+        "teams": {"enabled": True},
     })
     return Agent(
         config=cfg,

@@ -14,16 +14,43 @@ Public surface:
 - :func:`run_teammate` — long-lived loop driving one teammate's Agent.
 """
 
+from aura.core.teams.backends import (
+    BackendHandle,
+    BackendUnavailable,
+    InProcessBackend,
+    PaneBackend,
+    TeammateBackend,
+    get_backend,
+    is_inside_tmux,
+    pane_backend_available,
+    tmux_available,
+)
 from aura.core.teams.mailbox import Mailbox
 from aura.core.teams.manager import TeamManager
-from aura.core.teams.runtime import run_teammate
-from aura.core.teams.types import TeammateMember, TeamMessage, TeamRecord
+from aura.core.teams.runtime import run_teammate, run_teammate_main
+from aura.core.teams.types import (
+    BackendType,
+    TeammateMember,
+    TeamMessage,
+    TeamRecord,
+)
 
 __all__ = [
+    "BackendHandle",
+    "BackendType",
+    "BackendUnavailable",
+    "InProcessBackend",
     "Mailbox",
+    "PaneBackend",
     "TeamManager",
     "TeamMessage",
     "TeamRecord",
+    "TeammateBackend",
     "TeammateMember",
+    "get_backend",
+    "is_inside_tmux",
+    "pane_backend_available",
     "run_teammate",
+    "run_teammate_main",
+    "tmux_available",
 ]

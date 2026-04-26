@@ -3,6 +3,15 @@
 Lifetime: spawned once by :meth:`TeamManager.add_member`, exits on
 ``stop_event.set()`` (graceful) or ``abort.abort()`` (cascade from leader).
 
+Two callers run this module:
+
+- ``InProcessBackend.spawn`` schedules :func:`run_teammate` directly on
+  the leader's asyncio loop.
+- ``PaneBackend.spawn`` launches the entrypoint defined in
+  :mod:`aura.cli.teammate_entrypoint`, which in turn calls
+  :func:`run_teammate_main` to build a fresh Agent + Mailbox and drive
+  the same loop inside its own subprocess.
+
 Loop sketch (per design §3.4):
 
 1. If a ``seed_prompt`` was supplied at spawn, run it through the Agent
@@ -228,3 +237,88 @@ async def run_teammate(
             team_id=team_id,
             member=member_name,
         )
+
+
+async def run_teammate_main(
+    *,
+    team_id: str,
+    member_name: str,
+    storage_root: str,
+    agent_type: str = "general-purpose",
+    model_name: str | None = None,
+    system_prompt: str | None = None,
+    seed_prompt: str | None = None,
+) -> int:
+    """Subprocess entrypoint for the pane backend.
+
+    Builds a fresh :class:`~aura.core.agent.Agent` rooted at
+    ``storage_root`` and drives :func:`run_teammate` against the same
+    JSONL mailbox the leader writes to. Returns a process-style exit
+    code: ``0`` on clean shutdown (``shutdown_request`` consumed),
+    non-zero on startup failure.
+
+    Communication is exclusively via the on-disk mailbox + ``.seen``
+    cursor — no IPC channel back to the leader is needed because every
+    coordination point (text, shutdown_request, shutdown_response) is
+    already a JSONL line under ``<storage_root>/teams/<team_id>/inbox/``.
+
+    Lazy imports keep the cold-start cost of the subprocess minimal:
+    the leader pays the import bill once at spawn (via
+    ``send-keys "python -m ..."``) and the subprocess re-imports only
+    what the loop actually touches.
+    """
+    # Lazy imports: keeping them inside the function avoids inflating
+    # the import-time cost of ``aura.core.teams.runtime`` for the
+    # in-process backend (which never calls this).
+    from pathlib import Path
+
+    from aura.config.loader import load_config
+    from aura.core.agent import build_agent
+    from aura.core.persistence.storage import SessionStorage as _Storage
+    from aura.core.teams.types import TeammateMember as _Member
+
+    # Load AuraConfig from the user's configured paths; the subprocess
+    # picks up the same providers/router/tool config the leader runs.
+    # ``load_config`` returns a fully-validated AuraConfig.
+    config = load_config()
+    if model_name:
+        # Override the router default so the subprocess Agent picks up
+        # the per-member model spec. We don't touch other entries —
+        # only the one the next ``llm.resolve(router["default"])`` call
+        # in ``build_agent`` will read.
+        config = config.model_copy(
+            update={"router": {**config.router, "default": model_name}},
+        )
+    storage = _Storage(Path(storage_root) / "index.sqlite")
+    # ``session_id`` ties the subprocess Agent to its own transcript
+    # file; we name it after the team + member so a re-spawn on the
+    # same member resumes its history naturally.
+    session_id = f"team-{team_id}-{member_name}"
+    agent = build_agent(config, session_id=session_id)
+    # Synthesize a minimal TeammateMember for the runtime — only
+    # ``name`` is consumed downstream (envelope + mailbox); the rest
+    # is bookkeeping we already received via CLI flags. Created here
+    # so a future caller can pass a richer record without changing
+    # this signature.
+    _ = _Member(
+        name=member_name,
+        agent_type=agent_type,
+        model_name=model_name,
+        system_prompt=system_prompt,
+    )
+    stop_event = asyncio.Event()
+    abort = AbortController()
+    try:
+        await run_teammate(
+            agent=agent,
+            team_id=team_id,
+            member_name=member_name,
+            storage=storage,
+            stop_event=stop_event,
+            abort=abort,
+            seed_prompt=seed_prompt,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            await agent.aclose()
+    return 0

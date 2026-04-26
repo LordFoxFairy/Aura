@@ -48,6 +48,7 @@ from aura.core.teams.types import (
     MAX_BODY_CHARS,
     MAX_MEMBERS,
     TEAM_LEADER_NAME,
+    BackendType,
     TeammateMember,
     TeamMessage,
     TeamMessageKind,
@@ -56,6 +57,7 @@ from aura.core.teams.types import (
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
+    from aura.core.teams.backends.types import BackendHandle
 
 #: Slug pattern for team_id and member name. Restricted to ASCII alnum +
 #: ``-`` / ``_`` so the value is safe as a filesystem path segment on
@@ -199,6 +201,14 @@ class TeamManager:
         # callback. Tests can ``await mgr._shutdown_waiters[name]`` to
         # block on the round-trip from a sync entry point.
         self._shutdown_waiters: dict[str, asyncio.Task[bool]] = {}
+        # member_name -> :class:`BackendHandle` returned by the backend
+        # at spawn. The handle is the backend-agnostic shutdown surface
+        # (``shutdown`` / ``force_kill`` / ``is_alive``). The in-process
+        # backend's handle wraps the same task we already track under
+        # ``_runtimes`` — the duplication is intentional so pane-only
+        # paths (``cleanup_session_teams`` walking ``_member_backends``)
+        # can run uniform code without dispatching on backend_type.
+        self._member_backends: dict[str, BackendHandle] = {}
         # Set of team_ids created in THIS process that are still on disk.
         # Mirrors claude-code's ``sessionCreatedTeams`` Set + the gh-32730
         # fix: ``create_team`` registers, ``delete_team`` unregisters, and
@@ -313,6 +323,16 @@ class TeamManager:
                 *[t for t in self._runtimes.values() if not t.done()],
                 return_exceptions=True,
             )
+        # Pane backends also need a force_kill so their tmux panes
+        # close before we ``rm -rf`` the team directory. ``force_kill``
+        # is idempotent — handles already cleaned by ``_teardown_member``
+        # become no-ops.
+        if self._member_backends:
+            await asyncio.gather(
+                *[h.force_kill() for h in self._member_backends.values()],
+                return_exceptions=True,
+            )
+            self._member_backends.clear()
         for team_id in team_ids:
             team_dir = self._storage.team_root(team_id)
             try:
@@ -348,6 +368,7 @@ class TeamManager:
         system_prompt: str | None = None,
         model_name: str | None = None,
         seed_prompt: str | None = None,
+        backend_type: BackendType = "in_process",
     ) -> TeammateMember:
         """Spawn a teammate, register its runtime task, persist the record.
 
@@ -356,6 +377,13 @@ class TeamManager:
         iteration so a freshly-added teammate doesn't need a separate
         ``send_message`` to get going. Optional; ``None`` means "wait
         idle until the leader sends something".
+
+        ``backend_type`` selects the runtime strategy:
+        ``"in_process"`` (default) runs the teammate as an asyncio task
+        on the leader's loop; ``"pane"`` spawns a real subprocess inside
+        a freshly-split tmux pane. The pane backend raises
+        :class:`TeamError` early when the environment doesn't support
+        it (no ``$TMUX`` / no ``tmux`` on PATH).
 
         Returns the persisted :class:`TeammateMember`. Raises
         :class:`TeamError` on duplicate name, ``MAX_MEMBERS`` overflow,
@@ -380,11 +408,23 @@ class TeamManager:
                 f"team has reached MAX_MEMBERS={MAX_MEMBERS}; "
                 "remove a member before adding another",
             )
+        # Resolve the backend BEFORE we mutate state so a misrouted
+        # ``backend_type="pane"`` outside tmux fails fast without
+        # leaving an orphan TaskRecord / member row.
+        from aura.core.teams.backends.registry import (
+            BackendUnavailable,
+            get_backend,
+        )
+        try:
+            backend = get_backend(backend_type)
+        except BackendUnavailable as exc:
+            raise TeamError(str(exc)) from exc
         member = TeammateMember(
             name=name,
             agent_type=agent_type,
             system_prompt=system_prompt,
             model_name=model_name,
+            backend_type=backend_type,
         )
         self._team.members.append(member)
         self._persist()
@@ -423,37 +463,211 @@ class TeamManager:
         # Per-runtime stop event — set by remove_member so the loop can
         # exit between mailbox polls without waiting for the next abort.
         stop_event = asyncio.Event()
-        # Done-callback: prune state on natural completion / cancel.
-        def _cleanup(_t: asyncio.Task[None]) -> None:
-            self._runtimes.pop(record.id, None)
-            self._running_aborts.pop(record.id, None)
-            with contextlib.suppress(Exception):
-                if not _t.cancelled():
-                    _t.exception()
-        task: asyncio.Task[None] = asyncio.create_task(
-            self._runtime_runner(
-                agent=child,
+        # Spawn path:
+        #
+        # 1. If a custom ``runtime_runner`` was injected (tests), use the
+        #    legacy direct ``asyncio.create_task`` flow so the test's
+        #    runner shape (``async def(**kwargs) -> None``) keeps working
+        #    bit-for-bit. The handle wraps the resulting task with the
+        #    same in-process semantics the registry would have produced.
+        # 2. Otherwise dispatch to the in-process backend's ``spawn_sync``
+        #    helper — a synchronous wrapper around the same
+        #    ``asyncio.create_task`` call so we don't have to drive an
+        #    async coroutine from this sync method. Pane backend MUST
+        #    use :meth:`aadd_member` from an async context.
+        from aura.core.teams.backends.in_process import (
+            InProcessBackend as _InProcessBackend,
+        )
+        from aura.core.teams.backends.in_process import (
+            InProcessHandle as _InProcessHandle,
+        )
+        from aura.core.teams.runtime import run_teammate as _default_runner
+        if backend_type == "pane":
+            raise TeamError(
+                "pane backend must be added via aadd_member() from an "
+                "async context (sync add_member supports in_process only)",
+            )
+        handle: BackendHandle
+        if self._runtime_runner is not _default_runner:
+            # Legacy path for tests: run the injected coroutine directly.
+            def _cleanup(_t: asyncio.Task[None]) -> None:
+                self._runtimes.pop(record.id, None)
+                self._running_aborts.pop(record.id, None)
+                with contextlib.suppress(Exception):
+                    if not _t.cancelled():
+                        _t.exception()
+            task: asyncio.Task[None] = asyncio.create_task(
+                self._runtime_runner(
+                    agent=child,
+                    team_id=self._team.team_id,
+                    member_name=name,
+                    storage=self._storage,
+                    stop_event=stop_event,
+                    abort=abort,
+                    seed_prompt=seed_prompt,
+                ),
+                name=f"aura-teammate-{name}",
+            )
+            task.add_done_callback(_cleanup)
+            self._runtimes[record.id] = task
+            handle = _InProcessHandle(
+                task=task,
+                stop_event=stop_event,
+                abort=abort,
+            )
+        else:
+            # Production path — dispatch via the in-process backend
+            # singleton (sync helper). Pane already short-circuited above.
+            assert isinstance(backend, _InProcessBackend)
+            handle = backend.spawn_sync(
                 team_id=self._team.team_id,
-                member_name=name,
+                member=member,
+                agent=child,
+                manager=self,
                 storage=self._storage,
                 stop_event=stop_event,
                 abort=abort,
                 seed_prompt=seed_prompt,
-            ),
-            name=f"aura-teammate-{name}",
-        )
-        task.add_done_callback(_cleanup)
-        self._runtimes[record.id] = task
+            )
+            in_proc_task = handle.task
+            def _cleanup(_t: asyncio.Task[None]) -> None:
+                self._runtimes.pop(record.id, None)
+                self._running_aborts.pop(record.id, None)
+                with contextlib.suppress(Exception):
+                    if not _t.cancelled():
+                        _t.exception()
+            in_proc_task.add_done_callback(_cleanup)
+            self._runtimes[record.id] = in_proc_task
         # Stash the stop_event on the manager so remove_member can fire
         # it without re-allocating; a member->event map avoids leaking
         # the event into the runtime's call signature.
         self._stop_events[name] = stop_event
+        # Backend handle is the canonical shutdown surface; index by name.
+        self._member_backends[name] = handle
+        # If the backend mutated ``member.tmux_pane_id`` (pane only),
+        # persist the updated record so a crash leaves recoverable state.
+        if member.tmux_pane_id is not None:
+            self._persist()
         journal.write(
             "team_member_added",
             team_id=self._team.team_id,
             member=name,
             agent_type=agent_type,
+            backend_type=backend_type,
             task_id=record.id,
+            tmux_pane_id=member.tmux_pane_id,
+        )
+        return member
+
+    async def aadd_member(
+        self,
+        name: str,
+        *,
+        agent_type: str = "general-purpose",
+        system_prompt: str | None = None,
+        model_name: str | None = None,
+        seed_prompt: str | None = None,
+        backend_type: BackendType = "in_process",
+    ) -> TeammateMember:
+        """Async-native variant of :meth:`add_member`.
+
+        Required by the pane backend whose ``spawn`` awaits
+        ``subprocess.run`` via ``asyncio.to_thread``; the sync
+        ``add_member`` cannot drive that from inside a running event
+        loop. The in-process backend works identically through either
+        entry point.
+
+        Implementation defers to :meth:`add_member` for non-pane
+        backends; for pane it performs the same sequence but awaits the
+        backend spawn directly without any loop juggling.
+        """
+        if backend_type != "pane":
+            return self.add_member(
+                name,
+                agent_type=agent_type,
+                system_prompt=system_prompt,
+                model_name=model_name,
+                seed_prompt=seed_prompt,
+                backend_type=backend_type,
+            )
+        # Pane path — async-native.
+        if self._team is None:
+            raise TeamError("no team is active; call create_team first")
+        if name == TEAM_LEADER_NAME:
+            raise TeamError(f"member name {name!r} is reserved for the leader")
+        if name == BROADCAST_RECIPIENT:
+            raise TeamError(
+                f"member name {name!r} is reserved for broadcast routing",
+            )
+        if not _SLUG_RE.match(name):
+            raise TeamError(
+                f"member name {name!r} must match {_SLUG_RE.pattern}",
+            )
+        if any(m.name == name for m in self._team.members):
+            raise TeamError(f"member {name!r} already exists in team")
+        if len(self._team.members) >= MAX_MEMBERS:
+            raise TeamError(
+                f"team has reached MAX_MEMBERS={MAX_MEMBERS}; "
+                "remove a member before adding another",
+            )
+        from aura.core.teams.backends.registry import (
+            BackendUnavailable,
+            get_backend,
+        )
+        try:
+            backend = get_backend(backend_type)
+        except BackendUnavailable as exc:
+            raise TeamError(str(exc)) from exc
+        member = TeammateMember(
+            name=name,
+            agent_type=agent_type,
+            system_prompt=system_prompt,
+            model_name=model_name,
+            backend_type=backend_type,
+        )
+        self._team.members.append(member)
+        self._persist()
+        prompt_for_task = seed_prompt or "(idle teammate; awaiting messages)"
+        record = self._tasks_store.create(
+            description=f"teammate: {name}",
+            prompt=prompt_for_task,
+            kind="teammate",
+            agent_type=agent_type,
+            metadata={"team_id": self._team.team_id, "member": name},
+        )
+        child = self._factory.spawn(
+            prompt_for_task,
+            agent_type=agent_type,
+            task_id=record.id,
+        )
+        child.join_team(manager=self, member_name=name)
+        self._member_agents[name] = child
+        self._member_task_ids[name] = record.id
+        abort = AbortController()
+        self._running_aborts[record.id] = abort
+        stop_event = asyncio.Event()
+        handle = await backend.spawn(
+            team_id=self._team.team_id,
+            member=member,
+            agent=child,
+            manager=self,
+            storage=self._storage,
+            stop_event=stop_event,
+            abort=abort,
+            seed_prompt=seed_prompt,
+        )
+        self._stop_events[name] = stop_event
+        self._member_backends[name] = handle
+        if member.tmux_pane_id is not None:
+            self._persist()
+        journal.write(
+            "team_member_added",
+            team_id=self._team.team_id,
+            member=name,
+            agent_type=agent_type,
+            backend_type=backend_type,
+            task_id=record.id,
+            tmux_pane_id=member.tmux_pane_id,
         )
         return member
 
@@ -724,6 +938,23 @@ class TeamManager:
             handle = self._runtimes.get(task_id)
             if handle is not None and not handle.done():
                 handle.cancel()
+        # Backend handle teardown — covers the pane case (kill-pane) and
+        # is a harmless no-op for in-process where the task cancel above
+        # already did the work.
+        backend_handle = self._member_backends.pop(name, None)
+        if backend_handle is not None and not already_acked:
+            with contextlib.suppress(Exception):
+                # ``force_kill`` is async (pane awaits a tmux IPC); fire-
+                # and-forget on the running loop. If no loop is active
+                # (rare; sync-only test path), skip — there's nothing
+                # the backend can do without a loop, and the in-process
+                # task cancel above already covered that case.
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop is not None:
+                    loop.create_task(backend_handle.force_kill())
         agent = self._member_agents.pop(name, None)
         if agent is not None:
             with contextlib.suppress(Exception):

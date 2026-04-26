@@ -42,10 +42,14 @@ from tests.conftest import FakeChatModel, FakeTurn
 
 
 def _cfg() -> AuraConfig:
+    # ``teams.enabled=True`` from v0.18 — see test_teams_manager.py for
+    # the rationale (the gate would otherwise make spawned Agent.join_team
+    # raise inside SubagentFactory.spawn).
     return AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
+        "teams": {"enabled": True},
     })
 
 

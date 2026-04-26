@@ -39,6 +39,10 @@ def _agent(tmp_path: Path) -> Agent:
 
 
 def test_default_registry_has_builtin_set() -> None:
+    # ``/team`` is gated by ``teams.enabled`` (claude-code parity with
+    # isAgentSwarmsEnabled(), v0.18+); a no-agent registry build cannot
+    # consult a config and the safe default is off, so ``/team`` is
+    # absent here. See test_teams_feature_flag.py for the gate-on path.
     r = build_default_registry()
     names = {c.name for c in r.list()}
     assert names == {
@@ -47,7 +51,7 @@ def test_default_registry_has_builtin_set() -> None:
         "/tasks", "/task-get", "/task-stop",
         "/status", "/diff", "/log", "/mcp",
         "/buddy",
-        "/resume", "/team",
+        "/resume",
     }
 
 

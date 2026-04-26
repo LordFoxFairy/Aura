@@ -997,7 +997,19 @@ class Agent:
         auto-enables ``send_message`` when the user has not pinned a
         custom ``tools.enabled`` allowlist. Idempotent on the same
         manager / member name.
+
+        Raises ``RuntimeError`` when the teams feature gate
+        (``teams.enabled``) is False — claude-code parity with
+        ``isAgentSwarmsEnabled()``. The caller should set
+        ``teams.enabled=true`` in ``.aura/config.json`` to opt in.
         """
+        if not self._config.teams.enabled:
+            raise RuntimeError(
+                "teams disabled — set teams.enabled=true in "
+                ".aura/config.json to enable the multi-agent swarm "
+                "subsystem (mirrors claude-code's "
+                "isAgentSwarmsEnabled() flag)"
+            )
         if self._team is manager and (
             member_name is None or self._team_member_name == member_name
         ):
@@ -1022,8 +1034,13 @@ class Agent:
 
         Skips when the user pinned ``tools.enabled`` (their choice
         wins) or when the tool is already in the registry (idempotent
-        on double-join).
+        on double-join). Also skips when the teams feature gate
+        (``teams.enabled``) is False — claude-code parity with
+        ``isAgentSwarmsEnabled()``: a disabled teams subsystem must
+        not grow the LLM's tool schema with an inert tool.
         """
+        if not self._config.teams.enabled:
+            return
         if self._user_pinned_tools_allowlist_value:
             return
         if "send_message" in self._registry:

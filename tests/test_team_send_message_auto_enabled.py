@@ -30,10 +30,17 @@ from tests.conftest import FakeChatModel
 
 
 def _default_cfg() -> AuraConfig:
-    """AuraConfig with the shipped default ``tools.enabled`` allowlist."""
+    """AuraConfig with the shipped default ``tools.enabled`` allowlist.
+
+    ``teams.enabled=True`` is set explicitly so these tests exercise the
+    auto-enable path; the v0.18+ default is ``False`` (claude-code parity
+    with ``isAgentSwarmsEnabled()``), and that's covered by
+    ``test_teams_feature_flag.py``.
+    """
     return AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
+        "teams": {"enabled": True},
     })
 
 
@@ -42,6 +49,7 @@ def _custom_allowlist_cfg(tools: list[str]) -> AuraConfig:
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": tools},
+        "teams": {"enabled": True},
     })
 
 

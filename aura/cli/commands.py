@@ -67,7 +67,15 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     r.register(MCPCommand())
     r.register(BuddyCommand())
     r.register(ResumeCommand())
-    r.register(TeamCommand())
+    # Teams feature-gate: mirrors claude-code's ``isAgentSwarmsEnabled()``.
+    # ``TeamCommand`` is registered only when the user has opted into the
+    # multi-agent swarm subsystem via ``teams.enabled=true`` in their
+    # AuraConfig (default False). When ``agent`` is not provided we have
+    # no config to consult and the safe, claude-code-aligned default is
+    # off — callers that want the gated command must construct the
+    # registry with an Agent.
+    if agent is not None and agent._config.teams.enabled:
+        r.register(TeamCommand())
     if agent is not None:
         # Only skills with ``user_invocable=True`` get a ``/<name>`` slash
         # command — claude-code parity. Skills flagged ``user-invocable:

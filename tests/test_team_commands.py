@@ -14,11 +14,16 @@ from aura.core.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
 
-def _agent(tmp_path: Path) -> Agent:
+def _agent(tmp_path: Path, *, teams_enabled: bool = True) -> Agent:
+    # ``teams.enabled=True`` is required from v0.18 onwards — the gate
+    # (claude-code parity with isAgentSwarmsEnabled()) defaults to False
+    # and would make ``Agent.join_team`` raise. These slash-dispatch tests
+    # need the gate open so /team verbs reach their handlers.
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
+        "teams": {"enabled": teams_enabled},
     })
     return Agent(
         config=cfg,
@@ -83,7 +88,11 @@ async def test_team_unknown_subcommand(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_dispatch_team_through_registry(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    r = build_default_registry()
+    # v0.18+ teams gate (claude-code parity with isAgentSwarmsEnabled()):
+    # ``TeamCommand`` is only registered with the default registry when
+    # the agent's config has ``teams.enabled=True``. Pass the agent so
+    # the gate sees an opt-in config.
+    r = build_default_registry(agent)
     result = await dispatch("/team", agent, r)
     assert result.handled is True
     assert "subcommand" in result.text

@@ -100,8 +100,7 @@ def test_cache_breakpoints_set_for_anthropic_model(tmp_path: Path) -> None:
     # HumanMessage.
     project_memory = next(
         m for m in msgs[1:]
-        if isinstance(m, HumanMessage)
-        and "<project-memory>" in str(m.content)
+        if "<project-memory>" in str(m.content)
     )
     assert (
         project_memory.additional_kwargs.get("cache_control")
@@ -117,8 +116,7 @@ def test_cache_breakpoints_skipped_for_openai_model(tmp_path: Path) -> None:
     # <project-memory> — also no marker.
     project_memory = next(
         m for m in msgs[1:]
-        if isinstance(m, HumanMessage)
-        and "<project-memory>" in str(m.content)
+        if "<project-memory>" in str(m.content)
     )
     assert "cache_control" not in project_memory.additional_kwargs
 
@@ -187,7 +185,7 @@ def test_cache_breakpoints_only_system_when_eager_empty(tmp_path: Path) -> None:
     )
     # Only the SystemMessage in the prefix; no <project-memory>.
     assert not any(
-        isinstance(m, HumanMessage) and "<project-memory>" in str(m.content)
+        "<project-memory>" in str(m.content)
         for m in msgs
     )
 
@@ -217,8 +215,7 @@ def test_cache_breakpoint_with_unconditional_rule_only(tmp_path: Path) -> None:
     msgs = ctx.build([])
     project_memory = next(
         m for m in msgs[1:]
-        if isinstance(m, HumanMessage)
-        and "<project-memory>" in str(m.content)
+        if "<project-memory>" in str(m.content)
     )
     assert (
         project_memory.additional_kwargs.get("cache_control")
@@ -269,7 +266,7 @@ def test_skills_section_appears_inside_cached_prefix(tmp_path: Path) -> None:
     )
     project_memory_idx = next(
         i for i, m in enumerate(msgs)
-        if isinstance(m, HumanMessage) and "<project-memory>" in str(m.content)
+        if "<project-memory>" in str(m.content)
     )
     # Skills land AFTER project-memory but BEFORE any nested-memory / rule /
     # invoked-skill / todos / history messages — i.e. it's part of the
@@ -417,7 +414,7 @@ def test_skills_section_position_does_not_break_existing_invariants(
     )
     project_memory = next(
         m for m in msgs[1:]
-        if isinstance(m, HumanMessage) and "<project-memory>" in str(m.content)
+        if "<project-memory>" in str(m.content)
     )
     assert (
         project_memory.additional_kwargs.get("cache_control")

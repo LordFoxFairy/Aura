@@ -129,36 +129,41 @@ class TestDiscovery:
         cwd = tmp_path / "project"
         rules_dir = cwd / ".aura" / "rules"
         rules_dir.mkdir(parents=True)
-        # 250 lines of short content (well under 4096 bytes)
+        # 250 lines of short content (well under the 25 KB byte cap)
         body = "\n".join(f"L{i}" for i in range(250))
         (rules_dir / "long.md").write_text(body + "\n")
 
         bundle = load_rules(cwd)
         assert len(bundle.unconditional) == 1
         content = bundle.unconditional[0].content
-        assert content.endswith("\n… (truncated)")
+        # F-03-007 — truncation marker is now an explicit WARNING with
+        # byte counts so the model knows what got dropped + the limit.
+        assert "WARNING:" in content
+        assert "limit: 25000" in content
         # 200 lines retained: L199 is present, L200 onwards is not.
         assert "L199" in content
         assert "L200" not in content
 
-    def test_07_body_byte_truncation_4096(
+    def test_07_body_byte_truncation_25k(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _isolate_user_layer(monkeypatch, tmp_path)
         cwd = tmp_path / "project"
         rules_dir = cwd / ".aura" / "rules"
         rules_dir.mkdir(parents=True)
-        # 10 lines × 600 bytes/line = 6000 bytes > 4096, but only 10 lines (< 200)
-        body = "\n".join("x" * 600 for _ in range(10))
+        # 30 lines × 1000 bytes/line = 30000 bytes > 25_000 cap, but only
+        # 30 lines (< _MAX_LINES=200) so byte-cap is the trigger.
+        body = "\n".join("x" * 1000 for _ in range(30))
         (rules_dir / "big.md").write_text(body)
 
         bundle = load_rules(cwd)
         assert len(bundle.unconditional) == 1
         content = bundle.unconditional[0].content
-        assert content.endswith("\n… (truncated)")
-        # Body up-to-truncation is at most 4096 bytes.
-        trimmed = content[: -len("\n… (truncated)")]
-        assert len(trimmed.encode("utf-8")) <= 4096
+        assert "WARNING:" in content
+        assert "limit: 25000" in content
+        # Pre-marker body must respect the byte cap.
+        marker_idx = content.index("\nWARNING:")
+        assert len(content[:marker_idx].encode("utf-8")) <= 25_000
 
     def test_08_user_layer_scanned_recursively(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

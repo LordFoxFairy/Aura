@@ -8,6 +8,7 @@ completed}). Failed / cancelled tasks are excluded.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
@@ -35,7 +36,7 @@ def _agent(tmp_path: Path) -> Agent:
 
 
 def _seed_history(agent: Agent, *, pairs: int = 10) -> None:
-    h: list = []
+    h: list[Any] = []
     for i in range(pairs):
         h.append(HumanMessage(content=f"u-{i}"))
         h.append(AIMessage(content=f"a-{i}"))

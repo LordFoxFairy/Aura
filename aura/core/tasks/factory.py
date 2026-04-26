@@ -112,6 +112,13 @@ def _default_storage() -> SessionStorage:
 class SubagentFactory:
     """Create a standalone Agent for a single subagent run."""
 
+    # Class-level defaults so test subclasses that bypass ``__init__``
+    # (e.g. ``_CustomFactory`` patterns in test_task_observability)
+    # still see sane recursion / abort-cascade state. Every concrete
+    # ``__init__`` overrides these per-instance.
+    _depth: int = 0
+    _parent_abort_event: asyncio.Event | None = None
+
     def __init__(
         self,
         parent_config: AuraConfig,

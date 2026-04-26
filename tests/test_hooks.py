@@ -9,7 +9,12 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import PRE_TOOL_PASSTHROUGH, HookChain, PreToolOutcome
+from aura.core.hooks import (
+    PRE_TOOL_ASK_PENDING_KEY,
+    PRE_TOOL_PASSTHROUGH,
+    HookChain,
+    PreToolOutcome,
+)
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
@@ -452,3 +457,111 @@ def test_merge_concatenates_all_turn_cycle_slots() -> None:
     # Non-destructive — originals untouched.
     assert len(left.pre_model) == 1
     assert len(right.post_tool) == 1
+
+
+# ---------------------------------------------------------------------------
+# F-04-002 — PreToolOutcome.ask channel + merge precedence (deny > ask > allow)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_ask_propagates_to_merged_outcome() -> None:
+    async def asker(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
+    ) -> PreToolOutcome:
+        return PreToolOutcome(ask=True)
+
+    chain = HookChain(pre_tool=[asker])
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+    assert outcome.ask is True
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_ask_seen_by_downstream_hook_via_state() -> None:
+    """When an upstream hook sets ``ask=True``, downstream hooks see
+    ``state.custom[PRE_TOOL_ASK_PENDING_KEY]`` so a permission hook
+    later in the chain can detect the demand and demote any auto-allow
+    to the asker path."""
+    seen: list[bool] = []
+
+    async def upstream(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
+    ) -> PreToolOutcome:
+        return PreToolOutcome(ask=True)
+
+    async def downstream(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
+    ) -> PreToolOutcome:
+        seen.append(bool(state.custom.get(PRE_TOOL_ASK_PENDING_KEY)))
+        return PRE_TOOL_PASSTHROUGH
+
+    chain = HookChain(pre_tool=[upstream, downstream])
+    state = LoopState()
+    await chain.run_pre_tool(tool=_stub_tool, args={}, state=state)
+    assert seen == [True]
+    # Sentinel must NOT leak past the chain run — next tool call should
+    # see no pending ask unless re-requested.
+    assert PRE_TOOL_ASK_PENDING_KEY not in state.custom
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_ask_does_not_leak_when_no_hook_asks() -> None:
+    state = LoopState()
+    state.custom["unrelated"] = "x"
+    chain = HookChain(pre_tool=[])
+    out = await chain.run_pre_tool(tool=_stub_tool, args={}, state=state)
+    assert out.ask is False
+    assert PRE_TOOL_ASK_PENDING_KEY not in state.custom
+    assert state.custom["unrelated"] == "x"
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_deny_beats_ask() -> None:
+    """deny > ask. Even if a hook upstream said ``ask``, a downstream
+    deny is the final verdict."""
+    from aura.core.permissions.decision import Decision
+
+    deny = Decision(allow=False, reason="safety_blocked")
+
+    async def asker(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
+    ) -> PreToolOutcome:
+        return PreToolOutcome(ask=True)
+
+    async def denier(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
+    ) -> PreToolOutcome:
+        return PreToolOutcome(decision=deny)
+
+    chain = HookChain(pre_tool=[asker, denier])
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+    # ask flag still propagates as a side-channel; the deny is the
+    # authoritative decision.
+    assert outcome.decision is deny
+    assert outcome.ask is True
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_ask_overrides_prior_allow() -> None:
+    """ask > allow. A prior allow does not survive a subsequent ask."""
+    from aura.core.permissions.decision import Decision
+
+    allow = Decision(allow=True, reason="mode_bypass")
+
+    async def allower(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
+    ) -> PreToolOutcome:
+        return PreToolOutcome(decision=allow)
+
+    async def asker(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
+    ) -> PreToolOutcome:
+        return PreToolOutcome(ask=True)
+
+    chain = HookChain(pre_tool=[allower, asker])
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+    assert outcome.ask is True
+    # decision channel still records the prior allow, but the ask
+    # signal demands the loop re-prompt — the permission hook in
+    # production reads PRE_TOOL_ASK_PENDING_KEY to do exactly that.
+    assert outcome.decision is allow

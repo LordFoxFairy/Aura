@@ -49,7 +49,11 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
 
-from aura.core.hooks import PreToolHook, PreToolOutcome
+from aura.core.hooks import (
+    PRE_TOOL_ASK_PENDING_KEY,
+    PreToolHook,
+    PreToolOutcome,
+)
 from aura.core.permissions.decision import Decision
 from aura.core.permissions.denials import DENIALS_SINK_KEY, PermissionDenial
 from aura.core.permissions.mode import DEFAULT_MODE, Mode
@@ -94,14 +98,14 @@ def _dedup_key(tool_name: str, args: dict[str, Any]) -> str:
 _ACCEPT_EDITS_TOOLS: frozenset[str] = frozenset({"read_file", "write_file", "edit_file"})
 
 # Plan mode allow-list. Pure read / information-gathering tools the planner
-# needs in order to draft a useful plan (read the code, search it, fetch
-# docs, inspect running subagents). These fall through to the normal
-# rule / ask pipeline so safety + default-allow rules still apply; plan
-# mode only removes the blanket dry-run for them.
+# needs in order to draft a useful plan (read the code, search it, inspect
+# running subagents). These fall through to the normal rule / ask pipeline
+# so safety + default-allow rules still apply; plan mode only removes the
+# blanket dry-run for them.
+# plan mode = no side effects, no outbound calls
 _PLAN_MODE_READ_TOOLS: frozenset[str] = frozenset(
     {
         "read_file", "grep", "glob",
-        "web_fetch", "web_search",
         "task_get", "task_list",
     }
 )
@@ -308,6 +312,7 @@ def make_permission_hook(
     project_root: Path,
     mode: Mode | Callable[[], Mode] = DEFAULT_MODE,
     safety: SafetyPolicy = DEFAULT_SAFETY,
+    disable_bypass: bool = False,
 ) -> PreToolHook:
     # Bug fix (integration test finding): closing over ``mode`` by VALUE
     # meant Agent.set_mode(...) mid-session (shift+tab, exit_plan_mode,
@@ -315,11 +320,34 @@ def make_permission_hook(
     # mode was captured at CLI startup. Accept a Callable to support live
     # reads; wrap literals so existing test call-sites stay unchanged.
     if callable(mode):
-        _mode_provider: Callable[[], Mode] = mode
+        _raw_mode_provider: Callable[[], Mode] = mode
     else:
         _frozen_mode: Mode = mode
-        def _mode_provider() -> Mode:
+        def _raw_mode_provider() -> Mode:
             return _frozen_mode
+
+    # F-04-015: defense-in-depth bypass clamp. The CLI + Agent.set_mode
+    # both reject ``bypass`` at construction / set time when
+    # ``disable_bypass`` is true, but a programmatic provider that
+    # returns ``"bypass"`` mid-session would otherwise sneak past those
+    # gates. Clamp here so the hook NEVER honors bypass when the kill
+    # switch is on, and emit a one-shot warning so the regression is
+    # observable in audit logs.
+    _bypass_clamp_warned: list[bool] = [False]
+
+    def _mode_provider() -> Mode:
+        live = _raw_mode_provider()
+        if disable_bypass and live == "bypass":
+            if not _bypass_clamp_warned[0]:
+                journal.write(
+                    "bypass_clamped",
+                    reason="disable_bypass",
+                    requested="bypass",
+                    effective="default",
+                )
+                _bypass_clamp_warned[0] = True
+            return "default"
+        return live
 
     async def _hook(
         *,
@@ -456,13 +484,23 @@ async def _decide(
     if deny_match is not None:
         return Decision(allow=False, reason="rule_deny", rule=deny_match), ""
 
+    # F-04-002: If an upstream PreToolHook in this chain set ``ask``,
+    # demote any auto-allow path (bypass, rule, accept_edits, dedup
+    # cache) and route directly to the asker. Safety + restrict-tools
+    # still fire above — those are denies, not allows, and an ask must
+    # never silently promote a deny to a prompt. Plan-mode also still
+    # fires (a planner can't pretend to act with side effects). The
+    # signal is set by HookChain.run_pre_tool when any earlier hook
+    # returned ``PreToolOutcome(ask=True)``.
+    ask_demote = bool(state.custom.get(PRE_TOOL_ASK_PENDING_KEY))
+
     # 1. Bypass mode — loud and first. Note: bypass deliberately does NOT
     # run through safety here; the safety floor for bypass lives at the
     # tool level (bash_safety_hook) and for path tools is enforced by
     # the OS (write to /etc/passwd would fail anyway). This matches the
     # existing spec contract and the pre-existing test
     # ``test_bypass_mode_short_circuits_even_on_protected_path``.
-    if mode == "bypass":
+    if mode == "bypass" and not ask_demote:
         journal.write("permission_bypass", tool=tool.name)
         return Decision(allow=True, reason="mode_bypass"), ""
 
@@ -498,7 +536,11 @@ async def _decide(
     # 4. accept_edits mode — auto-allow the edit-family tools. Any other
     # tool (bash, web_fetch, custom) falls through to the rule/ask path,
     # so side-effecting calls still require explicit consent.
-    if mode == "accept_edits" and tool.name in _ACCEPT_EDITS_TOOLS:
+    if (
+        mode == "accept_edits"
+        and tool.name in _ACCEPT_EDITS_TOOLS
+        and not ask_demote
+    ):
         return Decision(allow=True, reason="mode_accept_edits"), ""
 
     # 4.5 Ask rules — force the prompt path even if a sibling allow /
@@ -543,11 +585,12 @@ async def _decide(
                 ), feedback
 
     # 5. Rule match — project first (includes built-in defaults), session second.
-    matched = rules.matches(tool.name, args, tool)
-    if matched is None:
-        matched = session.matches(tool.name, args, tool)
-    if matched is not None:
-        return Decision(allow=True, reason="rule_allow", rule=matched), ""
+    if not ask_demote:
+        matched = rules.matches(tool.name, args, tool)
+        if matched is None:
+            matched = session.matches(tool.name, args, tool)
+        if matched is not None:
+            return Decision(allow=True, reason="rule_allow", rule=matched), ""
 
     # 6. Ask — with per-turn ResolveOnce dedup.
     #
@@ -563,7 +606,7 @@ async def _decide(
     cache_key = _dedup_key(tool.name, args)
     cache = state.custom.setdefault(_PERM_DEDUP_CACHE_KEY, {})
     cached = cache.get(cache_key)
-    if cached is not None:
+    if cached is not None and not ask_demote:
         cached_decision, cached_feedback = cached
         journal.write(
             "permission_dedup_hit",

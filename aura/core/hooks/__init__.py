@@ -28,7 +28,7 @@ StopReason = Literal["user_exit", "clear", "max_turns", "error"]
 
 @dataclass(frozen=True)
 class PreToolOutcome:
-    """What a :class:`PreToolHook` returns — two independent channels.
+    """What a :class:`PreToolHook` returns — three independent channels.
 
     - ``short_circuit``: non-None replaces the tool's own execution with
       this :class:`ToolResult`. The tool is NOT invoked; the result lands
@@ -39,12 +39,17 @@ class PreToolOutcome:
       onto the :class:`aura.core.loop.ToolStep` so a PermissionAudit can
       be emitted between ToolCallStarted and ToolCallCompleted. A hook
       that has nothing to say about permission returns ``decision=None``.
+    - ``ask``: when True, demote any pending auto-allow back to the
+      user-prompt path. Lets a PreToolHook (e.g. a custom audit hook)
+      override an upstream auto-allow rule and force a fresh user
+      confirmation. Merge precedence is ``deny > ask > allow``: a deny
+      cannot be promoted back to a prompt, but an auto-allow can be.
 
-    Both fields default to ``None`` — a hook that neither short-circuits
-    nor emits a decision returns :obj:`PreToolOutcome.passthrough` (or
-    equivalently ``PreToolOutcome()``). Returning an implicit ``None``
-    from a PreToolHook is a type error by design — the contract is strict
-    so future readers can rely on "every hook returns an outcome".
+    All three fields default to passthrough — a hook that has nothing to
+    do returns :obj:`PRE_TOOL_PASSTHROUGH` (or equivalently
+    ``PreToolOutcome()``). Returning an implicit ``None`` from a
+    PreToolHook is a type error by design — the contract is strict so
+    future readers can rely on "every hook returns an outcome".
 
     Minimal usage — a hook that only short-circuits::
 
@@ -59,12 +64,21 @@ class PreToolOutcome:
 
     short_circuit: ToolResult | None = None
     decision: Decision | None = None
+    ask: bool = False
 
 
 # Shared sentinel for the "nothing to do" case so common hooks don't each
 # allocate a fresh PreToolOutcome on every call. Frozen dataclass = safe
 # to share by reference.
 PRE_TOOL_PASSTHROUGH: PreToolOutcome = PreToolOutcome()
+
+# state.custom key for the ``ask`` channel signal. Set to True by
+# HookChain.run_pre_tool while the chain has an unresolved ask request,
+# so a downstream permission hook can detect "an earlier hook said ask"
+# and route the call into its asker rather than an auto-allow branch.
+# Cleared at the end of every run_pre_tool — never leaks across tool
+# calls.
+PRE_TOOL_ASK_PENDING_KEY = "_pre_tool_ask_pending"
 
 
 class PreModelHook(Protocol):
@@ -282,8 +296,7 @@ class HookChain:
     ) -> PreToolOutcome:
         """Merge pre_tool hook outcomes across the chain.
 
-        Merge semantics (intentional asymmetry — the two channels model
-        different intents):
+        Merge semantics (three channels, three intents):
 
         - ``short_circuit`` is **first-wins**. The first hook that emits
           a non-None ``short_circuit`` stops the chain immediately —
@@ -300,6 +313,11 @@ class HookChain:
           where the permission hook is last and gets to stamp its
           ``rule_allow`` / ``mode_bypass`` reason as the authoritative
           allow audit trail.
+        - ``ask`` is **deny > ask > allow**. Once any hook sets
+          ``ask=True``, downstream hooks see ``state.custom[
+          PRE_TOOL_ASK_PENDING_KEY]=True`` so a permission hook can
+          force-prompt instead of auto-allowing. A subsequent deny still
+          wins over the ask; an allow CANNOT erase a pending ask.
 
         Audit trail: every hook that emits a non-None decision also
         triggers a ``pre_tool_hook_decision`` journal event (with the
@@ -324,41 +342,66 @@ class HookChain:
 
         merged_decision: Decision | None = None
         merged_decision_locked = False  # set True once a deny is recorded
-        for hook in self.pre_tool:
-            outcome = await hook(tool=tool, args=args, state=state, **kwargs)
-            if outcome.decision is not None:
-                # Per-hook audit event — fires for every non-None
-                # decision the chain produces, regardless of merge
-                # outcome, so audit readers can reconstruct what each
-                # hook said even when one was overridden by a later
-                # hook in the merge.
-                hook_name = (
-                    f"{getattr(hook, '__module__', '')}."
-                    f"{getattr(hook, '__qualname__', repr(hook))}"
-                ).lstrip(".")
-                journal.write(
-                    "pre_tool_hook_decision",
-                    hook=hook_name,
-                    tool=tool.name,
-                    allow=outcome.decision.allow,
-                    reason=outcome.decision.reason,
-                )
-                # First-deny-wins: a deny locks the merged decision so
-                # a later hook's allow cannot silently override it.
-                # Among allows (no deny seen yet) we keep last-wins
-                # behavior so the permission hook (typically last) gets
-                # to stamp its reason.
-                if not merged_decision_locked:
-                    merged_decision = outcome.decision
-                    if not outcome.decision.allow:
-                        merged_decision_locked = True
-            # First-wins: stop immediately on the first short-circuit.
-            if outcome.short_circuit is not None:
-                return PreToolOutcome(
-                    short_circuit=outcome.short_circuit,
-                    decision=merged_decision,
-                )
-        return PreToolOutcome(short_circuit=None, decision=merged_decision)
+        ask_requested = False
+        # Snapshot the prior value so we can restore it after this run
+        # — state.custom is shared across turns and we must not leak
+        # ``_pre_tool_ask_pending`` into the next tool call.
+        prior_ask_pending = state.custom.get(PRE_TOOL_ASK_PENDING_KEY)
+        try:
+            for hook in self.pre_tool:
+                outcome = await hook(tool=tool, args=args, state=state, **kwargs)
+                if outcome.ask and not ask_requested:
+                    ask_requested = True
+                    # Make the ask flag visible to downstream hooks (the
+                    # permission hook is typically last) so it can demote
+                    # an auto-allow to the asker path within the SAME
+                    # chain run, not on a follow-up turn.
+                    state.custom[PRE_TOOL_ASK_PENDING_KEY] = True
+                if outcome.decision is not None:
+                    # Per-hook audit event — fires for every non-None
+                    # decision the chain produces, regardless of merge
+                    # outcome, so audit readers can reconstruct what each
+                    # hook said even when one was overridden by a later
+                    # hook in the merge.
+                    hook_name = (
+                        f"{getattr(hook, '__module__', '')}."
+                        f"{getattr(hook, '__qualname__', repr(hook))}"
+                    ).lstrip(".")
+                    journal.write(
+                        "pre_tool_hook_decision",
+                        hook=hook_name,
+                        tool=tool.name,
+                        allow=outcome.decision.allow,
+                        reason=outcome.decision.reason,
+                    )
+                    # First-deny-wins: a deny locks the merged decision so
+                    # a later hook's allow cannot silently override it.
+                    # Among allows (no deny seen yet) we keep last-wins
+                    # behavior so the permission hook (typically last) gets
+                    # to stamp its reason.
+                    if not merged_decision_locked:
+                        merged_decision = outcome.decision
+                        if not outcome.decision.allow:
+                            merged_decision_locked = True
+                # First-wins: stop immediately on the first short-circuit.
+                if outcome.short_circuit is not None:
+                    return PreToolOutcome(
+                        short_circuit=outcome.short_circuit,
+                        decision=merged_decision,
+                        ask=ask_requested,
+                    )
+            return PreToolOutcome(
+                short_circuit=None,
+                decision=merged_decision,
+                ask=ask_requested,
+            )
+        finally:
+            # Always restore the prior value (or remove the key) so the
+            # ask flag never leaks across run_pre_tool invocations.
+            if prior_ask_pending is None:
+                state.custom.pop(PRE_TOOL_ASK_PENDING_KEY, None)
+            else:
+                state.custom[PRE_TOOL_ASK_PENDING_KEY] = prior_ask_pending
 
     async def run_post_tool(
         self,

@@ -53,6 +53,10 @@ from pydantic import ValidationError
 
 from aura.config.schema import AuraConfigError
 from aura.core.permissions.rule import InvalidRuleError, Rule
+from aura.core.permissions.safety import (
+    DEFAULT_PROTECTED_READS,
+    DEFAULT_PROTECTED_WRITES,
+)
 from aura.core.permissions.session import RuleSet
 from aura.errors import AuraError
 from aura.schemas.permissions import PermissionsConfig
@@ -126,6 +130,92 @@ def _validate(raw: dict[str, Any], source: Path) -> PermissionsConfig:
         raise AuraConfigError(source=str(source), detail=str(exc)) from exc
 
 
+# Concrete representative paths each protected pattern is *intended* to
+# block. ``safety_exempt`` overlap with any of these is a configuration
+# error: the user has weakened a built-in protection rather than added
+# a project-specific carve-out. Expanded against ``Path.home()`` /
+# absolutized at validation time so a user pattern like ``~/.ssh/**``
+# is recognised as overlapping ``**/.ssh/**``.
+_PROTECTED_OVERLAP_SAMPLES: tuple[str, ...] = (
+    "~/.ssh/id_rsa",
+    "~/.ssh/config",
+    "~/project/.git/HEAD",
+    "~/project/.git/config",
+    "~/project/.aura/settings.json",
+    "~/.bashrc",
+    "~/.zshrc",
+    "~/.profile",
+    "~/.bash_profile",
+    "~/.zprofile",
+    "/etc/passwd",
+    "/etc/hosts",
+)
+
+
+def _validate_safety_exempt(
+    cfg: PermissionsConfig, source: Path,
+) -> None:
+    """Reject ``safety_exempt`` patterns that overlap any built-in
+    protected entry. F-04-020 — a user pattern such as ``~/.ssh/**`` or
+    ``**/.git/**`` would otherwise silently disarm the safety floor.
+    """
+    if not cfg.safety_exempt:
+        return
+    import pathspec
+
+    home = str(Path.home())
+    samples = [
+        s.replace("~", home, 1) if s.startswith("~") else s
+        for s in _PROTECTED_OVERLAP_SAMPLES
+    ]
+    # Pre-compile both protected lists once so we can identify which
+    # built-in entry the offending pattern overlapped (clear error).
+    protected_names: list[tuple[str, pathspec.PathSpec]] = []
+    for protected in (*DEFAULT_PROTECTED_WRITES, *DEFAULT_PROTECTED_READS):
+        expanded = (
+            protected.replace("~", home, 1)
+            if protected.startswith("~")
+            else protected
+        )
+        protected_names.append((
+            protected,
+            pathspec.PathSpec.from_lines("gitignore", [expanded]),
+        ))
+
+    for pattern in cfg.safety_exempt:
+        expanded_pat = (
+            pattern.replace("~", home, 1) if pattern.startswith("~") else pattern
+        )
+        try:
+            spec = pathspec.PathSpec.from_lines("gitignore", [expanded_pat])
+        except Exception as exc:  # noqa: BLE001 — surface as config error
+            raise AuraConfigError(
+                source=str(source),
+                detail=(
+                    f"safety_exempt pattern {pattern!r} is not a valid "
+                    f"gitignore-style glob: {exc}"
+                ),
+            ) from exc
+        for sample in samples:
+            if not spec.match_file(sample):
+                continue
+            # The exempt pattern matches a sample that the protected list
+            # is meant to block. Find which built-in entry to name in
+            # the error so the user knows what they tried to disarm.
+            for protected_pattern, protected_spec in protected_names:
+                if protected_spec.match_file(sample):
+                    raise AuraConfigError(
+                        source=str(source),
+                        detail=(
+                            f"safety_exempt pattern {pattern!r} overlaps "
+                            f"built-in protected pattern "
+                            f"{protected_pattern!r} "
+                            f"(sample path {sample!r}); refusing to "
+                            "disarm a default safety entry"
+                        ),
+                    )
+
+
 def load(project_root: Path) -> PermissionsConfig:
     """Load merged project + local permissions. See module docstring."""
     project_path = _settings_path(project_root)
@@ -136,8 +226,14 @@ def load(project_root: Path) -> PermissionsConfig:
 
     # Validate each file independently so error messages point at the
     # file that actually has the typo.
-    _validate(project_raw, project_path)
-    _validate(local_raw, local_path)
+    project_cfg = _validate(project_raw, project_path)
+    local_cfg = _validate(local_raw, local_path)
+
+    # F-04-020: per-file safety_exempt overlap checks BEFORE merge so
+    # the error names the file that actually contains the offending
+    # pattern. A merged-list check would lose that attribution.
+    _validate_safety_exempt(project_cfg, project_path)
+    _validate_safety_exempt(local_cfg, local_path)
 
     # Merge:
     #   mode — local wins if it sets it; explicit "default" in local is

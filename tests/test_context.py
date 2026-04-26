@@ -45,14 +45,16 @@ def test_01_eager_layer2_with_primary_and_two_unconditional_rules(
     assert len(out) == 2
     assert isinstance(out[0], SystemMessage)
     assert out[0].content == "SYS"
-    assert isinstance(out[1], HumanMessage)
-    assert out[1].content == (
-        "<project-memory>\n"
-        "PRIMARY\n\n"
-        "RULE-1-BODY\n\n"
-        "RULE-2-BODY\n"
-        "</project-memory>"
-    )
+    # F-03-003: project-memory now emits as a SystemMessage wrapped in a
+    # <system-reminder> envelope with an OVERRIDE preamble.
+    assert isinstance(out[1], SystemMessage)
+    body = str(out[1].content)
+    assert body.startswith("<system-reminder>\n")
+    assert body.endswith("\n</system-reminder>")
+    assert "OVERRIDE" in body
+    assert (
+        "<project-memory>\nPRIMARY\n\nRULE-1-BODY\n\nRULE-2-BODY\n</project-memory>"
+    ) in body
 
 
 def test_02_empty_primary_and_empty_bundle_emits_system_only(
@@ -82,7 +84,7 @@ def test_03_only_unconditional_rules_layer2_contains_rules_only(
     )
     out = ctx.build([])
     assert len(out) == 2
-    assert out[1].content == "<project-memory>\nA\n\nB\n</project-memory>"
+    assert "<project-memory>\nA\n\nB\n</project-memory>" in str(out[1].content)
 
 
 def test_04_subdir_aura_md_loaded_on_tool_touched_path(tmp_path: Path) -> None:

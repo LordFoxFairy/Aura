@@ -23,8 +23,14 @@ _RULES_DIR = "rules"
 _MD_SUFFIX = ".md"
 
 _MAX_LINES = 200
-_MAX_BYTES = 4096
-_TRUNCATED_MARKER = "\n… (truncated)"
+_DEFAULT_BYTE_CAP = 25_000
+
+
+def _truncation_warning(actual_bytes: int, limit: int) -> str:
+    return (
+        f"\nWARNING: this file is {actual_bytes} bytes (limit: {limit}). "
+        "Keep memory files under 25 KB; split long content into separate files."
+    )
 
 
 @dataclass(frozen=True)
@@ -243,6 +249,7 @@ def _extract_globs(parsed: Any) -> tuple[str, ...] | object:
     - str（允许逗号分隔、各段 strip）→ 过滤空串后的元组。
     - list → 逐项转 str 的元组。
     - 其它类型 → `_SKIP`。
+    - 归一化后所有 entries ∈ {"**", "**/*"} → 空元组（unconditional carve-out, F-03-005）。
     """
     if not isinstance(parsed, dict):
         return ()
@@ -251,15 +258,31 @@ def _extract_globs(parsed: Any) -> tuple[str, ...] | object:
     value = parsed["paths"]
     if isinstance(value, str):
         parts = tuple(p.strip() for p in value.split(",") if p.strip())
-        return parts
+        return _normalize_universal(parts)
     if isinstance(value, list):
-        return tuple(str(item) for item in value)
+        parts = tuple(str(item) for item in value)
+        return _normalize_universal(parts)
     return _SKIP
 
 
-def _truncate(body: str) -> str:
-    """200 行 或 4096 字节（首个命中）即截断，尾部追加 marker。"""
+_UNIVERSAL_GLOBS = frozenset({"**", "**/*"})
+
+
+def _normalize_universal(parts: tuple[str, ...]) -> tuple[str, ...]:
+    if parts and all(p in _UNIVERSAL_GLOBS for p in parts):
+        return ()
+    return parts
+
+
+def _truncate(body: str, *, byte_cap: int = _DEFAULT_BYTE_CAP) -> str:
+    """200 行 或 `byte_cap` 字节（首个命中）即截断，尾部追加 WARNING marker。
+
+    `byte_cap` 取代旧的硬编码 4096：rules 走默认 25_000，调用方可显式收紧。
+    Marker 暴露 actual/limit 给模型，引导用户把超长 memory 拆文件 (F-03-007)。
+    """
+    original_bytes = len(body.encode("utf-8"))
     truncated = False
+    limit_hit = byte_cap
 
     lines = body.splitlines(keepends=True)
     if len(lines) > _MAX_LINES:
@@ -268,13 +291,13 @@ def _truncate(body: str) -> str:
 
     trimmed = "".join(lines)
     encoded = trimmed.encode("utf-8")
-    if len(encoded) > _MAX_BYTES:
+    if len(encoded) > byte_cap:
         # 按字节截断后，末尾可能砍断一个多字节字符；errors='replace' 维持字符串完整
-        trimmed = encoded[:_MAX_BYTES].decode("utf-8", errors="replace")
+        trimmed = encoded[:byte_cap].decode("utf-8", errors="replace")
         truncated = True
 
     if truncated:
-        return trimmed + _TRUNCATED_MARKER
+        return trimmed + _truncation_warning(original_bytes, limit_hit)
     return trimmed
 
 

@@ -35,6 +35,14 @@ _AURA_MD = "AURA.md"
 _AURA_DIR = ".aura"
 _AURA_LOCAL_MD = "AURA.local.md"
 
+# claude-code's exact phrasing — wraps injected memory so the model treats
+# project instructions as overriding default behavior (audit F-03-003).
+_OVERRIDE_PREAMBLE = (
+    "Codebase and user instructions are shown below. Be sure to adhere to "
+    "these instructions. IMPORTANT: These instructions OVERRIDE any default "
+    "behavior and you MUST follow them exactly as written."
+)
+
 
 @dataclass(frozen=True)
 class NestedFragment:
@@ -257,8 +265,11 @@ class Context:
 
         eager = _joined_eager(self._primary_memory, self._rules.unconditional)
         if eager:
-            project_memory_msg = HumanMessage(
-                f"<project-memory>\n{eager}\n</project-memory>"
+            project_memory_msg = SystemMessage(
+                "<system-reminder>\n"
+                f"{_OVERRIDE_PREAMBLE}\n\n"
+                f"<project-memory>\n{eager}\n</project-memory>\n"
+                "</system-reminder>"
             )
             if is_anthropic:
                 project_memory_msg.additional_kwargs["cache_control"] = {

@@ -240,6 +240,51 @@ async def test_content_mode_distinguishes_match_vs_context_on_hyphen_path(
     assert {e["line"] for e in ctx_entries} == {1, 3}
 
 
+async def test_grep_excludes_vcs_directories(tmp_path: Path) -> None:
+    # Simulate a checkout: the magic word lives inside .git/HEAD AND in a
+    # tracked source file. Auto-exclude must drop the .git/ hit.
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/SECRET_TOKEN\n", encoding="utf-8")
+    svn_dir = tmp_path / ".svn"
+    svn_dir.mkdir()
+    (svn_dir / "entries").write_text("SECRET_TOKEN\n", encoding="utf-8")
+    (tmp_path / "src.py").write_text("# SECRET_TOKEN here\n", encoding="utf-8")
+
+    out = await grep.ainvoke({"pattern": "SECRET_TOKEN", "path": str(tmp_path)})
+    assert any(p.endswith("src.py") for p in out["files"])
+    assert not any(".git" in p for p in out["files"])
+    assert not any(".svn" in p for p in out["files"])
+
+
+async def test_grep_max_columns_truncates_long_lines(tmp_path: Path) -> None:
+    long_line = "x" * 600 + "MARKER" + "y" * 600
+    (tmp_path / "long.txt").write_text(long_line + "\n", encoding="utf-8")
+    out = await grep.ainvoke(
+        {"pattern": "MARKER", "path": str(tmp_path), "output_mode": "content"}
+    )
+    assert out["mode"] == "content"
+    assert len(out["matches"]) == 1
+    text = out["matches"][0]["text"]
+    assert len(text) < 600
+    # rg signals truncation with a bracketed notice (`[Omitted ...]` or `[... omitted]`).
+    assert "[" in text and "]" in text
+
+
+async def test_grep_max_columns_param_override(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("x" * 50 + "MARK" + "y" * 50 + "\n", encoding="utf-8")
+    out = await grep.ainvoke(
+        {
+            "pattern": "MARK",
+            "path": str(tmp_path),
+            "output_mode": "content",
+            "max_columns": 20,
+        }
+    )
+    assert len(out["matches"]) == 1
+    assert "[" in out["matches"][0]["text"]
+
+
 async def test_content_mode_single_hyphen_path_still_works(tmp_path: Path) -> None:
     # Regression guard: a simple hyphenated dir (no digits in between) must
     # also round-trip cleanly — confirms the fix isn't narrowly tied to

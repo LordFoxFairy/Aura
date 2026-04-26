@@ -3,6 +3,10 @@
 Shells out to ``rg`` (ripgrep). The three output modes mirror claude-code's
 GrepTool: ``files_with_matches`` (default, just paths), ``count`` (per-file
 match counts), and ``content`` (line-level matches with optional context).
+
+VCS metadata directories (``.git``, ``.svn``, ``.hg``) are auto-excluded —
+mirrors claude-code's VCS_DIRECTORIES_TO_EXCLUDE. Lines longer than
+``max_columns`` (default 500) are truncated by rg with a ``[...]`` indicator.
 """
 
 from __future__ import annotations
@@ -58,6 +62,15 @@ class GrepParams(BaseModel):
         le=5000,
         description="Cap on entries/lines returned.",
     )
+    max_columns: int = Field(
+        default=500,
+        ge=1,
+        le=10_000,
+        description=(
+            "Per-line character cap (rg --max-columns); over-long lines are "
+            "elided with '[...]'."
+        ),
+    )
 
     model_config = {"populate_by_name": True}
 
@@ -85,8 +98,15 @@ _MATCH_SEP = "\x1f"
 _CTX_SEP = "\x02"
 
 
+_VCS_EXCLUDE_GLOBS: tuple[str, ...] = ("!.git", "!.svn", "!.hg")
+
+
 def _build_argv(p: GrepParams) -> list[str]:
-    argv: list[str] = ["rg", "--line-number"]
+    argv: list[str] = ["rg", "--line-number", f"--max-columns={p.max_columns}"]
+    # VCS-metadata excludes go before user globs so an explicit positive
+    # glob from the caller can still re-include them.
+    for g in _VCS_EXCLUDE_GLOBS:
+        argv += ["--glob", g]
     if p.case_insensitive:
         argv.append("-i")
     if p.multiline:
@@ -151,7 +171,9 @@ class Grep(BaseTool):
         "Search file contents via ripgrep. Default returns matching file paths "
         "('files_with_matches'); other modes: 'content' (lines with optional "
         "context_before/after), 'count' (per-file match totals). Supports "
-        "case_insensitive (rg -i), glob, type, and multiline."
+        "case_insensitive (rg -i), glob, type, and multiline. VCS metadata "
+        "dirs (.git/.svn/.hg) are auto-excluded; lines over max_columns "
+        "(default 500 chars) are elided with '[...]'."
     )
     args_schema: type[BaseModel] = GrepParams
     metadata: dict[str, Any] | None = tool_metadata(

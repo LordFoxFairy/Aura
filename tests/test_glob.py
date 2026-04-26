@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -144,6 +146,68 @@ def test_invalid_sort_value_rejected() -> None:
 
     with pytest.raises(ValidationError):
         GlobParams(pattern="*.py", sort="lastmod")  # type: ignore[arg-type]
+
+
+def _git_init_repo(root: Path) -> None:
+    subprocess.run(
+        ["git", "init", "-q"], cwd=root, check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.email", "t@t"], check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "config", "user.name", "t"], check=True,
+        capture_output=True,
+    )
+
+
+def _git_add_commit(root: Path) -> None:
+    subprocess.run(
+        ["git", "-C", str(root), "add", "-A"], check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "commit", "-qm", "init"], check=True,
+        capture_output=True,
+    )
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+async def test_glob_in_git_repo_excludes_gitignored_file(tmp_path: Path) -> None:
+    _git_init_repo(tmp_path)
+    (tmp_path / ".gitignore").write_text("secret.py\n", encoding="utf-8")
+    (tmp_path / "ok.py").write_text("", encoding="utf-8")
+    (tmp_path / "secret.py").write_text("", encoding="utf-8")
+    _git_add_commit(tmp_path)
+
+    out = await glob.ainvoke({"pattern": "*.py", "path": str(tmp_path)})
+    assert "ok.py" in out["files"]
+    assert "secret.py" not in out["files"]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not on PATH")
+async def test_glob_in_git_repo_excludes_untracked_file(tmp_path: Path) -> None:
+    _git_init_repo(tmp_path)
+    (tmp_path / "tracked.py").write_text("", encoding="utf-8")
+    _git_add_commit(tmp_path)
+    # New file added after initial commit and never `git add`-ed.
+    (tmp_path / "untracked.py").write_text("", encoding="utf-8")
+
+    out = await glob.ainvoke({"pattern": "*.py", "path": str(tmp_path)})
+    assert "tracked.py" in out["files"]
+    assert "untracked.py" not in out["files"]
+
+
+async def test_glob_in_non_git_dir_includes_all_files(tmp_path: Path) -> None:
+    # Same names as the gitignore test, but no .git/ → ignored file IS included.
+    (tmp_path / ".gitignore").write_text("secret.py\n", encoding="utf-8")
+    (tmp_path / "ok.py").write_text("", encoding="utf-8")
+    (tmp_path / "secret.py").write_text("", encoding="utf-8")
+
+    out = await glob.ainvoke({"pattern": "*.py", "path": str(tmp_path)})
+    assert "ok.py" in out["files"]
+    assert "secret.py" in out["files"]
 
 
 async def test_truncation_preserves_sort_order(tmp_path: Path) -> None:

@@ -678,3 +678,156 @@ async def test_journal_event_shows_write_file_as_tool(
         assert blocked[0]["reason"] == "never_read"
     finally:
         journal_module.reset()
+
+
+# ---------------------------------------------------------------------------
+# F-04-011 — must_read_first coverage for bash mutation idioms
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bash_sed_in_place_blocked_when_target_unread(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    target = tmp_path / "config.toml"
+    target.write_text("k = 1\n")
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": f"sed -i 's/1/2/' {target}"},
+        state=LoopState(),
+    )
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+    assert "would mutate" in (outcome.short_circuit.error or "")
+    assert str(target.resolve()) in (outcome.short_circuit.error or "")
+
+
+@pytest.mark.asyncio
+async def test_bash_sed_in_place_allowed_after_read(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "config.toml"
+    target.write_text("k = 1\n")
+    ctx.record_read(target)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": f"sed -i 's/1/2/' {target}"},
+        state=LoopState(),
+    )
+    assert outcome.short_circuit is None
+
+
+@pytest.mark.asyncio
+async def test_bash_redirect_overwrite_blocked_when_target_unread(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    target = tmp_path / "out.txt"
+    target.write_text("old\n")
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": f"echo new > {target}"},
+        state=LoopState(),
+    )
+    assert outcome.short_circuit is not None
+    assert outcome.short_circuit.ok is False
+
+
+@pytest.mark.asyncio
+async def test_bash_redirect_to_new_file_passes(tmp_path: Path) -> None:
+    """``> path`` to a non-existent target is pure creation — no prior read needed."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    target = tmp_path / "fresh.txt"  # does not exist
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": f"echo hi > {target}"},
+        state=LoopState(),
+    )
+    assert outcome.short_circuit is None
+
+
+@pytest.mark.asyncio
+async def test_bash_append_redirect_blocked_when_target_unread(
+    tmp_path: Path,
+) -> None:
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    target = tmp_path / "log.txt"
+    target.write_text("entry-1\n")
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": f"echo entry-2 >> {target}"},
+        state=LoopState(),
+    )
+    assert outcome.short_circuit is not None
+
+
+@pytest.mark.asyncio
+async def test_bash_tee_blocked_when_target_unread(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    target = tmp_path / "shared.txt"
+    target.write_text("v0\n")
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": f"echo v1 | tee {target}"},
+        state=LoopState(),
+    )
+    assert outcome.short_circuit is not None
+
+
+@pytest.mark.asyncio
+async def test_bash_redirect_to_dev_null_passes(tmp_path: Path) -> None:
+    """``> /dev/null`` should not flag — /dev/* is excluded from the regex."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "ls /tmp > /dev/null 2>&1"},
+        state=LoopState(),
+    )
+    assert outcome.short_circuit is None
+
+
+@pytest.mark.asyncio
+async def test_bash_pure_read_command_passes(tmp_path: Path) -> None:
+    """No mutation idiom in command → hook passthrough."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "ls -la /tmp"},
+        state=LoopState(),
+    )
+    assert outcome.short_circuit is None
+
+
+@pytest.mark.asyncio
+async def test_bash_journal_emits_blocked_event_with_command(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "journal.jsonl"
+    journal_module.configure(log)
+    try:
+        ctx = _ctx(tmp_path)
+        hook = make_must_read_first_hook(ctx)
+        target = tmp_path / "cfg.toml"
+        target.write_text("k=1\n")
+        cmd = f"sed -i 's/1/2/' {target}"
+        await hook(
+            tool=_bash_tool(),
+            args={"command": cmd},
+            state=LoopState(),
+        )
+        events = [json.loads(line) for line in log.read_text().splitlines()]
+        blocked = [e for e in events if e["event"] == "must_read_first_blocked"]
+        assert len(blocked) == 1
+        assert blocked[0]["tool"] == "bash"
+        assert blocked[0]["path"] == str(target.resolve())
+        assert blocked[0]["command"] == cmd
+    finally:
+        journal_module.reset()

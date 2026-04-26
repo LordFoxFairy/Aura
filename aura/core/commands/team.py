@@ -38,7 +38,7 @@ from aura.core.teams.manager import (
     TeamManager,
     TeamViewSnapshot,
 )
-from aura.core.teams.types import TeamRecord
+from aura.core.teams.types import BackendType, TeamRecord
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
@@ -69,7 +69,12 @@ _HELP = """\
   teammate <member>                Render one teammate's last 50 transcript
                                    entries in the same style as the main
                                    agent transcript.
-  add <name> [agent_type] [model]  Spawn a teammate.
+  add <name> [agent_type] [model] [--backend <kind>]
+                                   Spawn a teammate. ``--backend`` picks
+                                   the runtime: ``in_process`` (default,
+                                   asyncio task on the leader's loop) or
+                                   ``pane`` (subprocess in a tmux split;
+                                   requires ``$TMUX`` + tmux on PATH).
   remove <name>                    Graceful shutdown of a teammate.
   members                          Show live members + status.
   send <to> <body>                 Send a text message (no LLM).
@@ -84,6 +89,56 @@ Recipients: a member name, the literal 'leader', or 'broadcast'.
 #: a meaningful debug trail, short enough that the REPL panel stays
 #: scrollable on a 24-line terminal.
 _TEAMMATE_TAIL_CAP: int = 50
+
+
+#: Backends ``/team add --backend <kind>`` accepts. Kept in sync with
+#: :data:`aura.core.teams.types.BackendType`; the CLI validates here
+#: so a typo surfaces a friendly hint instead of bouncing through the
+#: registry's ``BackendUnavailable`` path.
+_VALID_BACKENDS: tuple[str, ...] = ("in_process", "pane")
+
+
+class _AddUsageError(ValueError):
+    """Raised by :func:`_parse_add_args` for malformed ``/team add`` input.
+
+    Distinct from ``TeamError`` — this fires before we touch the manager,
+    so it carries pure usage messages rather than runtime errors.
+    """
+
+
+def _parse_add_args(rest: str) -> tuple[list[str], BackendType]:
+    """Parse ``/team add`` arg string into ``(positional, backend_type)``.
+
+    ``--backend <kind>`` may appear at any position; consumed tokens are
+    stripped so the remaining positional args (``name [agent_type] [model]``)
+    keep their original semantics. Defaults to ``"in_process"`` when the
+    flag is absent. Raises :class:`_AddUsageError` for missing values or
+    unknown backend kinds.
+    """
+    tokens = rest.split()
+    backend_type: BackendType = "in_process"
+    positional: list[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "--backend":
+            if i + 1 >= len(tokens):
+                raise _AddUsageError(
+                    "usage: /team add ... --backend <"
+                    + "|".join(_VALID_BACKENDS) + ">",
+                )
+            raw = tokens[i + 1]
+            if raw not in _VALID_BACKENDS:
+                raise _AddUsageError(
+                    f"unknown backend {raw!r}; expected one of "
+                    + "|".join(_VALID_BACKENDS),
+                )
+            backend_type = cast(BackendType, raw)
+            i += 2
+            continue
+        positional.append(tok)
+        i += 1
+    return positional, backend_type
 
 
 def _ensure_manager(agent: Agent) -> TeamManager | None:
@@ -349,19 +404,36 @@ class TeamCommand:
         if verb == "teammate":
             return self._teammate(agent, mgr, rest)
         if verb == "add":
-            tokens = rest.split()
-            if not tokens:
+            try:
+                positional, backend_type = _parse_add_args(rest)
+            except _AddUsageError as exc:
+                return str(exc), "print"
+            if not positional:
                 return (
-                    "usage: /team add <name> [agent_type] [model]", "print",
+                    "usage: /team add <name> [agent_type] [model] "
+                    "[--backend in_process|pane]",
+                    "print",
                 )
-            name = tokens[0]
-            agent_type = tokens[1] if len(tokens) > 1 else "general-purpose"
-            model_name = tokens[2] if len(tokens) > 2 else None
-            member = mgr.add_member(
-                name, agent_type=agent_type, model_name=model_name,
+            name = positional[0]
+            agent_type = positional[1] if len(positional) > 1 else "general-purpose"
+            model_name = positional[2] if len(positional) > 2 else None
+            try:
+                member = mgr.add_member(
+                    name,
+                    agent_type=agent_type,
+                    model_name=model_name,
+                    backend_type=backend_type,
+                )
+            except TeamError as exc:
+                return f"error: {exc}", "print"
+            suffix = (
+                f" backend={member.backend_type}"
+                if member.backend_type != "in_process"
+                else ""
             )
             return (
-                f"member {member.name!r} added (agent_type={member.agent_type})",
+                f"member {member.name!r} added "
+                f"(agent_type={member.agent_type}{suffix})",
                 "print",
             )
         if verb == "remove":

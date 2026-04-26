@@ -510,8 +510,19 @@ class Agent:
         # selected agent_type); always empty for top-level Agents. Stored on
         # self so ``clear_session`` can rebuild the prompt identically.
         self._system_prompt_suffix = system_prompt_suffix
-        self._system_prompt = build_system_prompt() + system_prompt_suffix
-        self._primary_memory = project_memory.load_project_memory(self._cwd)
+        self._auto_memory_dir = self._storage.memory_dir(cwd=self._cwd)
+        self._system_prompt = (
+            build_system_prompt(
+                cwd=self._cwd,
+                model_spec=self._current_model_spec,
+                auto_memory_dir=self._auto_memory_dir,
+            )
+            + system_prompt_suffix
+        )
+        self._primary_memory = project_memory.load_project_memory(
+            self._cwd,
+            auto_memory_dir=self._auto_memory_dir,
+        )
         self._rules = rules.load_rules(self._cwd)
         # ``inherited_reads`` (Workstream G8) only flows into the FIRST
         # Context construction — /clear and /compact build their own fresh
@@ -899,7 +910,10 @@ class Agent:
         # 不做原地 reset，避免遗漏字段。
         project_memory.clear_cache(self._cwd)
         rules.clear_cache(self._cwd)
-        self._primary_memory = project_memory.load_project_memory(self._cwd)
+        self._primary_memory = project_memory.load_project_memory(
+            self._cwd,
+            auto_memory_dir=self._storage.memory_dir(cwd=self._cwd),
+        )
         self._rules = rules.load_rules(self._cwd)
         self._context = self._build_context()
         # Swap the must-read-first hook so it closes over the NEW Context —

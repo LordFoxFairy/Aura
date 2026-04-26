@@ -24,19 +24,34 @@ _TEXT_IMPORT_EXTS = frozenset(
 )
 
 # Aura 单 event-loop 运行，无并发写入；因此缓存无需加锁。
-_primary_cache: dict[Path, str] = {}
+_primary_cache: dict[tuple[Path, Path | None], str] = {}
 
 
-def load_project_memory(cwd: Path, *, force_reload: bool = False) -> str:
+def load_project_memory(
+    cwd: Path,
+    *,
+    force_reload: bool = False,
+    auto_memory_dir: Path | None = None,
+) -> str:
     """按 User / Project(outer→inner) / Local(outer→inner) 顺序拼接项目记忆。
 
     文件间与层间统一以单空行分隔；缺失 / 目录占位 / 权限拒绝 —— 一律静默跳过。
     读到的文件同时展开 `@imports`。
     以 resolved cwd 为 key 进入 `_primary_cache`；`force_reload=True` 旁路缓存并覆盖。
+
+    F-03-004 — auto-memory layer. When ``auto_memory_dir`` is supplied
+    (typically ``Storage.memory_dir(cwd=...)``), the loader appends the
+    directory's ``MEMORY.md`` index after the User / Project / Local
+    chain. The model writes its own ``MEMORY.md`` + per-memory files
+    via the existing ``write_file`` tool — no new pipeline. ``None``
+    (default) preserves the legacy three-layer chain for callers that
+    don't have a Storage handle. Imports are expanded just like the
+    other layers, so ``MEMORY.md`` can ``@`` into per-entry files.
     """
     resolved = cwd.resolve()
-    if not force_reload and resolved in _primary_cache:
-        return _primary_cache[resolved]
+    cache_key = (resolved, auto_memory_dir.resolve() if auto_memory_dir else None)
+    if not force_reload and cache_key in _primary_cache:
+        return _primary_cache[cache_key]
 
     # F-03-006: stop walking at the git root if `cwd` is in a repo. Falls
     # back to filesystem root when `git` is missing or `cwd` isn't tracked,
@@ -63,17 +78,29 @@ def load_project_memory(cwd: Path, *, force_reload: bool = False) -> str:
         if local is not None:
             fragments.append(local)
 
+    if auto_memory_dir is not None:
+        memory_md = read_with_imports(auto_memory_dir / "MEMORY.md")
+        if memory_md is not None:
+            fragments.append(memory_md)
+
     result = "\n\n".join(fragments)
-    _primary_cache[resolved] = result
+    _primary_cache[cache_key] = result
     return result
 
 
 def clear_cache(cwd: Path | None = None) -> None:
-    """清 `_primary_cache`：无参清空全部；有参清指定 resolved cwd（不存在则静默）。"""
+    """清 `_primary_cache`：无参清空全部；有参清指定 resolved cwd 的所有变体。
+
+    Cache keys are ``(resolved_cwd, auto_memory_dir | None)`` since the
+    F-03-004 auto-memory layer participates in the key. Clearing by cwd
+    drops every entry whose first key component matches.
+    """
     if cwd is None:
         _primary_cache.clear()
         return
-    _primary_cache.pop(cwd.resolve(), None)
+    target = cwd.resolve()
+    for key in [k for k in _primary_cache if k[0] == target]:
+        _primary_cache.pop(key, None)
 
 
 def _detect_git_root(cwd: Path) -> Path | None:

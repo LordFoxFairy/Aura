@@ -156,6 +156,21 @@ class SessionStorage:
         self._validate_session_id(session_id)
         return self._project_dir(cwd) / f"{session_id}.jsonl"
 
+    def memory_dir(self, *, cwd: Path | None = None) -> Path:
+        """Return the per-project auto-memory directory.
+
+        Layout: ``<projects>/<encoded-cwd>/memory/``. Persists across
+        sessions for one project (cwd) — sibling to ``<session-id>.jsonl``
+        under the same project root. Mirrors claude-code's per-project
+        memory directory convention. ``MEMORY.md`` (the index) and one
+        ``.md`` file per memory entry live here.
+
+        Does NOT create the directory; callers (loaders, the model's
+        ``write_file`` tool, ``add_memory`` helper) materialize it on
+        first write.
+        """
+        return self._project_dir(cwd) / "memory"
+
     def session_dir(
         self, session_id: str, *, cwd: Path | None = None,
     ) -> Path:

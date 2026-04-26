@@ -44,6 +44,7 @@ def build_system_prompt(
     cwd: Path | None = None,
     now: dt.datetime | None = None,
     model_spec: str | None = None,
+    auto_memory_dir: Path | None = None,
 ) -> str:
     sections = [
         _identity_section(),
@@ -51,7 +52,78 @@ def build_system_prompt(
             cwd=cwd or Path.cwd(), now=now, model_spec=model_spec,
         ),
     ]
+    if auto_memory_dir is not None:
+        sections.append(_auto_memory_section(auto_memory_dir))
     return "\n\n".join(sections)
+
+
+def _auto_memory_section(memory_dir: Path) -> str:
+    """F-03-004 — explain the auto-memory convention to the model.
+
+    The model reads + writes memory files via the existing ``write_file``
+    / ``read_file`` tools; this prompt section names the directory and
+    conventions so the model knows where to put a recall and what types
+    of memory to capture. Mirrors claude-code's auto-memory instructions
+    almost verbatim — the file layout (one .md per memory + a top-level
+    ``MEMORY.md`` index) is identical so users moving between the two
+    have a uniform mental model.
+    """
+    return (
+        "# auto memory\n\n"
+        f"You have a persistent, file-based memory system at `{memory_dir}/`. "
+        "Write to it directly with the ``write_file`` tool — no need to "
+        "create the directory first; ``write_file`` materializes parent "
+        "directories on demand.\n\n"
+        "Build up memory over time so future conversations have a complete "
+        "picture of who the user is, how they want to collaborate, what "
+        "behaviors to repeat or avoid, and the project's context.\n\n"
+        "## Types of memory\n\n"
+        "- **user**: role, goals, responsibilities, knowledge level, "
+        "preferences. Tailor your behavior to the user's profile.\n"
+        "- **feedback**: explicit corrections + validated approaches the "
+        "user has confirmed. Save with a short *Why:* line so edge cases "
+        "make sense later.\n"
+        "- **project**: ongoing work, deadlines, decisions, incidents that "
+        "aren't derivable from the code or git history. Convert relative "
+        "dates to absolute (\"Thursday\" → \"2026-04-30\") so memory stays "
+        "interpretable after time passes.\n"
+        "- **reference**: pointers to where information lives in external "
+        "systems (Linear projects, Slack channels, Grafana dashboards).\n\n"
+        "## What NOT to save\n\n"
+        "- Code patterns / file paths / architecture — derivable from the "
+        "current project state.\n"
+        "- Git history — ``git log`` is authoritative.\n"
+        "- Anything already in CLAUDE.md / AURA.md.\n"
+        "- Ephemeral task state — that's what conversation context is for.\n\n"
+        "## How to save\n\n"
+        f"1. Write the memory to its own file (``{memory_dir}/<topic>.md``) "
+        "with this frontmatter:\n\n"
+        "   ```\n"
+        "   ---\n"
+        "   name: {memory name}\n"
+        "   description: {one-line hook used to decide relevance later}\n"
+        "   type: {user, feedback, project, reference}\n"
+        "   ---\n\n"
+        "   {memory content}\n"
+        "   ```\n\n"
+        f"2. Append a one-line pointer to ``{memory_dir}/MEMORY.md``:\n\n"
+        "   ```\n"
+        "   - [Title](file.md) — one-line hook\n"
+        "   ```\n\n"
+        f"``MEMORY.md`` is the index — keep entries under ~150 chars each "
+        "so it stays scannable. The full memory bodies live in their own "
+        "files and are loaded on demand via ``read_file``.\n\n"
+        "## When to access\n\n"
+        "Read memory when it's relevant or when the user references "
+        "prior-conversation context. Re-check that a memory is still "
+        "correct (read the current code) before acting on it — memories "
+        "can go stale. If a remembered fact conflicts with what you "
+        "observe now, trust observation and update or remove the stale "
+        "memory.\n\n"
+        "## Saving on user request\n\n"
+        "If the user asks you to remember something, save it immediately. "
+        "If they ask you to forget something, find and remove the entry."
+    )
 
 
 def _identity_section() -> str:

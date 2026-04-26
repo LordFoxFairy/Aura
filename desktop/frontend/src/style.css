@@ -162,3 +162,94 @@ html, body, #app {
 
 #send:hover { filter: brightness(0.9); }
 #send:active { filter: brightness(0.8); }
+
+/* Permission modal — overlays the conversation when Aura requests consent. */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.overlay[hidden] { display: none !important; }
+
+.permission-modal {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  width: min(560px, 92%);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+}
+
+.permission-modal[data-destructive="true"] {
+  border-color: rgba(248, 81, 73, 0.5);
+}
+
+.permission-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.permission-icon { color: #f0c674; font-size: 18px; }
+.permission-modal[data-destructive="true"] .permission-icon { color: var(--error); }
+
+.permission-tool {
+  font-family: ui-monospace, SF Mono, monospace;
+  font-size: 13px;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+
+.permission-args {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: ui-monospace, SF Mono, monospace;
+  font-size: 12px;
+  color: var(--fg-dim);
+  margin: 0 0 14px 0;
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.permission-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.permission-actions button {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--fg);
+}
+.permission-actions button:hover { filter: brightness(1.15); }
+
+.btn-deny { color: var(--error); border-color: rgba(248, 81, 73, 0.5); }
+.btn-once { color: var(--user); border-color: rgba(88, 166, 255, 0.5); }
+.btn-always {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+
+.permission-hint {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-family: ui-monospace, SF Mono, monospace;
+  word-wrap: break-word;
+}

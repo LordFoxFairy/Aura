@@ -1,6 +1,6 @@
 //! Aura desktop — Rust backend.
 //!
-//! Spawns ``python -m aura.cli.headless`` as a child process, streams
+//! Spawns ``python -m aura.desktop.headless`` as a child process, streams
 //! line-delimited JSON events from its stdout into Tauri events the
 //! frontend subscribes to via ``listen("aura-event", ...)``. User
 //! prompts come down via the ``send_prompt`` command which writes one
@@ -24,6 +24,14 @@ struct PromptRequest {
     text: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct PermissionResponse {
+    kind: String,
+    id: String,
+    choice: String,        // "accept" | "always" | "deny"
+    feedback: String,      // optional free-text from the user
+}
+
 /// Shared handle on the running Aura subprocess. Wrapped in a Mutex so
 /// the ``send_prompt`` command can lock the stdin half across awaits.
 struct AuraProcess {
@@ -41,6 +49,41 @@ async fn send_prompt(
     let req = PromptRequest {
         kind: "prompt".to_string(),
         text,
+    };
+    let line =
+        serde_json::to_string(&req).map_err(|e| format!("encode: {e}"))? + "\n";
+    let mut guard = state.stdin.lock().await;
+    let stdin = guard
+        .as_mut()
+        .ok_or_else(|| "aura subprocess not running".to_string())?;
+    stdin
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|e| format!("write stdin: {e}"))?;
+    stdin
+        .flush()
+        .await
+        .map_err(|e| format!("flush stdin: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn send_permission_response(
+    id: String,
+    choice: String,
+    feedback: Option<String>,
+    state: State<'_, AuraProcess>,
+) -> Result<(), String> {
+    // Validate choice on the Rust side so a buggy frontend can't smuggle
+    // an unrecognized value through to the Python asker.
+    if !matches!(choice.as_str(), "accept" | "always" | "deny") {
+        return Err(format!("invalid choice: {:?}", choice));
+    }
+    let req = PermissionResponse {
+        kind: "permission_response".to_string(),
+        id,
+        choice,
+        feedback: feedback.unwrap_or_default(),
     };
     let line =
         serde_json::to_string(&req).map_err(|e| format!("encode: {e}"))? + "\n";
@@ -83,7 +126,7 @@ async fn stop_aura(state: State<'_, AuraProcess>) -> Result<(), String> {
 
 /// Spawn the aura headless subprocess and wire its stdout → tauri event stream.
 async fn spawn_aura(app: AppHandle) -> Result<AuraProcess, String> {
-    // Locate the repo root so we can run ``python -m aura.cli.headless``.
+    // Locate the repo root so we can run ``python -m aura.desktop.headless``.
     // src-tauri/ → desktop/ → repo root.
     let repo_root = std::env::current_dir()
         .map_err(|e| format!("current_dir: {e}"))?
@@ -97,9 +140,9 @@ async fn spawn_aura(app: AppHandle) -> Result<AuraProcess, String> {
     // are picked up automatically. Fall back to bare ``python -m`` if
     // ``uv`` isn't on PATH (rare on dev machines but covered).
     let (program, args): (&str, Vec<&str>) = if which::which("uv").is_ok() {
-        ("uv", vec!["run", "python", "-m", "aura.cli.headless"])
+        ("uv", vec!["run", "python", "-m", "aura.desktop.headless"])
     } else {
-        ("python", vec!["-m", "aura.cli.headless"])
+        ("python", vec!["-m", "aura.desktop.headless"])
     };
 
     let mut child = Command::new(program)
@@ -193,7 +236,11 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![send_prompt, stop_aura])
+        .invoke_handler(tauri::generate_handler![
+            send_prompt,
+            send_permission_response,
+            stop_aura,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

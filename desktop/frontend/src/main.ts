@@ -30,12 +30,30 @@ interface AuraEvent {
   model?: string;
   line?: string;
   type?: string;
+  // permission_request fields
+  id?: string;
+  tool?: string;
+  args?: unknown;
+  rule_hint?: string;
+  is_destructive?: boolean;
 }
 
 const conversationEl = document.getElementById("conversation") as HTMLElement;
 const statusEl = document.getElementById("status") as HTMLElement;
 const inputEl = document.getElementById("input") as HTMLTextAreaElement;
 const sendBtn = document.getElementById("send") as HTMLButtonElement;
+
+const permOverlay = document.getElementById("permission-overlay") as HTMLElement;
+const permModal = permOverlay.querySelector(".permission-modal") as HTMLElement;
+const permToolEl = document.getElementById("permission-tool") as HTMLElement;
+const permArgsEl = document.getElementById("permission-args") as HTMLElement;
+const permHintEl = document.getElementById("permission-hint") as HTMLElement;
+const permDenyBtn = document.getElementById("perm-deny") as HTMLButtonElement;
+const permOnceBtn = document.getElementById("perm-once") as HTMLButtonElement;
+const permAlwaysBtn = document.getElementById("perm-always") as HTMLButtonElement;
+
+/** ID of the permission request currently displayed in the modal, or null. */
+let activePermissionId: string | null = null;
 
 /** Track the assistant message currently being streamed so deltas append in place. */
 let activeAssistantBubble: HTMLElement | null = null;
@@ -102,6 +120,40 @@ function setStatus(text: string, kind: "ready" | "thinking" | "error" | "off"): 
   statusEl.dataset.kind = kind;
 }
 
+function showPermissionPrompt(ev: AuraEvent): void {
+  if (!ev.id || !ev.tool) return;
+  activePermissionId = ev.id;
+  permToolEl.textContent = ev.tool;
+  permArgsEl.textContent = JSON.stringify(ev.input ?? ev.args ?? {}, null, 2);
+  permHintEl.textContent = ev.rule_hint
+    ? `"Always" installs rule: ${ev.rule_hint}`
+    : "";
+  permModal.dataset.destructive = String(ev.is_destructive !== false);
+  permOverlay.hidden = false;
+}
+
+function hidePermissionPrompt(): void {
+  activePermissionId = null;
+  permOverlay.hidden = true;
+}
+
+async function respondPermission(
+  choice: "accept" | "always" | "deny",
+): Promise<void> {
+  if (activePermissionId === null) return;
+  const id = activePermissionId;
+  hidePermissionPrompt();
+  try {
+    await invoke("send_permission_response", { id, choice, feedback: "" });
+  } catch (e) {
+    appendError(`permission response failed: ${e}`);
+  }
+}
+
+permDenyBtn.addEventListener("click", () => void respondPermission("deny"));
+permOnceBtn.addEventListener("click", () => void respondPermission("accept"));
+permAlwaysBtn.addEventListener("click", () => void respondPermission("always"));
+
 async function send(): Promise<void> {
   const text = inputEl.value.trim();
   if (!text) return;
@@ -140,6 +192,9 @@ void listen<AuraEvent>("aura-event", (msg) => {
     case "tool_call_started":
       finalizeAssistantBubble("natural");
       appendToolCallCard(ev.name ?? "(unknown)", ev.input ?? {});
+      break;
+    case "permission_request":
+      showPermissionPrompt(ev);
       break;
     case "tool_call_completed":
       // Phase 1: just dim the most recent tool card on completion. Phase 2

@@ -21,6 +21,23 @@
         ></textarea>
         <button id="send">Send</button>
       </footer>
+      <!-- Permission prompt modal (hidden until a permission_request event lands). -->
+      <div id="permission-overlay" class="overlay" hidden>
+        <div class="permission-modal">
+          <div class="permission-head">
+            <span class="permission-icon" aria-hidden="true">⚠</span>
+            <span>Aura wants to run a tool</span>
+          </div>
+          <div id="permission-tool" class="permission-tool"></div>
+          <pre id="permission-args" class="permission-args"></pre>
+          <div class="permission-actions">
+            <button id="perm-deny" class="btn-deny">No</button>
+            <button id="perm-once" class="btn-once">Yes, once</button>
+            <button id="perm-always" class="btn-always">Yes, always</button>
+          </div>
+          <div class="permission-hint" id="permission-hint"></div>
+        </div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

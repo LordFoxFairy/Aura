@@ -4,8 +4,8 @@ Tauri 2 + Rust desktop frontend for Aura. Sibling to `aura/` (the Python CLI), *
 
 ## Phase 1 — what's shipped
 
-- **Rust IPC bridge** (`src-tauri/src/lib.rs`): on app start, spawns `python -m aura.cli.headless` (preferring `uv run` when available), pipes its stdout NDJSON event stream to Tauri's `aura-event` channel, and exposes `send_prompt(text)` / `stop_aura()` Tauri commands.
-- **Headless Aura entry** (`aura/cli/headless.py`): single-tenant stdio mode that reads `{"kind":"prompt","text":"..."}` line-delimited requests from stdin and emits one event per line on stdout (assistant_delta / tool_call_started / final / error / etc.).
+- **Rust IPC bridge** (`src-tauri/src/lib.rs`): on app start, spawns `python -m aura.desktop.headless` (preferring `uv run` when available), pipes its stdout NDJSON event stream to Tauri's `aura-event` channel, and exposes `send_prompt(text)` / `stop_aura()` Tauri commands.
+- **Headless Aura entry** (`aura/desktop/headless.py`): single-tenant stdio mode that reads `{"kind":"prompt","text":"..."}` line-delimited requests from stdin and emits one event per line on stdout (assistant_delta / tool_call_started / final / error / etc.).
 - **Vanilla TS frontend** (`frontend/src/main.ts`): minimal conversation UI — user bubble + streaming assistant bubble + tool-call cards + status indicator. ~200 LoC. No framework yet.
 
 ## Layout
@@ -39,7 +39,7 @@ cd ..               # back to desktop/
 cargo tauri dev
 ```
 
-The dev shell starts Vite (frontend hot-reload) and a debug Tauri window. The Rust backend spawns `uv run python -m aura.cli.headless` from the repo root; ensure `uv sync` has been run there.
+The dev shell starts Vite (frontend hot-reload) and a debug Tauri window. The Rust backend spawns `uv run python -m aura.desktop.headless` from the repo root; ensure `uv sync` has been run there.
 
 ## Build (release)
 

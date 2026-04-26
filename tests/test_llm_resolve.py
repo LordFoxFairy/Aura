@@ -111,11 +111,13 @@ def test_get_context_window_gpt_4o_mini() -> None:
 
 
 def test_get_context_window_unknown_model_returns_default() -> None:
-    # Models we've never heard of fall back to a generous 512k default so the
-    # status bar still shows a usable ratio instead of a divide-by-zero, and
-    # frontier models that ship past our table don't under-report their
-    # window size and make the %-bar look alarming.
-    assert get_context_window("provider:totally-made-up-model") == 512_000
+    # Models we've never heard of fall back to a safe 128k default — over-
+    # stated default was a real bug because the status bar would lie to
+    # operators on common Chinese-model providers (DeepSeek / GLM / Qwen
+    # variants), reading 8% utilization right before a provider-side
+    # context-overflow rejection. Operators on a true 1M-context model
+    # can override via ``AuraConfig.context_window``.
+    assert get_context_window("provider:totally-made-up-model") == 128_000
 
 
 def test_get_context_window_longest_prefix_match_wins() -> None:

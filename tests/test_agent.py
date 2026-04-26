@@ -1542,10 +1542,12 @@ def test_agent_pinned_tokens_estimate_is_stable_across_reads(tmp_path: Path) -> 
     assert first == second
 
 
-def test_agent_context_window_unknown_model_uses_generous_default(tmp_path: Path) -> None:
-    # Frontier model not in the table ⇒ 512k default (not 128k) so the
-    # pct-bar doesn't lie about a 1M-window model being at "40%" when it's
-    # really at 10%.
+def test_agent_context_window_unknown_model_uses_safe_default(tmp_path: Path) -> None:
+    # Unknown model ⇒ 128k default. The previous 512k default was reverted
+    # because over-stated window mis-led operators on common Chinese-model
+    # providers (DeepSeek / GLM / Qwen) — status bar would read 8% right
+    # before a 1261/4001-style overflow rejection. Operators on a true
+    # 1M-context frontier model can override via AuraConfig.context_window.
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "unknown-vendor", "protocol": "openai"}],
         "router": {"default": "unknown-vendor:some-frontier-model-we-havent-tabled"},
@@ -1555,4 +1557,4 @@ def test_agent_context_window_unknown_model_uses_generous_default(tmp_path: Path
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
         storage=_storage(tmp_path),
     )
-    assert agent.context_window == 512_000
+    assert agent.context_window == 128_000

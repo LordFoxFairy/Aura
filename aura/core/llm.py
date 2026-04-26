@@ -38,11 +38,15 @@ _PROTOCOLS: dict[str, tuple[str, str, str | None]] = {
 # status bar to render `live/window` ratios. We match by substring with
 # longest-prefix wins so dated suffixes ("claude-opus-4-20250514") and
 # provider prefixes ("anthropic:claude-opus-4") both resolve to the family.
-# Unknown models fall back to ``_DEFAULT_CONTEXT_WINDOW`` (a deliberately
-# generous 512k so new frontier models that ship past our table still render
-# a usable ratio — a wrong-but-high ratio is a strictly better UX than a
-# crashed status bar OR a claim that a 1M-context model is at 40% when it's
-# actually at 10%).
+# Unknown models fall back to ``_DEFAULT_CONTEXT_WINDOW``.
+#
+# Default-tuning rationale: an *over-stated* default is a real bug — the
+# status bar reads 8% while the prompt has already overflowed the model's
+# actual max. We reverted from 512k to 128k (claude-code's same default)
+# because over-estimation on Chinese models (DeepSeek / GLM / Qwen
+# variants) confused users who saw "plenty of room" right before a
+# Provider-side 1261/4001/etc rejection. Operators on a true 1M-context
+# model can still set ``AuraConfig.context_window`` to override.
 _CONTEXT_WINDOWS: dict[str, int] = {
     # Anthropic — Opus / Sonnet / Haiku families. Claude 4.x variants are
     # documented at 200k standard + 1M extended-context; 200k is the
@@ -65,19 +69,60 @@ _CONTEXT_WINDOWS: dict[str, int] = {
     "gpt-3.5-turbo": 16_385,
     "gpt-5": 400_000,
     "gpt-4": 8_192,
+    "o1-mini": 128_000,
+    "o1-preview": 128_000,
+    "o1": 200_000,
+    "o3-mini": 200_000,
+    "o3": 200_000,
     # Google / Gemini (common via OpenAI-compatible proxies)
     "gemini-2": 1_000_000,
     "gemini-1.5": 1_000_000,
+    # DeepSeek (deepseek.com + Aliyun re-host). The chat / coder / V2 / V3
+    # series ship a 128k default surface; DeepSeek-V3.1 / Reasoner variants
+    # run 64k. We pick 128k as the family floor; users on 64k can override
+    # via AuraConfig.context_window.
+    "deepseek-chat": 128_000,
+    "deepseek-coder": 128_000,
+    "deepseek-reasoner": 64_000,
+    "deepseek-v3": 128_000,
+    "deepseek-v2": 128_000,
+    "deepseek": 128_000,
+    # Zhipu GLM family (BigModel + open-source releases). GLM-4 / GLM-4.5
+    # advertise 128k default; the GLM-4-Long variant runs 1M but ships
+    # under a distinct id ("glm-4-long"). Map family-by-family.
+    "glm-4-long": 1_000_000,
+    "glm-4-plus": 128_000,
+    "glm-4-air": 128_000,
+    "glm-4-flash": 128_000,
+    "glm-4.5": 128_000,
+    "glm-4": 128_000,
+    "glm-5": 128_000,
+    "glm-z1": 128_000,
+    "glm": 128_000,
+    # Aliyun DashScope / Qwen family. Qwen2.5 / Qwen3 default 128k; the
+    # qwen-long / qwen-turbo-1m variants run 1M / 10M but ship as distinct
+    # ids. qwen-turbo / qwen-plus default 128k; qwen-max runs 32k by spec.
+    "qwen-turbo-1m": 1_000_000,
+    "qwen-long": 10_000_000,
+    "qwen-max": 32_000,
+    "qwen3-coder": 128_000,
+    "qwen3": 128_000,
+    "qwen2.5-coder": 128_000,
+    "qwen2.5": 128_000,
+    "qwen-coder": 128_000,
+    "qwen-plus": 128_000,
+    "qwen-turbo": 128_000,
+    "qwen": 128_000,
+    # Moonshot Kimi — k1 / k2 default 128k; long-context variant 200k.
+    "moonshot-v1-128k": 128_000,
+    "moonshot-v1-32k": 32_000,
+    "moonshot-v1-8k": 8_000,
+    "kimi-k2": 128_000,
+    "kimi": 128_000,
+    "moonshot": 128_000,
 }
 
-# Bumped to 512k (from 128k) per user request: frontier models increasingly
-# ship 400k-1M contexts; falling back to 128k for an unknown model badly
-# under-reports window size and makes the %-bar look alarming on models
-# that have room to spare. 512k is "generous without lying": the common
-# 200k/400k/1M tiers all render reasonable bars against this default, and
-# operators who care about the exact number can override via the config
-# block ``AuraConfig.context_window``.
-_DEFAULT_CONTEXT_WINDOW = 512_000
+_DEFAULT_CONTEXT_WINDOW = 128_000
 
 
 def get_context_window(model_spec: str) -> int:

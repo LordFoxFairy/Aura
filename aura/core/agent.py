@@ -696,7 +696,6 @@ class Agent:
             self._partial_assistant_text = ""
 
             saw_ai_message = False
-            retry_exc: BaseException | None = None
             try:
                 try:
                     async for event in self._loop.run_turn(
@@ -758,24 +757,14 @@ class Agent:
                     # Pure CancelledError — preserve legacy behaviour.
                     yield Final(message="(cancelled)")
                     raise
-            except Exception as exc:
-                if not _is_context_overflow(exc):
-                    raise
-                journal.write(
-                    "reactive_compact_triggered",
-                    session=self._session_id,
-                    error=str(exc),
-                )
-                retry_exc = exc
             finally:
                 self._current_abort = None
-
-            if retry_exc is not None:
-                await self.compact(source="reactive")
-                history = self._storage.load(self._session_id)
-                async for event in self._loop.run_turn(history=history):
-                    yield event
-
+            # F-01-012 — reactive recompact lives INSIDE AgentLoop now
+            # (turn_count + per-turn audit state survive the recompact).
+            # The Agent simply hands a callback into the loop via
+            # ``_build_loop``; on context-overflow, the loop calls back,
+            # we compact + reload ``history`` in place, and the SAME
+            # turn retries. No outer try/retry block here.
             self._storage.save(self._session_id, history)
             journal.write(
                 "astream_end",
@@ -1434,7 +1423,22 @@ class Agent:
             retry_config=self._config.retry,
             session_id=self._session_id,
             microcompact_policy=policy,
+            compact_callback=self._reactive_compact_callback,
         )
+
+    async def _reactive_compact_callback(
+        self, history: list[BaseMessage],
+    ) -> None:
+        """F-01-012 — compact + reload history in place for the loop.
+
+        Called by ``AgentLoop._invoke_model`` when ``ainvoke`` raises a
+        context-overflow. Compacts (which writes the summary back to
+        storage), then refreshes the in-memory history list in place
+        so the loop's local reference sees the new state without a
+        re-assignment.
+        """
+        await self.compact(source="reactive")
+        history[:] = self._storage.load(self._session_id)
 
     def _build_context(
         self,

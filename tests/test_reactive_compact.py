@@ -221,6 +221,53 @@ async def test_reactive_compact_journal_event(tmp_path: Path) -> None:
         ev = triggered[0]
         assert "context_length_exceeded" in ev["error"]
         assert ev["session"] == "default"
+        # F-01-012 — reactive recompact runs INSIDE the loop, so the
+        # event carries the turn number it interrupted (not zero).
+        assert ev.get("turn") == 1
+        assert ev.get("attempt") == 1
         await agent.aclose()
     finally:
         journal.reset()
+
+
+@pytest.mark.asyncio
+async def test_reactive_compact_preserves_turn_count(tmp_path: Path) -> None:
+    """F-01-012 — turn_count is NOT reset across the reactive recompact.
+
+    Pre-fix, the outer Agent caught the overflow and re-entered run_turn,
+    which started a brand-new turn at count=1. Post-fix, the loop catches
+    overflow internally and retries the SAME turn — so the post-recompact
+    successful ainvoke lands in turn 1, not turn 2 of a fresh run.
+    """
+    model = _RaisingModel(
+        errors=[
+            RuntimeError("400 — context_length_exceeded for model gpt-4o"),
+            None,  # summary turn for compact
+            None,  # retry of the same turn — succeeds
+        ],
+        turns=[
+            FakeTurn(AIMessage(content="SUMMARY")),
+            FakeTurn(AIMessage(content="OK after retry")),
+        ],
+    )
+    agent = Agent(
+        config=_minimal_config(),
+        model=model,
+        storage=_storage(tmp_path),
+        auto_compact_threshold=0,
+    )
+    from langchain_core.messages import HumanMessage
+    h: list[Any] = []
+    for i in range(10):
+        h.append(HumanMessage(content=f"u-{i}"))
+        h.append(AIMessage(content=f"a-{i}"))
+    agent._storage.save(agent.session_id, h)
+
+    async for _ in agent.astream("hi"):
+        pass
+
+    # The post-recompact ainvoke completed inside turn 1 — i.e. the loop's
+    # turn_count is exactly 1 after the run, not 2 (which would mean the
+    # whole turn was re-entered from the outer Agent layer).
+    assert agent.state.turn_count == 1
+    await agent.aclose()

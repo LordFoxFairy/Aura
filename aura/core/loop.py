@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import json
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -215,6 +215,11 @@ def partition_batches(steps: list[ToolStep]) -> list[list[ToolStep]]:
 
 class AgentLoop:
     _DEFAULT_MAX_TURNS: int | None = None
+    # F-01-012 — cap reactive-compact retries inside one turn so a
+    # permanently-overflowing prompt cannot loop forever. One retry is
+    # the contract: if a single compact didn't fit the prompt, repeated
+    # compacts won't either, so propagate the error.
+    _MAX_REACTIVE_COMPACT: int = 1
 
     def __init__(
         self,
@@ -229,6 +234,9 @@ class AgentLoop:
         session_id: str = DEFAULT_SESSION,
         microcompact_policy: MicrocompactPolicy | None = None,
         batch_timeout_sec: float | None = None,
+        compact_callback: Callable[
+            [list[BaseMessage]], Awaitable[None]
+        ] | None = None,
     ) -> None:
         self._registry = registry
         self._hooks = hooks or HookChain()
@@ -265,6 +273,13 @@ class AgentLoop:
         # sentinel = feature disabled; ``_run_batch`` gates on
         # ``len(batch) > 1 AND _batch_timeout_sec > 0``.
         self._batch_timeout_sec = _resolve_batch_timeout(batch_timeout_sec)
+        # F-01-012 — reactive compact callback. When set, ``_invoke_model``
+        # catches context-overflow on ``ainvoke``, calls this back to mutate
+        # ``history`` in place (the Agent compacts + reloads), and retries
+        # the SAME turn (turn_count + per-turn audit state preserved).
+        # ``None`` keeps the legacy "raise to caller" behaviour for tests
+        # that drive AgentLoop directly without an Agent.
+        self._compact_callback = compact_callback
 
     def _rebind_tools(self, tools: list[BaseTool]) -> None:
         """Rebind the loop's model with an updated tool set.
@@ -447,43 +462,96 @@ class AgentLoop:
         abort_task.cancel()
         return invoke_task.result()
 
-    async def _invoke_model(self, history: list[BaseMessage]) -> AIMessage:
-        # turn_count 先于 pre_model hook 递增，hook 看到的是"即将开始的第 N 轮"。
-        self._state.turn_count += 1
-        await self._hooks.run_pre_model(history=history, state=self._state)
-        # Context.build 是整个代码库中唯一组装 messages 的构造点 ——
-        # 不要在别处拼 SystemMessage/HumanMessage 传给模型。
-        messages = self._context.build(history)
-        # G2 microcompact — view-only compression of old tool_use/tool_result
-        # pairs. Stored history keeps full payloads; only the outgoing
-        # prompt is trimmed. Matches claude-code's ``messagesForQuery``
-        # semantic (query.ts:412-468). We rebind the LOCAL ``messages``
-        # only — ``history`` (Agent-owned, persisted in storage) is never
-        # touched here.
-        if self._microcompact_policy is not None:
-            mc_result = apply_microcompact(messages, self._microcompact_policy)
-            if mc_result.cleared_pair_count > 0:
-                messages = mc_result.messages
-                journal.write(
-                    "microcompact_applied",
-                    session=self._session_id,
-                    turn=self._state.turn_count,
-                    cleared_pair_count=mc_result.cleared_pair_count,
-                    cleared_tool_call_ids=list(mc_result.cleared_tool_call_ids),
-                    cleared_positions=[
-                        [p.ai_idx, p.tool_idx] for p in mc_result.cleared_pairs
-                    ],
-                )
-        # Wrap ONLY the SDK call — not tool dispatch, not hook run, not
-        # history.append — so retries are surgical and tool semantics stay
-        # untouched. Transient 429 / 503 / connection drops become
-        # recoverable; auth errors still surface immediately.
-        ai = await with_retry(
-            lambda: self._bound.ainvoke(messages),
+    async def _invoke_with_retry(
+        self, messages: list[BaseMessage],
+    ) -> AIMessage:
+        """Run ``self._bound.ainvoke(messages)`` through the retry policy.
+
+        Pulled out so the call site doesn't define a closure over a loop
+        variable (ruff B023). Wraps ONLY the SDK call — not tool dispatch,
+        not hook run, not history.append — so retries are surgical and
+        tool semantics stay untouched.
+        """
+        async def _do_invoke() -> AIMessage:
+            return await self._bound.ainvoke(messages)
+
+        return await with_retry(
+            _do_invoke,
             max_attempts=self._retry_config.max_attempts,
             base_delay_s=self._retry_config.base_delay_s,
             max_delay_s=self._retry_config.max_delay_s,
         )
+
+    async def _invoke_model(self, history: list[BaseMessage]) -> AIMessage:
+        # turn_count 先于 pre_model hook 递增，hook 看到的是"即将开始的第 N 轮"。
+        self._state.turn_count += 1
+        await self._hooks.run_pre_model(history=history, state=self._state)
+        # F-01-012 — reactive-compact retry lives INSIDE _invoke_model so
+        # turn_count + per-turn audit state survive the recompact. The
+        # outer Agent layer hands us a callback that compacts and
+        # reloads history in place; we catch context-overflow on
+        # ainvoke, fire the callback, and retry the SAME turn. Capped
+        # at ``_MAX_REACTIVE_COMPACT`` so a permanently-overflowing
+        # prompt cannot loop forever. Without a callback (legacy Agent-
+        # less tests) we re-raise to preserve old behaviour.
+        from aura.core.agent import _is_context_overflow  # noqa: PLC0415  — avoid import cycle
+
+        recompact_attempts = 0
+        while True:
+            # Context.build 是整个代码库中唯一组装 messages 的构造点 ——
+            # 不要在别处拼 SystemMessage/HumanMessage 传给模型。
+            messages = self._context.build(history)
+            # G2 microcompact — view-only compression of old tool_use /
+            # tool_result pairs. Stored history keeps full payloads; only
+            # the outgoing prompt is trimmed. Matches claude-code's
+            # ``messagesForQuery`` semantic (query.ts:412-468). We rebind
+            # the LOCAL ``messages`` only — ``history`` (Agent-owned,
+            # persisted in storage) is never touched here.
+            if self._microcompact_policy is not None:
+                mc_result = apply_microcompact(
+                    messages, self._microcompact_policy,
+                )
+                if mc_result.cleared_pair_count > 0:
+                    messages = mc_result.messages
+                    journal.write(
+                        "microcompact_applied",
+                        session=self._session_id,
+                        turn=self._state.turn_count,
+                        cleared_pair_count=mc_result.cleared_pair_count,
+                        cleared_tool_call_ids=list(
+                            mc_result.cleared_tool_call_ids,
+                        ),
+                        cleared_positions=[
+                            [p.ai_idx, p.tool_idx]
+                            for p in mc_result.cleared_pairs
+                        ],
+                    )
+            # Wrap ONLY the SDK call — not tool dispatch, not hook run,
+            # not history.append — so retries are surgical and tool
+            # semantics stay untouched. Transient 429 / 503 / connection
+            # drops become recoverable; auth errors still surface
+            # immediately.
+            try:
+                ai = await self._invoke_with_retry(messages)
+                break
+            except Exception as exc:
+                if (
+                    self._compact_callback is None
+                    or not _is_context_overflow(exc)
+                    or recompact_attempts >= self._MAX_REACTIVE_COMPACT
+                ):
+                    raise
+                recompact_attempts += 1
+                journal.write(
+                    "reactive_compact_triggered",
+                    session=self._session_id,
+                    turn=self._state.turn_count,
+                    attempt=recompact_attempts,
+                    error=str(exc),
+                )
+                await self._compact_callback(history)
+                # Loop continues: rebuild messages from the new
+                # (compacted) history and retry ainvoke.
         # F-01-005 — partial-response recovery. If the response was cut off
         # by max_output_tokens, append a meta HumanMessage asking the model
         # to resume and re-invoke; cap at ``_MAX_LENGTH_RETRY`` so a
@@ -503,12 +571,7 @@ class AgentLoop:
             )
             messages.append(ai)
             messages.append(HumanMessage(content=_LENGTH_RESUME_PROMPT))
-            ai = await with_retry(
-                lambda: self._bound.ainvoke(messages),
-                max_attempts=self._retry_config.max_attempts,
-                base_delay_s=self._retry_config.base_delay_s,
-                max_delay_s=self._retry_config.max_delay_s,
-            )
+            ai = await self._invoke_with_retry(messages)
         history.append(ai)
         await self._hooks.run_post_model(
             ai_message=ai, history=history, state=self._state,

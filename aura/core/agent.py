@@ -25,7 +25,10 @@ from aura.core.compact import (
     MicrocompactPolicy,
     run_compact,
 )
-from aura.core.compact.constants import AUTO_COMPACT_THRESHOLD
+from aura.core.compact.constants import (
+    AUTO_COMPACT_THRESHOLD,
+    auto_compact_threshold_for,
+)
 from aura.core.hooks import HookChain
 from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.hooks.budget import default_hooks
@@ -135,6 +138,11 @@ class Agent:
         # value (same object) is cleared too — no re-seeding needed.
         self._turn_denials: list[PermissionDenial] = []
         self._state.custom[DENIALS_SINK_KEY] = self._turn_denials
+        # F-0910-002: auto-compact circuit breaker — three consecutive failed
+        # auto-compact attempts disable subsequent auto-firings for this
+        # session. Manual ``/compact`` bypasses this counter (different code
+        # path), and a successful auto-compact resets it to 0.
+        self._state.custom["consecutive_compact_failures"] = 0
         self._session_rules = session_rules
         # Permission mode — the CLI resolves the effective mode (config +
         # --bypass-permissions flag) and hands it in. Stored here so the
@@ -771,26 +779,64 @@ class Agent:
                 history_len=len(history),
                 total_tokens=self._state.total_tokens_used,
             )
-            # Auto-compact post-turn. Bug 2 fix #2 — providers that
-            # don't populate ``usage_metadata`` (DashScope error 1261,
-            # some Ollama builds) leave ``total_tokens_used`` at zero
-            # forever, so the trigger never armed. Fall back to a
-            # char-based history estimator (len/4) so the trigger can
-            # still arm even without provider usage envelopes.
-            if self._auto_compact_threshold > 0:
+            # Auto-compact post-turn. Deliberately AFTER save + astream_end
+            # so the summary turn sees a stable, already-persisted history
+            # and we don't interleave compact I/O with the caller's yield
+            # stream. Zero threshold disables; any positive value arms it.
+            # Char-based estimator fallback (Bug 2 fix #2) so providers that
+            # don't populate ``usage_metadata`` (DashScope 1261, some Ollama)
+            # still arm the trigger.
+            effective_threshold = self._effective_auto_compact_threshold()
+            if effective_threshold > 0:
                 used = self._state.total_tokens_used
                 used_estimator = used == 0
                 if used_estimator:
                     used = self._estimate_history_tokens(history)
-                if used > self._auto_compact_threshold:
-                    journal.write(
-                        "auto_compact_triggered",
-                        session=self._session_id,
-                        tokens=used,
-                        threshold=self._auto_compact_threshold,
-                        used_estimator=used_estimator,
+                if used > effective_threshold:
+                    # F-0910-002 circuit breaker: skip auto-compact after 3
+                    # consecutive failures so a permanently-broken summary
+                    # turn can't burn provider quota every turn. Manual
+                    # /compact bypasses this — see Agent.compact().
+                    failures = int(
+                        self._state.custom.get(
+                            "consecutive_compact_failures", 0,
+                        )
                     )
-                    await self.compact(source="auto")
+                    if failures >= 3:
+                        journal.write(
+                            "auto_compact_skipped_circuit_breaker",
+                            session=self._session_id,
+                            tokens=used,
+                            threshold=effective_threshold,
+                            consecutive_failures=failures,
+                            used_estimator=used_estimator,
+                        )
+                    else:
+                        journal.write(
+                            "auto_compact_triggered",
+                            session=self._session_id,
+                            tokens=used,
+                            threshold=effective_threshold,
+                            used_estimator=used_estimator,
+                        )
+                        try:
+                            await self.compact(source="auto")
+                        except Exception as exc:  # noqa: BLE001
+                            new_failures = failures + 1
+                            self._state.custom[
+                                "consecutive_compact_failures"
+                            ] = new_failures
+                            journal.write(
+                                "auto_compact_failed",
+                                session=self._session_id,
+                                error=str(exc),
+                                consecutive_failures=new_failures,
+                            )
+                            raise
+                        else:
+                            self._state.custom[
+                                "consecutive_compact_failures"
+                            ] = 0
 
     def switch_model(self, spec: str) -> None:
         """Swap the live model. Raises ``AuraConfigError`` on failure.
@@ -883,6 +929,19 @@ class Agent:
         self._partial_assistant_text = ""
         self._loop = self._build_loop()
         journal.write("session_cleared", session=self._session_id)
+
+    def _effective_auto_compact_threshold(self) -> int:
+        """Resolve the live auto-compact threshold.
+
+        F-0910-001: ``-1`` means "derive from the live model's context
+        window". An explicit positive override (constructor kwarg) wins
+        over the model-aware computation; ``0`` keeps disabling the
+        feature entirely. Recomputed every call so ``switch_model`` is
+        honored without re-wiring.
+        """
+        if self._auto_compact_threshold == -1:
+            return auto_compact_threshold_for(self._current_model_spec)
+        return self._auto_compact_threshold
 
     async def compact(
         self, *, source: Literal["manual", "auto", "reactive"] = "manual",

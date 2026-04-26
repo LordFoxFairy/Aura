@@ -128,6 +128,83 @@ class CompactCommand:
         )
 
 
+class ContextCommand:
+    """``/context`` — print per-section token estimates for the live prompt.
+
+    F-0910-016: introspection on what's filling the context window. Walks
+    the live ``Context.build([])`` output, classifies each rendered
+    HumanMessage into one of (system / memory / skills / files / history /
+    other), and reports a 4-chars-per-token estimate per section plus a
+    history estimate from the persisted session.
+    """
+
+    name = "/context"
+    description = "show per-section token estimates"
+    source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = None
+
+    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+        from langchain_core.messages import SystemMessage
+
+        # Pinned prompt (system + memory + skills + ...): comes from
+        # Context.build([]) — same path the live turn uses, so the numbers
+        # match what the model sees.
+        sections: dict[str, int] = {
+            "system": 0,
+            "memory": 0,
+            "skills": 0,
+            "files": 0,
+            "other": 0,
+        }
+        for msg in agent._context.build([]):
+            content = getattr(msg, "content", "")
+            if not isinstance(content, str):
+                content = str(content)
+            tokens = len(content) // 4
+            if isinstance(msg, SystemMessage):
+                sections["system"] += tokens
+            elif "<project-memory>" in content or "<nested-memory" in content:
+                sections["memory"] += tokens
+            elif (
+                "<skills-available>" in content
+                or "<skill-invoked" in content
+                or "<skill-active" in content
+            ):
+                sections["skills"] += tokens
+            elif "<recent-file" in content:
+                sections["files"] += tokens
+            else:
+                sections["other"] += tokens
+
+        # History: persisted messages — counted separately from "other" so
+        # the operator can tell pinned-prefix bloat from conversation drift.
+        history = agent._storage.load(agent.session_id)
+        history_tokens = 0
+        for msg in history:
+            content = getattr(msg, "content", "")
+            if not isinstance(content, str):
+                content = str(content)
+            history_tokens += len(content) // 4
+
+        total = sum(sections.values()) + history_tokens
+        window = agent.context_window
+        pct = (total * 100 // window) if window > 0 else 0
+
+        lines = ["Context token estimates (~4 chars/token):"]
+        lines.append(f"  system   : {sections['system']:>8}")
+        lines.append(f"  memory   : {sections['memory']:>8}")
+        lines.append(f"  skills   : {sections['skills']:>8}")
+        lines.append(f"  files    : {sections['files']:>8}")
+        lines.append(f"  other    : {sections['other']:>8}")
+        lines.append(f"  history  : {history_tokens:>8}")
+        lines.append("  ─────────  ────────")
+        lines.append(f"  total    : {total:>8}  ({pct}% of {window})")
+        return CommandResult(
+            handled=True, kind="view", text="\n".join(lines),
+        )
+
+
 class ModelCommand:
     """``/model [spec]`` — show or switch the current model."""
 

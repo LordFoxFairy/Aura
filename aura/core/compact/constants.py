@@ -22,7 +22,38 @@ MAX_TOKENS_PER_FILE = 5_000
 # Auto-compact trigger: when LoopState.total_tokens_used exceeds this value,
 # a post_model observer would mark a pending compact. Wired via the
 # ``auto_compact_threshold`` constructor kwarg on ``Agent``. 0 = disabled.
-AUTO_COMPACT_THRESHOLD = 150_000
+#
+# Sentinel value ``-1`` means "derive from current model's context window"
+# via :func:`auto_compact_threshold_for`. F-0910-001: a fixed 150k value is
+# model-blind — too low for 1M-context models (premature compaction) and
+# too high for 32k-context models (overflow). The default has been changed
+# to ``-1`` so a fresh Agent gets model-aware behaviour out of the box; an
+# explicit positive value still overrides.
+AUTO_COMPACT_THRESHOLD = -1
+
+# F-0910-001: claude-code uses ``window - 13_000`` as its auto-compact
+# trigger (``13k`` headroom for the next user turn + summary scratch). We
+# mirror that constant exactly so threshold semantics match.
+AUTO_COMPACT_HEADROOM_TOKENS = 13_000
+
+
+def auto_compact_threshold_for(model_spec: str) -> int:
+    """Return ``ctx_window - AUTO_COMPACT_HEADROOM_TOKENS`` for ``model_spec``.
+
+    F-0910-001: previously the threshold was a hard-coded 150k constant —
+    too low on 1M-context frontier models (premature compact) and too high
+    on 32k-context models (overflow before trigger). This helper returns a
+    model-aware floor; callers can still pass an explicit override via the
+    ``auto_compact_threshold`` constructor kwarg.
+
+    Floors at 1k so a misconfigured / unknown small-window model still
+    yields a positive (enabled) threshold instead of <=0 ("disabled").
+    """
+    from aura.core.llm import get_context_window
+
+    window = get_context_window(model_spec)
+    threshold = window - AUTO_COMPACT_HEADROOM_TOKENS
+    return max(1_000, threshold)
 
 # --- Microcompact (G2, v0.12) -----------------------------------------------
 # Per-turn prompt-view compression of old tool_use/tool_result pair payloads.

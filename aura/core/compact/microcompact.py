@@ -35,6 +35,7 @@ This module is pure: no I/O, no hooks, no journal writes. Side effects
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -80,6 +81,15 @@ class MicrocompactPolicy:
         default_factory=lambda: MICROCOMPACT_COMPACTABLE_TOOLS,
     )
     clear_marker: str = MICROCOMPACT_CLEAR_MARKER
+    # F-0910-004: time-based force trigger. When the wall-clock gap since
+    # ``last_assistant_ts`` exceeds ``gap_threshold_minutes``, microcompact
+    # fires regardless of pair count — long idle gaps invalidate the model's
+    # cached working set anyway, so a forced compress on resume is cheaper
+    # than rehydrating stale tool payloads. ``last_assistant_ts=None``
+    # disables the time trigger (parity with ``trigger_pairs<=0`` for the
+    # pair trigger).
+    last_assistant_ts: float | None = None
+    gap_threshold_minutes: int = 60
 
 
 @dataclass(frozen=True)
@@ -310,9 +320,21 @@ def apply_microcompact(
             cleared_pairs=(),
         )
     pairs = find_tool_pairs(messages, policy.compactable_tools)
+    # F-0910-004: time-based force trigger — when the wall-clock gap since
+    # ``last_assistant_ts`` exceeds ``gap_threshold_minutes``, force a
+    # clear by lowering the effective trigger to ``keep_recent`` so any
+    # surplus pairs above the keep-recent floor get compressed.
+    effective_trigger = policy.trigger_pairs
+    if (
+        policy.last_assistant_ts is not None
+        and policy.gap_threshold_minutes > 0
+    ):
+        gap_minutes = (time.time() - policy.last_assistant_ts) / 60.0
+        if gap_minutes >= policy.gap_threshold_minutes:
+            effective_trigger = max(1, policy.keep_recent)
     clear_ids = select_clear_ids(
         pairs,
-        trigger_pairs=policy.trigger_pairs,
+        trigger_pairs=effective_trigger,
         keep_recent=policy.keep_recent,
     )
     if not clear_ids:

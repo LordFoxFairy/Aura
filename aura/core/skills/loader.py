@@ -50,6 +50,15 @@ _CLAUDE_DIR = ".claude"
 _SKILLS_DIR = "skills"
 _SKILL_FILE = "SKILL.md"
 
+# F-0910-011: bundled skills shipped inside the Aura distribution. These
+# render the previously-half-wired ``managed`` SkillLayer into a real
+# layer with three concrete users (verify / simplify / code-review).
+# Decision: ship real bundles instead of stripping ``managed`` from the
+# Literal. Bundles load FIRST so user / project layers can override them
+# by name (same first-seen-wins semantics as the existing layer
+# stack — outer wins).
+_BUNDLED_SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills" / "bundled"
+
 # Claude-code-compat namespace: skills written for claude-code reference
 # ``${CLAUDE_SKILL_DIR}`` / ``${CLAUDE_SESSION_ID}`` in their body. We accept
 # both namespaces at render time so a user can drop a claude-code skill into
@@ -103,8 +112,13 @@ _conditional_skills: dict[str, Skill] = {}
 _activated_conditional_names: set[str] = set()
 
 
-def load_skills(cwd: Path, *, home: Path | None = None) -> SkillRegistry:
-    """Scan user + project layers and return a populated SkillRegistry.
+def load_skills(
+    cwd: Path,
+    *,
+    home: Path | None = None,
+    include_bundled: bool = False,
+) -> SkillRegistry:
+    """Scan managed + user + project layers; return a populated SkillRegistry.
 
     Conditional skills (``paths:`` frontmatter) are stored in the module's
     conditional map instead of the returned registry — they only appear in
@@ -112,12 +126,25 @@ def load_skills(cwd: Path, *, home: Path | None = None) -> SkillRegistry:
     them over.
 
     ``home`` defaults to ``Path.home()``; exposed as kwarg for tests.
+    ``include_bundled`` defaults to False so the existing layer-precedence
+    tests stay hermetic; production callers (Agent.__init__) pass True to
+    opt into the verify / simplify / code-review bundles.
     """
     home_dir = (home if home is not None else Path.home()).resolve()
     cwd_resolved = cwd.resolve()
 
     registry = SkillRegistry()
     seen_source_paths: set[Path] = set()
+
+    # --- Layer 0: managed (bundled with the Aura distribution) ---
+    # F-0910-011: ships verify / simplify / code-review out of the box. These
+    # load FIRST so user / project layers can override by name (same
+    # first-seen-wins as the rest of the stack). The ``managed`` layer tag
+    # was previously half-wired (declared in SkillLayer Literal, never
+    # populated); shipping these three bundles flips it to a real layer.
+    if include_bundled and _BUNDLED_SKILLS_DIR.is_dir():
+        for skill in _load_layer(_BUNDLED_SKILLS_DIR, layer="managed"):
+            _install_or_drop(skill, registry, seen_source_paths)
 
     # --- Layer 1a: user (Aura-native) ---
     # User layer goes first so it wins on name collisions — matches TS

@@ -59,20 +59,54 @@ from aura.tools.ask_user import QuestionAsker
 # errors. We match on stringified message — not exception type — so we don't
 # have to import openai / anthropic SDK types and so custom/wrapper models
 # keep working. Lowercased at compare time; covers OpenAI, Anthropic,
-# Google, and generic "too many tokens" phrasings.
+# Google, Aliyun DashScope, Ollama variants. Add new entries when a
+# provider surfaces a novel phrasing — bug-watch the journal for
+# ``llm_invoke_failed`` events whose error doesn't trigger reactive compact.
 _CONTEXT_OVERFLOW_PHRASES: tuple[str, ...] = (
+    # OpenAI / OpenAI-compatible.
     "context length",
     "context_length_exceeded",
     "maximum context",
+    # Anthropic.
     "prompt is too long",
+    # Aliyun DashScope (the OpenAI-compat endpoint surfaces this exact
+    # phrasing for both 1261 and the bare-text variants Qwen returns).
+    "prompt exceeds max length",
+    "input too long",
+    "exceeds max length",
+    # Google Gemini.
+    "request payload size exceeds",
+    # Generic — last-resort matchers.
     "too many tokens",
+    "max_tokens exceeded",
+)
+
+# Aliyun DashScope error codes that map to "context too long". Code-level
+# detection complements phrase matching: even when the SDK localizes the
+# message into another language, the structured code field stays stable.
+_CONTEXT_OVERFLOW_CODES: tuple[str, ...] = (
+    "1261",  # DashScope: "Prompt exceeds max length"
 )
 
 
 def _is_context_overflow(exc: BaseException) -> bool:
-    """True iff ``exc``'s message matches a known context-overflow signature."""
+    """True iff ``exc``'s message matches a known context-overflow signature.
+
+    Checks both the lowercased error text (cheap substring match against
+    :data:`_CONTEXT_OVERFLOW_PHRASES`) and the structured error code
+    field (``'code': '1261'`` style — DashScope and similar surfaces).
+    """
     msg = str(exc).lower()
-    return any(phrase in msg for phrase in _CONTEXT_OVERFLOW_PHRASES)
+    if any(phrase in msg for phrase in _CONTEXT_OVERFLOW_PHRASES):
+        return True
+    # Fallback: structured code in the rendered exception. DashScope's
+    # OpenAI-compat client renders ``Error code: 400 - {'error':
+    # {'code': '1261', ...}}`` so the literal ``'code': '1261'`` substring
+    # is stable across SDK locales.
+    for code in _CONTEXT_OVERFLOW_CODES:
+        if f"'code': '{code}'" in msg or f'"code": "{code}"' in msg:
+            return True
+    return False
 
 
 async def _unavailable_question_asker(
@@ -1343,9 +1377,15 @@ class Agent:
         Ollama builds, and a few self-hosted backends never populate
         the LangChain usage envelope, leaving ``total_tokens_used``
         pinned at zero — so the auto-compact trigger could never arm
-        on a runaway session. The 4-chars-per-token approximation is
-        good enough to cross the (large) threshold once exhaustion
-        actually happens.
+        on a runaway session.
+
+        Counts the FULL prompt the model sees per turn, not just
+        ``history``: pinned prefix (system + memory + skills + tool
+        schemas) plus the live history. Prior versions only counted
+        history, which underestimated by ~5–10k tokens on a real
+        config and let DashScope sessions overflow before the trigger
+        ever armed. The 4-chars-per-token approximation is consistent
+        in-aggregate and cheap to compute.
         """
         char_count = 0
         for msg in history:
@@ -1354,7 +1394,8 @@ class Agent:
                 char_count += len(content)
             else:
                 char_count += len(str(content))
-        return char_count // 4
+        history_tokens = char_count // 4
+        return history_tokens + self._estimate_pinned_tokens()
 
     def _estimate_pinned_tokens(self) -> int:
         # Build the pinned messages with an empty history — everything

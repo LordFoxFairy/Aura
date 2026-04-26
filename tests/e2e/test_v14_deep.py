@@ -1115,7 +1115,12 @@ _AUTO_COMPACT_DRIVER = textwrap.dedent(
         agent = Agent(
             config=cfg, model=FakeChatModel(turns=turns), storage=storage,
             session_id="e2e-auto-compact",
-            auto_compact_threshold=10,  # tiny threshold → trip on first turn
+            # Threshold > pinned estimate so the first astream's
+            # estimator-fallback path doesn't auto-fire (the test asserts
+            # exactly 1 trigger from the manual poke at 5000 tokens).
+            # Pinned (system prompt + auto-memory section) is ~1500 tokens
+            # for this minimal config; 4000 leaves comfortable headroom.
+            auto_compact_threshold=4000,
         )
         # Force token counter past threshold by hand-poking — without a
         # real LLM the usage hook can't pump it for us. The auto-compact
@@ -1169,9 +1174,9 @@ def test_e2e_auto_compact_emits_journal_event(tmp_path: Path) -> None:
         f"expected 1 auto_compact_triggered; got "
         f"{[e.get('event') for e in events]!r}"
     )
-    assert triggers[0]["threshold"] == 10
+    assert triggers[0]["threshold"] == 4000
     tokens = triggers[0]["tokens"]
-    assert isinstance(tokens, int) and tokens >= 10, (
+    assert isinstance(tokens, int) and tokens >= 4000, (
         f"unexpected tokens field: {tokens!r}"
     )
 

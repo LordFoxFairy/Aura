@@ -291,11 +291,12 @@ async def test_microcompact_applied_journal_event_emitted(tmp_path: Path) -> Non
         assert ev["cleared_tool_call_ids"] == [f"tc-{i}" for i in range(7)]
         # ``cleared_positions`` — the ToolPair indices into the outgoing
         # ``messages`` view (what find_tool_pairs sees). Context.build
-        # prepends a SystemMessage, shifting each raw-history position
-        # by +1. Raw triples (Human @ 3i, AI @ 3i+1, Tool @ 3i+2) become
-        # (3i+1, 3i+2, 3i+3) in the outgoing view.
+        # prepends two messages now: the system_prompt SystemMessage and
+        # the ``<skills-available>`` HumanMessage from bundled skills
+        # (F-0910-011, v0.18.x). Raw triples (Human @ 3i, AI @ 3i+1,
+        # Tool @ 3i+2) become (3i+2, 3i+3, 3i+4) in the outgoing view.
         assert ev["cleared_positions"] == [
-            [3 * i + 2, 3 * i + 3] for i in range(7)
+            [3 * i + 3, 3 * i + 4] for i in range(7)
         ]
     finally:
         journal.reset()

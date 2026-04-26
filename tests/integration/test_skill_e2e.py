@@ -304,7 +304,11 @@ async def test_conditional_skill_activation_promotes_to_registry(
         enabled_tools=["read_file"],
     )
     try:
-        assert [s.name for s in agent1._skill_registry.list()] == []
+        # Bundled skills (F-0910-011) are present at every Agent init; the
+        # invariant we care about is that the user's conditional ``pyhelp``
+        # is stashed in the module bucket and NOT in the registry yet.
+        registry_names = {s.name for s in agent1._skill_registry.list()}
+        assert "pyhelp" not in registry_names
         assert [s.name for s in get_conditional_skills()] == ["pyhelp"]
     finally:
         await agent1.aclose()
@@ -324,9 +328,9 @@ async def test_conditional_skill_activation_promotes_to_registry(
         enabled_tools=["read_file"],
     )
     try:
-        names = [s.name for s in agent2._skill_registry.list()]
-        assert names == ["pyhelp"], (
-            f"expected ['pyhelp'] in registry after activation; got {names!r}"
+        names = {s.name for s in agent2._skill_registry.list()}
+        assert "pyhelp" in names, (
+            f"expected 'pyhelp' in registry after activation; got {sorted(names)}"
         )
         # Body survives the activation path (sanity; loader re-parses the
         # file during the second ``load_skills`` call).

@@ -15,6 +15,7 @@ from aura.core.commands.buddy import BuddyCommand
 from aura.core.commands.builtin import (
     ClearCommand,
     CompactCommand,
+    ContextCommand,
     ExitCommand,
     HelpCommand,
     ModelCommand,
@@ -55,6 +56,7 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     r.register(ExitCommand())
     r.register(ClearCommand())
     r.register(CompactCommand())
+    r.register(ContextCommand())
     r.register(ModelCommand())
     r.register(ExportCommand())
     r.register(StatsCommand())

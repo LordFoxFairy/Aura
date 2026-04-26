@@ -1119,7 +1119,11 @@ async def test_agent_skills_loaded_at_init_from_cwd_and_home(
 
     agent = _agent(tmp_path, turns=[])
     names = {s.name for s in agent._skill_registry.list()}
-    assert names == {"user-skill", "proj-skill"}
+    # Bundled skills (verify / simplify / code-review) load alongside user
+    # + project layers in v0.18.x (F-0910-011). Assert user/project layers
+    # land in the registry; bundled set is fixed and orthogonal.
+    assert {"user-skill", "proj-skill"} <= names
+    assert {"verify", "simplify", "code-review"} <= names
     await agent.aclose()
 
 

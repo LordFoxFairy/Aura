@@ -214,7 +214,11 @@ class Agent:
         if pre_loaded_skills is not None:
             self._skill_registry = pre_loaded_skills
         else:
-            self._skill_registry = load_skills(cwd=self._cwd)
+            # F-0910-011 — bundled skills (verify / simplify / code-review)
+            # ship with Aura and load alongside user + project layers.
+            self._skill_registry = load_skills(
+                cwd=self._cwd, include_bundled=True,
+            )
         # Subagent plumbing. Built AFTER _skill_registry so the factory can
         # hand the parent's (this Agent's) pre-loaded skills through to any
         # child Agent it spawns — matches claude-code's "subagent inherits
@@ -1468,18 +1472,18 @@ class Agent:
             )
             return
         self._mcp_manager = manager
-        for t in tools:
-            # Collisions with built-ins or a previous MCP discovery pass
-            # would raise; journal + skip so a duplicate doesn't take the
-            # whole aconnect down.
-            try:
-                self._registry.register(t)
-            except ValueError as exc:
-                journal.write(
-                    "mcp_tool_register_skipped",
-                    tool=t.name,
-                    error=str(exc),
-                )
+        # F-02-031 — route the merge through ``assemble_tool_pool`` so
+        # builtin-vs-MCP collisions resolve with builtin precedence + a
+        # ``mcp_tool_shadowed`` journal event instead of a silent skip.
+        from aura.core.registry import assemble_tool_pool  # noqa: PLC0415
+        merged = assemble_tool_pool(self._registry.tools(), tools)
+        # Replace registry contents with the merged pool. Clear-then-add
+        # keeps the existing ToolRegistry instance + its callers (the
+        # loop's tool binding, send_message register/unregister, etc.).
+        for name in list(self._registry):
+            self._registry.unregister(name)
+        for t in merged.values():
+            self._registry.register(t)
         self._mcp_commands = list(commands)
         # MCP resources are exposed via the CLI-layer ``@server:uri`` mention
         # preprocessor (see :mod:`aura.cli.attachments`), NOT as an LLM tool.

@@ -101,14 +101,15 @@ def test_build_connections_stdio() -> None:
                         env={"TOKEN": "t"}),
     ])
     conns = mgr._build_connections()
-    assert conns == {
-        "gh": {
-            "transport": "stdio",
-            "command": "npx",
-            "args": ["-y", "pkg"],
-            "env": {"TOKEN": "t"},
-        },
-    }
+    # F-06-004 — every connection now carries ``session_kwargs.message_handler``
+    # for list-changed observability; assert on the transport-shape fields,
+    # not strict equality.
+    entry = conns["gh"]
+    assert entry["transport"] == "stdio"
+    assert entry["command"] == "npx"
+    assert entry["args"] == ["-y", "pkg"]
+    assert entry["env"] == {"TOKEN": "t"}
+    assert callable(entry["session_kwargs"]["message_handler"])
 
 
 def test_build_connections_sse_no_headers() -> None:
@@ -116,7 +117,10 @@ def test_build_connections_sse_no_headers() -> None:
         MCPServerConfig(name="r", transport="sse", url="https://x/sse"),
     ])
     conns = mgr._build_connections()
-    assert conns == {"r": {"transport": "sse", "url": "https://x/sse"}}
+    entry = conns["r"]
+    assert entry["transport"] == "sse"
+    assert entry["url"] == "https://x/sse"
+    assert callable(entry["session_kwargs"]["message_handler"])
 
 
 def test_build_connections_streamable_http_with_headers() -> None:
@@ -129,13 +133,11 @@ def test_build_connections_streamable_http_with_headers() -> None:
         ),
     ])
     conns = mgr._build_connections()
-    assert conns == {
-        "c": {
-            "transport": "streamable_http",
-            "url": "https://x/mcp",
-            "headers": {"Authorization": "Bearer t"},
-        },
-    }
+    entry = conns["c"]
+    assert entry["transport"] == "streamable_http"
+    assert entry["url"] == "https://x/mcp"
+    assert entry["headers"] == {"Authorization": "Bearer t"}
+    assert callable(entry["session_kwargs"]["message_handler"])
 
 
 def test_build_connections_mixed_transports() -> None:
@@ -225,10 +227,9 @@ async def test_start_all_passes_sse_connection_dict_to_client(
     ])
     await mgr.start_all()
 
-    assert captured["connections"] == {
-        "remote": {
-            "transport": "sse",
-            "url": "https://example.com/sse",
-            "headers": {"Authorization": "Bearer abc"},
-        },
-    }
+    entry = captured["connections"]["remote"]
+    assert entry["transport"] == "sse"
+    assert entry["url"] == "https://example.com/sse"
+    assert entry["headers"] == {"Authorization": "Bearer abc"}
+    # F-06-004 — list-changed message handler attached to the connection.
+    assert callable(entry["session_kwargs"]["message_handler"])

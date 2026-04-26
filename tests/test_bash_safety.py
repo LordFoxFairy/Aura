@@ -590,3 +590,49 @@ def test_rm_rf_user_home_envvar_allowed(monkeypatch: object) -> None:
     # layer handles user consent.
     monkeypatch.setenv("HOME", "/tmp/userspace")  # type: ignore[attr-defined]
     assert check_bash_safety("rm -rf $HOME") is None
+
+
+# ---------------------------------------------------------------------------
+# F-04-008 — brace expansion no longer a known-false-negative
+# ---------------------------------------------------------------------------
+
+
+def test_rm_rf_brace_list_with_system_path_blocked() -> None:
+    """``rm -rf /{etc,tmp}`` expands → /etc is a system path → block."""
+    v = check_bash_safety("rm -rf /{etc,tmp}")
+    assert isinstance(v, BashSafetyViolation)
+
+
+def test_rm_rf_brace_list_all_safe_passes() -> None:
+    """``rm -rf /tmp/{a,b}`` — all alternatives are safe → no block."""
+    assert check_bash_safety("rm -rf /tmp/{a,b}") is None
+
+
+def test_rm_rf_nested_brace_with_system_path_blocked() -> None:
+    """Nested braces still expand and trip the system-path check."""
+    v = check_bash_safety("rm -rf /{etc/{passwd,shadow},tmp}")
+    assert isinstance(v, BashSafetyViolation)
+
+
+def test_rm_rf_brace_outside_root_blocked() -> None:
+    """``rm -rf {/etc,/var}`` — leading-slash alternatives all hit."""
+    v = check_bash_safety("rm -rf {/etc,/var/log}")
+    assert isinstance(v, BashSafetyViolation)
+
+
+def test_brace_expansion_helper_handles_no_braces() -> None:
+    """No braces in input → helper returns the input unchanged."""
+    from aura.core.permissions.bash_safety import _expand_braces
+    assert _expand_braces("/etc/passwd") == ["/etc/passwd"]
+
+
+def test_brace_expansion_helper_unbalanced_braces_pass_through() -> None:
+    """Malformed brace (unmatched ``{``) → return as-is, do not crash."""
+    from aura.core.permissions.bash_safety import _expand_braces
+    assert _expand_braces("/etc/{passwd") == ["/etc/{passwd"]
+
+
+def test_brace_expansion_helper_single_alternative_pass_through() -> None:
+    """``{onlyone}`` is not a real list → return as literal."""
+    from aura.core.permissions.bash_safety import _expand_braces
+    assert _expand_braces("/etc/{onlyone}") == ["/etc/{onlyone}"]

@@ -91,14 +91,38 @@ _DANGEROUS_COMMAND_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:>{1,2}\s*|\bof=)\s*/dev/(?:sd[a-z]|nvme|hd[a-z]|vd[a-z])"),
     # rm combined with background operator: rm ... & (not &&).
     re.compile(r"\brm\b[^;&\n]*&(?!&)"),
-    # $(rm ...) command substitution wrapping a destructive command.
-    re.compile(r"\$\(\s*rm\s+(?:-[a-zA-Z]*[rRf][a-zA-Z]*)"),
-    # `rm ...` backtick substitution wrapping a destructive command.
-    re.compile(r"`\s*rm\s+(?:-[a-zA-Z]*[rRf][a-zA-Z]*)"),
+    # $(...) command substitution wrapping any destructive idiom.
+    # Catches $(rm -rf ...), $(dd of=...), $(mkfs...), $(chown -R...).
+    re.compile(
+        r"\$\(\s*"
+        r"(?:rm\s+(?:-[a-zA-Z]*[rRf][a-zA-Z]*)"
+        r"|dd\s+[^)]*\bof=/dev/"
+        r"|mkfs(?:\.\w+)?\b"
+        r"|chown\s+-[a-zA-Z]*R"
+        r"|chmod\s+(?:-R\s+)?0?777)"
+    ),
+    # `...` backtick substitution wrapping any destructive idiom.
+    re.compile(
+        r"`\s*"
+        r"(?:rm\s+(?:-[a-zA-Z]*[rRf][a-zA-Z]*)"
+        r"|dd\s+[^`]*\bof=/dev/"
+        r"|mkfs(?:\.\w+)?\b"
+        r"|chown\s+-[a-zA-Z]*R"
+        r"|chmod\s+(?:-R\s+)?0?777)"
+    ),
     # find ... -delete (recursive delete via find action).
     re.compile(r"\bfind\b[^|;&\n]*\s-delete\b"),
-    # find ... -exec rm / -execdir rm (per-match rm exec).
-    re.compile(r"\bfind\b[^|;&\n]*\s-exec(?:dir)?\s+rm\b"),
+    # find ... -exec / -execdir invoking ANY destructive verb.
+    re.compile(
+        r"\bfind\b[^|;&\n]*\s-exec(?:dir)?\s+"
+        r"(?:rm|chown|chmod|dd|mv|truncate)\b"
+    ),
+    # dd writes to a raw block device (covered by /dev/ pattern above
+    # for output, but ``dd if=... of=/dev/sda`` outside of $() also
+    # triggers via redirect rule). Add explicit guard for the dd verb.
+    re.compile(r"\bdd\b[^|;&\n]*\bof=/dev/(?:sd[a-z]|nvme|hd[a-z]|vd[a-z])"),
+    # mkfs against any device (formatting wipes data).
+    re.compile(r"\bmkfs(?:\.\w+)?\s+/dev/"),
 )
 
 

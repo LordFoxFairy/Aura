@@ -549,3 +549,67 @@ def test_build_one_connection_missing_var_in_headers_raises(
     msg = str(exc_info.value)
     assert "ABSENT_TOKEN" in msg
     assert "s1" in msg
+
+
+# ---------------------------------------------------------------------------
+# F-06-004 — list-changed message handler attached to each connection
+# ---------------------------------------------------------------------------
+
+
+def test_build_one_connection_attaches_message_handler_stdio() -> None:
+    """Every stdio connection carries a session_kwargs.message_handler."""
+    cfg = MCPServerConfig(name="alpha", transport="stdio", command="echo")
+    out = MCPManager._build_one_connection(cfg)
+    entry = out["alpha"]
+    assert "session_kwargs" in entry
+    assert callable(entry["session_kwargs"]["message_handler"])
+
+
+def test_build_one_connection_attaches_message_handler_remote() -> None:
+    """SSE connections carry the same session_kwargs.message_handler hook."""
+    cfg = MCPServerConfig(
+        name="beta", transport="sse", url="https://x.example/mcp",
+    )
+    out = MCPManager._build_one_connection(cfg)
+    entry = out["beta"]
+    assert "session_kwargs" in entry
+    assert callable(entry["session_kwargs"]["message_handler"])
+
+
+@pytest.mark.asyncio
+async def test_list_changed_handler_journals_only_relevant_methods(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The handler journals tools/prompts/resources list_changed; others ignored."""
+    from aura.core.mcp.manager import _make_list_changed_logger
+    from aura.core.persistence import journal as journal_module
+    log_path = tmp_path / "audit.jsonl"
+    journal_module.configure(log_path)
+    try:
+        handler = _make_list_changed_logger("server-x")
+
+        class _Notification:
+            def __init__(self, method: str) -> None:
+                self.root = type("Root", (), {"method": method})()
+
+        # Three relevant notifications + one irrelevant one.
+        await handler(_Notification("notifications/tools/list_changed"))
+        await handler(_Notification("notifications/prompts/list_changed"))
+        await handler(_Notification("notifications/resources/list_changed"))
+        await handler(_Notification("notifications/logging/setLevel"))
+
+        import json
+        events = [
+            json.loads(line) for line in log_path.read_text().splitlines() if line
+        ]
+        list_changed = [e for e in events if e["event"] == "mcp_list_changed"]
+        assert len(list_changed) == 3
+        assert all(e["server"] == "server-x" for e in list_changed)
+        methods = {e["method"] for e in list_changed}
+        assert methods == {
+            "notifications/tools/list_changed",
+            "notifications/prompts/list_changed",
+            "notifications/resources/list_changed",
+        }
+    finally:
+        journal_module.reset()

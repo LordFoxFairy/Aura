@@ -19,8 +19,11 @@ for zero-dependency safety. Known limitations (documented per rule):
     ``${HOME}``) forms ARE resolved at the path-classification step
     (``os.path.expanduser`` + ``os.path.expandvars``), so ``rm -rf $HOME``
     and ``rm -rf ~root`` are caught. Brace expansion (``rm -rf /{etc,tmp}``)
-    and glob expansion are NOT resolved — they require running bash, and
-    Python's stdlib has no equivalent. Known-false-negative, documented.
+    is also resolved via :func:`_expand_braces` (cartesian product over
+    comma-separated alternatives, recurses into nested ``{...}``); each
+    expansion is independently checked. Sequence expressions (``{1..10}``)
+    and glob expansion (``/etc/*``) remain unresolved — those need a
+    real shell. Known-false-negative for those forms, documented.
   - BSD-sed vs. GNU-sed ``-i`` semantics: handled conservatively (any
     ``i`` in a short-flag cluster triggers the rule regardless of the
     next token's role).
@@ -544,13 +547,70 @@ def _pipe_segments_quote_aware(command: str) -> list[str]:
     return segments
 
 
+def _expand_braces(text: str) -> list[str]:
+    """Expand POSIX-style ``{a,b,c}`` brace lists into cartesian product.
+
+    Handles single-level + nested forms (``/{a,b/{c,d}}``). Sequence
+    expressions (``{1..10}``) are NOT supported — the security-relevant
+    case is enumerated alternatives. When the input has no balanced
+    ``{...}`` group, returns ``[text]`` unchanged.
+
+    F-04-008 — closes the module-docstring's brace-expansion gap so
+    ``rm -rf /{etc,tmp}`` flags both targets at the safety check.
+    """
+    # Find the first balanced { ... } group at the top level.
+    start = text.find("{")
+    if start == -1:
+        return [text]
+    depth = 0
+    end = -1
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end == -1:
+        return [text]
+    prefix = text[:start]
+    suffix = text[end + 1:]
+    body = text[start + 1: end]
+    # Split on commas at depth 0 within this group.
+    parts: list[str] = []
+    depth = 0
+    cursor = 0
+    for i, ch in enumerate(body):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            parts.append(body[cursor:i])
+            cursor = i + 1
+    parts.append(body[cursor:])
+    if len(parts) <= 1:
+        # Not a real brace list — treat as literal.
+        return [text]
+    out: list[str] = []
+    suffix_expansions = _expand_braces(suffix)
+    for p in parts:
+        for sub in _expand_braces(p):
+            for suf in suffix_expansions:
+                out.append(prefix + sub + suf)
+    return out
+
+
 def _is_system_path(path: str) -> bool:
     """True iff ``path`` sits under a known system-owned prefix.
 
     Tilde (``~``, ``~root``) and environment-variable (``$HOME``, ``${VAR}``)
     forms are expanded before the prefix check so ``rm -rf $HOME`` and
-    ``rm -rf ~root`` are caught. Brace expansion (``/{etc,tmp}``) and glob
-    expansion are NOT resolved — see module docstring for the residual gap.
+    ``rm -rf ~root`` are caught. Brace expansion (``rm -rf /{etc,tmp}``)
+    is also resolved so each enumerated alternative is checked
+    independently. Glob expansion (``/etc/*``) is still NOT resolved —
+    see module docstring for the residual gap.
     """
     if not path:
         return False
@@ -559,6 +619,15 @@ def _is_system_path(path: str) -> bool:
     # Resolve tilde + env-var expansion BEFORE the prefix scan so obfuscated
     # forms like ``$HOME`` (root's home is /root) and ``~root`` are caught.
     cleaned = os.path.expandvars(os.path.expanduser(cleaned))
+    # F-04-008 — fan out brace alternatives so each path is checked.
+    # If ANY alternative is a system path, treat the whole expression as
+    # one (the safest possible behaviour for ``rm -rf {/etc,/tmp}``).
+    candidates = _expand_braces(cleaned)
+    return any(_check_single_path(c) for c in candidates)
+
+
+def _check_single_path(cleaned: str) -> bool:
+    """Match a single (post-expansion) path against system prefixes."""
     if cleaned in _SAFE_DEV_TARGETS:
         return False
     # /dev/fd/N family

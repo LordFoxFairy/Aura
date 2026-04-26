@@ -201,6 +201,49 @@ def _resolve_op_timeout(explicit: float | None) -> float:
     return _DEFAULT_OP_TIMEOUT_SEC
 
 
+# F-06-004 — MCP server-pushed list-changed notifications. Each ClientSession
+# can register a ``message_handler`` callback that receives every inbound
+# notification / request. We hand the library a closure per server that
+# records ``notifications/{tools,prompts,resources}/list_changed`` events
+# to the journal, named by server. Aura's MCP sessions are short-lived
+# (one tool call per session) so an auto-rediscovery loop is impractical
+# without a persistent-session rearchitecture; the journal trail is the
+# observable surface in the meantime.
+_LIST_CHANGED_METHODS: frozenset[str] = frozenset({
+    "notifications/tools/list_changed",
+    "notifications/prompts/list_changed",
+    "notifications/resources/list_changed",
+})
+
+
+def _make_list_changed_logger(server_name: str) -> Any:
+    """Return a langchain-mcp-adapters ``message_handler`` for *server_name*.
+
+    The handler accepts every inbound message but only acts on the three
+    list-changed notification methods. Anything else passes through to
+    the library's default handler (a stdlib-only forwarder that suppresses
+    unknown messages). Implemented as a closure so the journal event
+    carries the server name without a global registry lookup.
+    """
+    from aura.core.persistence import journal  # noqa: PLC0415
+
+    async def _handler(message: Any) -> None:
+        # The library hands us either a request, notification, or exception.
+        # We pattern-match on the ``method`` attribute to avoid a heavyweight
+        # MCP-types import at module load.
+        method = None
+        root = getattr(message, "root", None) or message
+        method = getattr(root, "method", None)
+        if isinstance(method, str) and method in _LIST_CHANGED_METHODS:
+            journal.write(
+                "mcp_list_changed",
+                server=server_name,
+                method=method,
+            )
+
+    return _handler
+
+
 class MCPManager:
     def __init__(
         self,
@@ -851,6 +894,20 @@ class MCPManager:
         :class:`RuntimeError` that names the missing var + server so
         the operator gets actionable text instead of a silent empty
         substitution baked into a transport spawn.
+
+        F-06-004 — every connection carries a ``session_kwargs`` with a
+        ``message_handler`` that journals list-changed notifications
+        (``notifications/tools/list_changed``,
+        ``notifications/prompts/list_changed``,
+        ``notifications/resources/list_changed``). This makes the events
+        observable to operators even though Aura's MCP sessions are
+        currently short-lived (one tool call per session) so an
+        auto-rediscovery loop is impractical without a persistent-session
+        rearchitecture. The journal trail is enough for an operator to
+        see when an upstream server's catalog drifted; subsequent
+        ``/mcp reconnect`` rebuilds the cache. The handler is wired here
+        rather than in :class:`MCPServerConfig` so SDK callers who
+        construct connections by hand still get the audit hook for free.
         """
         from aura.core.mcp.adapter import _expand_env_vars  # noqa: PLC0415
 
@@ -860,6 +917,10 @@ class MCPManager:
             if text is None:
                 return None
             return _expand_env_vars(text, _missing_log=missing)
+
+        session_kwargs = {
+            "message_handler": _make_list_changed_logger(cfg.name),
+        }
 
         if cfg.transport == "stdio":
             command = _expand(cfg.command)
@@ -883,11 +944,13 @@ class MCPManager:
                     "command": command,
                     "args": args,
                     "env": env if env else None,
+                    "session_kwargs": session_kwargs,
                 }
             }
         conn: dict[str, Any] = {
             "transport": cfg.transport,
             "url": _expand(cfg.url),
+            "session_kwargs": session_kwargs,
         }
         if cfg.headers:
             conn["headers"] = {

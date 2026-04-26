@@ -109,6 +109,60 @@ def test_bash_is_destructive_covers_system_path_redirect() -> None:
     ) is True
 
 
+# ---------------------------------------------------------------------------
+# F-02-016 — command-substitution regex now covers more than rm
+# ---------------------------------------------------------------------------
+
+
+def test_bash_is_destructive_covers_dollar_paren_chown() -> None:
+    """``$(chown -R nobody /etc)`` is destructive even via command sub."""
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "echo $(chown -R nobody /etc)"},
+    ) is True
+
+
+def test_bash_is_destructive_covers_dollar_paren_dd() -> None:
+    """``$(dd if=/dev/zero of=/dev/sda)`` formats a disk via command sub."""
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "echo $(dd if=/dev/zero of=/dev/sda)"},
+    ) is True
+
+
+def test_bash_is_destructive_covers_dollar_paren_mkfs() -> None:
+    """``$(mkfs.ext4 ...)`` formats a filesystem via command sub."""
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "echo $(mkfs.ext4 /dev/sdb1)"},
+    ) is True
+
+
+def test_bash_is_destructive_covers_backtick_chown() -> None:
+    """Backtick form of chown -R also caught."""
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "echo `chown -R nobody /etc`"},
+    ) is True
+
+
+def test_bash_is_destructive_covers_dd_to_device() -> None:
+    """Bare ``dd of=/dev/sda`` is destructive without command sub."""
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "dd if=/dev/zero of=/dev/sda bs=1M"},
+    ) is True
+
+
+def test_bash_is_destructive_covers_mkfs_on_device() -> None:
+    """``mkfs.ext4 /dev/sdb1`` formats a real device."""
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "mkfs.ext4 /dev/sdb1"},
+    ) is True
+
+
+def test_bash_is_destructive_covers_find_exec_chown() -> None:
+    """``find ... -exec chown ...`` triggers per-match privilege change."""
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "find /etc -exec chown root:root {} +"},
+    ) is True
+
+
 def test_bash_is_destructive_missing_command_returns_false() -> None:
     # Defensive: args without a ``command`` key shouldn't throw — the
     # arg-schema layer catches that earlier, but the classifier still

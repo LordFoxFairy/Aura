@@ -300,7 +300,16 @@ def main() -> int:
             # user-specific SafetyPolicy. Previously the CLI only called
             # ``load_ruleset`` and dropped ``safety_exempt`` on the floor.
             perm_cfg = store.load(project_root)
-            disk_rules = store.load_ruleset(project_root)
+            # F-04-007 — validate every rule's tool name against the known
+            # set so a typo (``read_filee(...)``) errors out at startup
+            # with a "did you mean ...?" hint instead of silently never
+            # matching at runtime. ``mcp__*`` is wildcard-allowed because
+            # MCP tools are discovered after CLI startup; users who write
+            # rules for those server-tools see no false positives.
+            known_tools = list(config.tools.enabled) + ["mcp__*"]
+            disk_rules = store.load_ruleset(
+                project_root, known_tool_names=known_tools,
+            )
         except AuraConfigError as exc:
             return _fail_startup(console, exc)
         # User rules first, built-in defaults last. Both are allow-only so

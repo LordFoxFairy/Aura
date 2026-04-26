@@ -1521,6 +1521,21 @@ class Agent:
             await self.fire_stop(reason="user_exit")
         self._teardown_local_tasks()
 
+        # Claude-code parity (gh-32730): rm -rf every team this session
+        # created that wasn't explicitly /team delete'd, so an orphan
+        # team dir doesn't accumulate forever. Best-effort — failures
+        # journal but don't block the rest of the teardown.
+        # CRITICAL: only the LEADER fires cleanup. Teammates (where
+        # ``_team_member_name`` is set) inherit ``_team`` from the
+        # leader's manager via ``join_team`` — calling cleanup from
+        # a teammate's aclose would cancel sibling teammates'
+        # runtimes mid-flight (the leader's set is shared).
+        if self._team is not None and self._team_member_name is None:
+            cleanup = getattr(self._team, "cleanup_session_teams", None)
+            if callable(cleanup):
+                with contextlib.suppress(Exception):
+                    await cleanup()
+
         if self._mcp_manager is not None:
             mgr = self._mcp_manager
             servers_hanging = self._connected_server_names()

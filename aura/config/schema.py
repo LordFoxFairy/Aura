@@ -35,6 +35,16 @@ class ToolsConfig(BaseModel):
             "todo_write", "web_fetch", "write_file",
         ],
     )
+    cleanup_completed_subagent_transcripts: bool = Field(
+        default=False,
+        description=(
+            "When True, delete a subagent's transcript JSONL + meta.json "
+            "from disk after the subagent terminates with status=completed. "
+            "Failed/cancelled/timeout transcripts are always kept (debug "
+            "value). Default False matches claude-code's behavior — files "
+            "stay so /resume + post-mortem inspection work."
+        ),
+    )
 
 
 class StorageConfig(BaseModel):

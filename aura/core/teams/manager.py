@@ -32,6 +32,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -198,6 +199,13 @@ class TeamManager:
         # callback. Tests can ``await mgr._shutdown_waiters[name]`` to
         # block on the round-trip from a sync entry point.
         self._shutdown_waiters: dict[str, asyncio.Task[bool]] = {}
+        # Set of team_ids created in THIS process that are still on disk.
+        # Mirrors claude-code's ``sessionCreatedTeams`` Set + the gh-32730
+        # fix: ``create_team`` registers, ``delete_team`` unregisters, and
+        # :meth:`cleanup_session_teams` (called from ``Agent.aclose``)
+        # ``rm -rf``s every entry left behind so an unsupervised team
+        # doesn't pile up on disk forever.
+        self._session_created_teams: set[str] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle: create / delete / lookup
@@ -245,6 +253,10 @@ class TeamManager:
         )
         self._team = record
         self._persist()
+        # Track for session-end cleanup — claude-code parity (gh-32730).
+        # Removed by :meth:`delete_team` when the user explicitly tears
+        # down; otherwise consumed by :meth:`cleanup_session_teams`.
+        self._session_created_teams.add(team_id)
         journal.write(
             "team_created",
             team_id=team_id,
@@ -254,11 +266,12 @@ class TeamManager:
         return record
 
     def delete_team(self) -> None:
-        """Tear down every teammate, clear in-memory state, leave files alone.
+        """Tear down every teammate AND remove the team directory from disk.
 
-        Files stay so post-mortem inspection works; the design proposal
-        §3.3 calls this out explicitly. A future ``--purge`` flag could
-        ``shutil.rmtree`` the folder, but Phase A keeps it conservative.
+        Aligned with claude-code's ``TeamDeleteTool`` (post gh-32730):
+        explicit delete is destructive — config.json + inbox/ + transcripts/
+        are all removed. ``_session_created_teams`` membership is cleared
+        so the session-end cleanup doesn't double-rm.
         """
         if self._team is None:
             return
@@ -268,8 +281,60 @@ class TeamManager:
             with contextlib.suppress(TeamError):
                 self.remove_member(member.name, force=True)
         team_id = self._team.team_id
+        self._session_created_teams.discard(team_id)
+        team_dir = self._storage.team_root(team_id)
+        with contextlib.suppress(FileNotFoundError):
+            shutil.rmtree(team_dir)
         self._team = None
-        journal.write("team_deleted", team_id=team_id)
+        journal.write("team_deleted", team_id=team_id, dir_removed=True)
+
+    async def cleanup_session_teams(self) -> None:
+        """Remove every team this session created that wasn't explicitly deleted.
+
+        Mirrors claude-code's ``cleanupSessionTeams`` (``utils/swarm/
+        teamHelpers.ts:576``) — invoked from ``Agent.aclose`` so an
+        operator who forgot to ``/team delete`` doesn't leak orphan
+        directories. Best-effort: missing directories are tolerated,
+        rmtree errors are journaled but do not propagate.
+        """
+        if not self._session_created_teams:
+            return
+        # Snapshot before mutation; the rmtree loop clears the set entry
+        # by entry so a partial failure doesn't strand the surviving
+        # entries.
+        team_ids = list(self._session_created_teams)
+        # Best-effort: cancel any still-running runtime tasks first so
+        # rmtree doesn't race with an active poll loop.
+        for task in list(self._runtimes.values()):
+            if not task.done():
+                task.cancel()
+        if self._runtimes:
+            await asyncio.gather(
+                *[t for t in self._runtimes.values() if not t.done()],
+                return_exceptions=True,
+            )
+        for team_id in team_ids:
+            team_dir = self._storage.team_root(team_id)
+            try:
+                shutil.rmtree(team_dir)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                journal.write(
+                    "team_session_cleanup_error",
+                    team_id=team_id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                continue
+            journal.write("team_session_cleanup", team_id=team_id)
+            self._session_created_teams.discard(team_id)
+        # Clear in-memory state if the live team was among the cleaned set.
+        if self._team is not None and self._team.team_id not in self._session_created_teams:
+            # Already pruned from the set above; clear runtime state too.
+            self._team = None
+            self._runtimes.clear()
+            self._member_task_ids.clear()
+            self._member_agents.clear()
 
     # ------------------------------------------------------------------
     # Membership

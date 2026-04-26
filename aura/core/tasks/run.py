@@ -210,6 +210,61 @@ def _flush_transcript(
         return None
 
 
+def _maybe_cleanup_completed_transcript(
+    *,
+    agent: Any,
+    transcript_storage: SessionStorage,
+    task_id: str,
+    parent_session_id: str,
+    cwd: str,
+) -> None:
+    """Delete a successfully-completed subagent's transcript + meta files.
+
+    Opt-in via ``ToolsConfig.cleanup_completed_subagent_transcripts``;
+    default is False (claude-code parity — files stay so /resume +
+    post-mortem inspection work).
+
+    Only the SUCCESS branch calls this; failed / cancelled / timeout
+    transcripts always survive (operators need them for debugging).
+    Failures here journal but never raise — losing the cleanup is
+    strictly less bad than crashing the run_task teardown path.
+    """
+    try:
+        cfg = getattr(agent, "_config", None)
+        tools_cfg = getattr(cfg, "tools", None) if cfg is not None else None
+        if not getattr(tools_cfg, "cleanup_completed_subagent_transcripts", False):
+            return
+        cwd_arg: Path | None = Path(cwd) if cwd else None
+        parent_arg: str | None = parent_session_id or None
+        for fn_name in ("subagent_transcript_path", "subagent_metadata_path"):
+            path_fn = getattr(transcript_storage, fn_name, None)
+            if not callable(path_fn):
+                continue
+            target: Path = path_fn(
+                task_id, parent_session_id=parent_arg, cwd=cwd_arg,
+            )
+            try:
+                target.unlink(missing_ok=True)
+            except OSError as exc:
+                journal.write(
+                    "subagent_transcript_cleanup_error",
+                    task_id=task_id,
+                    file=fn_name,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+        journal.write(
+            "subagent_transcript_cleaned",
+            task_id=task_id,
+            parent_session_id=parent_arg or "",
+        )
+    except Exception as exc:  # noqa: BLE001
+        journal.write(
+            "subagent_transcript_cleanup_error",
+            task_id=task_id,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+
 def _flush_metadata(
     *,
     transcript_storage: SessionStorage,
@@ -581,6 +636,18 @@ async def run_task(
             _flush_metadata(
                 transcript_storage=transcript_storage,
                 record=record,
+                parent_session_id=resolved_parent_session_id,
+                cwd=resolved_cwd,
+            )
+            # Opt-in cleanup: when the user has set
+            # ``tools.cleanup_completed_subagent_transcripts: true``,
+            # the success-branch transcript + meta are deleted right
+            # after they're written. Failed / cancelled / timeout
+            # branches above always keep their files (debugging).
+            _maybe_cleanup_completed_transcript(
+                agent=agent,
+                transcript_storage=transcript_storage,
+                task_id=task_id,
                 parent_session_id=resolved_parent_session_id,
                 cwd=resolved_cwd,
             )

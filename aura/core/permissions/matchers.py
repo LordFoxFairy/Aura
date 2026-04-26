@@ -5,8 +5,13 @@ A ``rule_matcher`` in a tool's metadata decides whether a pattern rule like
 two shapes every built-in tool needs:
 
 - ``exact_match_on(key)`` — the arg at ``args[key]`` must equal the rule
-  content verbatim. Used by tools whose input is a single scalar (bash's
-  ``command``, glob/grep's ``pattern``, web_fetch's ``url``).
+  content. When the rule content contains a glob metachar (``*`` or ``?``)
+  the comparison uses :func:`fnmatch.fnmatchcase`, so a single rule like
+  ``bash(npm install *)`` covers every ``npm install <pkg>`` variant
+  without listing each one. Without metachars the match is verbatim
+  equality (back-compat with rules written before this layer).
+  Used by tools whose input is a single scalar (bash's ``command``,
+  glob/grep's ``pattern``, web_fetch's ``url``).
 
 - ``path_prefix_on(key)`` — the arg at ``args[key]`` must equal OR be a
   descendant of the rule content, treated as a filesystem path.
@@ -30,17 +35,28 @@ rule available, fall back to tool-wide".
 
 from __future__ import annotations
 
+from fnmatch import fnmatchcase
 from pathlib import PurePath
 
 from aura.schemas.tool import ToolRuleMatcher
 
 
 def exact_match_on(key: str) -> ToolRuleMatcher:
-    """Matcher: ``args[key]`` must equal the rule's content verbatim."""
+    """Matcher: ``args[key]`` matches the rule's content.
+
+    Glob metachars (``*`` / ``?``) in ``content`` enable :func:`fnmatchcase`
+    matching so ``bash(npm install *)`` covers every ``npm install <pkg>``
+    invocation. Without metachars, the comparison is verbatim equality —
+    back-compat with rules authored before glob support landed.
+    """
 
     def _matches(args: dict[str, object], content: str) -> bool:
         value = args.get(key)
-        return isinstance(value, str) and value == content
+        if not isinstance(value, str):
+            return False
+        if "*" in content or "?" in content:
+            return fnmatchcase(value, content)
+        return value == content
 
     _matches.key = key  # type: ignore[attr-defined]
     return _matches

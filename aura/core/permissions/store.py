@@ -513,8 +513,12 @@ def ensure_local_settings(project_root: Path) -> tuple[Path, bool]:
         "//": (
             "Machine-local permission overrides. Add rule strings to "
             "permissions.allow to auto-approve tool calls without a "
-            "prompt. Examples: \"bash(npm test)\", \"read_file(/tmp)\", "
-            "\"grep\". Full spec: docs/specs/2026-04-19-aura-permission.md."
+            "prompt. Glob metachars (* and ?) are supported in rule "
+            "content, so one rule covers a whole family. Examples: "
+            "\"bash(npm test)\" (exact), \"bash(npm install *)\" (glob — "
+            "covers every npm install variant), \"bash(ls *)\" (any ls), "
+            "\"read_file(/tmp)\" (path prefix), \"grep\" (tool-wide). "
+            "Full spec: docs/specs/2026-04-19-aura-permission.md."
         ),
         "permissions": {
             "allow": [],

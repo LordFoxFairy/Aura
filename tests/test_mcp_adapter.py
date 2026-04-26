@@ -50,6 +50,73 @@ def test_add_aura_metadata_namespaces_tool_name() -> None:
     assert tool.name == "mcp__github__search"
 
 
+# ---------------------------------------------------------------------------
+# F-06-006 — per-tool MCP annotations override conservative defaults.
+# ---------------------------------------------------------------------------
+
+
+def _mk_tool_with_metadata(
+    name: str, metadata: dict[str, Any]
+) -> StructuredTool:
+    """Mimic langchain-mcp-adapters' tool shape: hints land in metadata."""
+    async def _coro(x: str = "") -> dict[str, Any]:
+        return {}
+    return StructuredTool(
+        name=name,
+        description="fixture",
+        args_schema=_Params,
+        coroutine=_coro,
+        metadata=metadata,
+    )
+
+
+def test_annotation_read_only_hint_flips_is_read_only() -> None:
+    tool = _mk_tool_with_metadata("search", {"readOnlyHint": True})
+    out = add_aura_metadata(tool, server_name="github")
+    md = out.metadata or {}
+    assert md.get("is_read_only") is True
+    # Read-only implies non-destructive AND concurrency-safe — server can't
+    # contradict itself.
+    assert md.get("is_destructive") is False
+    assert md.get("is_concurrency_safe") is True
+
+
+def test_annotation_destructive_hint_false_flips_is_destructive() -> None:
+    tool = _mk_tool_with_metadata("create", {"destructiveHint": False})
+    out = add_aura_metadata(tool, server_name="gh")
+    md = out.metadata or {}
+    assert md.get("is_destructive") is False
+    # Not declared read-only, so it stays non-read-only.
+    assert md.get("is_read_only") is False
+
+
+def test_annotation_open_world_hint_false_marks_concurrency_safe() -> None:
+    tool = _mk_tool_with_metadata("query", {"openWorldHint": False})
+    out = add_aura_metadata(tool, server_name="gh")
+    md = out.metadata or {}
+    assert md.get("is_concurrency_safe") is True
+
+
+def test_annotation_open_world_hint_true_keeps_concurrency_unsafe() -> None:
+    tool = _mk_tool_with_metadata("search", {"openWorldHint": True})
+    out = add_aura_metadata(tool, server_name="gh")
+    md = out.metadata or {}
+    assert md.get("is_concurrency_safe") is False
+
+
+def test_annotation_destructive_and_read_only_combine() -> None:
+    """Server-declared read-only takes precedence even if destructiveHint
+    is also set — read-only implies non-destructive per MCP spec."""
+    tool = _mk_tool_with_metadata(
+        "search",
+        {"readOnlyHint": True, "destructiveHint": True},
+    )
+    out = add_aura_metadata(tool, server_name="gh")
+    md = out.metadata or {}
+    assert md.get("is_read_only") is True
+    assert md.get("is_destructive") is False
+
+
 def test_add_aura_metadata_preserves_already_namespaced_name() -> None:
     tool = _mk_tool("mcp__github__search")
     add_aura_metadata(tool, server_name="github")

@@ -841,22 +841,67 @@ class MCPManager:
         Exposed separately so ``enable`` / ``_connect_one`` can inject one
         server's entry back into an existing client's ``connections`` dict
         without rebuilding the whole map.
+
+        F-06-002 — applies ``${VAR}`` / ``${VAR:-default}`` expansion to
+        every string leaf (``command`` / each ``args`` / each ``env``
+        value / each ``headers`` value / ``url``). This is belt-and-
+        suspenders defence for configs that bypass ``mcp_store.load()``
+        (programmatic ``MCPServerConfig`` construction in SDK callers /
+        tests). An unresolved reference with no default raises a
+        :class:`RuntimeError` that names the missing var + server so
+        the operator gets actionable text instead of a silent empty
+        substitution baked into a transport spawn.
         """
+        from aura.core.mcp.adapter import _expand_env_vars  # noqa: PLC0415
+
+        missing: list[str] = []
+
+        def _expand(text: str | None) -> str | None:
+            if text is None:
+                return None
+            return _expand_env_vars(text, _missing_log=missing)
+
         if cfg.transport == "stdio":
+            command = _expand(cfg.command)
+            args = [_expand_env_vars(a, _missing_log=missing) for a in cfg.args]
+            env_raw = cfg.env or {}
+            env = {
+                k: _expand_env_vars(v, _missing_log=missing)
+                for k, v in env_raw.items()
+            }
+            if missing:
+                raise RuntimeError(
+                    f"MCP server {cfg.name!r}: unresolved environment "
+                    f"variable(s) in stdio config: "
+                    f"{sorted(set(missing))} "
+                    "(define them in the parent shell or supply "
+                    "${VAR:-default})"
+                )
             return {
                 cfg.name: {
                     "transport": "stdio",
-                    "command": cfg.command,
-                    "args": list(cfg.args),
-                    "env": dict(cfg.env) if cfg.env else None,
+                    "command": command,
+                    "args": args,
+                    "env": env if env else None,
                 }
             }
         conn: dict[str, Any] = {
             "transport": cfg.transport,
-            "url": cfg.url,
+            "url": _expand(cfg.url),
         }
         if cfg.headers:
-            conn["headers"] = dict(cfg.headers)
+            conn["headers"] = {
+                k: _expand_env_vars(v, _missing_log=missing)
+                for k, v in cfg.headers.items()
+            }
+        if missing:
+            raise RuntimeError(
+                f"MCP server {cfg.name!r}: unresolved environment "
+                f"variable(s) in {cfg.transport} config: "
+                f"{sorted(set(missing))} "
+                "(define them in the parent shell or supply "
+                "${VAR:-default})"
+            )
         return {cfg.name: conn}
 
     # ------------------------------------------------------------------

@@ -87,6 +87,37 @@ def _cap_description(text: str) -> tuple[str, bool, int]:
     return head + marker, True, original_len
 
 
+def _read_annotation_hints(tool: BaseTool) -> dict[str, bool | None]:
+    """Extract MCP ``ToolAnnotations`` hints from a langchain-mcp-adapters tool.
+
+    langchain-mcp-adapters stores the raw ``annotations.model_dump()`` into
+    ``tool.metadata`` BEFORE we replace it (see ``tools.py:_convert_mcp_tool_to_langchain_tool``).
+    We also fall back to ``getattr(tool, "annotations", None)`` for any
+    library version / test fake that exposes the hints as an attribute.
+
+    Returns a dict with the three keys we care about, each ``None`` when
+    the server didn't declare the corresponding hint.
+    """
+    hints: dict[str, bool | None] = {
+        "readOnlyHint": None,
+        "destructiveHint": None,
+        "openWorldHint": None,
+    }
+    md = getattr(tool, "metadata", None)
+    if isinstance(md, dict):
+        for key in hints:
+            val = md.get(key)
+            if isinstance(val, bool):
+                hints[key] = val
+    ann = getattr(tool, "annotations", None)
+    if ann is not None:
+        for key in hints:
+            val = getattr(ann, key, None)
+            if isinstance(val, bool):
+                hints[key] = val
+    return hints
+
+
 def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
     """Mutate *tool* in-place: namespace the name and attach Aura metadata.
 
@@ -98,10 +129,17 @@ def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
     claude-code's constant. Truncation emits a journal event so operators
     see when an MCP server is shipping oversized docs.
 
+    Per-tool annotations (``readOnlyHint`` / ``destructiveHint`` /
+    ``openWorldHint``) are honoured when the server declares them; we
+    fall back to conservative defaults (destructive + non-concurrency-safe
+    + non-read-only) only when no annotation is present. Hints are
+    advisory — the permission layer still gates by user rules.
+
     Returns the same object for call-site convenience.
     """
     # StructuredTool.name / metadata are plain pydantic fields — mutating
     # them is supported by langchain-core. No reflection needed.
+    hints = _read_annotation_hints(tool)
     if not tool.name.startswith(_MCP_PREFIX):
         tool.name = f"{_MCP_PREFIX}{server_name}__{tool.name}"
     capped_desc, truncated, original_len = _cap_description(
@@ -120,10 +158,19 @@ def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
             )
         except Exception:  # noqa: BLE001
             pass
+    is_read_only = hints["readOnlyHint"] is True
+    # Destructive defaults to True (claude-code parity). Only flip to False
+    # when the server explicitly declared a non-destructive hint OR the
+    # tool is read-only (which implies non-destructive per MCP spec).
+    is_destructive = not (is_read_only or hints["destructiveHint"] is False)
+    # openWorldHint=True keeps concurrency-unsafe (parallel calls to an
+    # external world can race); openWorldHint=False allows safe-concurrent
+    # marking. Read-only also implies safe to run concurrently.
+    is_concurrency_safe = is_read_only or hints["openWorldHint"] is False
     tool.metadata = tool_metadata(
-        is_read_only=False,
-        is_destructive=True,
-        is_concurrency_safe=False,
+        is_read_only=is_read_only,
+        is_destructive=is_destructive,
+        is_concurrency_safe=is_concurrency_safe,
         max_result_size_chars=_MAX_MCP_RESULT_CHARS,
         rule_matcher=None,
         args_preview=_args_preview,

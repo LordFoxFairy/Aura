@@ -458,3 +458,94 @@ def test_mcp_server_status_is_frozen_dataclass() -> None:
     )
     with pytest.raises(_dc.FrozenInstanceError):
         s.tool_count = 5  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# F-06-002 — env-var expansion in ``_build_one_connection``.
+# Belt-and-suspenders defence for configs constructed in code that bypass
+# ``mcp_store.load()`` (the loader's own expansion is covered in
+# ``tests/test_mcp_env_expand.py``).
+# ---------------------------------------------------------------------------
+
+
+def test_build_one_connection_expands_stdio_command_args_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MY_BIN", "/usr/bin/python")
+    monkeypatch.setenv("MY_TOK", "deadbeef")
+    cfg = MCPServerConfig(
+        name="s1",
+        transport="stdio",
+        command="${MY_BIN}",
+        args=["--flag", "${MY_BIN}"],
+        env={"TOKEN": "${MY_TOK}"},
+    )
+    out = MCPManager._build_one_connection(cfg)
+    entry = out["s1"]
+    assert entry["command"] == "/usr/bin/python"
+    assert entry["args"] == ["--flag", "/usr/bin/python"]
+    assert entry["env"] == {"TOKEN": "deadbeef"}
+
+
+def test_build_one_connection_missing_var_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MISSING_BIN", raising=False)
+    cfg = MCPServerConfig(
+        name="s1",
+        transport="stdio",
+        command="${MISSING_BIN}",
+    )
+    with pytest.raises(RuntimeError) as exc_info:
+        MCPManager._build_one_connection(cfg)
+    msg = str(exc_info.value)
+    assert "MISSING_BIN" in msg
+    assert "s1" in msg
+
+
+def test_build_one_connection_default_used_when_var_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``${VAR:-default}`` does NOT raise — default substitutes silently."""
+    monkeypatch.delenv("OPT_BIN", raising=False)
+    cfg = MCPServerConfig(
+        name="s1",
+        transport="stdio",
+        command="${OPT_BIN:-/bin/true}",
+    )
+    out = MCPManager._build_one_connection(cfg)
+    assert out["s1"]["command"] == "/bin/true"
+
+
+def test_build_one_connection_expands_url_and_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("API_HOST", "https://api.example.com")
+    monkeypatch.setenv("BEARER", "token-xyz")
+    cfg = MCPServerConfig(
+        name="s1",
+        transport="sse",
+        url="${API_HOST}/mcp",
+        headers={"Authorization": "Bearer ${BEARER}"},
+    )
+    out = MCPManager._build_one_connection(cfg)
+    entry = out["s1"]
+    assert entry["url"] == "https://api.example.com/mcp"
+    assert entry["headers"] == {"Authorization": "Bearer token-xyz"}
+
+
+def test_build_one_connection_missing_var_in_headers_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ABSENT_TOKEN", raising=False)
+    cfg = MCPServerConfig(
+        name="s1",
+        transport="sse",
+        url="https://api.example.com/mcp",
+        headers={"Authorization": "Bearer ${ABSENT_TOKEN}"},
+    )
+    with pytest.raises(RuntimeError) as exc_info:
+        MCPManager._build_one_connection(cfg)
+    msg = str(exc_info.value)
+    assert "ABSENT_TOKEN" in msg
+    assert "s1" in msg

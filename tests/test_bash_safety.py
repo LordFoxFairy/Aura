@@ -550,3 +550,43 @@ def test_ls_etc_allowed() -> None:
 
 def test_cat_etc_hosts_allowed() -> None:
     assert check_bash_safety("cat /etc/hosts") is None
+
+
+# ---------------------------------------------------------------------------
+# F-04-008 — env-var / tilde expansion in _is_system_path
+# ---------------------------------------------------------------------------
+
+
+def test_rm_rf_home_envvar_blocked(monkeypatch: object) -> None:
+    # $HOME pointed at a system prefix (root's home on Linux) must be
+    # caught after env-var expansion — pre-fix this slipped through.
+    monkeypatch.setenv("HOME", "/root")  # type: ignore[attr-defined]
+    v = check_bash_safety("rm -rf $HOME")
+    assert isinstance(v, BashSafetyViolation)
+    assert v.reason == "destructive_removal"
+
+
+def test_rm_rf_braced_envvar_blocked(monkeypatch: object) -> None:
+    monkeypatch.setenv("HOME", "/root")  # type: ignore[attr-defined]
+    v = check_bash_safety("rm -rf ${HOME}")
+    assert isinstance(v, BashSafetyViolation)
+    assert v.reason == "destructive_removal"
+
+
+def test_rm_rf_tilde_root_blocked(monkeypatch: object) -> None:
+    # On Linux ~root expands to /root; on macOS to /var/root. Force the
+    # HOME-of-root lookup via a monkeypatched pwd entry isn't worth the
+    # complexity — pin via $HOME=/root and use the literal ~ form which
+    # expanduser maps using $HOME for the unqualified ~ case.
+    monkeypatch.setenv("HOME", "/root")  # type: ignore[attr-defined]
+    v = check_bash_safety("rm -rf ~")
+    assert isinstance(v, BashSafetyViolation)
+    assert v.reason == "destructive_removal"
+
+
+def test_rm_rf_user_home_envvar_allowed(monkeypatch: object) -> None:
+    # Sanity: when $HOME points at a user-owned dir, NO Tier A trip —
+    # the agent is allowed to wipe its own scratch space; permission
+    # layer handles user consent.
+    monkeypatch.setenv("HOME", "/tmp/userspace")  # type: ignore[attr-defined]
+    assert check_bash_safety("rm -rf $HOME") is None

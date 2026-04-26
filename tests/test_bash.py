@@ -310,6 +310,98 @@ async def test_bash_below_hard_ceiling_not_killed() -> None:
     assert out["exit_code"] == 0
 
 
+# ---------------------------------------------------------------------------
+# F-02-016 — destructive-pattern regex coverage (command sub + find)
+# ---------------------------------------------------------------------------
+
+
+def test_is_destructive_blocks_command_sub_rm() -> None:
+    # $(rm -rf /) wraps the destructive command in command substitution —
+    # the wrapping bash will execute the inner; static check must catch.
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "echo $(rm -rf /)"}
+    ) is True
+
+
+def test_is_destructive_blocks_backtick_rm() -> None:
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "echo `rm -rf /`"}
+    ) is True
+
+
+def test_is_destructive_blocks_find_delete() -> None:
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "find . -delete"}
+    ) is True
+
+
+def test_is_destructive_blocks_find_exec_rm() -> None:
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "find . -exec rm {} \\;"}
+    ) is True
+
+
+def test_is_destructive_blocks_find_execdir_rm() -> None:
+    assert resolve_is_destructive(
+        bash.metadata, {"command": "find . -execdir rm {} \\;"}
+    ) is True
+
+
+# ---------------------------------------------------------------------------
+# F-02-035 — process-group teardown on timeout/cancel
+# ---------------------------------------------------------------------------
+
+
+async def test_bash_timeout_kills_process_group() -> None:
+    """Timeout on a shell that backgrounded a sleep must reap the *group*.
+
+    Pre-fix, ``proc.terminate()`` only signalled the immediate /bin/sh —
+    the backgrounded ``sleep`` lived on as an orphan. With
+    ``start_new_session=True`` + ``killpg`` the whole group dies.
+    """
+    with tempfile.NamedTemporaryFile(
+        mode="w", delete=False, suffix=".pid"
+    ) as pf:
+        pid_path = pf.name
+    try:
+        # Background a long sleep, capture ITS pid (the grandchild), then
+        # the shell waits forever. On group-kill, the sleep dies too.
+        cmd = (
+            f"sleep 100 & echo $! > {pid_path}; "
+            "wait"
+        )
+        with pytest.raises(ToolError, match="timeout"):
+            await bash.ainvoke({"command": cmd, "timeout": 1})
+
+        with open(pid_path) as fh:
+            pid_str = fh.read().strip()
+        assert pid_str, "background sleep PID not captured"
+        sleep_pid = int(pid_str)
+        # ~2s budget per spec — group teardown should reap inside that.
+        assert await _wait_pid_dead(sleep_pid, timeout=2.0), (
+            f"backgrounded sleep pid={sleep_pid} survived group kill"
+        )
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(pid_path)
+
+
+async def test_bash_subprocess_in_separate_session() -> None:
+    """The child must NOT share the agent's process group — otherwise a
+    Ctrl-C on the agent's TTY would propagate via SIGINT and kill the
+    REPL too. Verify the child's pgid differs from the parent's.
+    """
+    out = await bash.ainvoke(
+        {"command": "ps -o pgid= -p $$ | tr -d ' '", "timeout": 5}
+    )
+    child_pgid = int(out["stdout"].strip())
+    parent_pgid = os.getpgid(0)
+    assert child_pgid != parent_pgid, (
+        f"child pgid={child_pgid} matches parent pgid={parent_pgid} — "
+        "start_new_session not in effect"
+    )
+
+
 async def test_bash_sigterm_race_cleaned_up_with_sigkill() -> None:
     """Child ignores SIGTERM — ladder must escalate to SIGKILL."""
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".pid") as pf:

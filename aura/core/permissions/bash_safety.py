@@ -15,10 +15,12 @@ for zero-dependency safety. Known limitations (documented per rule):
 
   - Nested command substitution / process substitution inside valid
     POSIX structures: we reject on sight rather than recurse.
-  - Shell expansion (``$HOME/../etc/passwd``, brace expansion, glob): not
-    resolved. A sufficiently obfuscated path under a system prefix may
-    slip through. Partial mitigation: claude-code's own AST hits the
-    same class of edge cases; we match its static posture.
+  - Shell expansion: tilde (``~``) and environment-variable (``$HOME``,
+    ``${HOME}``) forms ARE resolved at the path-classification step
+    (``os.path.expanduser`` + ``os.path.expandvars``), so ``rm -rf $HOME``
+    and ``rm -rf ~root`` are caught. Brace expansion (``rm -rf /{etc,tmp}``)
+    and glob expansion are NOT resolved — they require running bash, and
+    Python's stdlib has no equivalent. Known-false-negative, documented.
   - BSD-sed vs. GNU-sed ``-i`` semantics: handled conservatively (any
     ``i`` in a short-flag cluster triggers the rule regardless of the
     next token's role).
@@ -81,6 +83,7 @@ bug-fail-open.
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 from dataclasses import dataclass
@@ -542,15 +545,20 @@ def _pipe_segments_quote_aware(command: str) -> list[str]:
 
 
 def _is_system_path(path: str) -> bool:
-    """True iff ``path`` sits under a known system-owned prefix. Tilde
-    expansion and environment variables are NOT resolved — a command
-    that writes to ``$HOME/../../etc/foo`` or ``~root/foo`` isn't caught,
-    but that level of indirection is beyond stdlib's reach without
-    mirroring bash expansion rules. Known-false-negative, documented."""
+    """True iff ``path`` sits under a known system-owned prefix.
+
+    Tilde (``~``, ``~root``) and environment-variable (``$HOME``, ``${VAR}``)
+    forms are expanded before the prefix check so ``rm -rf $HOME`` and
+    ``rm -rf ~root`` are caught. Brace expansion (``/{etc,tmp}``) and glob
+    expansion are NOT resolved — see module docstring for the residual gap.
+    """
     if not path:
         return False
     # Strip surrounding quotes that shlex would have stripped.
     cleaned = path.strip("\"'")
+    # Resolve tilde + env-var expansion BEFORE the prefix scan so obfuscated
+    # forms like ``$HOME`` (root's home is /root) and ``~root`` are caught.
+    cleaned = os.path.expandvars(os.path.expanduser(cleaned))
     if cleaned in _SAFE_DEV_TARGETS:
         return False
     # /dev/fd/N family

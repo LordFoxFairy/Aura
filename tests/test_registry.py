@@ -1,7 +1,9 @@
-"""Tests for aura.core.registry — ToolRegistry."""
+"""Tests for aura.core.registry — ToolRegistry + assemble_tool_pool."""
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -9,7 +11,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.core.loop import ToolStep, partition_batches
-from aura.core.registry import ToolRegistry
+from aura.core.registry import ToolRegistry, assemble_tool_pool
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from aura.tools.read_file import read_file
@@ -186,6 +188,79 @@ def test_registry_unregister_is_idempotent_on_missing_name() -> None:
     reg.unregister("ghost")
     reg.unregister("ghost")
     assert "tool_a" in reg
+
+
+def _mk(name: str) -> BaseTool:
+    return build_tool(
+        name=name,
+        description=name,
+        args_schema=_AParams,
+        func=_noop_a,
+    )
+
+
+def test_assemble_tool_pool_concats_builtins_then_mcp_sorted() -> None:
+    builtin_b = _mk("b_builtin")
+    builtin_a = _mk("a_builtin")
+    mcp_y = _mk("y_mcp")
+    mcp_x = _mk("x_mcp")
+    pool = assemble_tool_pool([builtin_b, builtin_a], [mcp_y, mcp_x])
+    assert list(pool.keys()) == ["a_builtin", "b_builtin", "x_mcp", "y_mcp"]
+
+
+def test_assemble_tool_pool_builtin_wins_on_collision_and_journals(
+    tmp_path: Path,
+) -> None:
+    from aura.core import journal
+
+    journal_path = tmp_path / "audit.jsonl"
+    journal.configure(journal_path)
+    try:
+        builtin_bash = _mk("bash")
+        mcp_bash = _mk("bash")
+        mcp_other = _mk("zzz_other")
+        pool = assemble_tool_pool([builtin_bash], [mcp_bash, mcp_other])
+        assert pool["bash"] is builtin_bash
+        assert "zzz_other" in pool
+        assert len(pool) == 2
+    finally:
+        journal.reset()
+    events = [
+        json.loads(line)
+        for line in journal_path.read_text().splitlines()
+        if line.strip()
+    ]
+    shadow_events = [e for e in events if e["event"] == "mcp_tool_shadowed"]
+    assert len(shadow_events) == 1
+    assert shadow_events[0]["tool"] == "bash"
+    assert shadow_events[0]["shadowed_by"] == "builtin"
+
+
+def test_assemble_tool_pool_empty_inputs() -> None:
+    assert assemble_tool_pool([], []) == {}
+
+
+def test_assemble_tool_pool_dedupes_intra_mcp_silently(tmp_path: Path) -> None:
+    from aura.core import journal
+
+    journal_path = tmp_path / "audit.jsonl"
+    journal.configure(journal_path)
+    try:
+        mcp_first = _mk("dup")
+        mcp_second = _mk("dup")
+        pool = assemble_tool_pool([], [mcp_first, mcp_second])
+        assert len(pool) == 1
+        assert "dup" in pool
+    finally:
+        journal.reset()
+    events = [
+        json.loads(line)
+        for line in journal_path.read_text().splitlines()
+        if line.strip()
+    ]
+    shadow_events = [e for e in events if e["event"] == "mcp_tool_shadowed"]
+    assert len(shadow_events) == 1
+    assert shadow_events[0]["shadowed_by"] == "mcp"
 
 
 async def test_partition_short_circuited_step_goes_solo() -> None:

@@ -42,7 +42,10 @@ prompt is Task 8+ work that no longer requires backend changes.
 
 from __future__ import annotations
 
+import difflib
 import json
+from collections.abc import Iterable
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Literal
 
@@ -188,7 +191,64 @@ def load(project_root: Path) -> PermissionsConfig:
     return PermissionsConfig.model_validate(merged)
 
 
-def load_ruleset(project_root: Path) -> RuleSet:
+def _validate_known_tools(
+    rules: Iterable[Rule],
+    known_tool_names: Iterable[str],
+    *,
+    source: str,
+) -> None:
+    """Reject rules whose ``tool`` is not in ``known_tool_names``.
+
+    Wildcard tool patterns (``*`` anywhere in the tool field, e.g.
+    ``mcp__github__*``) are treated as known by default — they're scoped
+    to a server's surface that may not yet be discovered at load time, and
+    a wildcard that matches NOTHING is harmless (the rule simply never
+    fires). Exact-name rules with no match raise :class:`AuraConfigError`,
+    naming the offending tool plus the closest known name (via
+    :func:`difflib.get_close_matches`) so the operator can fix the typo.
+
+    Failure modes are surfaced one-at-a-time; we raise on the first miss
+    rather than aggregating, because subsequent errors are usually
+    correlated typos and aggregating noise hides the actionable signal.
+    """
+    known_set = set(known_tool_names)
+    for rule in rules:
+        if "*" in rule.tool:
+            continue
+        if rule.tool in known_set:
+            continue
+        # Wildcards in known_tool_names (e.g. ``mcp__github__*`` registered
+        # by an MCP server) should still cover non-wildcard rules that
+        # match the wildcard's surface.
+        if any("*" in known and fnmatchcase(rule.tool, known) for known in known_set):
+            continue
+        suggestions = difflib.get_close_matches(rule.tool, known_set, n=1)
+        hint = f"; did you mean {suggestions[0]!r}?" if suggestions else ""
+        raise AuraConfigError(
+            source=source,
+            detail=(
+                f"unknown tool name in rule {rule.to_string()!r}: "
+                f"{rule.tool!r}{hint}"
+            ),
+        )
+
+
+def load_ruleset(
+    project_root: Path,
+    *,
+    known_tool_names: Iterable[str] | None = None,
+) -> RuleSet:
+    """Load merged settings into a :class:`RuleSet`.
+
+    When ``known_tool_names`` is supplied, every parsed rule's ``tool``
+    field is validated against it via :func:`_validate_known_tools` —
+    typos surface as :class:`AuraConfigError` at startup instead of as
+    silent never-fires at runtime. Pass the union of registry tool names
+    plus any internal names (``bash``, ``read_file``, ...). When
+    ``known_tool_names`` is ``None`` the validation step is skipped to
+    preserve backward compatibility for callers that haven't built a
+    tool pool yet.
+    """
     cfg = load(project_root)
     parsed: list[Rule] = []
     for raw in cfg.allow:
@@ -199,6 +259,12 @@ def load_ruleset(project_root: Path) -> RuleSet:
                 source=str(_settings_path(project_root)),
                 detail=f"invalid rule string {raw!r}: {exc}",
             ) from exc
+    if known_tool_names is not None:
+        _validate_known_tools(
+            parsed,
+            known_tool_names,
+            source=str(_settings_path(project_root)),
+        )
     return RuleSet(rules=tuple(parsed))
 
 

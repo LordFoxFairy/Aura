@@ -405,3 +405,72 @@ def test_ensure_local_output_roundtrips_through_load(tmp_path: Path) -> None:
     # Template's empty allow list means no rules — load should see defaults.
     assert cfg.allow == []
     assert cfg.mode == "default"
+
+
+# ---------------------------------------------------------------------------
+# F-04-007 — known-tool-name validation at RuleSet load time
+# ---------------------------------------------------------------------------
+
+
+def test_load_ruleset_known_tools_skipped_by_default(tmp_path: Path) -> None:
+    # Backward compat: omitting ``known_tool_names`` keeps the old behaviour
+    # where any tool name parses cleanly.
+    save_rule(tmp_path, Rule(tool="totally_made_up_tool", content=None))
+    rs = load_ruleset(tmp_path)
+    assert rs.rules[0].tool == "totally_made_up_tool"
+
+
+def test_load_ruleset_unknown_tool_raises_aura_config_error(tmp_path: Path) -> None:
+    save_rule(tmp_path, Rule(tool="unknown_tool", content="read"))
+    with pytest.raises(AuraConfigError) as exc:
+        load_ruleset(
+            tmp_path,
+            known_tool_names={"bash", "read_file", "write_file", "edit_file"},
+        )
+    msg = str(exc.value)
+    assert "unknown_tool" in msg
+    assert "settings.json" in msg
+
+
+def test_load_ruleset_unknown_tool_suggests_closest_match(tmp_path: Path) -> None:
+    save_rule(tmp_path, Rule(tool="read_fil", content=None))
+    with pytest.raises(AuraConfigError) as exc:
+        load_ruleset(
+            tmp_path,
+            known_tool_names={"bash", "read_file", "write_file", "edit_file"},
+        )
+    msg = str(exc.value)
+    assert "read_fil" in msg
+    assert "read_file" in msg
+
+
+def test_load_ruleset_known_tool_passes(tmp_path: Path) -> None:
+    save_rule(tmp_path, Rule(tool="bash", content="npm test"))
+    save_rule(tmp_path, Rule(tool="read_file", content=None))
+    rs = load_ruleset(
+        tmp_path,
+        known_tool_names={"bash", "read_file", "write_file"},
+    )
+    assert len(rs.rules) == 2
+
+
+def test_load_ruleset_wildcard_rule_skips_validation(tmp_path: Path) -> None:
+    # Wildcards (e.g. mcp__github__*) cover server surfaces that may not be
+    # populated yet at load time; treat them as known.
+    save_rule(tmp_path, Rule(tool="mcp__github__*", content=None))
+    rs = load_ruleset(
+        tmp_path,
+        known_tool_names={"bash", "read_file"},
+    )
+    assert rs.rules[0].tool == "mcp__github__*"
+
+
+def test_load_ruleset_wildcard_in_known_covers_concrete_rule(tmp_path: Path) -> None:
+    # A wildcard registered in known_tool_names (an MCP server's whole
+    # surface) must also satisfy a non-wildcard rule that matches it.
+    save_rule(tmp_path, Rule(tool="mcp__github__create_issue", content=None))
+    rs = load_ruleset(
+        tmp_path,
+        known_tool_names={"bash", "mcp__github__*"},
+    )
+    assert rs.rules[0].tool == "mcp__github__create_issue"

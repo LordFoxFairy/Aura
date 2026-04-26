@@ -11,7 +11,12 @@ import pytest
 
 from aura.config.schema import RetryConfig
 from aura.core.persistence import journal
-from aura.core.retry import _is_retriable, with_retry
+from aura.core.retry import (
+    _RETRY_AFTER_MAX_S,
+    _extract_retry_after,
+    _is_retriable,
+    with_retry,
+)
 
 # --- helpers ---------------------------------------------------------------
 
@@ -329,6 +334,158 @@ def test_retry_config_extra_forbid() -> None:
 
 
 # --- custom retriable callable -------------------------------------------
+
+
+# --- F-01-004: Retry-After header / SDK retry_after field -----------------
+
+
+class _FakeResponse:
+    def __init__(self, headers: dict[str, str]) -> None:
+        self.headers = headers
+
+
+def _make_rate_limit_with_header(value: str) -> _FakeRateLimitError:
+    exc = _FakeRateLimitError("429")
+    exc.response = _FakeResponse({"retry-after": value})  # type: ignore[attr-defined]
+    return exc
+
+
+def test_extract_retry_after_returns_none_when_absent() -> None:
+    # Plain exception with no response/SDK fields → no hint.
+    assert _extract_retry_after(RuntimeError("boom")) is None
+
+
+def test_extract_retry_after_reads_lower_case_header() -> None:
+    exc = _make_rate_limit_with_header("7")
+    assert _extract_retry_after(exc) == 7.0
+
+
+def test_extract_retry_after_reads_title_case_header() -> None:
+    exc = _FakeRateLimitError("429")
+    exc.response = _FakeResponse({"Retry-After": "12"})  # type: ignore[attr-defined]
+    assert _extract_retry_after(exc) == 12.0
+
+
+def test_extract_retry_after_ignores_malformed_header() -> None:
+    # An HTTP-date or garbage in the header must not crash and must fall
+    # through (caller will use exponential backoff).
+    exc = _make_rate_limit_with_header("Wed, 21 Oct 2015 07:28:00 GMT")
+    assert _extract_retry_after(exc) is None
+
+
+def test_extract_retry_after_caps_extreme_value() -> None:
+    exc = _make_rate_limit_with_header("99999")
+    assert _extract_retry_after(exc) == _RETRY_AFTER_MAX_S
+
+
+def test_extract_retry_after_zero_and_negative_yield_none() -> None:
+    assert _extract_retry_after(_make_rate_limit_with_header("0")) is None
+    assert _extract_retry_after(_make_rate_limit_with_header("-5")) is None
+
+
+def test_extract_retry_after_reads_sdk_field_seconds() -> None:
+    exc = _FakeRateLimitError("rl")
+    exc.retry_after = 4.5  # type: ignore[attr-defined]
+    assert _extract_retry_after(exc) == 4.5
+
+
+def test_extract_retry_after_reads_sdk_field_milliseconds() -> None:
+    exc = _FakeRateLimitError("rl")
+    exc.retry_after_ms = 2500  # type: ignore[attr-defined]
+    assert _extract_retry_after(exc) == 2.5
+
+
+def test_extract_retry_after_header_takes_precedence_over_sdk_field() -> None:
+    exc = _make_rate_limit_with_header("8")
+    exc.retry_after = 99  # type: ignore[attr-defined]
+    assert _extract_retry_after(exc) == 8.0
+
+
+@pytest.mark.asyncio
+async def test_with_retry_uses_header_delay_over_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When Retry-After is present, the sleep matches the header (not
+    the exponential schedule)."""
+    journal.configure(tmp_path / "j.jsonl")
+    sleeps: list[float] = []
+
+    async def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    try:
+        # First raise: header says 7s. Second raise: header says 3s.
+        # Backoff math would give 1.0 then 2.0 — header wins both times.
+        fn, _ = _make_counting_fn(errors=[
+            _make_rate_limit_with_header("7"),
+            _make_rate_limit_with_header("3"),
+        ], final_value="ok")
+        result = await with_retry(
+            fn, max_attempts=3, jitter=False, base_delay_s=1.0, max_delay_s=30.0,
+        )
+        assert result == "ok"
+        assert sleeps == [7.0, 3.0]
+        lines = (tmp_path / "j.jsonl").read_text().splitlines()
+        retries = [json.loads(line) for line in lines if '"llm_retry"' in line]
+        assert len(retries) == 2
+        assert retries[0]["retry_after_source"] == "header"
+        assert retries[0]["wait_seconds"] == 7.0
+        assert retries[1]["retry_after_source"] == "header"
+    finally:
+        journal.reset()
+
+
+@pytest.mark.asyncio
+async def test_with_retry_falls_back_to_backoff_when_no_header(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal.configure(tmp_path / "j.jsonl")
+    sleeps: list[float] = []
+
+    async def fake_sleep(sec: float) -> None:
+        sleeps.append(sec)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    try:
+        fn, _ = _make_counting_fn(errors=[
+            _FakeRateLimitError("nope"),  # no response.headers
+        ], final_value="ok")
+        await with_retry(
+            fn, max_attempts=3, jitter=False, base_delay_s=1.0, max_delay_s=10.0,
+        )
+        assert sleeps == [1.0]
+        lines = (tmp_path / "j.jsonl").read_text().splitlines()
+        retries = [json.loads(line) for line in lines if '"llm_retry"' in line]
+        assert retries[0]["retry_after_source"] == "backoff"
+    finally:
+        journal.reset()
+
+
+# --- F-01-013: KeyboardInterrupt / SystemExit propagate ---------------------
+
+
+@pytest.mark.asyncio
+async def test_keyboard_interrupt_propagates_unclassified() -> None:
+    """KeyboardInterrupt is BaseException, not Exception — the narrowed
+    except clause must let it propagate without retry classification."""
+    fn, calls = _make_counting_fn(errors=[KeyboardInterrupt()])
+    with pytest.raises(KeyboardInterrupt):
+        await with_retry(
+            fn, max_attempts=5, jitter=False, base_delay_s=0.001,
+        )
+    # Must not retry — single call, then raise.
+    assert calls[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_system_exit_propagates_unclassified() -> None:
+    fn, calls = _make_counting_fn(errors=[SystemExit(1)])
+    with pytest.raises(SystemExit):
+        await with_retry(
+            fn, max_attempts=5, jitter=False, base_delay_s=0.001,
+        )
+    assert calls[0] == 1
 
 
 @pytest.mark.asyncio

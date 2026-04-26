@@ -11,6 +11,11 @@ from pydantic import BaseModel, Field
 from aura.core.permissions.matchers import path_prefix_on
 from aura.schemas.tool import ToolError, tool_metadata
 
+# F-02-009 — pre-stat size cap mirroring claude-code's edit-pre-stat
+# guard. 256 MB is well above any reasonable source file but well below
+# the size at which ``read_bytes`` would OOM the agent process.
+_MAX_EDIT_SIZE = 256 * 1024 * 1024
+
 
 class EditFileParams(BaseModel):
     path: str = Field(description="Path to the file to edit.")
@@ -74,6 +79,15 @@ class EditFile(BaseTool):
             raise ToolError(
                 "cannot edit with empty old_str when file exists; "
                 "use a non-empty old_str to identify the region"
+            )
+
+        # F-02-009 — refuse files above _MAX_EDIT_SIZE before ``read_bytes``
+        # so we never load a multi-GB file into memory just to fail later.
+        size = p.stat().st_size
+        if size > _MAX_EDIT_SIZE:
+            raise ToolError(
+                f"too large to edit: {size} bytes > {_MAX_EDIT_SIZE} "
+                f"({_MAX_EDIT_SIZE // (1024 * 1024)} MB cap)"
             )
 
         # Read bytes (not ``read_text``) so universal-newline translation

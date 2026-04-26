@@ -15,6 +15,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
+    HumanMessage,
     ToolCall,
     ToolMessage,
 )
@@ -69,6 +70,47 @@ _AUTO_ALLOW_REASONS: frozenset[str] = frozenset(
 # in :mod:`aura.core.tasks.run`.
 _BATCH_TIMEOUT_ENV_VAR = "AURA_BATCH_TIMEOUT_SEC"
 _DEFAULT_BATCH_TIMEOUT_SEC: float = 60.0
+
+# F-01-005 — partial-response (max_output_tokens) recovery budget. When a
+# model run terminates with finish_reason=length / stop_reason=max_tokens,
+# we append a meta HumanMessage asking the model to resume and re-invoke
+# up to this many extra times PER turn. Three is enough headroom for two
+# concatenated long replies without letting a misbehaving provider park a
+# turn forever.
+_MAX_LENGTH_RETRY: int = 3
+
+# Finish reasons that map to "output truncated by max_output_tokens" across
+# providers. ``length`` is OpenAI's value, ``max_tokens`` is Anthropic's.
+# Lowercased before compare so SDK casing differences don't slip through.
+_LENGTH_FINISH_REASONS: frozenset[str] = frozenset({"length", "max_tokens"})
+
+# Body of the meta HumanMessage we append on a length cut-off. Phrased to
+# tell the model to keep going from where it stopped — claude-code uses a
+# similar string in its query-engine length-recovery branch.
+_LENGTH_RESUME_PROMPT: str = (
+    "(Output token limit hit. Resume directly from where you stopped, "
+    "without repeating prior content.)"
+)
+
+
+def _length_truncated(ai: AIMessage) -> bool:
+    """Detect a length-cutoff AIMessage across provider shapes.
+
+    OpenAI surfaces ``finish_reason='length'`` inside ``response_metadata``;
+    Anthropic surfaces ``stop_reason='max_tokens'`` either at the top
+    level or inside ``response_metadata``. We probe all three and
+    case-fold so SDK-version drift doesn't silently disable recovery.
+    """
+    meta = getattr(ai, "response_metadata", None) or {}
+    candidates: list[object] = [
+        meta.get("finish_reason"),
+        meta.get("stop_reason"),
+        getattr(ai, "stop_reason", None),
+    ]
+    return any(
+        isinstance(raw, str) and raw.lower() in _LENGTH_FINISH_REASONS
+        for raw in candidates
+    )
 
 
 def _resolve_batch_timeout(override: float | None) -> float:
@@ -442,6 +484,31 @@ class AgentLoop:
             base_delay_s=self._retry_config.base_delay_s,
             max_delay_s=self._retry_config.max_delay_s,
         )
+        # F-01-005 — partial-response recovery. If the response was cut off
+        # by max_output_tokens, append a meta HumanMessage asking the model
+        # to resume and re-invoke; cap at ``_MAX_LENGTH_RETRY`` so a
+        # misbehaving provider that always returns length cannot loop
+        # forever. The first AIMessage is appended to ``messages`` (the
+        # local view) so the next ainvoke sees it; only the FINAL AIMessage
+        # (the one we actually return) is appended to ``history``.
+        length_retries = 0
+        while length_retries < _MAX_LENGTH_RETRY and _length_truncated(ai):
+            length_retries += 1
+            journal.write(
+                "length_recovery",
+                session=self._session_id,
+                turn=self._state.turn_count,
+                attempt=length_retries,
+                max_attempts=_MAX_LENGTH_RETRY,
+            )
+            messages.append(ai)
+            messages.append(HumanMessage(content=_LENGTH_RESUME_PROMPT))
+            ai = await with_retry(
+                lambda: self._bound.ainvoke(messages),
+                max_attempts=self._retry_config.max_attempts,
+                base_delay_s=self._retry_config.base_delay_s,
+                max_delay_s=self._retry_config.max_delay_s,
+            )
         history.append(ai)
         await self._hooks.run_post_model(
             ai_message=ai, history=history, state=self._state,

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from aura.schemas.tool import ToolError
-from aura.tools.edit_file import edit_file
+from aura.tools.edit_file import _MAX_EDIT_SIZE, edit_file
 
 
 async def test_edit_file_single_replacement(tmp_path: Path) -> None:
@@ -249,3 +250,29 @@ async def test_mixed_endings_ambiguous_old_str_rejected_by_uniqueness(
         await edit_file.ainvoke(
             {"path": str(f), "old_str": "line", "new_str": "LINE"}
         )
+
+
+# ---------------------------------------------------------------------------
+# F-02-009 — pre-stat size cap rejects files above _MAX_EDIT_SIZE
+# ---------------------------------------------------------------------------
+
+
+async def test_edit_file_above_size_cap_rejected(tmp_path: Path) -> None:
+    f = tmp_path / "huge.bin"
+    # Sparse file via os.truncate: 257 MB without consuming disk.
+    f.touch()
+    os.truncate(f, _MAX_EDIT_SIZE + 1024 * 1024)
+    with pytest.raises(ToolError, match="too large to edit"):
+        await edit_file.ainvoke(
+            {"path": str(f), "old_str": "x", "new_str": "y"}
+        )
+
+
+async def test_edit_file_at_size_cap_accepted(tmp_path: Path) -> None:
+    # Exactly at the cap is OK; the comparison is strict ``>``.
+    f = tmp_path / "ok.txt"
+    f.write_text("hello world\n", encoding="utf-8")
+    out = await edit_file.ainvoke(
+        {"path": str(f), "old_str": "hello", "new_str": "goodbye"}
+    )
+    assert out == {"replacements": 1}

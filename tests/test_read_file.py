@@ -39,18 +39,71 @@ async def test_read_file_missing_file(tmp_path: Path) -> None:
         await read_file.ainvoke({"path": str(tmp_path / "nope.txt")})
 
 
-async def test_read_file_too_large(tmp_path: Path) -> None:
-    f = tmp_path / "big.bin"
-    f.write_bytes(b"x" * (1024 * 1024 + 1))
-    with pytest.raises(ToolError, match="too large"):
-        await read_file.ainvoke({"path": str(f)})
-
-
 async def test_read_file_invalid_utf8(tmp_path: Path) -> None:
     f = tmp_path / "bad.bin"
-    f.write_bytes(b"\xff\xfe\x00\x00")
+    # No BOM prefix — random high bytes that are not valid UTF-8.
+    f.write_bytes(b"\xc3\x28\xa0\xa1")
     with pytest.raises(ToolError, match="UTF-8"):
         await read_file.ainvoke({"path": str(f)})
+
+
+# ---------------------------------------------------------------------------
+# F-02-003 — head-truncate at 1 MB instead of rejecting
+# ---------------------------------------------------------------------------
+
+
+async def test_read_file_oversize_head_truncated(tmp_path: Path) -> None:
+    f = tmp_path / "big.bin"
+    # 2 MB of single-byte ASCII lines: each "a\n" is 2 bytes ⇒ 1,048,576
+    # lines. Head-truncated to 1 MB ⇒ 524,288 lines visible.
+    f.write_bytes(b"a\n" * (1024 * 1024))
+    out = await read_file.ainvoke({"path": str(f), "limit": 10})
+    assert out["partial"] is True
+    assert out["truncated_at_bytes"] == 1024 * 1024
+    # First 10 lines come from the head of the file.
+    assert out["content"] == "a\n" * 10
+    assert out["lines"] == 10
+
+
+async def test_read_file_within_cap_no_truncation_field(tmp_path: Path) -> None:
+    f = tmp_path / "small.txt"
+    f.write_text("hello\n", encoding="utf-8")
+    out = await read_file.ainvoke({"path": str(f)})
+    # Field present, but None when no head-truncation occurred.
+    assert out["truncated_at_bytes"] is None
+    assert out["partial"] is False
+
+
+# ---------------------------------------------------------------------------
+# F-02-005 — BOM-aware decode (UTF-16 LE/BE, UTF-8 BOM)
+# ---------------------------------------------------------------------------
+
+
+async def test_read_file_utf16_le_bom(tmp_path: Path) -> None:
+    f = tmp_path / "u16le.txt"
+    text = "hello\nworld\n"
+    # codecs writer adds the LE BOM automatically when encoding via
+    # ``utf-16``; here we write the BOM + LE bytes directly.
+    f.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
+    out = await read_file.ainvoke({"path": str(f)})
+    assert out["content"] == text
+
+
+async def test_read_file_utf16_be_bom(tmp_path: Path) -> None:
+    f = tmp_path / "u16be.txt"
+    text = "hello\nworld\n"
+    f.write_bytes(b"\xfe\xff" + text.encode("utf-16-be"))
+    out = await read_file.ainvoke({"path": str(f)})
+    assert out["content"] == text
+
+
+async def test_read_file_utf8_bom_stripped(tmp_path: Path) -> None:
+    f = tmp_path / "u8bom.txt"
+    f.write_bytes(b"\xef\xbb\xbfhello\n")
+    out = await read_file.ainvoke({"path": str(f)})
+    # BOM must NOT appear in the decoded content.
+    assert out["content"] == "hello\n"
+    assert "﻿" not in out["content"]
 
 
 def test_read_file_is_read_only() -> None:

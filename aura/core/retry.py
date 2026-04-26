@@ -106,6 +106,60 @@ def _is_retriable(exc: BaseException) -> bool:
     return any(sub in msg for sub in _RETRIABLE_SUBSTRINGS)
 
 
+# F-01-004 — server-suggested retry delay cap. Even if the provider says
+# "wait 2 hours" we cap the honored value at 5 minutes so a misbehaving
+# server can't park a turn forever; the surrounding ``max_attempts`` budget
+# still bounds the total time.
+_RETRY_AFTER_MAX_S: float = 300.0
+
+
+def _extract_retry_after(exc: BaseException) -> float | None:
+    """Pull a server-suggested retry delay (seconds) out of ``exc``, or None.
+
+    Walks two surfaces in order:
+
+    1. ``exc.response.headers["retry-after"]`` — HTTP standard. Value is
+       either an integer-seconds string or an HTTP-date; we honor the
+       seconds form and ignore the date form (rare in 429/503 responses
+       and would require pulling email.utils into a hot path).
+    2. SDK convenience fields on the exception itself — ``retry_after`` /
+       ``retry_after_ms`` as set by openai / anthropic Python SDKs.
+
+    Returns ``None`` when no usable hint is present, the value is
+    malformed, or it parses as ``<= 0``. Returned value is capped at
+    :data:`_RETRY_AFTER_MAX_S`.
+    """
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        raw: object | None = None
+        # ``headers`` may be a plain dict or a case-insensitive mapping;
+        # try both lookup forms before giving up.
+        try:
+            raw = headers.get("retry-after")
+            if raw is None:
+                raw = headers.get("Retry-After")
+        except (AttributeError, TypeError):
+            raw = None
+        if raw is not None:
+            try:
+                seconds = float(str(raw).strip())
+            except (TypeError, ValueError):
+                seconds = -1.0
+            if seconds > 0:
+                return min(seconds, _RETRY_AFTER_MAX_S)
+
+    direct = getattr(exc, "retry_after", None)
+    if isinstance(direct, (int, float)) and direct > 0:
+        return min(float(direct), _RETRY_AFTER_MAX_S)
+
+    direct_ms = getattr(exc, "retry_after_ms", None)
+    if isinstance(direct_ms, (int, float)) and direct_ms > 0:
+        return min(float(direct_ms) / 1000.0, _RETRY_AFTER_MAX_S)
+
+    return None
+
+
 def _compute_delay(
     attempt: int, *, base: float, cap: float, jitter: bool,
 ) -> float:
@@ -152,15 +206,26 @@ async def with_retry(
             # Cancellation ALWAYS propagates — Ctrl+C / task.cancel() must
             # tear down promptly. Do not classify, do not journal, do not sleep.
             raise
-        except BaseException as exc:
+        except Exception as exc:
+            # F-01-013 — narrowed from BaseException so KeyboardInterrupt /
+            # SystemExit propagate to the caller instead of being classified
+            # and (for KeyboardInterrupt's "interrupt" message) potentially
+            # silently treated as non-retriable + re-raised after journaling.
             last_exc = exc
             if not retriable(exc):
                 raise
             # Last attempt: no sleep, just re-raise after the for loop exits.
             if attempt == max_attempts - 1:
                 break
-            wait = _compute_delay(
-                attempt, base=base_delay_s, cap=max_delay_s, jitter=jitter,
+            # F-01-004 — honor server-supplied Retry-After when present.
+            # Falls through to exponential backoff otherwise.
+            header_wait = _extract_retry_after(exc)
+            wait = (
+                header_wait
+                if header_wait is not None
+                else _compute_delay(
+                    attempt, base=base_delay_s, cap=max_delay_s, jitter=jitter,
+                )
             )
             journal.write(
                 "llm_retry",
@@ -168,6 +233,7 @@ async def with_retry(
                 max_attempts=max_attempts,
                 wait_seconds=round(wait, 3),
                 reason=type(exc).__name__,
+                retry_after_source="header" if header_wait is not None else "backoff",
             )
             # asyncio.sleep raises CancelledError on task cancel — propagate,
             # do not swallow. That is the documented contract: users expect

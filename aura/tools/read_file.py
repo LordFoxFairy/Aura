@@ -17,6 +17,17 @@ Round 3B — token budget. A perfectly valid 1 MB UTF-8 text file is
 still ~250k tokens — enough to evict every other context message. Cap
 at :data:`_TOKEN_BUDGET` and reject (rather than silently truncate) so
 the LLM sees a clear error and learns to slice.
+
+F-02-003 — head-truncation at the byte cap. Files exceeding
+:data:`_MAX_BYTES` are read up to the cap (head bytes), with
+``partial=True`` and ``truncated_at_bytes`` set on the result, instead
+of being rejected outright. The token-budget check above still fires on
+the truncated content, so oversized text files surface as a clear
+"slice with offset/limit" error rather than a silent partial.
+
+F-02-005 — BOM-aware decode. We sniff the first 2-3 bytes for UTF-16
+(LE/BE) and UTF-8 BOMs and decode accordingly; UTF-8 BOM is stripped
+from the returned string. No BOM ⇒ plain UTF-8.
 """
 
 from __future__ import annotations
@@ -95,6 +106,20 @@ def _reject_blocked_device(path: str) -> None:
         )
 
 
+def _decode_with_bom(data: bytes) -> str:
+    """Decode bytes with BOM-aware encoding selection.
+
+    UTF-16 LE/BE BOMs ⇒ decode via the ``utf-16`` codec, which honours
+    the leading BOM and strips it from the result. UTF-8 BOM ⇒ skip the
+    3-byte BOM and decode as utf-8. No BOM ⇒ plain utf-8.
+    """
+    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+        return data.decode("utf-16")
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data[3:].decode("utf-8")
+    return data.decode("utf-8")
+
+
 def _validate_content_tokens(content: str) -> None:
     """Reject reads that would blow the token budget.
 
@@ -132,7 +157,11 @@ def _preview(args: dict[str, Any]) -> str:
 
 class ReadFile(BaseTool):
     name: str = "read_file"
-    description: str = "Read a UTF-8 text file (up to 1 MB) with optional offset/limit."
+    description: str = (
+        "Read a text file (UTF-8 / UTF-16 LE / UTF-16 BE / UTF-8-BOM) with "
+        "optional offset/limit. Files exceeding 1 MB are head-truncated to "
+        "the cap with partial=True and truncated_at_bytes set."
+    )
     args_schema: type[BaseModel] = ReadFileParams
     metadata: dict[str, Any] | None = tool_metadata(
         is_read_only=True, is_concurrency_safe=True,
@@ -159,10 +188,19 @@ class ReadFile(BaseTool):
         if not p.exists():
             raise ToolError(f"not found: {path}")
         size = p.stat().st_size
+        # F-02-003 — head-truncate at the byte cap (instead of rejecting),
+        # surface partial=True + truncated_at_bytes so the caller can detect
+        # the cut. Read bytes (not text) so BOM sniffing happens before
+        # decode.
+        truncated_at_bytes: int | None = None
         if size > _MAX_BYTES:
-            raise ToolError(f"too large: {size} bytes > 1 MB")
+            with p.open("rb") as fh:
+                raw = fh.read(_MAX_BYTES)
+            truncated_at_bytes = _MAX_BYTES
+        else:
+            raw = p.read_bytes()
         try:
-            content = p.read_text(encoding="utf-8")
+            content = _decode_with_bom(raw)
         except UnicodeDecodeError as exc:
             raise ToolError(f"not UTF-8: {exc}") from exc
 
@@ -181,6 +219,7 @@ class ReadFile(BaseTool):
                 "offset": offset,
                 "limit": limit,
                 "partial": True,
+                "truncated_at_bytes": truncated_at_bytes,
             }
 
         end = offset + limit if limit is not None else None
@@ -191,8 +230,10 @@ class ReadFile(BaseTool):
         # return (covers both full reads and oversized slices).
         _validate_content_tokens(joined)
 
-        partial = offset > 0 or (
-            limit is not None and offset + limit < total_lines
+        partial = (
+            truncated_at_bytes is not None
+            or offset > 0
+            or (limit is not None and offset + limit < total_lines)
         )
         return {
             "content": joined,
@@ -201,6 +242,7 @@ class ReadFile(BaseTool):
             "offset": offset,
             "limit": limit,
             "partial": partial,
+            "truncated_at_bytes": truncated_at_bytes,
         }
 
 

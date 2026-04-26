@@ -221,10 +221,10 @@ def test_subagent_inherits_parent_skills(tmp_path: Path) -> None:
     child_agent.close()
 
 
-def test_subagent_still_cannot_recurse_via_task_create() -> None:
-    # Recursion guard: even though subagent inherits the parent tool set,
-    # task_create + task_output MUST be stripped so a subagent can't spawn
-    # further subagents (dispatch not wired into child Agents in 0.5.x).
+def test_subagent_at_depth_one_still_has_task_create() -> None:
+    # F-07-004 — controlled recursion. Depth-1 children retain task_create
+    # (and task_output) so they can dispatch their own grandchildren; only
+    # depth >= cap (=2) strips those tools.
     parent_config = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
@@ -238,13 +238,59 @@ def test_subagent_still_cannot_recurse_via_task_create() -> None:
     )
     child_agent = factory.spawn("sub-prompt")
     enabled = child_agent._config.tools.enabled
-    assert "task_create" not in enabled
-    assert "task_output" not in enabled
+    assert "task_create" in enabled
+    assert "task_output" in enabled
+    # Child's own factory carries depth=1 so its spawn produces depth=2.
+    assert child_agent._subagent_factory.depth == 1
     child_agent.close()
 
 
-def test_subagent_inherits_allowed_tools_excluding_task_tools() -> None:
-    # Parent has 4 tools enabled; child sees the non-task-tool subset.
+def _wire_fake_model_chain(child_agent: Agent) -> None:
+    # Test ergonomics — Agent.__init__ builds the child's own factory with
+    # no model_factory, so a grandchild spawn would try to resolve a real
+    # provider key. Inject a FakeChatModel so the depth chain works under
+    # unit-test conditions.
+    child_agent._subagent_factory._model_factory = lambda: FakeChatModel(turns=[])
+    child_agent._subagent_factory._storage_factory = (
+        lambda: SessionStorage(Path(":memory:"))
+    )
+
+
+def test_subagent_at_depth_cap_strips_task_create() -> None:
+    # F-07-004 — at the depth cap (2), spawning a child strips task_create
+    # so the LLM doesn't see a tool it cannot use, AND any direct call to
+    # spawn from a capped factory raises ToolError.
+    parent_config = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
+    })
+    factory = SubagentFactory(
+        parent_config=parent_config,
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(turns=[]),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+    # Depth-1 child first.
+    child = factory.spawn("d1")
+    assert child._subagent_factory.depth == 1
+    _wire_fake_model_chain(child)
+    # Grandchild at depth=2 — task_create stripped.
+    grand = child._subagent_factory.spawn("d2")
+    assert "task_create" not in grand._config.tools.enabled
+    assert "task_output" not in grand._config.tools.enabled
+    assert grand._subagent_factory.depth == 2
+    _wire_fake_model_chain(grand)
+    # Great-grandchild attempt — capped factory refuses.
+    with pytest.raises(ToolError, match="depth cap"):
+        grand._subagent_factory.spawn("d3")
+    child.close()
+    grand.close()
+
+
+def test_subagent_inherits_allowed_tools_at_depth_one() -> None:
+    # Below the depth cap, the child sees the FULL parent set (including
+    # task_create / task_output) so it can dispatch grandchildren.
     parent_config = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
@@ -257,7 +303,9 @@ def test_subagent_inherits_allowed_tools_excluding_task_tools() -> None:
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
     child_agent = factory.spawn("sub-prompt")
-    assert child_agent._config.tools.enabled == ["bash", "read_file"]
+    assert child_agent._config.tools.enabled == [
+        "bash", "read_file", "task_create", "task_output",
+    ]
     child_agent.close()
 
 
@@ -442,9 +490,8 @@ def test_factory_spawn_rejects_type_requiring_missing_parent_tools() -> None:
 
 
 def test_factory_spawn_general_purpose_does_not_filter_tools() -> None:
-    # General-purpose sentinel → inherit all parent tools (minus the
-    # recursion-guard trio). Explicit regression guard against the
-    # "empty frozenset = deny-all" misread.
+    # General-purpose sentinel → inherit all parent tools, including
+    # task_create up to the depth cap (controlled recursion).
     parent_config = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
@@ -458,9 +505,8 @@ def test_factory_spawn_general_purpose_does_not_filter_tools() -> None:
     )
     child = factory.spawn("p", agent_type="general-purpose")
     enabled = set(child._config.tools.enabled)
-    # bash + read_file + write_file inherited; task_create stripped by the
-    # recursion guard.
-    assert enabled == {"bash", "read_file", "write_file"}
+    # All four parent tools cross the boundary at depth=1 (below the cap).
+    assert enabled == {"bash", "read_file", "write_file", "task_create"}
     # No suffix added to the prompt.
     assert "Subagent context" not in child._system_prompt
     child.close()
@@ -498,6 +544,76 @@ async def test_parent_cancel_cascades_to_subagent(tmp_path: Path) -> None:
     r = store.get(rec.id)
     assert r is not None
     assert r.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_parent_abort_event_cascades_to_subagent(tmp_path: Path) -> None:
+    # F-07-005 — parent's abort signal travels through the factory and
+    # cancels the running child within ~event-loop ticks. The bg task
+    # must reach the ``cancelled`` terminal state without waiting for the
+    # natural timeout / completion.
+    store = TasksStore()
+
+    class _HangingFake(FakeChatModel):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **_: Any,
+        ) -> ChatResult:
+            await asyncio.sleep(30)
+            raise RuntimeError("unreachable")
+
+    parent_abort = asyncio.Event()
+    factory = SubagentFactory(
+        parent_config=_cfg(enabled=[]),
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: _HangingFake(),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        parent_abort_event=parent_abort,
+    )
+
+    rec = store.create(description="cascade", prompt="hang")
+    bg = asyncio.create_task(run_task(store, factory, rec.id))
+    # Let the child enter astream so the cascade has something to interrupt.
+    await asyncio.sleep(0.05)
+    parent_abort.set()
+    # Bound the wait at 2s — the cascade target. CancelledError propagates
+    # out of run_task because the abort watcher cancels the current_task.
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(bg, timeout=2.0)
+
+    r = store.get(rec.id)
+    assert r is not None
+    assert r.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_child_factory_inherits_parent_abort_event(tmp_path: Path) -> None:
+    # The cascade must reach grandchildren too: when a depth-1 subagent
+    # spawns a depth-2 grandchild, that grandchild's factory carries the
+    # SAME parent_abort_event so the root's abort still cancels it.
+    parent_abort = asyncio.Event()
+    parent_config = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
+    })
+    factory = SubagentFactory(
+        parent_config=parent_config,
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(turns=[]),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        parent_abort_event=parent_abort,
+    )
+    child = factory.spawn("d1")
+    _wire_fake_model_chain(child)
+    grand = child._subagent_factory.spawn("d2")
+    assert child._subagent_factory.abort_event is parent_abort
+    assert grand._subagent_factory.abort_event is parent_abort
+    child.close()
+    grand.close()
 
 
 # ---------------------------------------------------------------------------

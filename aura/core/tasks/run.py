@@ -386,6 +386,26 @@ async def run_task(
     # into the error message + journal so the operator sees exactly how
     # long we waited.
     effective_timeout = _resolve_timeout(timeout_sec)
+    # F-07-005 — parent abort cascade. The factory carries the parent's
+    # abort signal (None when the caller didn't wire one). We chain it to
+    # a child-local Event + a watcher coroutine; when the parent fires,
+    # the watcher cancels THIS run_task task and the existing
+    # CancelledError branch flips the record to ``cancelled``.
+    parent_abort = factory.abort_event
+    abort_watcher: asyncio.Task[None] | None = None
+    if parent_abort is not None:
+        current_task = asyncio.current_task()
+
+        async def _watch_parent_abort() -> None:
+            assert parent_abort is not None  # narrow for mypy
+            await parent_abort.wait()
+            if current_task is not None and not current_task.done():
+                current_task.cancel()
+
+        abort_watcher = asyncio.create_task(
+            _watch_parent_abort(),
+            name=f"aura-subagent-abort-watch-{task_id[:8]}",
+        )
     # V13-T1C: subagent_start fires before spawn so operators observing the
     # journal see a clear "run_task began for X" signal even if spawn itself
     # raises (the lifecycle pairs with one of subagent_completed /
@@ -655,6 +675,12 @@ async def run_task(
             await summarizer.stop()
         if agent is not None:
             await agent.aclose()
+    finally:
+        # Tear down the parent-abort watcher on every exit branch (success,
+        # cancellation, timeout, failure). Leaving it dangling would orphan
+        # an asyncio.Task that holds a reference to ``current_task``.
+        if abort_watcher is not None and not abort_watcher.done():
+            abort_watcher.cancel()
 
 
 async def _capture_child_messages(

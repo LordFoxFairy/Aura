@@ -26,10 +26,25 @@ Inheritance rules (matches claude-code's Task tool):
   langchain-mcp-adapters spawns a fresh session per ``get_tools`` call, so
   parent and subagent end up with INDEPENDENT MCP connections to the same
   servers. That's the simplest + correct-enough design.
-- Recursion guard: ``task_create`` / ``task_output`` / ``task_get`` /
-  ``task_list`` / ``task_stop`` are stripped from the child's
-  tools.enabled — a subagent CANNOT spawn or inspect further subagents
-  in 0.5.x (dispatch not wired into child Agents yet).
+- Recursion guard: controlled — capped at depth 2 (claude-code parity,
+  see ``runAgent.ts``). Each :class:`SubagentFactory` carries its own
+  ``_depth`` (the depth of the agent it was constructed FOR, root = 0);
+  ``spawn`` raises :class:`ToolError` when invoked on a factory already
+  at the cap, and the spawned child's ``task_create`` is stripped from
+  its tools the moment its depth reaches the cap so the LLM doesn't
+  even see a tool it cannot use. ``task_output`` is similarly stripped
+  on capped children — without ``task_create`` it has no task to query.
+  The inspection tools ``task_get`` / ``task_list`` / ``task_stop`` ARE
+  inherited at every depth: they operate on the shared
+  :class:`TasksStore` held by the parent Agent, so a subagent can poll
+  its siblings. Each child gets its own TasksStore
+  instance in practice (spawn builds a fresh Agent, which builds a fresh
+  store), so ``task_get("sibling-id")`` from a subagent will see an empty
+  store and return ``unknown task_id`` — that's intentional: siblings
+  aren't visible across the parent/child boundary, and we don't want to
+  leak parent state into the child. Keeping the tools enabled means the
+  LLM inside the subagent doesn't hallucinate "maybe task_get exists"
+  without a way to verify.
 - Parent budget hooks are NOT inherited. Safety hooks (bash_safety +
   must_read_first) are re-installed inside the child's ``__init__`` via
   the same code path as the parent, so the subagent is safe even though
@@ -51,6 +66,7 @@ transcript doesn't pollute the parent's on-disk session DB. Tests inject a
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -70,6 +86,7 @@ from aura.core.permissions.subagent_asker import SubagentAutoDenyAsker
 from aura.core.persistence.storage import SessionStorage
 from aura.core.skills import SkillRegistry
 from aura.core.tasks.agent_types import get_agent_type
+from aura.schemas.tool import ToolError
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
@@ -78,21 +95,12 @@ if TYPE_CHECKING:
 # every tool call is cheap and matches the "no I/O" contract.
 _SUBAGENT_AUTO_DENY_ASKER = SubagentAutoDenyAsker()
 
-# Tools the child must NEVER see — recursion guard + inspection-of-self
-# isolation. Stripping ``task_get`` / ``task_list`` / ``task_stop`` from
-# the child mirrors claude-code's "subagents cannot dispatch further
-# subagents" rule + closes the loophole where a child could observe its
-# own running record (the child's TasksStore is fresh + empty, so the
-# inspection tools would just return ``unknown task_id`` for every id;
-# stripping them is cleaner than letting the LLM hallucinate state that
-# isn't there).
-_RECURSION_BAN: frozenset[str] = frozenset({
-    "task_create",
-    "task_output",
-    "task_get",
-    "task_list",
-    "task_stop",
-})
+# Maximum subagent recursion depth. Root agent = 0; the first subagent it
+# spawns = 1; that subagent spawning a grandchild = 2. At the cap, the
+# child's ``task_create`` tool is stripped (no further descent) and any
+# attempt to ``factory.spawn`` from a capped factory raises ToolError.
+# Matches claude-code's controlled-recursion contract.
+_AGENT_DEPTH_CAP = 2
 
 
 def _default_storage() -> SessionStorage:
@@ -121,6 +129,8 @@ class SubagentFactory:
         parent_ask_rules: RuleSet | None = None,
         model_factory: Callable[[], BaseChatModel] | None = None,
         storage_factory: Callable[[], SessionStorage] | None = None,
+        parent_abort_event: asyncio.Event | None = None,
+        depth: int = 0,
     ) -> None:
         # ``parent_read_records_provider`` — called at each ``spawn`` to
         # snapshot the parent Agent's live ``Context._read_records`` map.
@@ -159,6 +169,25 @@ class SubagentFactory:
         self._parent_ask_rules = parent_ask_rules
         self._model_factory = model_factory
         self._storage_factory = storage_factory or _default_storage
+        # Depth of the agent that owns THIS factory. Children spawned from it
+        # land at ``self._depth + 1``. Root Agent passes the default 0; spawn
+        # mutates the child Agent's factory to depth+1 post-construction.
+        self._depth = depth
+        # Parent's abort signal — any awaiter on this Event learns the parent
+        # asked for shutdown. ``run_task`` reads it via :meth:`abort_event`
+        # and cancels the child's astream when it fires. ``None`` keeps the
+        # legacy "no cascade" behaviour for callers that don't wire it.
+        self._parent_abort_event = parent_abort_event
+
+    @property
+    def depth(self) -> int:
+        # ``getattr`` keeps test subclasses that skip __init__ working — they
+        # see depth=0 (root semantics) and never trip a missing-attr error.
+        return getattr(self, "_depth", 0)
+
+    @property
+    def abort_event(self) -> asyncio.Event | None:
+        return getattr(self, "_parent_abort_event", None)
 
     @property
     def parent_model_spec(self) -> str:
@@ -198,6 +227,17 @@ class SubagentFactory:
         # aura.tools.task_create, which pulls in this factory.
         from aura.core.agent import Agent
 
+        # F-07-004 — controlled recursion. Depth-cap check FIRST so a capped
+        # subagent that somehow still has task_create wired (stale schema,
+        # MCP injection) gets a clear ToolError rather than silent dispatch.
+        if self._depth >= _AGENT_DEPTH_CAP:
+            raise ToolError(
+                f"task_create refused: subagent recursion depth cap reached "
+                f"({self._depth}/{_AGENT_DEPTH_CAP}). A subagent at depth "
+                f"{self._depth} cannot spawn further subagents."
+            )
+        child_depth = self._depth + 1
+
         # Resolve the subagent flavor first — any unknown name raises
         # ValueError with the valid set, which the calling tool
         # (``task_create``) surfaces to the LLM as a ToolError.
@@ -224,16 +264,24 @@ class SubagentFactory:
         else:
             effective_allow = None  # inherit-all sentinel
 
-        # Clone the parent config but strip subagent-forbidden tools — a
-        # subagent can't spawn further subagents in 0.5.x (dispatch not
-        # wired into child Agents yet). MCP servers ARE inherited so the
-        # subagent has parity with parent's external tool set.
-        # ``allowed_tools`` (legacy kwarg) and ``effective_allow`` (derived
-        # from agent_type) both act as narrowing filters; both must pass.
+        # Clone the parent config. ``allowed_tools`` (legacy kwarg) and
+        # ``effective_allow`` (derived from agent_type) both act as narrowing
+        # filters; both must pass. MCP servers ARE inherited so the subagent
+        # has parity with parent's external tool set.
+        #
+        # Depth-cap strip: at the cap, descent stops here — the child sees
+        # neither ``task_create`` nor ``task_output`` (the latter has nothing
+        # to query without the former). Below the cap, both stay so the
+        # child can dispatch its own grandchildren.
+        forbidden = (
+            {"task_create", "task_output"}
+            if child_depth >= _AGENT_DEPTH_CAP
+            else set()
+        )
         child_tools = ToolsConfig(
             enabled=[
                 name for name in parent_enabled
-                if name not in _RECURSION_BAN
+                if name not in forbidden
                 and (allowed_tools is None or name in allowed_tools)
                 and (effective_allow is None or name in effective_allow)
             ]
@@ -337,7 +385,7 @@ class SubagentFactory:
             if task_id is not None
             else f"subagent-{uuid4().hex[:8]}"
         )
-        return Agent(
+        child_agent = Agent(
             config=child_cfg,
             model=model,
             storage=storage,
@@ -349,3 +397,10 @@ class SubagentFactory:
             inherited_reads=inherited_reads,
             mode=child_mode,
         )
+        # Propagate depth + abort cascade to the child's own factory.
+        # Agent.__init__ built it with default depth=0 and no abort event;
+        # mutate post-construction so a grandchild dispatched from this
+        # child knows its own depth and listens to OUR parent_abort_event.
+        child_agent._subagent_factory._depth = child_depth
+        child_agent._subagent_factory._parent_abort_event = self._parent_abort_event
+        return child_agent

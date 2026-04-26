@@ -65,7 +65,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, messages_to_dict
+from langchain_core.messages import AIMessage, BaseMessage
 
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
@@ -168,8 +168,17 @@ def _flush_transcript(
     task_id: str,
     messages: list[BaseMessage],
     store: TasksStore,
+    parent_session_id: str = "",
+    cwd: str = "",
 ) -> Path | None:
-    """Write the child's transcript as JSONL under ``<root>/subagents/``.
+    """Write the child's transcript JSONL via the storage's path API.
+
+    Routes through ``SessionStorage.write_subagent_transcript`` so the
+    file lands at the v3 nested location (``<projects>/<encoded-cwd>/
+    <parent-session>/subagents/agent-<task_id>.jsonl``) when the parent
+    session id is supplied — matching the ``subagent_metadata_path``
+    used by ``_flush_metadata``. Without ``parent_session_id`` it falls
+    back to the v2 flat ``<root>/subagents/agent-<task_id>.jsonl``.
 
     Returns the path written (and pins it on the TaskRecord), or ``None``
     on failure. Failures are journaled but never re-raised — losing a
@@ -177,41 +186,19 @@ def _flush_transcript(
     terminal mark on a write error.
     """
     try:
-        # Use the storage's underlying path to derive the root. ``:memory:``
-        # storage gives Path(":memory:"), whose .parent is Path("."). That's
-        # acceptable for tests; production callers always use a real path.
-        root = getattr(transcript_storage, "_path", None)
-        if root is None:
-            return None
-        sub_dir = Path(root).parent / "subagents"
-        sub_dir.mkdir(parents=True, exist_ok=True)
-        path = sub_dir / f"subagent-{task_id}.jsonl"
-        # JSONL: one message per line. ``messages_to_dict`` is the same
-        # shape SessionStorage.save uses, so a future load round-trips
-        # via ``messages_from_dict``.
-        payloads = messages_to_dict(messages)
-        with path.open("w", encoding="utf-8") as fh:
-            for payload in payloads:
-                fh.write(json.dumps(payload, ensure_ascii=False))
-                fh.write("\n")
-        # Best-effort: register the transcript with the storage's
-        # ``write_subagent_transcript`` index when present. A future
-        # storage upgrade will surface this through the API; until
-        # then we just write the raw file. Whichever approach the
-        # caller wires, the task_get-visible path is identical.
         register = getattr(
             transcript_storage, "write_subagent_transcript", None,
         )
-        if callable(register):
-            try:
-                register(task_id, messages)
-            except Exception as exc:  # noqa: BLE001
-                # Index write failure is non-fatal — the file is on disk.
-                journal.write(
-                    "subagent_transcript_index_error",
-                    task_id=task_id,
-                    error=f"{type(exc).__name__}: {exc}",
-                )
+        if not callable(register):
+            return None
+        cwd_arg: Path | None = Path(cwd) if cwd else None
+        parent_arg: str | None = parent_session_id or None
+        path: Path = register(
+            task_id,
+            messages,
+            parent_session_id=parent_arg,
+            cwd=cwd_arg,
+        )
         store.set_transcript_path(task_id, path)
         return path
     except Exception as exc:  # noqa: BLE001
@@ -478,6 +465,8 @@ async def run_task(
                 task_id=task_id,
                 messages=_load_child_messages(agent, store, task_id),
                 store=store,
+                parent_session_id=resolved_parent_session_id,
+                cwd=resolved_cwd,
             )
             _flush_metadata(
                 transcript_storage=transcript_storage,
@@ -527,6 +516,8 @@ async def run_task(
                 task_id=task_id,
                 messages=_load_child_messages(agent, store, task_id),
                 store=store,
+                parent_session_id=resolved_parent_session_id,
+                cwd=resolved_cwd,
             )
             _flush_metadata(
                 transcript_storage=transcript_storage,
@@ -558,6 +549,8 @@ async def run_task(
                 task_id=task_id,
                 messages=_load_child_messages(agent, store, task_id),
                 store=store,
+                parent_session_id=resolved_parent_session_id,
+                cwd=resolved_cwd,
             )
             _flush_metadata(
                 transcript_storage=transcript_storage,
@@ -582,6 +575,8 @@ async def run_task(
                 task_id=task_id,
                 messages=_load_child_messages(agent, store, task_id),
                 store=store,
+                parent_session_id=resolved_parent_session_id,
+                cwd=resolved_cwd,
             )
             _flush_metadata(
                 transcript_storage=transcript_storage,

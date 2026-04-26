@@ -77,20 +77,27 @@ async def test_usage_hook_extracts_openai_style_token_metadata() -> None:
     assert stats["last_cache_read_tokens"] == 0
 
 
-async def test_usage_hook_tolerates_missing_token_metadata() -> None:
+async def test_usage_hook_falls_back_to_char_estimator_when_usage_missing() -> None:
+    """DashScope / Ollama / self-hosted backends often omit ``usage_metadata``.
+    Pre-fix: stats stayed at zero so the status bar showed 0% utilization
+    right before a provider-side context-overflow rejection. Post-fix
+    (Round 11 audit): the hook char-estimates input from history and
+    output from the AI message body so the bar reflects reality.
+    """
     hook = make_usage_tracking_hook()
     state = LoopState()
 
-    # Ollama / fake models may omit usage_metadata entirely. No crash,
-    # stats stay at zero, total stays at zero.
-    ai = AIMessage(content="no usage here")
+    ai = AIMessage(content="no usage here")  # 13 chars → 3 tokens
     await hook(ai_message=ai, history=[], state=state)
 
     stats = state.custom.get("_token_stats", {})
-    assert stats.get("last_input_tokens", 0) == 0
+    # Estimator kicked in — output picks up the AI body.
+    assert stats.get("last_output_tokens", 0) == 13 // 4
+    assert stats.get("last_input_tokens", 0) == 0  # empty history
     assert stats.get("last_cache_read_tokens", 0) == 0
-    assert stats.get("last_output_tokens", 0) == 0
-    assert state.total_tokens_used == 0
+    # total_tokens_used now accumulates estimated tokens too so auto-
+    # compact thresholds arm at the right time on these providers.
+    assert state.total_tokens_used == 13 // 4
 
 
 async def test_usage_hook_accumulates_totals_across_turns() -> None:

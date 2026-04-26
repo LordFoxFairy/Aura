@@ -61,10 +61,27 @@ _RETRIABLE_SUBSTRINGS: tuple[str, ...] = (
     "502",
     "503",
     "504",
+    "509",  # Aliyun DashScope: server overloaded
     "timeout",
     "connection",
     "overloaded",
     "try again",
+    # Provider-specific phrasings.
+    "server is busy",  # DeepSeek "server is busy, please try again"
+    "system busy",  # Zhipu GLM
+    "service unavailable",
+)
+
+# Provider-specific structured error codes that map to "transient — retry".
+# Mirrors the ``_CONTEXT_OVERFLOW_CODES`` pattern in ``agent.py``: substring
+# match on the rendered exception text catches localized SDK messages
+# where the prose has been translated but the code field stays stable.
+_RETRIABLE_CODES: tuple[str, ...] = (
+    # Zhipu GLM: 1001 = system busy, 1002 = rate limit exceeded.
+    "1001",
+    "1002",
+    # Aliyun DashScope: 1003 = throttled. (1261 is overflow, NOT retriable.)
+    "1003",
 )
 
 # Substrings that signal a PERMANENT failure — wins over retriable matches.
@@ -100,10 +117,18 @@ def _is_retriable(exc: BaseException) -> bool:
     # Surround the message with spaces so status-code substrings like " 401 "
     # match at message boundaries without false-positiving inside URLs or
     # timestamps ("2024-04-01T00:00:00").
-    msg = f" {str(exc).lower()} "
+    raw = str(exc)
+    msg = f" {raw.lower()} "
     if any(sub in msg for sub in _NON_RETRIABLE_SUBSTRINGS):
         return False
-    return any(sub in msg for sub in _RETRIABLE_SUBSTRINGS)
+    if any(sub in msg for sub in _RETRIABLE_SUBSTRINGS):
+        return True
+    # Provider-specific structured codes — match against the un-spaced
+    # rendered exception so quoted JSON-like fragments hit (`'code': '1001'`).
+    for code in _RETRIABLE_CODES:
+        if f"'code': '{code}'" in raw or f'"code": "{code}"' in raw:
+            return True
+    return False
 
 
 # F-01-004 — server-suggested retry delay cap. Even if the provider says

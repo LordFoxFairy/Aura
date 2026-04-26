@@ -172,15 +172,20 @@ async def test_usage_tracking_hook_accumulates_total_tokens() -> None:
     assert state.total_tokens_used == 50
 
 
-async def test_usage_tracking_hook_handles_missing_usage_metadata() -> None:
+async def test_usage_tracking_hook_falls_back_to_estimator_when_usage_missing() -> None:
+    """Round 11 audit fix — when ``usage_metadata`` is missing the hook
+    falls back to a char/4 estimator (DashScope, some Ollama, self-hosted).
+    Pre-fix, ``state.total_tokens_used`` stayed pinned at zero so auto-
+    compact never armed and the status bar lied about utilization.
+    """
     from aura.core.hooks.budget import make_usage_tracking_hook
 
     hook = make_usage_tracking_hook()
     state = LoopState()
 
-    ai = AIMessage(content="no usage here")
+    ai = AIMessage(content="no usage here")  # 13 chars → 3 tokens
     await hook(ai_message=ai, history=[], state=state)
-    assert state.total_tokens_used == 0
+    assert state.total_tokens_used == 13 // 4
 
 
 def test_default_hooks_returns_populated_chain() -> None:

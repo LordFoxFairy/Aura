@@ -108,6 +108,32 @@ def make_usage_tracking_hook() -> PostModelHook:
 
         # New structured stats for the status bar.
         per_turn = _extract_token_stats(ai_message)
+        # Char-estimator fallback when the provider omits usage_metadata
+        # (DashScope, some Ollama, self-hosted backends). Without this the
+        # status bar would render 0% utilization right before a provider-
+        # side context-overflow rejection — the symptom the user reported.
+        # 4-chars-per-token is the same approximation Agent uses for the
+        # auto-compact estimator; consistent across surfaces.
+        if per_turn["input_tokens"] == 0 and per_turn["output_tokens"] == 0:
+            char_count = 0
+            for msg in history:
+                content = getattr(msg, "content", "")
+                char_count += (
+                    len(content) if isinstance(content, str) else len(str(content))
+                )
+            per_turn["input_tokens"] = char_count // 4
+            ai_content = getattr(ai_message, "content", "")
+            per_turn["output_tokens"] = (
+                len(ai_content) // 4
+                if isinstance(ai_content, str)
+                else len(str(ai_content)) // 4
+            )
+            # Mirror the legacy total-tokens accumulator path so auto-compact
+            # threshold checks see a realistic running total too.
+            state.total_tokens_used += (
+                per_turn["input_tokens"] + per_turn["output_tokens"]
+            )
+
         stats = state.custom.setdefault(
             "_token_stats",
             {

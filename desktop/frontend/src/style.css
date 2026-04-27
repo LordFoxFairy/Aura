@@ -110,6 +110,10 @@ html, body, #app {
   max-width: 85%;
 }
 
+.tool-card.completed {
+  opacity: 0.6;
+}
+
 .tool-head {
   color: var(--accent);
   font-weight: 600;

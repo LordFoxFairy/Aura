@@ -14,14 +14,19 @@ errors / startup banners; routine errors come through stdout as
 
 Event shapes (all NDJSON, one per line):
 
-- ``{"event": "ready", "session_id": "..."}`` — emitted once at startup
+- ``{"event": "ready", "session_id": "...", "model": "..."}`` — emitted once at startup
 - ``{"event": "assistant_delta", "text": "..."}`` — streaming model text
-- ``{"event": "tool_call_started", "name": "...", "args": {...}, "id": "..."}``
-- ``{"event": "tool_call_progress", "id": "...", "chunk": {...}}``
-- ``{"event": "tool_call_completed", "id": "...", "ok": bool, "result": {...}}``
+- ``{"event": "tool_call_started", "name": "...", "input": {...}}``
+- ``{"event": "tool_call_progress", "name": "...", "stream": "stdout|stderr", "chunk": "..."}``
+- ``{"event": "tool_call_completed", "name": "...", "output": ..., "error": str|null}``
 - ``{"event": "final", "message": "...", "reason": "..."}`` — turn ended
 - ``{"event": "error", "message": "..."}`` — fatal turn error
 - ``{"event": "exited"}`` — emitted right before the process closes stdin
+
+Note: tool_call_* events do NOT carry an ``id`` field — they correlate by
+``name`` (the agent loop is serial today, so same-name collisions don't
+occur). Adding ``id`` would require extending :class:`aura.schemas.events`
+and is out of scope for the desktop frontend.
 
 The CLI is single-tenant (one Agent per process, one prompt at a time).
 For multi-session use, the desktop spawns multiple subprocesses.

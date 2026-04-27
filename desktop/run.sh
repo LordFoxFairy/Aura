@@ -84,8 +84,11 @@ else
 fi
 
 # ── 4. Python deps ────────────────────────────────────────────────────────────
-step "Syncing Python deps (uv sync)…"
-(cd "$REPO_ROOT" && uv sync --quiet)
+# --extra all pulls in langchain-openai / -anthropic / -ollama / ddgs. Without
+# them the headless subprocess crashes at import ("ModuleNotFoundError: No
+# module named 'langchain_openai'") and the desktop shows "aura exited".
+step "Syncing Python deps (uv sync --extra all)…"
+(cd "$REPO_ROOT" && uv sync --extra all --quiet)
 ok "Python deps ready"
 
 # ── 5. Frontend deps ──────────────────────────────────────────────────────────
@@ -93,7 +96,31 @@ step "Installing frontend deps (npm install)…"
 (cd "$SCRIPT_DIR/frontend" && npm install --silent --no-audit --no-fund)
 ok "Frontend deps ready"
 
-# ── 6. Launch ─────────────────────────────────────────────────────────────────
+# ── 6. Port 5173 conflict — Vite's hardcoded port (matches tauri.conf.json) ───
+#
+# A prior `cargo tauri dev` that was killed via SIGINT/SIGTERM occasionally
+# leaves an orphaned vite/node process holding port 5173. Detect + clear so
+# the user doesn't have to deal with it manually.
+if command -v lsof >/dev/null 2>&1; then
+  PORT_PIDS="$(lsof -ti:5173 2>/dev/null || true)"
+  if [[ -n "$PORT_PIDS" ]]; then
+    warn "Port 5173 is in use by PID(s): $PORT_PIDS"
+    # Show what's holding it so the user can sanity-check before nuking
+    lsof -i:5173 -P -n 2>/dev/null | tail -n +2 | awk '{printf "    %s %s %s\n", $1, $2, $9}' || true
+    if ask "Kill these processes so the dev server can bind?"; then
+      step "Releasing port 5173…"
+      # shellcheck disable=SC2086
+      kill -9 $PORT_PIDS 2>/dev/null || true
+      sleep 0.5  # give the OS a beat to release the socket
+      ok "Port 5173 freed"
+    else
+      echo "Cannot start dev server while port 5173 is held. Aborting." >&2
+      exit 1
+    fi
+  fi
+fi
+
+# ── 7. Launch ─────────────────────────────────────────────────────────────────
 echo
 if [[ $BUILD_MODE -eq 1 ]]; then
   step "Building production bundle (cargo tauri build)…"

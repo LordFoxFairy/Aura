@@ -20,35 +20,40 @@ export default function PermissionModal(): React.ReactElement | null {
   };
 
   return (
-    <div className="overlay" id="permission-overlay">
+    <div className="modal-overlay" role="dialog" aria-modal="true">
       <div
-        className="permission-modal"
+        className="modal"
         data-destructive={String(permission.isDestructive)}
       >
-        <div className="permission-head">
-          <span className="permission-icon" aria-hidden="true">⚠</span>
-          <span>Aura wants to run a tool</span>
-        </div>
-        <div className="permission-tool">{permission.tool}</div>
-        <pre className="permission-args">
-          {JSON.stringify(permission.args, null, 2)}
-        </pre>
-        <div className="permission-actions">
-          <button className="btn-deny" onClick={() => void handle("deny")}>
+        <header className="modal__head">
+          <span className="modal__kind">notice</span>
+          <h2 className="modal__title">Aura wants to run a tool</h2>
+        </header>
+        <dl className="modal__body">
+          <dt>tool</dt>
+          <dd className="mono">{permission.tool}</dd>
+          <dt>arguments</dt>
+          <dd className="mono">
+            <pre>{JSON.stringify(permission.args, null, 2)}</pre>
+          </dd>
+          {permission.ruleHint && (
+            <>
+              <dt>installs rule</dt>
+              <dd className="mono">{permission.ruleHint}</dd>
+            </>
+          )}
+        </dl>
+        <footer className="modal__actions">
+          <button className="btn btn--ghost" onClick={() => void handle("deny")}>
             No
           </button>
-          <button className="btn-once" onClick={() => void handle("accept")}>
+          <button className="btn btn--ghost" onClick={() => void handle("accept")}>
             Yes, once
           </button>
-          <button className="btn-always" onClick={() => void handle("always")}>
+          <button className="btn btn--primary" onClick={() => void handle("always")}>
             Yes, always
           </button>
-        </div>
-        <div className="permission-hint">
-          {permission.ruleHint
-            ? `"Always" installs rule: ${permission.ruleHint}`
-            : ""}
-        </div>
+        </footer>
       </div>
     </div>
   );

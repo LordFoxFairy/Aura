@@ -7,13 +7,14 @@
  */
 
 import { create } from "zustand";
-import type { Message, PendingPermission, Status } from "./types";
+import type { Message, PendingPermission, Status, AuraStateSnapshot } from "./types";
 
 export interface AuraStore {
   messages: Message[];
   status: Status;
   model: string;
   permission: PendingPermission | null;
+  auraState: AuraStateSnapshot | null;
 
   appendUserMessage(text: string): void;
   appendAssistantDelta(text: string): void;
@@ -26,6 +27,7 @@ export interface AuraStore {
   appendError(message: string): void;
   setDisconnected(): void;
   setReady(model: string): void;
+  applyAuraState(snapshot: AuraStateSnapshot): void;
 }
 
 export const useAuraStore = create<AuraStore>((set) => ({
@@ -34,6 +36,7 @@ export const useAuraStore = create<AuraStore>((set) => ({
   status: { text: "connecting…", kind: "off" },
   model: "",
   permission: null,
+  auraState: null,
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -178,5 +181,9 @@ export const useAuraStore = create<AuraStore>((set) => ({
 
   setReady(model: string): void {
     set({ model, status: { text: `ready · ${model}`, kind: "ready" } });
+  },
+
+  applyAuraState(snapshot: AuraStateSnapshot): void {
+    set({ auraState: snapshot });
   },
 }));

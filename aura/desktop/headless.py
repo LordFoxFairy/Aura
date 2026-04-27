@@ -21,6 +21,9 @@ Event shapes (all NDJSON, one per line):
 - ``{"event": "tool_call_completed", "name": "...", "output": ..., "error": str|null}``
 - ``{"event": "final", "message": "...", "reason": "..."}`` — turn ended
 - ``{"event": "error", "message": "..."}`` — fatal turn error
+- ``{"event": "aura_state", "model": "...", "mode": "...", "cwd": "...",
+  "tokens": {...}, "pinned": int, "window": int, "last_turn_seconds": float}``
+  — emitted once at startup + after every Final event
 - ``{"event": "exited"}`` — emitted right before the process closes stdin
 
 Note: tool_call_* events do NOT carry an ``id`` field — they correlate by
@@ -37,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -223,6 +227,32 @@ def _event_to_dict(event: Any) -> dict[str, Any]:
     return {"event": "unknown", "type": type(event).__name__}
 
 
+def _build_aura_state(
+    agent: Agent,
+    last_turn_seconds: float,
+) -> dict[str, Any]:
+    """Snapshot agent state into the aura_state event payload."""
+    stats = agent.state.custom.get("_token_stats", {})
+    return {
+        "event": "aura_state",
+        "model": agent.current_model or "",
+        "mode": agent.mode,
+        "cwd": str(Path.cwd()),
+        "tokens": {
+            "last_input": int(stats.get("last_input_tokens", 0)),
+            "last_output": int(stats.get("last_output_tokens", 0)),
+            "last_cache_read": int(stats.get("last_cache_read_tokens", 0)),
+            "total_input": int(stats.get("total_input_tokens", 0)),
+            "total_output": int(stats.get("total_output_tokens", 0)),
+            "total_cache_read": int(stats.get("total_cache_read_tokens", 0)),
+            "turn_count": int(stats.get("turn_count", 0)),
+        },
+        "pinned": int(agent.pinned_tokens_estimate or 0),
+        "window": int(agent.context_window or 0),
+        "last_turn_seconds": float(last_turn_seconds),
+    }
+
+
 async def _run() -> int:
     cfg = load_config()
     spec = cfg.router.get("default", "")
@@ -289,15 +319,21 @@ async def _run() -> int:
         mode=mode,
     )
     _emit({"event": "ready", "session_id": agent.session_id, "model": spec})
+    _emit(_build_aura_state(agent, 0.0))
 
     # Track the in-flight astream task so a ``permission_response`` from
     # stdin can wake up the asker even while a turn is mid-flight.
     turn_task: asyncio.Task[None] | None = None
 
     async def _drive_turn(text: str) -> None:
+        turn_start = time.monotonic()
         try:
             async for event in agent.astream(text):
-                _emit(_event_to_dict(event))
+                d = _event_to_dict(event)
+                _emit(d)
+                if isinstance(event, Final):
+                    turn_secs = time.monotonic() - turn_start
+                    _emit(_build_aura_state(agent, turn_secs))
         except Exception as exc:  # noqa: BLE001
             _emit({
                 "event": "error",

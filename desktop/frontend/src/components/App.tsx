@@ -3,8 +3,10 @@ import { useAuraStore } from "../store";
 import * as bridge from "../bridge";
 import type { AuraEvent } from "../types";
 import ConversationView from "./ConversationView";
+import WelcomeScreen from "./WelcomeScreen";
 import Composer from "./Composer";
 import PermissionModal from "./PermissionModal";
+import StatusBar from "./StatusBar";
 
 function dispatch(ev: AuraEvent): void {
   // Use getState() — stable reference, no render dependency in this dispatcher.
@@ -18,6 +20,7 @@ function dispatch(ev: AuraEvent): void {
     appendError,
     setStatus,
     setDisconnected,
+    applyAuraState,
   } = useAuraStore.getState();
 
   switch (ev.event) {
@@ -87,6 +90,18 @@ function dispatch(ev: AuraEvent): void {
       console.warn("[aura raw]", ev.line);
       break;
 
+    case "aura_state":
+      applyAuraState({
+        model: ev.model,
+        mode: ev.mode,
+        cwd: ev.cwd,
+        tokens: ev.tokens,
+        pinned: ev.pinned,
+        window: ev.window,
+        last_turn_seconds: ev.last_turn_seconds,
+      });
+      break;
+
     default: {
       // Forward-compat: future Python versions may emit new event types.
       const forward = ev as { event: string; [k: string]: unknown };
@@ -97,7 +112,7 @@ function dispatch(ev: AuraEvent): void {
 }
 
 export default function App(): React.ReactElement {
-  const status = useAuraStore((s) => s.status);
+  const messages = useAuraStore((s) => s.messages);
 
   useEffect(() => {
     const unsubscribe = bridge.subscribe(dispatch);
@@ -107,12 +122,19 @@ export default function App(): React.ReactElement {
   return (
     <div id="app">
       <header className="topbar">
-        <div className="brand">Aura</div>
-        <div className="status" data-kind={status.kind}>
-          {status.text}
-        </div>
+        <span className="brand">Aura</span>
+        <span className="meta">editorial terminal</span>
       </header>
-      <ConversationView />
+      {messages.length === 0 ? (
+        // Welcome state: render a .page grid with WelcomeScreen inside it.
+        <div className="page">
+          <WelcomeScreen />
+        </div>
+      ) : (
+        // Conversation state: ConversationView renders its own .page grid.
+        <ConversationView />
+      )}
+      <StatusBar />
       <Composer />
       <PermissionModal />
     </div>

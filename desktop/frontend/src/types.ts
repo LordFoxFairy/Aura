@@ -40,7 +40,8 @@ export type AuraEvent =
   | AuraExitedEvent
   | AuraDisconnectedEvent
   | AuraStderrEvent
-  | AuraRawEvent;
+  | AuraRawEvent
+  | AuraStateEvent;
 
 /** Discriminated union of every message kind that can appear in the conversation. */
 export type Message =
@@ -62,4 +63,32 @@ export interface PendingPermission {
 export interface Status {
   text: string;
   kind: "ready" | "thinking" | "error" | "off";
+}
+
+// ── aura_state event ────────────────────────────────────────────────────────
+
+export interface AuraTokenStats {
+  last_input: number;
+  last_output: number;
+  last_cache_read: number;
+  total_input: number;
+  total_output: number;
+  total_cache_read: number;
+  turn_count: number;
+}
+
+export type AuraMode = "default" | "plan" | "accept_edits" | "bypass";
+
+export interface AuraStateSnapshot {
+  model: string;
+  mode: AuraMode;
+  cwd: string;
+  tokens: AuraTokenStats;
+  pinned: number;
+  window: number;
+  last_turn_seconds: number;
+}
+
+export interface AuraStateEvent extends AuraStateSnapshot {
+  event: "aura_state";
 }

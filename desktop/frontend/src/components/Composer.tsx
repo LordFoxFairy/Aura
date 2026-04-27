@@ -4,6 +4,9 @@ import * as bridge from "../bridge";
 
 export default function Composer(): React.ReactElement {
   const [text, setText] = useState<string>("");
+  const [focused, setFocused] = useState<boolean>(false);
+
+  const caretBlinks = focused && text.length === 0;
 
   async function send(): Promise<void> {
     const trimmed = text.trim();
@@ -21,21 +24,35 @@ export default function Composer(): React.ReactElement {
 
   return (
     <footer className="composer">
-      <textarea
-        id="input"
-        placeholder="Type a prompt and press Enter (Shift+Enter for newline)…"
-        rows={3}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            void send();
-          }
-        }}
-      />
-      <button id="send" onClick={() => void send()}>
-        Send
+      <div className="composer__prompt">
+        <span
+          className={`composer__caret${caretBlinks ? " composer__caret--blink" : ""}`}
+          aria-hidden="true"
+        >
+          &#x258C;
+        </span>
+        <textarea
+          className="composer__textarea"
+          placeholder="type a prompt — Enter to send, Shift+Enter for newline"
+          rows={1}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+        />
+      </div>
+      <button
+        className="composer__send"
+        onClick={() => void send()}
+        disabled={text.trim().length === 0}
+      >
+        &#x25B6; SEND
       </button>
     </footer>
   );

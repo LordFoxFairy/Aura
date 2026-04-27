@@ -1,32 +1,24 @@
-import React, { useRef, useEffect } from "react";
+import { useRef, useEffect } from "react";
 import { useAuraStore } from "../store";
 import MessageBubble from "./MessageBubble";
-import ToolCard from "./ToolCard";
-import { groupTurns } from "../lib/turn-groups";
 
 export default function ConversationView(): React.ReactElement {
   const messages = useAuraStore((s) => s.messages);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  // Auto-scroll on every messages change — preserved from Phase 2-1.
+  // Auto-scroll to bottom on every messages reference change.
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages]);
 
-  const rows = groupTurns(messages);
+  const visible = messages.filter((m) => m.kind !== "tool");
 
   return (
-    <div className="page" ref={scrollRef}>
-      {rows.map((row) => (
-        <React.Fragment key={row.id}>
-          <MessageBubble msg={row.primary} />
-          {row.tools.map((tool) => (
-            <ToolCard key={tool.id} msg={tool} />
-          ))}
-        </React.Fragment>
+    <div className="conversation__inner">
+      {visible.map((msg) => (
+        <MessageBubble key={msg.id} msg={msg} />
       ))}
+      <div ref={bottomRef} />
     </div>
   );
 }

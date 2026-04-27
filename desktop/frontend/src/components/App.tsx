@@ -6,7 +6,9 @@ import ConversationView from "./ConversationView";
 import WelcomeScreen from "./WelcomeScreen";
 import Composer from "./Composer";
 import PermissionModal from "./PermissionModal";
-import StatusBar from "./StatusBar";
+import Sidebar from "./Sidebar";
+import TopNav from "./TopNav";
+import ContextPanel from "./ContextPanel";
 
 function dispatch(ev: AuraEvent): void {
   // Use getState() — stable reference, no render dependency in this dispatcher.
@@ -113,6 +115,8 @@ function dispatch(ev: AuraEvent): void {
 
 export default function App(): React.ReactElement {
   const messages = useAuraStore((s) => s.messages);
+  const rightPanelOpen = useAuraStore((s) => s.rightPanelOpen);
+  const isWelcome = messages.filter((m) => m.kind !== "tool").length === 0;
 
   useEffect(() => {
     const unsubscribe = bridge.subscribe(dispatch);
@@ -120,22 +124,23 @@ export default function App(): React.ReactElement {
   }, []);
 
   return (
-    <div id="app">
-      <header className="topbar">
-        <span className="brand">Aura</span>
-        <span className="meta">editorial terminal</span>
-      </header>
-      {messages.length === 0 ? (
-        // Welcome state: render a .page grid with WelcomeScreen inside it.
-        <div className="page">
-          <WelcomeScreen />
+    <div
+      id="app"
+      data-right-panel-closed={String(!rightPanelOpen)}
+      data-welcome={String(isWelcome)}
+    >
+      <Sidebar />
+
+      <div className="main-column">
+        <TopNav />
+        <div className="conversation">
+          {isWelcome ? <WelcomeScreen /> : <ConversationView />}
         </div>
-      ) : (
-        // Conversation state: ConversationView renders its own .page grid.
-        <ConversationView />
-      )}
-      <StatusBar />
-      <Composer />
+        {/* Bottom composer only in conversation mode — welcome embeds its own hero composer. */}
+        {!isWelcome && <Composer variant="footer" />}
+      </div>
+
+      <ContextPanel />
       <PermissionModal />
     </div>
   );

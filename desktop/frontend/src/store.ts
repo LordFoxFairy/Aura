@@ -15,6 +15,7 @@ export interface AuraStore {
   model: string;
   permission: PendingPermission | null;
   auraState: AuraStateSnapshot | null;
+  rightPanelOpen: boolean;
 
   appendUserMessage(text: string): void;
   appendAssistantDelta(text: string): void;
@@ -28,6 +29,8 @@ export interface AuraStore {
   setDisconnected(): void;
   setReady(model: string): void;
   applyAuraState(snapshot: AuraStateSnapshot): void;
+  clearMessages(): void;
+  toggleRightPanel(): void;
 }
 
 export const useAuraStore = create<AuraStore>((set) => ({
@@ -37,6 +40,7 @@ export const useAuraStore = create<AuraStore>((set) => ({
   model: "",
   permission: null,
   auraState: null,
+  rightPanelOpen: false,
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -185,5 +189,13 @@ export const useAuraStore = create<AuraStore>((set) => ({
 
   applyAuraState(snapshot: AuraStateSnapshot): void {
     set({ auraState: snapshot });
+  },
+
+  clearMessages(): void {
+    set({ messages: [], permission: null, status: { text: "ready", kind: "ready" } });
+  },
+
+  toggleRightPanel(): void {
+    set((s) => ({ rightPanelOpen: !s.rightPanelOpen }));
   },
 }));

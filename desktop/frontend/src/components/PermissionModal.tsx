@@ -26,31 +26,33 @@ export default function PermissionModal(): React.ReactElement | null {
         data-destructive={String(permission.isDestructive)}
       >
         <header className="modal__head">
-          <span className="modal__kind">notice</span>
+          <span className="modal__icon">!</span>
           <h2 className="modal__title">Aura wants to run a tool</h2>
         </header>
+
         <dl className="modal__body">
-          <dt>tool</dt>
+          <dt>Tool</dt>
           <dd className="mono">{permission.tool}</dd>
-          <dt>arguments</dt>
+          <dt>Arguments</dt>
           <dd className="mono">
             <pre>{JSON.stringify(permission.args, null, 2)}</pre>
           </dd>
           {permission.ruleHint && (
             <>
-              <dt>installs rule</dt>
+              <dt>If you choose &ldquo;Always&rdquo;</dt>
               <dd className="mono">{permission.ruleHint}</dd>
             </>
           )}
         </dl>
+
         <footer className="modal__actions">
-          <button className="btn btn--ghost" onClick={() => void handle("deny")}>
+          <button className="btn btn--ghost" onClick={() => { void handle("deny"); }}>
             No
           </button>
-          <button className="btn btn--ghost" onClick={() => void handle("accept")}>
+          <button className="btn btn--ghost" onClick={() => { void handle("accept"); }}>
             Yes, once
           </button>
-          <button className="btn btn--primary" onClick={() => void handle("always")}>
+          <button className="btn btn--primary" onClick={() => { void handle("always"); }}>
             Yes, always
           </button>
         </footer>

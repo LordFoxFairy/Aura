@@ -18,7 +18,7 @@ from aura.core.tasks.types import TaskKind, TaskRecord, TaskStatus
 from aura.schemas.tool import tool_metadata
 
 _StatusFilter = Literal["all", "running", "completed", "failed", "cancelled"]
-_KindFilter = Literal["all", "subagent", "shell"]
+_KindFilter = Literal["all", "subagent", "shell", "teammate"]
 
 
 class TaskListParams(BaseModel):
@@ -33,7 +33,7 @@ class TaskListParams(BaseModel):
         default="all",
         description=(
             "Filter by task kind: 'subagent' (task_create), 'shell' "
-            "(bash_background), or 'all' for both."
+            "(bash_background), 'teammate' (team member), or 'all' for all."
         ),
     )
     limit: int = Field(
@@ -72,9 +72,10 @@ class TaskList(BaseTool):
 
     name: str = "task_list"
     description: str = (
-        "List recent subagent tasks with per-status counts. Pass "
+        "List recent subagent, shell, and teammate tasks with per-status counts. Pass "
         "status='running' (or 'completed'/'failed'/'cancelled') to filter; "
-        "default 'all' returns everything. limit caps the window (default 20)."
+        "kind='subagent'/'shell'/'teammate' to filter by task kind; default "
+        "'all' returns everything. limit caps the window (default 20)."
     )
     args_schema: type[BaseModel] = TaskListParams
     metadata: dict[str, Any] | None = tool_metadata(

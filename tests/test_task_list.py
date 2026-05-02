@@ -54,6 +54,18 @@ async def test_task_list_filters_by_status() -> None:
     assert out["tasks"][0]["description"] == "b"
 
 
+def test_task_list_filters_teammates() -> None:
+    store = TasksStore()
+    store.create("worker", "p", kind="subagent")
+    teammate = store.create("teammate: scout", "idle", kind="teammate")
+    tool = TaskList(store=store)
+
+    result = tool.invoke({"kind": "teammate"})
+
+    assert [t["id"] for t in result["tasks"]] == [teammate.id]
+    assert result["tasks"][0]["kind"] == "teammate"
+
+
 @pytest.mark.asyncio
 async def test_task_list_counts_cover_full_fleet_regardless_of_filter() -> None:
     store = _seed()

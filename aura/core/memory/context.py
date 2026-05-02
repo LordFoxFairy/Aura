@@ -369,7 +369,7 @@ class Context:
             drained = list(self._notifications_drainer())
             if drained:
                 cap = 5
-                head = drained[:cap] if len(drained) > cap else drained
+                head = drained[-cap:] if len(drained) > cap else drained
                 lines: list[str] = []
                 for n in head:
                     task_id = getattr(n, "task_id", "?")

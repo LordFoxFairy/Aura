@@ -180,7 +180,7 @@ async def test_multiple_notifications_aggregate_within_one_flush(
 
 @pytest.mark.asyncio
 async def test_notification_queue_caps_at_five(tmp_path: Path) -> None:
-    """More than 5 notifications collapse the tail to ``(N more earlier)``."""
+    """More than 5 notifications keep latest entries plus earlier count."""
     agent = _make_agent(tmp_path)
     try:
         store = agent._tasks_store
@@ -201,9 +201,13 @@ async def test_notification_queue_caps_at_five(tmp_path: Path) -> None:
         assert len(notif) == 1
         body = notif[0].content
         assert isinstance(body, str)
-        # First 5 should be present (FIFO order).
-        for rid in rec_ids[:5]:
+        # Latest 5 should be present so fresh terminal events are visible.
+        for rid in rec_ids[-5:]:
             assert rid[:8] in body
+        for rid in rec_ids[:3]:
+            assert rid[:8] not in body
+        latest_positions = [body.index(rid[:8]) for rid in rec_ids[-5:]]
+        assert latest_positions == sorted(latest_positions)
         # Overflow envelope.
         assert "(3 more earlier)" in body
     finally:

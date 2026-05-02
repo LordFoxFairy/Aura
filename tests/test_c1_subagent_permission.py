@@ -231,6 +231,64 @@ async def test_subagent_inherits_bypass_mode_from_parent() -> None:
         await child.aclose()
 
 
+@pytest.mark.asyncio
+async def test_subagent_freezes_parent_mode_at_spawn() -> None:
+    """Parent mode flips after spawn do not change child hook behavior."""
+    mode = "default"
+    factory = SubagentFactory(
+        parent_config=_cfg(),
+        parent_model_spec="openai:gpt-4o-mini",
+        parent_ruleset=RuleSet(),
+        parent_safety=DEFAULT_SAFETY,
+        parent_mode_provider=lambda: mode,
+        model_factory=lambda: FakeChatModel(
+            turns=[FakeTurn(AIMessage(content="done"))]
+        ),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+
+    child = factory.spawn("prompt")
+    mode = "bypass"
+    try:
+        assert child.mode == "default"
+        outcome = await child._hooks.run_pre_tool(
+            tool=_EchoTool(),
+            args={"value": "x"},
+            state=LoopState(),
+        )
+        assert outcome.short_circuit is not None
+        assert outcome.decision is not None
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "user_deny"
+        assert "subagent_auto_deny" in (outcome.short_circuit.error or "")
+    finally:
+        await child.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parent_mode", ["plan", "accept_edits"])
+async def test_subagent_collapses_interactive_parent_modes_to_default(
+    parent_mode: str,
+) -> None:
+    """Plan / accept_edits do not inherit into non-interactive children."""
+    factory = _build_factory(parent_ruleset=RuleSet(), parent_mode=parent_mode)
+    child = factory.spawn("prompt")
+    try:
+        assert child.mode == "default"
+        outcome = await child._hooks.run_pre_tool(
+            tool=_EchoTool(),
+            args={"value": "x"},
+            state=LoopState(),
+        )
+        assert outcome.short_circuit is not None
+        assert outcome.decision is not None
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "user_deny"
+        assert "subagent_auto_deny" in (outcome.short_circuit.error or "")
+    finally:
+        await child.aclose()
+
+
 # ---------------------------------------------------------------------------
 # Auxiliary — the asker itself
 # ---------------------------------------------------------------------------

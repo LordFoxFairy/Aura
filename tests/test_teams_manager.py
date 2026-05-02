@@ -9,10 +9,13 @@ from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel
 
 from aura.config.schema import AuraConfig
 from aura.core import llm
 from aura.core.abort import AbortController
+from aura.core.permissions.rule import Rule
 from aura.core.permissions.safety import DEFAULT_SAFETY
 from aura.core.permissions.session import RuleSet
 from aura.core.persistence.storage import SessionStorage
@@ -20,6 +23,8 @@ from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
 from aura.core.teams.manager import TeamError, TeamManager
 from aura.core.teams.types import TEAM_LEADER_NAME, TeamRecord
+from aura.schemas.state import LoopState
+from aura.schemas.tool import tool_metadata
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -36,11 +41,35 @@ def _cfg() -> AuraConfig:
     })
 
 
-def _factory() -> SubagentFactory:
+class _EchoParams(BaseModel):
+    value: str = "x"
+
+
+class _AllowedTool(BaseTool):
+    name: str = "team_allowed_tool"
+    description: str = "test-only allowed tool"
+    args_schema: type[BaseModel] = _EchoParams
+    metadata: dict[str, Any] | None = tool_metadata(is_destructive=False)
+
+    def _run(self, value: str = "x") -> str:
+        return value
+
+
+class _AskTool(BaseTool):
+    name: str = "team_ask_tool"
+    description: str = "test-only ask-path tool"
+    args_schema: type[BaseModel] = _EchoParams
+    metadata: dict[str, Any] | None = tool_metadata(is_destructive=False)
+
+    def _run(self, value: str = "x") -> str:
+        return value
+
+
+def _factory(*, parent_ruleset: RuleSet | None = None) -> SubagentFactory:
     return SubagentFactory(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
-        parent_ruleset=RuleSet(),
+        parent_ruleset=parent_ruleset or RuleSet(),
         parent_safety=DEFAULT_SAFETY,
         parent_mode_provider=lambda: "default",
         model_factory=lambda: FakeChatModel(
@@ -67,14 +96,17 @@ async def _no_runtime(**_kwargs: Any) -> None:
 
 
 def _mgr(
-    tmp_path: Path, *, runtime_runner: Any = _no_runtime,
+    tmp_path: Path,
+    *,
+    runtime_runner: Any = _no_runtime,
+    factory: SubagentFactory | None = None,
 ) -> tuple[TeamManager, SessionStorage]:
     storage = SessionStorage(tmp_path / "sessions.db")
     leader = _leader_stub(storage)
     return TeamManager(
         leader=leader,
         storage=storage,
-        factory=_factory(),
+        factory=factory or _factory(),
         running_aborts={},
         tasks_store=TasksStore(),
         runtime_runner=runtime_runner,
@@ -257,6 +289,42 @@ async def test_add_member_records_inherited_model_without_spawn_override(
     record = mgr._tasks_store.list(kind="teammate")[0]
     assert record.model_spec == mgr._factory.parent_model_spec
     assert spawn.call_args.kwargs.get("model_spec") is None
+
+
+@pytest.mark.asyncio
+async def test_add_member_teammate_uses_subagent_permission_contract(
+    tmp_path: Path,
+) -> None:
+    parent_ruleset = RuleSet(rules=(Rule(tool="team_allowed_tool", content=None),))
+    mgr, _ = _mgr(tmp_path, factory=_factory(parent_ruleset=parent_ruleset))
+    mgr.create_team("alpha")
+
+    mgr.add_member("alice")
+    child = mgr._member_agents["alice"]
+    try:
+        allowed = await child._hooks.run_pre_tool(
+            tool=_AllowedTool(),
+            args={"value": "x"},
+            state=LoopState(),
+        )
+        assert allowed.short_circuit is None
+        assert allowed.decision is not None
+        assert allowed.decision.allow is True
+        assert allowed.decision.reason == "rule_allow"
+
+        denied = await child._hooks.run_pre_tool(
+            tool=_AskTool(),
+            args={"value": "x"},
+            state=LoopState(),
+        )
+        assert denied.short_circuit is not None
+        assert denied.decision is not None
+        assert denied.decision.allow is False
+        assert denied.decision.reason == "user_deny"
+        assert "subagent_auto_deny" in (denied.short_circuit.error or "")
+    finally:
+        mgr.remove_member("alice", force=True)
+        await asyncio.sleep(0)
 
 
 def test_add_member_rejects_invalid_model_without_state_leak(

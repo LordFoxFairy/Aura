@@ -342,8 +342,14 @@ class TasksStore:
                     error=f"{type(exc).__name__}: {exc}",
                 )
 
-    def mark_completed(self, task_id: str, result: str) -> None:
+    def _terminal_record(self, task_id: str) -> TaskRecord | None:
         rec = self._records.get(task_id)
+        if rec is None or rec.status != "running":
+            return None
+        return rec
+
+    def mark_completed(self, task_id: str, result: str) -> None:
+        rec = self._terminal_record(task_id)
         if rec is None:
             return
         rec.status = "completed"
@@ -352,7 +358,7 @@ class TasksStore:
         self._fire_terminal(rec)
 
     def mark_failed(self, task_id: str, error: str) -> None:
-        rec = self._records.get(task_id)
+        rec = self._terminal_record(task_id)
         if rec is None:
             return
         rec.status = "failed"
@@ -361,7 +367,7 @@ class TasksStore:
         self._fire_terminal(rec)
 
     def mark_cancelled(self, task_id: str) -> None:
-        rec = self._records.get(task_id)
+        rec = self._terminal_record(task_id)
         if rec is None:
             return
         rec.status = "cancelled"

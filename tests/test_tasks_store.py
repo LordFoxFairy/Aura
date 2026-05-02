@@ -90,3 +90,57 @@ def test_mark_cancelled_sets_status() -> None:
     assert r is not None
     assert r.status == "cancelled"
     assert r.finished_at is not None
+
+
+def test_terminal_transition_is_idempotent_after_completed() -> None:
+    store = TasksStore()
+    rec = store.create(description="x", prompt="p")
+    seen: list[str] = []
+    store.add_terminal_listener(lambda r: seen.append(r.status))
+
+    store.mark_completed(rec.id, "done")
+    finished_at = rec.finished_at
+    store.mark_cancelled(rec.id)
+    store.mark_failed(rec.id, "boom")
+
+    assert rec.status == "completed"
+    assert rec.final_result == "done"
+    assert rec.error is None
+    assert rec.finished_at == finished_at
+    assert seen == ["completed"]
+
+
+def test_terminal_transition_is_idempotent_after_failed() -> None:
+    store = TasksStore()
+    rec = store.create(description="x", prompt="p")
+    seen: list[str] = []
+    store.add_terminal_listener(lambda r: seen.append(r.status))
+
+    store.mark_failed(rec.id, "boom")
+    finished_at = rec.finished_at
+    store.mark_completed(rec.id, "done")
+    store.mark_cancelled(rec.id)
+
+    assert rec.status == "failed"
+    assert rec.final_result is None
+    assert rec.error == "boom"
+    assert rec.finished_at == finished_at
+    assert seen == ["failed"]
+
+
+def test_terminal_transition_is_idempotent_after_cancelled() -> None:
+    store = TasksStore()
+    rec = store.create(description="x", prompt="p")
+    seen: list[str] = []
+    store.add_terminal_listener(lambda r: seen.append(r.status))
+
+    store.mark_cancelled(rec.id)
+    finished_at = rec.finished_at
+    store.mark_completed(rec.id, "done")
+    store.mark_failed(rec.id, "boom")
+
+    assert rec.status == "cancelled"
+    assert rec.final_result is None
+    assert rec.error is None
+    assert rec.finished_at == finished_at
+    assert seen == ["cancelled"]

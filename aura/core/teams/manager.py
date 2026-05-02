@@ -419,6 +419,8 @@ class TeamManager:
             backend = get_backend(backend_type)
         except BackendUnavailable as exc:
             raise TeamError(str(exc)) from exc
+        if model_name is not None:
+            self._factory.validate_model_spec(model_name)
         member = TeammateMember(
             name=name,
             agent_type=agent_type,
@@ -432,12 +434,18 @@ class TeamManager:
         # observability tooling all see it. ``kind="teammate"`` keeps it
         # distinct from one-shot subagents in /tasks output.
         prompt_for_task = seed_prompt or "(idle teammate; awaiting messages)"
+        task_model_spec = (
+            model_name
+            if model_name is not None
+            else self._factory.parent_model_spec
+        )
         record = self._tasks_store.create(
             description=f"teammate: {name}",
             prompt=prompt_for_task,
             kind="teammate",
             agent_type=agent_type,
             metadata={"team_id": self._team.team_id, "member": name},
+            model_spec=task_model_spec,
         )
         # Build the child Agent up-front so we can plumb the per-team
         # context (team manager, session_id) onto it before the runtime
@@ -448,6 +456,7 @@ class TeamManager:
             prompt_for_task,
             agent_type=agent_type,
             task_id=record.id,
+            model_spec=model_name,
         )
         # Stamp the teammate identity onto the Agent so the SendMessage
         # tool can resolve the (team_id, sender) pair without reaching
@@ -618,6 +627,8 @@ class TeamManager:
             backend = get_backend(backend_type)
         except BackendUnavailable as exc:
             raise TeamError(str(exc)) from exc
+        if model_name is not None:
+            self._factory.validate_model_spec(model_name)
         member = TeammateMember(
             name=name,
             agent_type=agent_type,
@@ -628,17 +639,24 @@ class TeamManager:
         self._team.members.append(member)
         self._persist()
         prompt_for_task = seed_prompt or "(idle teammate; awaiting messages)"
+        task_model_spec = (
+            model_name
+            if model_name is not None
+            else self._factory.parent_model_spec
+        )
         record = self._tasks_store.create(
             description=f"teammate: {name}",
             prompt=prompt_for_task,
             kind="teammate",
             agent_type=agent_type,
             metadata={"team_id": self._team.team_id, "member": name},
+            model_spec=task_model_spec,
         )
         child = self._factory.spawn(
             prompt_for_task,
             agent_type=agent_type,
             task_id=record.id,
+            model_spec=model_name,
         )
         child.join_team(manager=self, member_name=name)
         self._member_agents[name] = child

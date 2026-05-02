@@ -11,6 +11,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from aura.config.schema import AuraConfig
+from aura.core import llm
 from aura.core.abort import AbortController
 from aura.core.permissions.safety import DEFAULT_SAFETY
 from aura.core.permissions.session import RuleSet
@@ -80,6 +81,15 @@ def _mgr(
     ), storage
 
 
+class _FakePaneHandle:
+    pass
+
+
+class _FakePaneBackend:
+    async def spawn(self, **_kwargs: Any) -> _FakePaneHandle:
+        return _FakePaneHandle()
+
+
 def test_create_team_persists_config(tmp_path: Path) -> None:
     mgr, storage = _mgr(tmp_path)
     record = mgr.create_team("alpha")
@@ -117,6 +127,148 @@ async def test_add_and_remove_member(tmp_path: Path) -> None:
     assert all(m.name != "alice" for m in mgr.list_members())
     # Wait for runtime tasks to settle.
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_add_member_propagates_explicit_model_to_task_and_spawn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mgr, _ = _mgr(tmp_path)
+    spawn = MagicMock(wraps=mgr._factory.spawn)
+    monkeypatch.setattr(mgr._factory, "spawn", spawn)
+    mgr.create_team("alpha")
+
+    mgr.add_member("alice", model_name="openai:gpt-4o")
+    await asyncio.sleep(0)
+
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.model_spec == "openai:gpt-4o"
+    assert spawn.call_args.kwargs["model_spec"] == "openai:gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_add_member_records_inherited_model_without_spawn_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mgr, _ = _mgr(tmp_path)
+    spawn = MagicMock(wraps=mgr._factory.spawn)
+    monkeypatch.setattr(mgr._factory, "spawn", spawn)
+    mgr.create_team("alpha")
+
+    mgr.add_member("alice")
+    await asyncio.sleep(0)
+
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.model_spec == mgr._factory.parent_model_spec
+    assert spawn.call_args.kwargs.get("model_spec") is None
+
+
+def test_add_member_rejects_invalid_model_without_state_leak(
+    tmp_path: Path,
+) -> None:
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+
+    with pytest.raises(llm.UnknownModelSpecError):
+        mgr.add_member("alice", model_name="ghost-provider:nope")
+
+    assert mgr.list_members() == []
+    assert mgr._tasks_store.list(kind="teammate") == []
+
+
+def test_add_member_rejects_empty_model_without_state_leak(
+    tmp_path: Path,
+) -> None:
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+
+    with pytest.raises(llm.UnknownModelSpecError):
+        mgr.add_member("alice", model_name="")
+
+    assert mgr.list_members() == []
+    assert mgr._tasks_store.list(kind="teammate") == []
+
+
+@pytest.mark.asyncio
+async def test_aadd_member_propagates_explicit_model_to_task_and_spawn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aura.core.teams.backends.registry as registry
+
+    monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
+    mgr, _ = _mgr(tmp_path)
+    spawn = MagicMock(wraps=mgr._factory.spawn)
+    monkeypatch.setattr(mgr._factory, "spawn", spawn)
+    mgr.create_team("alpha")
+
+    await mgr.aadd_member("alice", model_name="openai:gpt-4o", backend_type="pane")
+
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.model_spec == "openai:gpt-4o"
+    assert spawn.call_args.kwargs["model_spec"] == "openai:gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_aadd_member_records_inherited_model_without_spawn_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aura.core.teams.backends.registry as registry
+
+    monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
+    mgr, _ = _mgr(tmp_path)
+    spawn = MagicMock(wraps=mgr._factory.spawn)
+    monkeypatch.setattr(mgr._factory, "spawn", spawn)
+    mgr.create_team("alpha")
+
+    await mgr.aadd_member("alice", backend_type="pane")
+
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.model_spec == mgr._factory.parent_model_spec
+    assert spawn.call_args.kwargs.get("model_spec") is None
+
+
+@pytest.mark.asyncio
+async def test_aadd_member_rejects_invalid_model_without_state_leak(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aura.core.teams.backends.registry as registry
+
+    monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+
+    with pytest.raises(llm.UnknownModelSpecError):
+        await mgr.aadd_member(
+            "alice",
+            model_name="ghost-provider:nope",
+            backend_type="pane",
+        )
+
+    assert mgr.list_members() == []
+    assert mgr._tasks_store.list(kind="teammate") == []
+
+
+@pytest.mark.asyncio
+async def test_aadd_member_rejects_empty_model_without_state_leak(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aura.core.teams.backends.registry as registry
+
+    monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+
+    with pytest.raises(llm.UnknownModelSpecError):
+        await mgr.aadd_member("alice", model_name="", backend_type="pane")
+
+    assert mgr.list_members() == []
+    assert mgr._tasks_store.list(kind="teammate") == []
 
 
 def test_add_member_rejects_reserved_names(tmp_path: Path) -> None:

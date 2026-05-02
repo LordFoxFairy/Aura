@@ -1,8 +1,10 @@
 """F-0910-020 — SUBAGENT-STOP semantics on compact.
 
 After the rebuild, the new history includes one ``<active-task>``
-HumanMessage per still-relevant subagent task (status in {running,
-completed}). Failed / cancelled tasks are excluded.
+HumanMessage per still-relevant subagent task: running tasks and terminal
+tasks whose result has not yet been observed through the task tools.
+Observed terminal tasks are excluded so compact does not keep re-injecting
+already-read results.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.persistence.storage import SessionStorage
+from aura.tools.task_get import TaskGet
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -66,14 +69,17 @@ async def test_running_task_emitted_as_active_task_message(
 
 
 @pytest.mark.asyncio
-async def test_completed_task_still_surfaces(tmp_path: Path) -> None:
-    """Completed tasks count as 'completed-not-retrieved' in our store
-    semantics — they survive compact so the model can still reference
-    them after a long gap."""
+async def test_unobserved_terminal_tasks_still_surface(tmp_path: Path) -> None:
+    """Unobserved terminal tasks survive compact until task_get/task_output
+    marks them observed."""
     agent = _agent(tmp_path)
     _seed_history(agent)
-    rec = agent._tasks_store.create(description="done subagent", prompt="x")
-    agent._tasks_store.mark_completed(rec.id, result="ok")
+    completed = agent._tasks_store.create(description="done subagent", prompt="x")
+    agent._tasks_store.mark_completed(completed.id, result="ok")
+    failed = agent._tasks_store.create(description="failed subagent", prompt="x")
+    agent._tasks_store.mark_failed(failed.id, error="boom")
+    cancelled = agent._tasks_store.create(description="cancelled subagent", prompt="x")
+    agent._tasks_store.mark_cancelled(cancelled.id)
 
     await agent.compact(source="manual")
 
@@ -81,23 +87,67 @@ async def test_completed_task_still_surfaces(tmp_path: Path) -> None:
     blob = "\n".join(str(m.content) for m in history)
     assert "done subagent" in blob
     assert 'status="completed"' in blob
+    assert "failed subagent" in blob
+    assert 'status="failed"' in blob
+    assert "cancelled subagent" in blob
+    assert 'status="cancelled"' in blob
 
 
 @pytest.mark.asyncio
-async def test_failed_and_cancelled_excluded(tmp_path: Path) -> None:
+async def test_observed_terminal_tasks_are_excluded(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
     _seed_history(agent)
-    failed = agent._tasks_store.create(description="failed sub", prompt="x")
+    completed = agent._tasks_store.create(description="observed done", prompt="x")
+    agent._tasks_store.mark_completed(completed.id, result="ok")
+    failed = agent._tasks_store.create(description="observed failed", prompt="x")
     agent._tasks_store.mark_failed(failed.id, error="boom")
-    cancelled = agent._tasks_store.create(description="cancelled sub", prompt="x")
+    cancelled = agent._tasks_store.create(description="observed cancelled", prompt="x")
     agent._tasks_store.mark_cancelled(cancelled.id)
+
+    tool = TaskGet(store=agent._tasks_store)
+    for rec in (completed, failed, cancelled):
+        assert tool._run(rec.id)["observed_at"] is not None
 
     await agent.compact(source="manual")
 
     history = agent._storage.load(agent.session_id)
     blob = "\n".join(str(m.content) for m in history)
-    assert "failed sub" not in blob
-    assert "cancelled sub" not in blob
+    assert "observed done" not in blob
+    assert "observed failed" not in blob
+    assert "observed cancelled" not in blob
+
+
+@pytest.mark.asyncio
+async def test_mixed_task_observation_controls_compact_injection(
+    tmp_path: Path,
+) -> None:
+    agent = _agent(tmp_path)
+    _seed_history(agent)
+    running = agent._tasks_store.create(description="still running", prompt="x")
+    completed = agent._tasks_store.create(description="pending success", prompt="x")
+    agent._tasks_store.mark_completed(completed.id, result="ok")
+    failed = agent._tasks_store.create(description="unseen failed", prompt="x")
+    agent._tasks_store.mark_failed(failed.id, error="boom")
+    observed = agent._tasks_store.create(description="retrieved result", prompt="x")
+    agent._tasks_store.mark_completed(observed.id, result="seen")
+
+    tool = TaskGet(store=agent._tasks_store)
+    first_seen = tool._run(observed.id)["observed_at"]
+    assert first_seen is not None
+    assert tool._run(observed.id)["observed_at"] == first_seen
+
+    await agent.compact(source="manual")
+
+    history = agent._storage.load(agent.session_id)
+    blob = "\n".join(str(m.content) for m in history)
+    assert running.id in blob
+    assert "still running" in blob
+    assert completed.id in blob
+    assert "pending success" in blob
+    assert failed.id in blob
+    assert "unseen failed" in blob
+    assert observed.id not in blob
+    assert "retrieved result" not in blob
 
 
 @pytest.mark.asyncio

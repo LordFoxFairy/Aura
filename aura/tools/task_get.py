@@ -72,6 +72,7 @@ def _serialize(rec: TaskRecord, *, include_messages: bool) -> dict[str, Any]:
         "status": rec.status,
         "started_at": rec.started_at,
         "finished_at": rec.finished_at,
+        "observed_at": rec.observed_at,
         "duration_seconds": duration,
         "final_result": rec.final_result,
         "error": rec.error,
@@ -133,4 +134,6 @@ class TaskGet(BaseTool):
         rec = self.store.get(task_id)
         if rec is None:
             raise ToolError(f"unknown task_id: {task_id!r}")
+        if rec.status != "running":
+            self.store.mark_observed(task_id)
         return _serialize(rec, include_messages=include_messages)

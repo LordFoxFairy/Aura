@@ -5,6 +5,8 @@ itself):
 
 - ``status``, ``final_result``, ``error``, ``finished_at`` are set exactly
   once, when a terminal transition is taken (completed / failed / cancelled).
+- ``observed_at`` is set exactly once after a terminal record is returned
+  through an LLM-facing result tool. Running tasks are never marked observed.
 - ``messages`` is append-only during the ``running`` window — the subagent's
   transcript accretes, never rewrites.
 - ``progress`` is mutated in place while the subagent is ``running`` — it
@@ -102,6 +104,7 @@ class TaskRecord:
     error: str | None = None
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
+    observed_at: float | None = None
     progress: TaskProgress = field(default_factory=TaskProgress)
     metadata: dict[str, object] = field(default_factory=dict)
     # Round 4F — JSONL transcript path on parent's storage root. Set by

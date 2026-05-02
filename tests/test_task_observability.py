@@ -30,6 +30,7 @@ from aura.core.tasks.run import run_task
 from aura.core.tasks.store import TasksStore
 from aura.core.tasks.types import TaskNotification
 from aura.tools.task_create import TaskCreate
+from aura.tools.task_get import TaskGet
 from aura.tools.task_output import TaskOutput
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -294,6 +295,98 @@ async def test_notification_for_failed_subagent_includes_error(
 # ---------------------------------------------------------------------------
 # F-07-008 — task_output(wait=True) blocking poll
 # ---------------------------------------------------------------------------
+
+
+def test_task_get_marks_terminal_task_observed_once() -> None:
+    store = TasksStore()
+    rec = store.create(description="done", prompt="go")
+    store.mark_completed(rec.id, "child done")
+    tool = TaskGet(store=store)
+
+    result = tool._run(rec.id)
+
+    assert result["observed_at"] is not None
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.observed_at == result["observed_at"]
+
+    second = tool._run(rec.id)
+
+    assert second["observed_at"] == result["observed_at"]
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.observed_at == result["observed_at"]
+
+
+def test_task_get_does_not_mark_running_task_observed() -> None:
+    store = TasksStore()
+    rec = store.create(description="running", prompt="go")
+    tool = TaskGet(store=store)
+
+    result = tool._run(rec.id)
+
+    assert result["observed_at"] is None
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.observed_at is None
+
+
+@pytest.mark.asyncio
+async def test_task_output_marks_terminal_task_observed_once() -> None:
+    store = TasksStore()
+    rec = store.create(description="done", prompt="go")
+    store.mark_failed(rec.id, "boom")
+    tool = TaskOutput(store=store)
+
+    result = await tool.ainvoke({"task_id": rec.id})
+
+    assert result["observed_at"] is not None
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.observed_at == result["observed_at"]
+
+    second = await tool.ainvoke({"task_id": rec.id, "wait": True})
+
+    assert second["observed_at"] == result["observed_at"]
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.observed_at == result["observed_at"]
+
+
+@pytest.mark.asyncio
+async def test_task_output_does_not_mark_running_task_observed() -> None:
+    store = TasksStore()
+    rec = store.create(description="running", prompt="go")
+    tool = TaskOutput(store=store)
+
+    result = await tool.ainvoke({"task_id": rec.id})
+
+    assert result["observed_at"] is None
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.observed_at is None
+
+
+@pytest.mark.asyncio
+async def test_task_output_wait_true_marks_task_observed_after_terminal() -> None:
+    store = TasksStore()
+    rec = store.create(description="slow", prompt="go")
+    tool = TaskOutput(store=store)
+
+    waiter = asyncio.create_task(
+        tool.ainvoke({"task_id": rec.id, "wait": True, "timeout": 2.0})
+    )
+    await asyncio.sleep(0.01)
+    assert not waiter.done()
+
+    store.mark_completed(rec.id, "child done")
+    result = await asyncio.wait_for(waiter, timeout=1.0)
+
+    assert result["terminal"] is True
+    assert result["observed_at"] is not None
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.observed_at == result["observed_at"]
 
 
 @pytest.mark.asyncio

@@ -22,12 +22,20 @@ from typing import Any
 
 import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from aura.core.tasks.store import TasksStore
 from tests.conftest import FakeChatModel, FakeTurn
 from tests.integration.conftest import build_integration_agent, drain
+
+
+def _seed_compactable_history(agent: Any, *, pairs: int = 10) -> None:
+    history: list[BaseMessage] = []
+    for i in range(pairs):
+        history.append(HumanMessage(content=f"u-{i}"))
+        history.append(AIMessage(content=f"a-{i}"))
+    agent._storage.save(agent.session_id, history)
 
 # ---------------------------------------------------------------------------
 # Test 1 — single subagent roundtrip
@@ -419,3 +427,135 @@ async def test_task_stop_cancels_running_subagent(tmp_path: Path) -> None:
     # The done-callback usually pops the entry; if it's still there, assert
     # it's terminal. Either state is acceptable — "gone or done".
     assert handle is None or handle.done()
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — observed terminal tasks do not reappear after compact
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_compact_keeps_unobserved_tasks_after_parent_observes_one_terminal(
+    tmp_path: Path,
+) -> None:
+    agent, _ = build_integration_agent(tmp_path, [])
+    store = agent._tasks_store
+    running = store.create(description="running child", prompt="keep working")
+    completed = store.create(description="observed completed child", prompt="done")
+    store.mark_completed(completed.id, "done result")
+    failed = store.create(description="unobserved failed child", prompt="fail")
+    store.mark_failed(failed.id, "boom")
+    cancelled = store.create(description="unobserved cancelled child", prompt="stop")
+    store.mark_cancelled(cancelled.id)
+
+    parent_reads_completed = FakeTurn(
+        message=AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "tc_get_completed",
+                    "name": "task_get",
+                    "args": {"task_id": completed.id},
+                },
+                {
+                    "id": "tc_list",
+                    "name": "task_list",
+                    "args": {"status": "all", "kind": "all", "limit": 20},
+                },
+            ],
+        )
+    )
+    agent._model = FakeChatModel(
+        turns=[
+            parent_reads_completed,
+            FakeTurn(message=AIMessage(content="observed one task")),
+        ]
+    )
+    agent._loop = agent._build_loop()
+
+    try:
+        events = await drain(agent, "check the task fleet")
+
+        from aura.schemas.events import ToolCallCompleted
+
+        get_events = [
+            e for e in events
+            if isinstance(e, ToolCallCompleted) and e.name == "task_get"
+        ]
+        assert len(get_events) == 1
+        first_observed_at = get_events[0].output["observed_at"]
+        assert first_observed_at is not None
+
+        list_events = [
+            e for e in events
+            if isinstance(e, ToolCallCompleted) and e.name == "task_list"
+        ]
+        assert len(list_events) == 1
+        counts = list_events[0].output["counts"]
+        assert counts["running"] == 1
+        assert counts["completed"] == 1
+        assert counts["failed"] == 1
+        assert counts["cancelled"] == 1
+
+        _seed_compactable_history(agent)
+        agent._model = FakeChatModel(
+            turns=[FakeTurn(message=AIMessage(content="SUMMARY"))]
+        )
+        await agent.compact(source="manual")
+
+        history = agent._storage.load(agent.session_id)
+        blob = "\n".join(str(m.content) for m in history)
+        assert running.id in blob
+        assert failed.id in blob
+        assert cancelled.id in blob
+        assert completed.id not in blob
+
+        post_compact_reads = FakeTurn(
+            message=AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "tc_get_completed_again",
+                        "name": "task_get",
+                        "args": {"task_id": completed.id},
+                    },
+                    {
+                        "id": "tc_list_after_compact",
+                        "name": "task_list",
+                        "args": {"status": "all", "kind": "all", "limit": 20},
+                    },
+                ],
+            )
+        )
+        agent._model = FakeChatModel(
+            turns=[
+                post_compact_reads,
+                FakeTurn(message=AIMessage(content="still has state")),
+            ]
+        )
+        agent._loop = agent._build_loop()
+
+        after_events = await drain(agent, "check after compact")
+        after_get_events = [
+            e for e in after_events
+            if isinstance(e, ToolCallCompleted) and e.name == "task_get"
+        ]
+        assert len(after_get_events) == 1
+        assert after_get_events[0].output["observed_at"] == first_observed_at
+
+        after_list_events = [
+            e for e in after_events
+            if isinstance(e, ToolCallCompleted) and e.name == "task_list"
+        ]
+        assert len(after_list_events) == 1
+        rows = {row["id"]: row for row in after_list_events[0].output["tasks"]}
+        assert rows[running.id]["status"] == "running"
+        assert rows[running.id]["observed_at"] is None
+        assert rows[completed.id]["status"] == "completed"
+        assert rows[completed.id]["observed_at"] == first_observed_at
+        assert rows[failed.id]["status"] == "failed"
+        assert rows[failed.id]["observed_at"] is None
+        assert rows[cancelled.id]["status"] == "cancelled"
+        assert rows[cancelled.id]["observed_at"] is None
+    finally:
+        await agent.aclose()

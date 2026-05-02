@@ -88,6 +88,7 @@ def _snapshot(rec: TaskRecord, *, terminal: bool) -> dict[str, Any]:
         # Round 4F — explicit terminal flag so the LLM doesn't have to
         # interpret status against a literal set.
         "terminal": terminal,
+        "observed_at": rec.observed_at,
     }
 
 
@@ -133,6 +134,8 @@ class TaskOutput(BaseTool):
         # immediately. ``terminal_event`` will short-circuit the wait
         # below, but checking here keeps the no-wait path purely synchronous.
         if not wait or rec.status != "running":
+            if rec.status != "running":
+                self.store.mark_observed(task_id)
             return _snapshot(rec, terminal=rec.status != "running")
 
         # Wait path: park on the per-task lazy event AND on the parent's
@@ -193,8 +196,12 @@ class TaskOutput(BaseTool):
         # whatever the child managed to do"); the parent's outer abort
         # handling unwinds the actual turn.
         if abort is not None and abort.aborted:
+            if rec.status != "running":
+                self.store.mark_observed(task_id)
             payload = _snapshot(rec, terminal=rec.status != "running")
             payload["error"] = "parent_aborted"
             return payload
 
+        if rec.status != "running":
+            self.store.mark_observed(task_id)
         return _snapshot(rec, terminal=rec.status != "running")

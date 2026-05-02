@@ -66,6 +66,19 @@ def test_task_list_filters_teammates() -> None:
     assert result["tasks"][0]["kind"] == "teammate"
 
 
+def test_task_list_rows_include_observed_at() -> None:
+    store = TasksStore()
+    rec = store.create("done", "p")
+    store.mark_completed(rec.id, "ok")
+    observed = store.mark_observed(rec.id)
+    tool = TaskList(store=store)
+
+    result = tool.invoke({})
+
+    assert result["tasks"][0]["id"] == rec.id
+    assert result["tasks"][0]["observed_at"] == observed
+
+
 @pytest.mark.asyncio
 async def test_task_list_counts_cover_full_fleet_regardless_of_filter() -> None:
     store = _seed()

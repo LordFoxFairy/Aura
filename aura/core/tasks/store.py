@@ -259,6 +259,20 @@ class TasksStore:
         rec.progress.latest_summary = summary
         rec.progress.summary_updated_at = time.time()
 
+    def mark_observed(self, task_id: str) -> float | None:
+        """Stamp when a terminal task's result is first observed.
+
+        Only LLM-facing retrieval tools should call this. Running tasks
+        return ``None`` and are left untouched; terminal tasks preserve the
+        first timestamp so repeated reads are stable.
+        """
+        rec = self._records.get(task_id)
+        if rec is None or rec.status == "running":
+            return None
+        if rec.observed_at is None:
+            rec.observed_at = time.time()
+        return rec.observed_at
+
     # ------------------------------------------------------------------
     # Round 4F — transcript path + lazy terminal event + listener registry
     # ------------------------------------------------------------------

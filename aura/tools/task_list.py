@@ -57,6 +57,7 @@ def _row(rec: TaskRecord) -> dict[str, Any]:
         "kind": rec.kind,
         "description": rec.description,
         "started_at": rec.started_at,
+        "observed_at": rec.observed_at,
     }
 
 

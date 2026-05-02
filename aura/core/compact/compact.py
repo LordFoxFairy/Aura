@@ -145,10 +145,10 @@ def _build_active_task_messages(agent: Agent) -> list[HumanMessage]:
     """F-0910-020: surface still-relevant subagent tasks across compact.
 
     Walks ``agent._tasks_store.list()`` and emits one HumanMessage per task
-    whose status is ``running`` or ``completed`` (the local equivalent of
-    "completed-not-retrieved" — TasksStore has no separate retrieval flag).
-    Each message renders ``<active-task id=... status=... last_seen_at=...>``
-    so a model resuming after compact knows what work is still open.
+    whose status is ``running`` or whose terminal result has not been observed
+    via ``task_get`` / ``task_output``. Each message renders
+    ``<active-task id=... status=... last_seen_at=...>`` so a model resuming
+    after compact knows what work is still open.
 
     Tolerates a missing ``_tasks_store`` (synthetic / partial Agent in tests)
     by returning an empty list.
@@ -158,7 +158,7 @@ def _build_active_task_messages(agent: Agent) -> list[HumanMessage]:
         return []
     out: list[HumanMessage] = []
     for rec in store.list():
-        if rec.status not in {"running", "completed"}:
+        if rec.status != "running" and rec.observed_at is not None:
             continue
         last_seen = (
             rec.progress.last_activity_at

@@ -18,6 +18,7 @@ raises a clear ``TeamError`` rather than silently no-op'ing.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
 from pathlib import Path
 from typing import Any
@@ -215,6 +216,63 @@ async def test_remove_member_accepts_response_as_ack(tmp_path: Path) -> None:
     assert captured["abort"].aborted is False
     # Membership is gone.
     assert all(m.name != "alice" for m in mgr.list_members())
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_graceful_remove_marks_cancelled_only_after_ack(
+    tmp_path: Path,
+) -> None:
+    """The TaskRecord should not become terminal during the ack window."""
+    storage = SessionStorage(tmp_path / "sessions.db")
+    leader = _leader_stub(storage)
+    ack_now = asyncio.Event()
+    stop_seen = asyncio.Event()
+
+    async def delayed_ack_runtime(**kwargs: Any) -> None:
+        await kwargs["stop_event"].wait()
+        stop_seen.set()
+        await ack_now.wait()
+        Mailbox(kwargs["storage"], kwargs["team_id"]).append(TeamMessage(
+            msg_id=uuid.uuid4().hex,
+            sender=kwargs["member_name"],
+            recipient=TEAM_LEADER_NAME,
+            body="shutting down after delay",
+            kind="shutdown_response",
+        ))
+
+    mgr = TeamManager(
+        leader=leader,
+        storage=storage,
+        factory=_factory(),
+        running_aborts={},
+        tasks_store=TasksStore(),
+        runtime_runner=delayed_ack_runtime,
+    )
+    mgr.create_team("alpha")
+    mgr.add_member("alice")
+    await asyncio.sleep(0)
+    record = mgr._tasks_store.list(kind="teammate")[0]
+
+    remove_task = asyncio.create_task(
+        mgr.aremove_member("alice", timeout_sec=2.0),
+    )
+    try:
+        await asyncio.wait_for(stop_seen.wait(), timeout=1.0)
+        assert record.status == "running"
+        assert not mgr._tasks_store.terminal_event(record.id).is_set()
+
+        ack_now.set()
+        assert await remove_task is True
+        record = mgr._tasks_store.list(kind="teammate")[0]
+        assert record.status == "cancelled"
+        assert mgr._tasks_store.terminal_event(record.id).is_set()
+    finally:
+        if not remove_task.done():
+            remove_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await remove_task
 
 
 @pytest.mark.asyncio
@@ -252,6 +310,8 @@ async def test_remove_member_falls_back_to_force_kill_on_timeout(
     acked = await mgr.aremove_member("alice", timeout_sec=0.3)
     assert acked is False
     assert captured["abort"].aborted is True
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.status == "cancelled"
 
 
 @pytest.mark.asyncio

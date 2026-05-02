@@ -209,6 +209,10 @@ class TeamManager:
         # paths (``cleanup_session_teams`` walking ``_member_backends``)
         # can run uniform code without dispatching on backend_type.
         self._member_backends: dict[str, BackendHandle] = {}
+        # task_id -> explicit terminal state selected by manager-owned
+        # lifecycle transitions. Runtime done callbacks consult this
+        # before interpreting a clean return as natural completion.
+        self._teammate_terminal_intents: dict[str, str] = {}
         # Set of team_ids created in THIS process that are still on disk.
         # Mirrors claude-code's ``sessionCreatedTeams`` Set + the gh-32730
         # fix: ``create_team`` registers, ``delete_team`` unregisters, and
@@ -315,6 +319,8 @@ class TeamManager:
         team_ids = list(self._session_created_teams)
         # Best-effort: cancel any still-running runtime tasks first so
         # rmtree doesn't race with an active poll loop.
+        for task_id in list(self._member_task_ids.values()):
+            self._mark_teammate_cancelled(task_id)
         for task in list(self._runtimes.values()):
             if not task.done():
                 task.cancel()
@@ -355,6 +361,9 @@ class TeamManager:
             self._runtimes.clear()
             self._member_task_ids.clear()
             self._member_agents.clear()
+            self._stop_events.clear()
+            self._running_aborts.clear()
+            self._teammate_terminal_intents.clear()
 
     # ------------------------------------------------------------------
     # Membership
@@ -500,11 +509,7 @@ class TeamManager:
         if self._runtime_runner is not _default_runner:
             # Legacy path for tests: run the injected coroutine directly.
             def _cleanup(_t: asyncio.Task[None]) -> None:
-                self._runtimes.pop(record.id, None)
-                self._running_aborts.pop(record.id, None)
-                with contextlib.suppress(Exception):
-                    if not _t.cancelled():
-                        _t.exception()
+                self._finalize_runtime_task(record.id, _t, abort)
             task: asyncio.Task[None] = asyncio.create_task(
                 self._runtime_runner(
                     agent=child,
@@ -540,11 +545,7 @@ class TeamManager:
             )
             in_proc_task = handle.task
             def _cleanup(_t: asyncio.Task[None]) -> None:
-                self._runtimes.pop(record.id, None)
-                self._running_aborts.pop(record.id, None)
-                with contextlib.suppress(Exception):
-                    if not _t.cancelled():
-                        _t.exception()
+                self._finalize_runtime_task(record.id, _t, abort)
             in_proc_task.add_done_callback(_cleanup)
             self._runtimes[record.id] = in_proc_task
         # Stash the stop_event on the manager so remove_member can fire
@@ -674,6 +675,12 @@ class TeamManager:
             abort=abort,
             seed_prompt=seed_prompt,
         )
+        task = getattr(handle, "task", None)
+        if isinstance(task, asyncio.Task):
+            def _cleanup(_t: asyncio.Task[None]) -> None:
+                self._finalize_runtime_task(record.id, _t, abort)
+            task.add_done_callback(_cleanup)
+            self._runtimes[record.id] = task
         self._stop_events[name] = stop_event
         self._member_backends[name] = handle
         if member.tmux_pane_id is not None:
@@ -835,6 +842,9 @@ class TeamManager:
             ))
         stop_event = self._stop_events.get(name)
         if stop_event is not None:
+            task_id = self._member_task_ids.get(name)
+            if task_id is not None:
+                self._set_teammate_cancel_intent(task_id)
             stop_event.set()
         # Poll the leader inbox for the matching ack. We deliberately
         # use ``asyncio.to_thread`` for the blocking sleep so the
@@ -938,6 +948,8 @@ class TeamManager:
             self._persist()
         task_id = self._member_task_ids.pop(name, None)
         stop_event = self._stop_events.pop(name, None)
+        if task_id is not None:
+            self._mark_teammate_cancelled(task_id)
         if send_request and task_id is not None:
             with contextlib.suppress(Exception):
                 self._post(TeamMessage(
@@ -953,6 +965,7 @@ class TeamManager:
             controller = self._running_aborts.get(task_id)
             if controller is not None and not controller.aborted:
                 controller.abort("teammate_removed")
+            self._running_aborts.pop(task_id, None)
             handle = self._runtimes.get(task_id)
             if handle is not None and not handle.done():
                 handle.cancel()
@@ -984,6 +997,38 @@ class TeamManager:
                 member=name,
                 forced=not already_acked,
             )
+
+    def _set_teammate_cancel_intent(self, task_id: str) -> None:
+        """Remember that a running teammate should finish as cancelled."""
+        if task_id in self._runtimes:
+            self._teammate_terminal_intents[task_id] = "cancelled"
+
+    def _mark_teammate_cancelled(self, task_id: str) -> None:
+        """Mark a teammate TaskRecord cancelled and preserve callback intent."""
+        self._set_teammate_cancel_intent(task_id)
+        self._tasks_store.mark_cancelled(task_id)
+
+    def _finalize_runtime_task(
+        self,
+        task_id: str,
+        task: asyncio.Task[None],
+        abort: AbortController,
+    ) -> None:
+        """Mirror a teammate runtime task's terminal outcome to TaskRecord."""
+        self._runtimes.pop(task_id, None)
+        self._running_aborts.pop(task_id, None)
+        intent = self._teammate_terminal_intents.pop(task_id, None)
+        if intent == "cancelled" or task.cancelled() or abort.aborted:
+            self._tasks_store.mark_cancelled(task_id)
+            return
+        exc = task.exception()
+        if exc is not None:
+            self._tasks_store.mark_failed(
+                task_id,
+                f"{type(exc).__name__}: {exc}",
+            )
+            return
+        self._tasks_store.mark_completed(task_id, "")
 
     def list_members(self) -> list[TeammateMember]:
         if self._team is None:

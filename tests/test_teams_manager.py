@@ -81,8 +81,29 @@ def _mgr(
     ), storage
 
 
+async def _wait_for_teammate_terminal(mgr: TeamManager) -> Any:
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    await asyncio.wait_for(
+        mgr._tasks_store.terminal_event(record.id).wait(),
+        timeout=1,
+    )
+    return record
+
+
 class _FakePaneHandle:
-    pass
+    pane_id = "pane-1"
+
+    def __init__(self) -> None:
+        self.force_killed = False
+
+    async def shutdown(self, *, timeout_sec: float = 5.0) -> bool:
+        return True
+
+    async def force_kill(self) -> None:
+        self.force_killed = True
+
+    def is_alive(self) -> bool:
+        return not self.force_killed
 
 
 class _FakePaneBackend:
@@ -127,6 +148,79 @@ async def test_add_and_remove_member(tmp_path: Path) -> None:
     assert all(m.name != "alice" for m in mgr.list_members())
     # Wait for runtime tasks to settle.
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_teammate_task_completes_on_natural_runtime_return(
+    tmp_path: Path,
+) -> None:
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+
+    mgr.add_member("alice")
+
+    record = await _wait_for_teammate_terminal(mgr)
+    assert record.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_teammate_task_fails_on_runtime_exception(
+    tmp_path: Path,
+) -> None:
+    async def broken_runtime(**_kwargs: Any) -> None:
+        raise RuntimeError("runtime exploded")
+
+    mgr, _ = _mgr(tmp_path, runtime_runner=broken_runtime)
+    mgr.create_team("alpha")
+
+    mgr.add_member("alice")
+
+    record = await _wait_for_teammate_terminal(mgr)
+    assert record.status == "failed"
+    assert record.error == "RuntimeError: runtime exploded"
+
+
+@pytest.mark.asyncio
+async def test_force_remove_marks_teammate_task_cancelled(
+    tmp_path: Path,
+) -> None:
+    async def parked_runtime(**kwargs: Any) -> None:
+        await kwargs["abort"].signal.wait()
+
+    mgr, _ = _mgr(tmp_path, runtime_runner=parked_runtime)
+    mgr.create_team("alpha")
+    mgr.add_member("alice")
+    await asyncio.sleep(0)
+
+    mgr.remove_member("alice", force=True)
+    await asyncio.sleep(0)
+
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.status == "cancelled"
+    assert mgr._member_task_ids == {}
+    assert mgr._running_aborts == {}
+    assert mgr._stop_events == {}
+
+
+@pytest.mark.asyncio
+async def test_parent_abort_marks_teammate_task_cancelled(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, AbortController] = {}
+
+    async def abortable_runtime(**kwargs: Any) -> None:
+        captured["abort"] = kwargs["abort"]
+        await kwargs["abort"].signal.wait()
+
+    mgr, _ = _mgr(tmp_path, runtime_runner=abortable_runtime)
+    mgr.create_team("alpha")
+    mgr.add_member("alice")
+    await asyncio.sleep(0)
+
+    captured["abort"].abort("parent_abort")
+
+    record = await _wait_for_teammate_terminal(mgr)
+    assert record.status == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -229,6 +323,46 @@ async def test_aadd_member_records_inherited_model_without_spawn_override(
     record = mgr._tasks_store.list(kind="teammate")[0]
     assert record.model_spec == mgr._factory.parent_model_spec
     assert spawn.call_args.kwargs.get("model_spec") is None
+
+
+@pytest.mark.asyncio
+async def test_pane_force_remove_marks_teammate_task_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aura.core.teams.backends.registry as registry
+
+    monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    await mgr.aadd_member("alice", backend_type="pane")
+
+    mgr.remove_member("alice", force=True)
+    await asyncio.sleep(0)
+
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.status == "cancelled"
+    assert mgr._member_task_ids == {}
+    assert mgr._running_aborts == {}
+    assert mgr._stop_events == {}
+
+
+@pytest.mark.asyncio
+async def test_pane_session_cleanup_marks_teammate_task_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import aura.core.teams.backends.registry as registry
+
+    monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    await mgr.aadd_member("alice", backend_type="pane")
+
+    await mgr.cleanup_session_teams()
+
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.status == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -366,6 +500,26 @@ async def test_delete_team_clears_state(tmp_path: Path) -> None:
     mgr.delete_team()
     assert mgr.team is None
     assert mgr.list_members() == []
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_session_cleanup_marks_teammate_task_cancelled(
+    tmp_path: Path,
+) -> None:
+    async def parked_runtime(**kwargs: Any) -> None:
+        await kwargs["abort"].signal.wait()
+
+    mgr, _ = _mgr(tmp_path, runtime_runner=parked_runtime)
+    mgr.create_team("alpha")
+    mgr.add_member("alice")
+    await asyncio.sleep(0)
+
+    await mgr.cleanup_session_teams()
+
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.status == "cancelled"
 
 
 def test_load_round_trip(tmp_path: Path) -> None:

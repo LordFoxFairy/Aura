@@ -83,16 +83,19 @@ def scenario_skill(tmp: Path) -> bool:
         os.chdir(tmp)
         agent = _build_agent(tmp)
 
-        # (a) registry populated
+        # (a) registry populated. The agent also loads bundled/user skills, so
+        # assert that this project skill is present instead of assuming it is
+        # the only available skill.
         skills = list(agent._skill_registry.list())
+        skills_by_name = {skill.name: skill for skill in skills}
         ok = _check(
-            f"skill registry has {len(skills)} skill(s)",
-            len(skills) == 1 and skills[0].name == "superpowers",
+            f"skill registry includes superpowers among {len(skills)} skill(s)",
+            "superpowers" in skills_by_name,
         )
         if not ok:
             return False
 
-        sk = skills[0]
+        sk = skills_by_name["superpowers"]
         ok = _check(
             "frontmatter parsed: description, when_to_use, arguments, version",
             bool(sk.description)

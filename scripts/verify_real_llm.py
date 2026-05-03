@@ -11,6 +11,7 @@ right API key env var (e.g. ``DEEPSEEK_API_KEY``). Run from repo root.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import time
@@ -109,7 +110,10 @@ def s3(sc: Scenario) -> None:
     rc, out = _run(["/log 3"])
     sc.output = out
     sc.check("process exited 0", rc == 0)
-    sc.check("at least one commit line", "feat" in out or "fix" in out)
+    sc.check(
+        "at least one abbreviated commit hash",
+        re.search(r"(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])", out) is not None,
+    )
 
 
 @scenario("/tasks (empty list on fresh session)")

@@ -1,4 +1,4 @@
-.PHONY: check lint fmt type test desktop desktop-build desktop-yes
+.PHONY: check lint fmt type test e2e desktop desktop-build desktop-yes
 
 check: lint type test
 
@@ -13,6 +13,9 @@ type:
 
 test:
 	uv run pytest -v
+
+e2e:
+	uv run pytest -m e2e -v
 
 # One-shot desktop launcher (interactive — prompts before installing deps)
 desktop:

@@ -52,6 +52,14 @@ uv run mypy aura tests
 uv run pytest -v
 ```
 
+The deep subprocess/PTY e2e tier is intentionally separate:
+
+```bash
+uv run pytest -m e2e -v
+# or
+make e2e
+```
+
 For faster iteration, run the focused test file or files that cover the
 change first, then run the full gate before marking the work complete. A
 plain full-suite run is:

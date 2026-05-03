@@ -36,6 +36,35 @@ uv sync --extra all --extra dev
 uv run aura --version
 ```
 
+### Development checks
+
+CI runs the same top-level gate as local contributors:
+
+```bash
+make check
+```
+
+That expands to:
+
+```bash
+uv run ruff check .
+uv run mypy aura tests
+uv run pytest -v
+```
+
+For faster iteration, run the focused test file or files that cover the
+change first, then run the full gate before marking the work complete. A
+plain full-suite run is:
+
+```bash
+uv run pytest -q
+```
+
+The pane-backend tests are skipped unless the process is running inside a
+tmux session with `tmux` on `PATH`; this is expected on normal local and CI
+runs. Permission hooks are part of product behavior and should stay enabled
+in tests unless a test is explicitly covering bypass mode.
+
 ## Quickstart
 
 1. Set your API key (pick one):
@@ -301,7 +330,7 @@ agent = build_agent(load_config(), hooks=hooks)
 
 ## Status
 
-**0.7.4 — eleven incremental releases since the walking-skeleton MVP.** Own-loop, JSON config, 11 built-in tools, hook-based extensibility, end-to-end permissions + safety (4 modes), skills, MCP, compact + auto-compact, fire-and-forget subagents with full inheritance, live status bar with context-pressure indicator, inline permission prompts. LangChain client-layer only. 1107 tests green.
+**0.18.0 — iterative releases since the walking-skeleton MVP.** Own-loop, JSON config, built-in tools, hook-based extensibility, end-to-end permissions + safety (4 modes), skills, MCP, compact + auto-compact, fire-and-forget subagents with full inheritance, teammate lifecycle tracking, live status bar with context-pressure indicator, inline permission prompts. LangChain client-layer only. The maintained release gate is `make check`.
 
 | Tag | Theme |
 |---|---|

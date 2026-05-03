@@ -17,6 +17,7 @@ Coverage matrix:
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -261,7 +262,9 @@ async def test_settings_json_can_register_external_hook_command(
     script.chmod(0o755)
 
     raw = {
-        "user_prompt_submit": [{"command": str(script), "timeout_ms": 3000}],
+        "user_prompt_submit": [
+            {"command": shlex.quote(str(script)), "timeout_ms": 3000},
+        ],
     }
     chain = build_lifecycle_hooks_from_config(raw)
     assert len(chain.user_prompt_submit) == 1
@@ -272,6 +275,33 @@ async def test_settings_json_can_register_external_hook_command(
     human_msgs = [m for m in saved if getattr(m, "type", "") == "human"]
     assert any("REWRITTEN" in str(m.content) for m in human_msgs)
     await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_external_hook_command_handles_quoted_paths_with_spaces(
+    tmp_path: Path,
+) -> None:
+    """Subprocess hooks run through a shell, so tests must quote paths."""
+    hook_dir = tmp_path / "hook dir"
+    hook_dir.mkdir()
+    script = hook_dir / "rewrite prompt.sh"
+    script.write_text("#!/bin/sh\nprintf 'SPACE_OK'\n")
+    script.chmod(0o755)
+
+    chain = build_lifecycle_hooks_from_config({
+        "user_prompt_submit": [
+            {"command": shlex.quote(str(script)), "timeout_ms": 3000},
+        ],
+    })
+    agent = _build_agent(tmp_path, hooks=chain)
+    try:
+        async for _ in agent.astream("original"):
+            pass
+        saved = agent._storage.load("default")
+        human_msgs = [m for m in saved if getattr(m, "type", "") == "human"]
+        assert any("SPACE_OK" in str(m.content) for m in human_msgs)
+    finally:
+        await agent.aclose()
 
 
 def test_build_lifecycle_hooks_from_config_skips_unknown_events() -> None:

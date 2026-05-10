@@ -13,6 +13,7 @@ runtime; Phase 6 will land the subagent runtime.
 """
 from __future__ import annotations
 
+from aura.core.runtime.mcp import McpRuntime
 from aura.core.runtime.session import SessionRuntime
 from aura.core.runtime.tool_factory import (
     STATEFUL_TOOL_FACTORIES,
@@ -30,6 +31,7 @@ from aura.core.runtime.tool_factory import (
 __all__ = [
     "STATEFUL_TOOL_FACTORIES",
     "AskUserQuestionFactory",
+    "McpRuntime",
     "SendMessageFactory",
     "SessionRuntime",
     "StatefulToolFactory",

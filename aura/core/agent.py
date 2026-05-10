@@ -48,6 +48,7 @@ from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
+from aura.core.runtime.mcp import McpRuntime
 from aura.core.runtime.session import SessionRuntime
 from aura.core.runtime.tool_factory import (
     STATEFUL_TOOL_FACTORIES,
@@ -566,12 +567,15 @@ class Agent:
         self._hooks.file_changed.append(make_aura_md_reload_hook(self))
         self._hooks.cwd_changed.append(make_cwd_rules_reload_hook(self))
         self._loop = self._build_loop()
-        # MCP is wired at construction to declare the slots, but no
-        # connection happens here — aconnect() does that work async. Sync
-        # construction MUST remain sync so the existing Agent(...) call
-        # sites (tests, SDK users) don't have to thread an event loop.
-        self._mcp_manager: MCPManager | None = None
-        self._mcp_commands: list[object] = []
+        # Phase 2 Task 8 — MCP lifecycle (manager + commands + connect /
+        # disconnect + journal events) lives on McpRuntime. Factory
+        # closes over the module-level ``MCPManager`` symbol so tests
+        # that monkey-patch ``agent_mod.MCPManager`` keep working.
+        self._mcp_runtime = McpRuntime(
+            list(self._config.mcp_servers),
+            mcp_overrides_builtin=self._config.tools.mcp_overrides_builtin,
+            manager_factory=lambda configs: MCPManager(configs),
+        )
         # Estimated size of the pinned prompt prefix (system msg + memory +
         # rules + skill catalogue + tool schemas) in tokens. Computed once
         # at construction so the status bar has a number to anchor against
@@ -1242,7 +1246,27 @@ class Agent:
         or when ``aconnect`` hasn't run yet — the caller short-circuits on
         that case.
         """
-        return self._mcp_manager
+        return self._mcp_runtime.manager
+
+    # Phase 2 Task 8 — back-compat shims. External callers (CLI
+    # commands, tests) poke ``_mcp_manager`` / ``_mcp_commands``
+    # directly; the data lives on :class:`McpRuntime` now and the
+    # shims forward reads + writes both ways.
+    @property
+    def _mcp_manager(self) -> MCPManager | None:
+        return self._mcp_runtime.manager
+
+    @_mcp_manager.setter
+    def _mcp_manager(self, value: MCPManager | None) -> None:
+        self._mcp_runtime.manager = value
+
+    @property
+    def _mcp_commands(self) -> list[object]:
+        return self._mcp_runtime.commands
+
+    @_mcp_commands.setter
+    def _mcp_commands(self, value: list[object]) -> None:
+        self._mcp_runtime.commands = list(value)
 
     @property
     def current_model(self) -> str:
@@ -1501,90 +1525,30 @@ class Agent:
         )
 
     async def aconnect(self) -> None:
-        """Establish MCP connections and register discovered tools / prompts.
+        """Establish MCP connections and register discovered tools.
 
-        Must be called before the first turn if ``mcp_servers`` are
-        configured. No-op if no servers are configured. Failures are
-        journalled and swallowed — the agent starts without the failing
-        servers' tools (graceful degradation is a v0.3.0 non-negotiable).
+        Delegates to :meth:`McpRuntime.connect_all`; on success swaps
+        the registry contents (preserving the registry identity the
+        loop binds against) and rebinds the loop's tool list. No-op
+        with no configured servers; failures are journaled and
+        swallowed inside the runtime (graceful degradation). MCP
+        resources are exposed via :mod:`aura.cli.attachments`'
+        ``@server:uri`` preprocessor, NOT as an LLM tool.
         """
-        if not self._config.mcp_servers:
+        merged = await self._mcp_runtime.connect_all(self._registry.tools())
+        if merged is None:
             return
-        try:
-            manager = MCPManager(self._config.mcp_servers)
-            tools, commands = await manager.start_all()
-        except Exception as exc:  # noqa: BLE001
-            journal.write(
-                "mcp_aconnect_failed",
-                error=f"{type(exc).__name__}: {exc}",
-            )
-            return
-        self._mcp_manager = manager
-        # F-02-031 — route the merge through ``assemble_tool_pool`` so
-        # builtin-vs-MCP collisions resolve under the configured policy
-        # (``tools.mcp_overrides_builtin``) and emit a ``mcp_tool_shadowed``
-        # journal event with the policy outcome (``winner``).
-        from aura.core.registry import assemble_tool_pool  # noqa: PLC0415
-        merged = assemble_tool_pool(
-            self._registry.tools(),
-            tools,
-            mcp_overrides=self._config.tools.mcp_overrides_builtin,
-        )
-        # Replace registry contents with the merged pool. Clear-then-add
-        # keeps the existing ToolRegistry instance + its callers (the
-        # loop's tool binding, send_message register/unregister, etc.).
-        for name in list(self._registry):
-            self._registry.unregister(name)
-        for t in merged.values():
-            self._registry.register(t)
-        self._mcp_commands = list(commands)
-        # MCP resources are exposed via the CLI-layer ``@server:uri`` mention
-        # preprocessor (see :mod:`aura.cli.attachments`), NOT as an LLM tool.
-        # Claude-code parity: the user attaches resources by naming them
-        # inline; the preprocessor resolves + injects the body before the
-        # turn hits the model. The prior ``mcp_read_resource`` auto-
-        # registration was removed in v0.10.x — it inverted the control
-        # direction (LLM had to invent URIs) and silently re-pulled
-        # resources turn after turn. :class:`aura.tools.mcp_read_resource
-        # .MCPReadResourceTool` is still importable for programmatic SDK
-        # users who want LLM-driven reads; the resource surface just isn't
-        # wired into the default agent anymore.
-        catalogue = manager.resources_catalogue()
+        self._mcp_runtime.replace_registry_contents(self._registry, merged)
         self._loop._rebind_tools(self._registry.tools())
-        journal.write(
-            "mcp_aconnect_done",
-            tool_count=len(tools),
-            command_count=len(commands),
-            resource_count=len(catalogue),
-        )
 
     # ------------------------------------------------------------------
     # Shutdown (B3): timeout-bounded, cancel-on-timeout MCP teardown.
     # ------------------------------------------------------------------
-    #
-    # The pre-B3 ``close`` had two failure modes that cost us in dogfood:
-    #
-    # 1. **Fire-and-forget under an active loop.** If ``close`` was called
-    #    from inside a running event loop (notebook / Tauri backend /
-    #    ``asyncio.run(_entry())`` during teardown but before the loop
-    #    closed), it did ``loop.create_task(stop_all())`` and returned —
-    #    the task was then orphaned and a hanging MCP server kept its
-    #    subprocess alive past agent teardown.
-    # 2. **Swallow-all ``except Exception``** made every path look like a
-    #    success in journal; operators couldn't tell a clean shutdown
-    #    apart from a swallowed RuntimeError.
-    #
-    # New contract:
-    #   * :meth:`aclose` is the canonical async entry. ``stop_all`` runs
-    #     under :func:`asyncio.wait_for`; on timeout the coroutine is
-    #     cancelled, ``servers_hanging`` is computed from
-    #     ``manager.status()`` (whoever's still ``connected``), and a
-    #     ``mcp_close_timeout`` journal event fires. Unexpected errors
-    #     emit ``mcp_close_error``; the happy path emits ``mcp_stopped``.
-    #   * :meth:`close` is the sync SDK/CLI wrapper. No active loop →
-    #     ``asyncio.run(self.aclose(...))``. Active loop → :class:`RuntimeError`
-    #     so the caller is forced onto the async path. Fire-and-forget is
-    #     gone.
+    # The B3 contract (timeout under :func:`asyncio.wait_for`,
+    # cancel-on-timeout, three journal events, idempotent on repeat) now
+    # lives on :class:`McpRuntime.disconnect_all`. :meth:`aclose` below
+    # is the canonical async entry; :meth:`close` is the sync SDK/CLI
+    # wrapper that refuses fire-and-forget when there is a live manager.
     def _teardown_local_tasks(self) -> None:
         """Cancel subagent tasks + kill lingering shell subprocesses.
 
@@ -1610,45 +1574,15 @@ class Agent:
                     proc.kill()
             self._running_shells.pop(task_id, None)
 
-    def _connected_server_names(self) -> list[str]:
-        """Best-effort snapshot of servers still in ``connected`` state.
-
-        Used to populate ``servers_hanging`` on the timeout journal
-        event. ``status()`` is pure-sync and defensively written never to
-        raise — if a half-torn-down manager misbehaves we degrade to
-        ``[]`` rather than poisoning the shutdown path.
-        """
-        mgr = self._mcp_manager
-        if mgr is None:
-            return []
-        try:
-            entries = mgr.status()
-        except Exception:  # noqa: BLE001
-            return []
-        return [e.name for e in entries if getattr(e, "state", None) == "connected"]
-
     async def aclose(self, *, mcp_timeout: float = 5.0) -> None:
         """Async, timeout-bounded teardown (B3).
 
-        Contract:
-        - Cancels in-flight subagent tasks + kills lingering shell
-          subprocesses (same as the old sync ``close``).
-        - Runs ``MCPManager.stop_all`` under ``asyncio.wait_for``. On
-          timeout, the coroutine is cancelled and a ``mcp_close_timeout``
-          event fires with ``{session, elapsed_sec, timeout_sec,
-          servers_hanging}``.
-        - Unexpected exceptions during ``stop_all`` are captured into a
-          ``mcp_close_error`` event (shutdown is best-effort; a thrown
-          exception must not crash the caller).
-        - Normal completion emits ``mcp_stopped`` with ``elapsed_sec``.
-        - ``self._mcp_manager`` is set to ``None`` on every branch so a
-          subsequent ``aclose()`` / ``close()`` is an idempotent no-op.
-        - Finally, ``self._storage.close()`` to flush SQLite.
-
-        F-04-014: fires ``Stop(reason="user_exit")`` BEFORE the
-        teardown so the hook sees a live state / mode / model. Hook
-        exceptions are suppressed — a broken stop hook MUST NOT block
-        agent shutdown.
+        Sequence: fire Stop hook (F-04-014) → cancel local tasks +
+        SIGKILL bash subprocesses → cleanup session-teams (leader
+        only) → :meth:`McpRuntime.disconnect_all` (B3 timeout
+        contract) → :meth:`SessionRuntime.close_storage` (SQLite
+        flush). Stop hook exceptions are suppressed — a broken stop
+        hook MUST NOT block shutdown.
         """
         with contextlib.suppress(Exception):
             await self.fire_stop(reason="user_exit")
@@ -1669,36 +1603,14 @@ class Agent:
                 with contextlib.suppress(Exception):
                     await cleanup()
 
-        if self._mcp_manager is not None:
-            mgr = self._mcp_manager
-            servers_hanging = self._connected_server_names()
-            loop = asyncio.get_running_loop()
-            t0 = loop.time()
-            try:
-                await asyncio.wait_for(mgr.stop_all(), timeout=mcp_timeout)
-            except TimeoutError:
-                elapsed = loop.time() - t0
-                journal.write(
-                    "mcp_close_timeout",
-                    session=self._session_id,
-                    elapsed_sec=elapsed,
-                    timeout_sec=mcp_timeout,
-                    servers_hanging=servers_hanging,
-                )
-            except Exception as exc:  # noqa: BLE001
-                journal.write(
-                    "mcp_close_error",
-                    session=self._session_id,
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-            else:
-                journal.write(
-                    "mcp_stopped",
-                    session=self._session_id,
-                    elapsed_sec=loop.time() - t0,
-                )
-            finally:
-                self._mcp_manager = None
+        # Phase 2 Task 8 — MCP teardown delegates to McpRuntime.
+        # Same B3 contract: timeout-bounded, cancel-on-timeout, three
+        # journal events (``mcp_close_timeout`` / ``mcp_close_error`` /
+        # ``mcp_stopped``), idempotent on repeat.
+        await self._mcp_runtime.disconnect_all(
+            session_id=self._session_id,
+            timeout_sec=mcp_timeout,
+        )
 
         # Phase 1 Task 13 — storage close lives on SessionRuntime so
         # other lifecycle exit points (future graceful-shutdown hooks)
@@ -1708,22 +1620,12 @@ class Agent:
     def close(self, *, mcp_timeout: float = 5.0) -> None:
         """Sync teardown — thin wrapper around :meth:`aclose`.
 
-        Primary entry for no-loop callers (the CLI's outer ``finally``
-        after ``asyncio.run(_entry())`` has returned, legacy SDK users
-        who never opened a loop, sync unit tests). When called without a
-        running loop we spin one via ``asyncio.run(self.aclose(...))``.
-
-        Inside a running event loop there are two cases:
-
-        * **No MCP manager to tear down** (and no storage-hostile state) —
-          we do the pure-sync cleanup in-place (``_teardown_local_tasks``
-          + ``_storage.close()``). This keeps the historical contract for
-          async unit tests that build a bare Agent and call ``close()``.
-        * **MCP manager is live** — we refuse. The pre-B3 path was
-          ``loop.create_task(stop_all())`` fire-and-forget, which leaked
-          tasks and kept MCP subprocesses alive past exit. Async callers
-          must explicitly ``await agent.aclose(...)`` to get the
-          timeout-bounded shutdown contract.
+        No active loop → ``asyncio.run(self.aclose(...))`` (the
+        no-loop CLI / legacy SDK path). Active loop with no live MCP
+        manager → pure-sync cleanup in-place (matches the bare-agent
+        contract async unit tests rely on). Active loop with a live
+        manager → :class:`RuntimeError`; the caller must explicitly
+        ``await agent.aclose(...)`` to honour the B3 timeout contract.
         """
         try:
             asyncio.get_running_loop()

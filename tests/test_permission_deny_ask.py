@@ -31,7 +31,17 @@ from aura.core.permissions.store import (
 )
 from aura.schemas.permissions import PermissionsConfig
 from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
 
 
 class _P(BaseModel):
@@ -244,10 +254,10 @@ async def test_deny_rule_blocks_under_default_mode(
         args={"command": "rm -rf /tmp/x"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "deny rule" in outcome.short_circuit.error
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "deny rule" in _sc(outcome).error  # type: ignore[operator,union-attr]
     assert outcome.decision is not None
     assert outcome.decision.reason == "rule_deny"
     assert outcome.decision.allow is False
@@ -280,7 +290,7 @@ async def test_deny_rule_blocks_even_under_bypass(
         args={"command": "rm -rf /tmp/x"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
+    assert _sc(outcome) is not None
     assert outcome.decision is not None
     assert outcome.decision.reason == "rule_deny"
     # ``permission_bypass`` MUST NOT fire — deny short-circuited first.
@@ -377,7 +387,7 @@ async def test_ask_rule_forces_prompt_when_allow_rule_would_match(
         args={"command": pattern},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     # Asker WAS consulted — the allow rule was overridden by the ask rule.
     assert len(spy.calls) == 1
     assert outcome.decision is not None
@@ -410,7 +420,7 @@ async def test_ask_rule_forces_prompt_even_after_session_allow(
         args={"command": pattern},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert len(spy.calls) == 1
 
 

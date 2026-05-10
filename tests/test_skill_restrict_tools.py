@@ -51,8 +51,18 @@ from aura.core.persistence import journal as journal_module
 from aura.core.persistence.storage import SessionStorage
 from aura.core.skills.command import SkillCommand
 from aura.core.skills.types import Skill
+from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -170,8 +180,8 @@ async def test_restrict_tools_blocks_undeclared_tool(tmp_path: Path) -> None:
             state=agent._state,
         )
         # Hook denied + asker never consulted.
-        assert outcome.short_circuit is not None
-        assert outcome.short_circuit.ok is False
+        assert _sc(outcome) is not None
+        assert _sc(outcome).ok is False  # type: ignore[union-attr]
         assert asker.calls == []
         assert outcome.decision is not None
         assert outcome.decision.reason == "restrict_tools_blocked"
@@ -213,7 +223,7 @@ async def test_restrict_tools_allows_declared_tool(tmp_path: Path) -> None:
         # rule_allow.
         assert len(asker.calls) == 1
         assert asker.calls[0]["tool"] == "read_file"
-        assert outcome.short_circuit is None
+        assert _sc(outcome) is None
         assert outcome.decision is not None
         assert outcome.decision.reason == "user_accept"
     finally:
@@ -258,7 +268,7 @@ async def test_lease_expires_when_turn_advances(tmp_path: Path) -> None:
         outcome2 = await hook(
             tool=bash_tool, args={}, state=agent._state,
         )
-        assert outcome2.short_circuit is None
+        assert _sc(outcome2) is None
         assert len(asker.calls) == 1
         assert asker.calls[0]["tool"] == "bash"
     finally:
@@ -295,7 +305,7 @@ async def test_multiple_active_skills_union(tmp_path: Path) -> None:
                 args={},
                 state=agent._state,
             )
-            assert outcome.short_circuit is None, (
+            assert _sc(outcome) is None, (
                 f"{declared!r} should not be blocked"
             )
 
@@ -338,7 +348,7 @@ async def test_empty_restrict_tools_no_restriction(tmp_path: Path) -> None:
             args={},
             state=agent._state,
         )
-        assert outcome.short_circuit is None
+        assert _sc(outcome) is None
         assert len(asker.calls) == 1
     finally:
         await agent.aclose()

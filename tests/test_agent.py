@@ -19,8 +19,18 @@ from aura.core.llm import UnknownModelSpecError
 from aura.core.memory import project_memory, rules
 from aura.core.persistence.storage import SessionStorage
 from aura.schemas.events import Final
+from aura.schemas.tool import ToolError, ToolResult
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
 
 
 def _minimal_config(enabled: list[str] | None = None) -> AuraConfig:
@@ -263,10 +273,10 @@ async def test_clear_session_wipes_read_state(tmp_path: Path) -> None:
         args={"path": str(target), "old_str": "body", "new_str": "BODY"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "has not been read" in outcome.short_circuit.error
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "has not been read" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
 def test_unknown_tool_name_in_config_raises_AuraConfigError(tmp_path: Path) -> None:
@@ -889,8 +899,6 @@ def test_ask_user_question_registered_even_without_asker_kwarg(tmp_path: Path) -
 async def test_ask_user_question_without_asker_raises_ToolError_on_invoke(
     tmp_path: Path,
 ) -> None:
-    from aura.schemas.tool import ToolError
-
     cfg = _minimal_config(enabled=["ask_user_question"])
     agent = Agent(
         config=cfg,

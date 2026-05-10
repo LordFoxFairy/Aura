@@ -46,8 +46,20 @@ from aura.core.permissions.subagent_asker import SubagentAutoDenyAsker
 from aura.core.persistence.storage import SessionStorage
 from aura.core.tasks.factory import SubagentFactory
 from aura.schemas.state import LoopState
-from aura.schemas.tool import tool_metadata
+from aura.schemas.tool import (
+    ToolResult,  # noqa: F401
+    tool_metadata,
+)
 from tests.conftest import FakeChatModel, FakeTurn
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
 
 # ---------------------------------------------------------------------------
 # Fixture / helpers
@@ -120,18 +132,18 @@ async def test_subagent_denies_tool_requiring_user_prompt() -> None:
             args={"value": "x"},
             state=LoopState(),
         )
-        assert outcome.short_circuit is not None, (
+        assert _sc(outcome) is not None, (
             "subagent hook must short-circuit (deny) on the ask path"
         )
-        assert outcome.decision is not None
-        assert outcome.decision.allow is False
-        assert outcome.decision.reason == "user_deny"
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.allow is False  # type: ignore[union-attr]
+        assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
         # Model-facing error string identifies this as a subagent auto-deny
         # via the ``user_deny`` reason (the asker's ``feedback`` field
         # carries the marker string; deny formatter appends it so the LLM
         # sees "subagent_auto_deny").
-        assert outcome.short_circuit.ok is False
-        assert "subagent_auto_deny" in (outcome.short_circuit.error or "")
+        assert _sc(outcome).ok is False  # type: ignore[union-attr]
+        assert "subagent_auto_deny" in (_sc(outcome).error or "")  # type: ignore[union-attr]
     finally:
         await child.aclose()
 
@@ -158,10 +170,10 @@ async def test_subagent_honors_parent_allow_rule() -> None:
             state=LoopState(),
         )
         # Allow path: no short_circuit, decision.allow True, reason rule_allow.
-        assert outcome.short_circuit is None
-        assert outcome.decision is not None
-        assert outcome.decision.allow is True
-        assert outcome.decision.reason == "rule_allow"
+        assert _sc(outcome) is None
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.allow is True  # type: ignore[union-attr]
+        assert outcome.decision.reason == "rule_allow"  # type: ignore[union-attr]
     finally:
         await child.aclose()
 
@@ -181,10 +193,10 @@ async def test_subagent_honors_parent_deny_rule_over_allow_rule() -> None:
             args={"value": "x"},
             state=LoopState(),
         )
-        assert outcome.short_circuit is not None
-        assert outcome.decision is not None
-        assert outcome.decision.allow is False
-        assert outcome.decision.reason == "rule_deny"
+        assert _sc(outcome) is not None
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.allow is False  # type: ignore[union-attr]
+        assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
     finally:
         await child.aclose()
 
@@ -204,11 +216,11 @@ async def test_subagent_honors_parent_ask_rule_by_auto_denying_prompt() -> None:
             args={"value": "x"},
             state=LoopState(),
         )
-        assert outcome.short_circuit is not None
-        assert outcome.decision is not None
-        assert outcome.decision.allow is False
-        assert outcome.decision.reason == "user_deny"
-        assert "subagent_auto_deny" in (outcome.short_circuit.error or "")
+        assert _sc(outcome) is not None
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.allow is False  # type: ignore[union-attr]
+        assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
+        assert "subagent_auto_deny" in (_sc(outcome).error or "")  # type: ignore[union-attr]
     finally:
         await child.aclose()
 
@@ -249,9 +261,9 @@ async def test_agent_wiring_passes_deny_and_ask_rules_to_subagent_factory(
             args={"path": str(tmp_path / "out.txt"), "content": "x"},
             state=LoopState(),
         )
-        assert outcome.short_circuit is not None
-        assert outcome.decision is not None
-        assert outcome.decision.reason == "rule_deny"
+        assert _sc(outcome) is not None
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
     finally:
         await child.aclose()
         await agent.aclose()
@@ -278,10 +290,10 @@ async def test_nested_subagent_factory_inherits_permission_context() -> None:
             args={"value": "x"},
             state=LoopState(),
         )
-        assert outcome.short_circuit is not None
-        assert outcome.decision is not None
-        assert outcome.decision.allow is False
-        assert outcome.decision.reason == "rule_deny"
+        assert _sc(outcome) is not None
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.allow is False  # type: ignore[union-attr]
+        assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
     finally:
         await grandchild.aclose()
         await child.aclose()
@@ -349,10 +361,10 @@ async def test_subagent_inherits_bypass_mode_from_parent() -> None:
             args={"value": "x"},
             state=LoopState(),
         )
-        assert outcome.short_circuit is None
-        assert outcome.decision is not None
-        assert outcome.decision.allow is True
-        assert outcome.decision.reason == "mode_bypass"
+        assert _sc(outcome) is None
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.allow is True  # type: ignore[union-attr]
+        assert outcome.decision.reason == "mode_bypass"  # type: ignore[union-attr]
     finally:
         await child.aclose()
 
@@ -382,11 +394,11 @@ async def test_subagent_freezes_parent_mode_at_spawn() -> None:
             args={"value": "x"},
             state=LoopState(),
         )
-        assert outcome.short_circuit is not None
-        assert outcome.decision is not None
-        assert outcome.decision.allow is False
-        assert outcome.decision.reason == "user_deny"
-        assert "subagent_auto_deny" in (outcome.short_circuit.error or "")
+        assert _sc(outcome) is not None
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.allow is False  # type: ignore[union-attr]
+        assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
+        assert "subagent_auto_deny" in (_sc(outcome).error or "")  # type: ignore[union-attr]
     finally:
         await child.aclose()
 
@@ -406,11 +418,11 @@ async def test_subagent_collapses_interactive_parent_modes_to_default(
             args={"value": "x"},
             state=LoopState(),
         )
-        assert outcome.short_circuit is not None
-        assert outcome.decision is not None
-        assert outcome.decision.allow is False
-        assert outcome.decision.reason == "user_deny"
-        assert "subagent_auto_deny" in (outcome.short_circuit.error or "")
+        assert _sc(outcome) is not None
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.allow is False  # type: ignore[union-attr]
+        assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
+        assert "subagent_auto_deny" in (_sc(outcome).error or "")  # type: ignore[union-attr]
     finally:
         await child.aclose()
 
@@ -469,9 +481,9 @@ async def test_subagent_still_denies_on_safety_violation(tmp_path: Path) -> None
             args={"path": str(protected), "content": "x"},
             state=LoopState(),
         )
-        assert outcome.short_circuit is not None
-        assert outcome.decision is not None
-        assert outcome.decision.allow is False
-        assert outcome.decision.reason == "safety_blocked"
+        assert _sc(outcome) is not None
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.allow is False  # type: ignore[union-attr]
+        assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
     finally:
         await child.aclose()

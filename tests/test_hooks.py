@@ -52,8 +52,8 @@ async def test_hookchain_empty_is_noop() -> None:
     )
 
     assert history == []
-    assert outcome.short_circuit is None
-    assert outcome.decision is None
+    assert outcome.short_circuit is None  # type: ignore[union-attr]
+    assert outcome.decision is None  # type: ignore[union-attr]
     assert final is result
 
 
@@ -102,7 +102,7 @@ async def test_pre_tool_short_circuits_with_tool_result() -> None:
     chain = HookChain(pre_tool=[deny])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.short_circuit is denied
+    assert outcome.short_circuit is denied  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -127,7 +127,7 @@ async def test_pre_tool_first_short_circuit_wins() -> None:
     chain = HookChain(pre_tool=[first, second])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.short_circuit is first_denial
+    assert outcome.short_circuit is first_denial  # type: ignore[union-attr]
     assert call_log == ["first"]
 
 
@@ -158,7 +158,7 @@ async def test_pre_tool_decision_last_allow_wins_when_no_deny() -> None:
     chain = HookChain(pre_tool=[early, late])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.decision is last_decision
+    assert outcome.decision is last_decision  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -188,7 +188,7 @@ async def test_pre_tool_first_deny_beats_later_allow() -> None:
     chain = HookChain(pre_tool=[deny_hook, allow_hook])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.decision is deny_first
+    assert outcome.decision is deny_first  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -218,7 +218,7 @@ async def test_pre_tool_first_deny_wins_regardless_of_position() -> None:
     chain = HookChain(pre_tool=[allow_hook, deny_hook])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.decision is deny_second
+    assert outcome.decision is deny_second  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -255,7 +255,7 @@ async def test_pre_tool_per_hook_decision_journaled(tmp_path: Any) -> None:
     finally:
         journal.reset()
 
-    assert outcome.decision is deny  # first-deny-wins
+    assert outcome.decision is deny  # type: ignore[union-attr]  # first-deny-wins
 
     # Replay the audit trail: BOTH hook decisions must be present.
     events = [
@@ -304,8 +304,8 @@ async def test_pre_tool_decision_preserved_when_short_circuit_fires() -> None:
     chain = HookChain(pre_tool=[decider, blocker, never_ran])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.short_circuit is sc
-    assert outcome.decision is early_decision
+    assert outcome.short_circuit is sc  # type: ignore[union-attr]
+    assert outcome.decision is early_decision  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -364,8 +364,8 @@ async def test_pre_tool_chain_passes_through_when_all_passthrough() -> None:
     chain = HookChain(pre_tool=[pass_through, pass_through])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.short_circuit is None
-    assert outcome.decision is None
+    assert outcome.short_circuit is None  # type: ignore[union-attr]
+    assert outcome.decision is None  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -472,7 +472,7 @@ async def test_pre_tool_ask_propagates_to_merged_outcome() -> None:
 
     chain = HookChain(pre_tool=[asker])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
-    assert outcome.ask is True
+    assert outcome.ask is True  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -508,7 +508,7 @@ async def test_pre_tool_ask_does_not_leak_when_no_hook_asks() -> None:
     state = LoopState()
     chain = HookChain(pre_tool=[])
     out = await chain.run_pre_tool(tool=_stub_tool, args={}, state=state)
-    assert out.ask is False
+    assert out.ask is False  # type: ignore[union-attr]
     assert state.slots.ask_pending is False
 
 
@@ -534,8 +534,8 @@ async def test_pre_tool_deny_beats_ask() -> None:
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
     # ask flag still propagates as a side-channel; the deny is the
     # authoritative decision.
-    assert outcome.decision is deny
-    assert outcome.ask is True
+    assert outcome.decision is deny  # type: ignore[union-attr]
+    assert outcome.ask is True  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -557,8 +557,8 @@ async def test_pre_tool_ask_overrides_prior_allow() -> None:
 
     chain = HookChain(pre_tool=[allower, asker])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
-    assert outcome.ask is True
+    assert outcome.ask is True  # type: ignore[union-attr]
     # decision channel still records the prior allow, but the ask
     # signal demands the loop re-prompt — the permission hook in
     # production reads PRE_TOOL_ASK_PENDING_KEY to do exactly that.
-    assert outcome.decision is allow
+    assert outcome.decision is allow  # type: ignore[union-attr]

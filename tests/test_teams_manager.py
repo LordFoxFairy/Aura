@@ -307,21 +307,21 @@ async def test_add_member_teammate_uses_subagent_permission_contract(
             args={"value": "x"},
             state=LoopState(),
         )
-        assert allowed.short_circuit is None
-        assert allowed.decision is not None
-        assert allowed.decision.allow is True
-        assert allowed.decision.reason == "rule_allow"
+        assert allowed.short_circuit is None  # type: ignore[union-attr]
+        assert allowed.decision is not None  # type: ignore[union-attr]
+        assert allowed.decision.allow is True  # type: ignore[union-attr]
+        assert allowed.decision.reason == "rule_allow"  # type: ignore[union-attr]
 
         denied = await child._hooks.run_pre_tool(
             tool=_AskTool(),
             args={"value": "x"},
             state=LoopState(),
         )
-        assert denied.short_circuit is not None
-        assert denied.decision is not None
-        assert denied.decision.allow is False
-        assert denied.decision.reason == "user_deny"
-        assert "subagent_auto_deny" in (denied.short_circuit.error or "")
+        assert denied.short_circuit is not None  # type: ignore[union-attr]
+        assert denied.decision is not None  # type: ignore[union-attr]
+        assert denied.decision.allow is False  # type: ignore[union-attr]
+        assert denied.decision.reason == "user_deny"  # type: ignore[union-attr]
+        assert "subagent_auto_deny" in (denied.short_circuit.error or "")  # type: ignore[union-attr]
     finally:
         mgr.remove_member("alice", force=True)
         await asyncio.sleep(0)

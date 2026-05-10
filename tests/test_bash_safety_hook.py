@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.persistence import journal as journal_module
+from aura.schemas.permissions import Replace
 from aura.schemas.state import LoopState
 from aura.tools.base import build_tool
 
@@ -76,11 +77,12 @@ async def test_dangerous_bash_short_circuits() -> None:
         args={"command": "zmodload zsh/system"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "bash safety blocked" in outcome.short_circuit.error
-    assert "zsh_dangerous_command" in outcome.short_circuit.error
+    # Task 9: hook now returns Replace (not PreToolOutcome).
+    assert isinstance(outcome, Replace)
+    assert outcome.result.ok is False
+    assert outcome.result.error is not None
+    assert "bash safety blocked" in outcome.result.error
+    assert "zsh_dangerous_command" in outcome.result.error
 
 
 @pytest.mark.asyncio
@@ -91,10 +93,11 @@ async def test_cd_git_compound_short_circuits() -> None:
         args={"command": "cd /x && git status"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "cd_git_compound" in outcome.short_circuit.error
+    # Task 9: hook now returns Replace (not PreToolOutcome).
+    assert isinstance(outcome, Replace)
+    assert outcome.result.ok is False
+    assert outcome.result.error is not None
+    assert "cd_git_compound" in outcome.result.error
 
 
 @pytest.mark.asyncio
@@ -153,3 +156,39 @@ async def test_non_string_command_arg_passes_through() -> None:
         state=LoopState(),
     )
     assert outcome.short_circuit is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 Task 9 — Outcome variant assertions.
+# Blocked paths now return Replace; passthrough paths return PRE_TOOL_PASSTHROUGH
+# (legacy, resolved in Task 10).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dangerous_bash_returns_replace_outcome() -> None:
+    hook = make_bash_safety_hook()
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "zmodload zsh/system"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Replace), f"expected Replace, got {type(outcome).__name__}"
+    assert outcome.result.ok is False
+    assert "bash safety blocked" in (outcome.result.error or "")
+    assert outcome.decision.allow is False
+    assert outcome.decision.reason == "safety_blocked"
+
+
+@pytest.mark.asyncio
+async def test_cd_git_compound_returns_replace_outcome() -> None:
+    hook = make_bash_safety_hook()
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "cd /x && git status"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Replace)
+    assert outcome.result.ok is False
+    assert outcome.decision.allow is False
+    assert outcome.decision.reason == "safety_blocked"

@@ -40,6 +40,7 @@ from aura.schemas.events import (
     ToolCallProgress,
     ToolCallStarted,
 )
+from aura.schemas.permissions import Allow, Ask, Block, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError, ToolResult
 from aura.tools.errors import hint_for_error
@@ -875,17 +876,57 @@ class AgentLoop:
                 state=self._state,
                 tool_call_id=tc["id"],
             )
-            # G4: PreToolOutcome carries both channels directly — no
-            # side-channel slot. ``short_circuit`` is the ToolResult
-            # that replaces tool.execute(); ``decision`` is the permission
-            # Decision (if any) that drives the PermissionAudit emission.
-            steps.append(ToolStep(
-                tool_call=tc,
-                tool=tool,
-                args=raw_args,
-                decision=outcome.short_circuit,
-                permission_decision=outcome.decision,
-            ))
+            # Phase 1 Task 9: pattern-match on Outcome variants from hooks
+            # that have migrated. Legacy PreToolOutcome falls through to
+            # the attribute-access path so mixed chains keep working.
+            match outcome:
+                case Allow(decision=perm_decision):
+                    # Hook allowed; tool will run. Carry the decision for
+                    # the PermissionAudit event.
+                    steps.append(ToolStep(
+                        tool_call=tc, tool=tool, args=raw_args,
+                        decision=None,
+                        permission_decision=perm_decision,
+                    ))
+                case Block(decision=perm_decision):
+                    # Hook denied; inject synthetic error from audit_line().
+                    steps.append(ToolStep(
+                        tool_call=tc, tool=tool, args=raw_args,
+                        decision=ToolResult(
+                            ok=False, error=perm_decision.audit_line(),
+                        ),
+                        permission_decision=perm_decision,
+                    ))
+                case Ask(reason=_ask_reason):
+                    # Escalation was not resolved by the permission hook
+                    # (defensive — in a well-formed chain the permission
+                    # hook always resolves Ask before it reaches the loop).
+                    # Treat as a deny with a clear error.
+                    steps.append(ToolStep(
+                        tool_call=tc, tool=tool, args=raw_args,
+                        decision=ToolResult(
+                            ok=False,
+                            error="permission escalation unresolved — no asker hook present",
+                        ),
+                        permission_decision=None,
+                    ))
+                case Replace(result=sc_result, decision=perm_decision):
+                    # Hook injected a synthetic result; tool is NOT invoked.
+                    steps.append(ToolStep(
+                        tool_call=tc, tool=tool, args=raw_args,
+                        decision=sc_result,
+                        permission_decision=perm_decision,
+                    ))
+                case _:
+                    # Legacy PreToolOutcome (or any unknown shape) — use
+                    # attribute access so pre-migration hooks keep working.
+                    # This arm is removed in Task 10 once PreToolOutcome
+                    # is deleted.
+                    steps.append(ToolStep(
+                        tool_call=tc, tool=tool, args=raw_args,
+                        decision=getattr(outcome, "short_circuit", None),
+                        permission_decision=getattr(outcome, "decision", None),
+                    ))
         return steps
 
     async def _execute_step(self, step: ToolStep) -> ToolResult:

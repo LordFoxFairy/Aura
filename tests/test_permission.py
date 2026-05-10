@@ -31,8 +31,25 @@ from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.permissions.store import PermissionStoreError
+from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from either Replace (Task 9+) or
+    legacy PreToolOutcome. Keeps existing test assertions concise."""
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
+
+def _decision(outcome: object) -> object:
+    """Extract the Decision from Allow, Block, Replace, or PreToolOutcome."""
+    if isinstance(outcome, (Allow, Replace)):
+        return outcome.decision
+    return getattr(outcome, "decision", None)
 
 
 class _P(BaseModel):
@@ -163,7 +180,7 @@ async def test_bypass_mode_short_circuits_even_on_protected_path(
         args={"path": "/etc/passwd"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert spy.calls == []
     names = [e[0] for e in journal_events]
     assert "permission_bypass" in names
@@ -188,9 +205,9 @@ async def test_safety_blocks_destructive_write_to_protected_path(
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error == "denied: protected path (safety policy)"
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error == "denied: protected path (safety policy)"  # type: ignore[union-attr]
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "safety_blocked"
@@ -217,9 +234,9 @@ async def test_safety_blocks_read_file_of_ssh_key(
         args={"path": str(Path.home() / ".ssh" / "id_rsa")},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error == "denied: protected path (safety policy)"
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error == "denied: protected path (safety policy)"  # type: ignore[union-attr]
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "safety_blocked"
@@ -272,7 +289,7 @@ async def test_read_of_git_path_is_not_blocked_by_safety(
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "rule_allow"
@@ -294,7 +311,7 @@ async def test_safety_skipped_on_destructive_tool_without_path_arg(
         args={"command": "rm -rf /"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert len(spy.calls) == 1  # asker was consulted
 
 
@@ -322,7 +339,7 @@ async def test_read_file_rule_matches_goes_to_rule_allow(
         args={"path": str(tmp_path / "ordinary.txt")},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "rule_allow"
@@ -349,7 +366,7 @@ async def test_read_file_with_empty_ruleset_goes_to_ask(
         args={"path": str(tmp_path / "ordinary.txt")},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert len(spy.calls) == 1
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_accept"
@@ -370,7 +387,7 @@ async def test_project_rules_match_takes_priority_over_session(
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "rule_allow"
@@ -388,7 +405,7 @@ async def test_session_rules_match_when_project_misses() -> None:
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert spy.calls == []
 
 
@@ -403,7 +420,7 @@ async def test_ask_accept_allows(
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert len(spy.calls) == 1
     assert spy.calls[0]["rule_hint"] == Rule(tool="writer", content=None)
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
@@ -421,9 +438,9 @@ async def test_ask_deny_returns_tool_result(
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error == "denied: user"
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error == "denied: user"  # type: ignore[union-attr]
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_deny"
 
@@ -442,8 +459,8 @@ async def test_ask_deny_with_feedback_embeds_note_in_error(
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.error == "denied: user — note: wrong dir"
+    assert _sc(outcome) is not None
+    assert _sc(outcome).error == "denied: user — note: wrong dir"  # type: ignore[union-attr]
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["feedback"] == "wrong dir"
 
@@ -462,7 +479,7 @@ async def test_ask_accept_with_feedback_keeps_allow_but_records_note(
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["feedback"] == "ok, proceed"
 
@@ -498,7 +515,7 @@ async def test_ask_always_session_scope_adds_rule_to_session() -> None:
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert session.rules() == (rule,)
 
 
@@ -527,7 +544,7 @@ async def test_ask_always_project_scope_calls_save_rule(
         project_root=tmp_path,
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert save_calls == [(tmp_path, rule, "project")]
     assert session.rules() == ()
 
@@ -557,7 +574,7 @@ async def test_ask_always_project_save_failure_degrades_to_session(
         project_root=tmp_path,
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert session.rules() == (rule,)
     names = [e[0] for e in journal_events]
     assert "permission_save_failed" in names
@@ -576,9 +593,9 @@ async def test_asker_exception_treated_as_deny(
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error == "denied: user"
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error == "denied: user"  # type: ignore[union-attr]
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_deny"
 
@@ -616,9 +633,9 @@ async def test_hook_returns_decision_on_outcome() -> None:
     )
     state = LoopState()
     outcome = await hook(tool=_tool(), args={}, state=state)
-    assert isinstance(outcome.decision, Decision)
-    assert outcome.decision.reason == "rule_allow"
-    assert outcome.decision.allow is True
+    assert isinstance(_decision(outcome), Decision)
+    assert _decision(outcome).reason == "rule_allow"  # type: ignore[attr-defined]
+    assert _decision(outcome).allow is True  # type: ignore[attr-defined]
     # Post-G4 direct-return contract: the hook MUST NOT write any
     # transient decision slot. Phase 1 Task 4 moved the G5 denials sink
     # onto ``state.slots.turn_denials`` (Task 7 then deleted the legacy
@@ -642,13 +659,13 @@ async def test_hook_decision_refreshes_across_calls() -> None:
     state = LoopState()
     # First call: rule_allow (writer rule matches).
     first_outcome = await hook(tool=_tool(), args={}, state=state)
-    assert first_outcome.decision is not None
-    assert first_outcome.decision.reason == "rule_allow"
+    assert _decision(first_outcome) is not None
+    assert _decision(first_outcome).reason == "rule_allow"  # type: ignore[attr-defined]
     # Second call: different tool, no matching rule → asker answers accept.
     second_outcome = await hook(tool=_tool("different"), args={}, state=state)
-    assert second_outcome.decision is not None
-    assert second_outcome.decision.reason == "user_accept"
-    assert second_outcome.decision is not first_outcome.decision
+    assert _decision(second_outcome) is not None
+    assert _decision(second_outcome).reason == "user_accept"  # type: ignore[attr-defined]
+    assert _decision(second_outcome) is not _decision(first_outcome)
 
 
 async def test_every_terminal_decision_emits_permission_decision(
@@ -700,7 +717,7 @@ async def test_user_rule_wins_audit_over_default_when_both_match(
         args={"path": "/tmp/specific/foo.txt"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None  # allowed
+    assert _sc(outcome) is None  # allowed
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     # The USER's specific rule should be reported — not the generic default.
     assert decision_event[1]["rule"] == user_rule.to_string()

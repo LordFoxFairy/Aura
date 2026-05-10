@@ -42,6 +42,8 @@ from langchain_core.tools import BaseTool
 
 from aura.core.hooks import PRE_TOOL_PASSTHROUGH, PreToolHook, PreToolOutcome
 from aura.core.memory.context import Context
+from aura.core.permissions.decision import Decision
+from aura.schemas.permissions import Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 
@@ -207,8 +209,8 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
                     reason=status,
                     command=command,
                 )
-                return PreToolOutcome(
-                    short_circuit=ToolResult(
+                return Replace(  # type: ignore[return-value]
+                    result=ToolResult(
                         ok=False,
                         error=(
                             f"bash command would mutate {resolved} but it has "
@@ -216,7 +218,7 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
                             f"read_file({resolved}) before running."
                         ),
                     ),
-                    decision=None,
+                    decision=Decision(allow=False, reason="safety_blocked"),
                 )
             return PRE_TOOL_PASSTHROUGH
 
@@ -254,11 +256,11 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
             path=str(resolved),
             reason=status,
         )
-        return PreToolOutcome(
-            short_circuit=ToolResult(
+        return Replace(  # type: ignore[return-value]
+            result=ToolResult(
                 ok=False, error=_error_text(tool.name, status, resolved),
             ),
-            decision=None,
+            decision=Decision(allow=False, reason="safety_blocked"),
         )
 
     return _hook

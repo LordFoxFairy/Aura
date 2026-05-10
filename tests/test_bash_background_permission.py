@@ -37,8 +37,18 @@ from aura.core.persistence import journal as journal_module
 from aura.core.persistence.storage import SessionStorage
 from aura.core.tasks.store import TasksStore
 from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
 from aura.tools.bash_background import BashBackground
 from tests.conftest import FakeChatModel, FakeTurn
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
 
 
 def _fake_bash_bg_tool() -> BashBackground:
@@ -66,11 +76,11 @@ async def test_bash_safety_hook_matches_bash_background() -> None:
         args={"command": "zmodload zsh/system"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "bash safety blocked" in outcome.short_circuit.error
-    assert "zsh_dangerous_command" in outcome.short_circuit.error
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "bash safety blocked" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    assert "zsh_dangerous_command" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
 @pytest.mark.asyncio
@@ -155,7 +165,7 @@ async def test_bash_safety_hook_honors_bypass_mode_for_bash_background() -> None
         args={"command": "zmodload zsh/system"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 @pytest.mark.asyncio
@@ -178,7 +188,7 @@ async def test_bash_safety_hook_honors_bypass_mode_for_bash() -> None:
         args={"command": "zmodload zsh/system"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 # -----------------------------------------------------------------------

@@ -42,8 +42,18 @@ from aura.core.persistence.storage import SessionStorage
 from aura.core.skills.command import SkillCommand
 from aura.core.skills.types import Skill
 from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
 
 # ---------------------------------------------------------------------------
 # Shared fixtures & helpers
@@ -218,7 +228,7 @@ async def test_undeclared_tool_still_prompts(tmp_path: Path) -> None:
         assert len(asker.calls) == 1
         assert asker.calls[0]["tool"] == "bash"
         # Because the spy answers "accept", the hook should allow.
-        assert outcome.short_circuit is None
+        assert _sc(outcome) is None
     finally:
         await agent.aclose()
 
@@ -252,7 +262,7 @@ async def test_declared_tool_auto_allowed(tmp_path: Path) -> None:
             args={},
             state=LoopState(),
         )
-        assert outcome.short_circuit is None
+        assert _sc(outcome) is None
         assert asker.calls == []
         assert outcome.decision is not None
         assert outcome.decision.reason == "rule_allow"

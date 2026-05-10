@@ -51,6 +51,7 @@ from aura.core.permissions.bash_safety import check_bash_safety
 from aura.core.permissions.decision import Decision
 from aura.core.permissions.denials import PermissionDenial
 from aura.core.permissions.mode import DEFAULT_MODE, Mode
+from aura.schemas.permissions import Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 
@@ -156,18 +157,18 @@ def make_bash_safety_hook(
             )
         )
 
-        return PreToolOutcome(
-            short_circuit=ToolResult(
+        return Replace(  # type: ignore[return-value]
+            result=ToolResult(
                 ok=False,
                 error=(
                     f"bash safety blocked: {violation.detail} "
                     f"(reason={violation.reason})"
                 ),
             ),
-            # G4 parity: surface the decision on the outcome so the Loop
-            # can stamp it onto ``ToolStep.permission_decision`` and the
-            # auditor emits a ``PermissionAudit`` event between
-            # ``ToolCallStarted`` and ``ToolCallCompleted``.
+            # Carry the decision so the Loop stamps it onto
+            # ``ToolStep.permission_decision`` and the auditor emits a
+            # ``PermissionAudit`` event between ``ToolCallStarted``
+            # and ``ToolCallCompleted``.
             decision=Decision(allow=False, reason="safety_blocked"),
         )
 

@@ -105,9 +105,9 @@ async def test_single_allow_variant_sets_decision() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    assert out.short_circuit is None
+    # Task 9: pure-Outcome chain returns Allow directly.
+    assert isinstance(out, Allow), f"expected Allow, got {type(out).__name__}"
     assert out.decision is d
-    assert out.ask is False
 
 
 @pytest.mark.asyncio
@@ -117,10 +117,10 @@ async def test_single_block_variant_sets_deny_decision() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
+    # Task 9: pure-Outcome chain returns Block directly.
     # Block does NOT carry a baked ToolResult — the loop turns the deny
-    # decision into a synthetic ToolMessage downstream, exactly like a
-    # legacy ``PreToolOutcome(decision=deny, short_circuit=None)``.
-    assert out.short_circuit is None
+    # decision into a synthetic ToolMessage via decision.audit_line().
+    assert isinstance(out, Block), f"expected Block, got {type(out).__name__}"
     assert out.decision is d
     assert out.decision.allow is False
 
@@ -131,11 +131,10 @@ async def test_single_ask_variant_propagates_ask_flag() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    assert out.ask is True
-    assert out.short_circuit is None
-    # Ask intentionally produces no decision — the asker creates one
-    # from the user's response in the loop.
-    assert out.decision is None
+    # Task 9: pure-Outcome chain returns Ask directly.
+    assert isinstance(out, Ask), f"expected Ask, got {type(out).__name__}"
+    # Ask carries only a reason; the asker creates the Decision from user response.
+    assert out.reason == "needs confirmation"
 
 
 @pytest.mark.asyncio
@@ -146,7 +145,9 @@ async def test_single_replace_variant_short_circuits_with_result() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    assert out.short_circuit is canned
+    # Task 9: pure-Outcome chain returns Replace directly.
+    assert isinstance(out, Replace), f"expected Replace, got {type(out).__name__}"
+    assert out.result is canned
     assert out.decision is d
 
 
@@ -177,24 +178,25 @@ _REPLACE_B = Replace(
 
 
 def _check_winner(
-    out: PreToolOutcome, expected: Outcome,
+    out: Outcome | PreToolOutcome, expected: Outcome,
 ) -> None:
-    """Assert ``out`` matches the PreToolOutcome shape that ``expected``
-    would produce when winning the merge."""
+    """Assert ``out`` matches the expected Outcome variant.
+
+    Task 9: run_pre_tool now returns Outcome directly for pure-Outcome chains.
+    The assertions check the Outcome variant shape.
+    """
     if isinstance(expected, Allow):
-        assert out.short_circuit is None
+        assert isinstance(out, Allow), f"expected Allow, got {type(out).__name__}"
         assert out.decision is expected.decision
     elif isinstance(expected, Block):
-        # Block surfaces as decision-only (no ToolResult), matching
-        # legacy "deny via decision channel" behavior.
-        assert out.short_circuit is None
+        assert isinstance(out, Block), f"expected Block, got {type(out).__name__}"
         assert out.decision is expected.decision
         assert out.decision.allow is False
     elif isinstance(expected, Ask):
-        assert out.ask is True
-        assert out.short_circuit is None
+        assert isinstance(out, Ask), f"expected Ask, got {type(out).__name__}"
     elif isinstance(expected, Replace):
-        assert out.short_circuit is expected.result
+        assert isinstance(out, Replace), f"expected Replace, got {type(out).__name__}"
+        assert out.result is expected.result
         assert out.decision is expected.decision
     else:  # pragma: no cover — defensive
         raise AssertionError(f"unknown expected variant: {expected!r}")
@@ -274,7 +276,7 @@ async def test_block_short_circuits_chain_no_later_hook_runs() -> None:
         tool=_stub_tool, args={}, state=LoopState(),
     )
     assert call_log == ["first"]
-    assert out.decision is _BLOCK_A.decision
+    assert out.decision is _BLOCK_A.decision  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -299,9 +301,9 @@ async def test_replace_does_not_short_circuit_block_can_still_win() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    # Both ran; Block wins.
+    # Both ran; Block wins. Task 9: returns Block directly.
     assert call_log == ["first", "second"]
-    assert out.short_circuit is None
+    assert isinstance(out, Block), f"expected Block, got {type(out).__name__}"
     assert out.decision is _BLOCK_B.decision
 
 
@@ -320,7 +322,7 @@ async def test_three_hook_chain_last_allow_wins_when_no_higher_variant() -> None
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    assert out.decision is a3.decision
+    assert out.decision is a3.decision  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +350,7 @@ async def test_mixed_outcome_then_legacy_uses_legacy_merge() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    assert out.decision is deny
+    assert out.decision is deny  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -370,7 +372,7 @@ async def test_mixed_legacy_then_outcome_falls_back_to_legacy_merge() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    assert out.decision is late_allow
+    assert out.decision is late_allow  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -388,4 +390,4 @@ async def test_mixed_passthrough_legacy_with_outcome_works() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    assert out.decision is block.decision
+    assert out.decision is block.decision  # type: ignore[union-attr]

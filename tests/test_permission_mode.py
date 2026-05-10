@@ -25,8 +25,20 @@ from aura.core.permissions.mode import DEFAULT_MODE, Mode
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
-from aura.schemas.tool import tool_metadata
+from aura.schemas.tool import (
+    ToolResult,  # noqa: F401
+    tool_metadata,
+)
 from aura.tools.base import build_tool
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
 
 
 def test_default_mode_is_default_string() -> None:
@@ -141,7 +153,7 @@ async def test_plan_mode_allows_read_file() -> None:
     outcome = await hook(
         tool=tool, args={"path": "/tmp/ordinary.txt"}, state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert spy.calls == []
 
 
@@ -158,8 +170,8 @@ async def test_plan_mode_blocks_write_file() -> None:
     outcome = await hook(
         tool=tool, args={"path": "/tmp/new.txt"}, state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
     assert spy.calls == []
 
 
@@ -176,8 +188,8 @@ async def test_plan_mode_blocks_bash() -> None:
     outcome = await hook(
         tool=tool, args={"command": "ls"}, state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
     assert spy.calls == []
 
 
@@ -193,13 +205,13 @@ async def test_plan_mode_error_says_would_have_called() -> None:
     outcome = await hook(
         tool=tool, args={"command": "ls -la"}, state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
     # Must mention plan mode + the tool name that was attempted.
-    assert outcome.short_circuit.error is not None
-    assert "plan mode" in outcome.short_circuit.error
-    assert "would have called" in outcome.short_circuit.error
-    assert "bash" in outcome.short_circuit.error
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "plan mode" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    assert "would have called" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    assert "bash" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
 async def test_plan_mode_respects_safety_floor(tmp_path: Path) -> None:
@@ -221,8 +233,8 @@ async def test_plan_mode_respects_safety_floor(tmp_path: Path) -> None:
         args={"path": str(Path.home() / ".ssh" / "id_rsa")},
         state=state,
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
     # Safety wins: the decision must report safety_blocked, not plan_mode_blocked.
     assert isinstance(outcome.decision, Decision)
     assert outcome.decision.reason == "safety_blocked"
@@ -272,7 +284,7 @@ async def test_accept_edits_mode_allows_read_file(
     outcome = await hook(
         tool=tool, args={"path": str(tmp_path / "ordinary.txt")}, state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "mode_accept_edits"
@@ -294,7 +306,7 @@ async def test_accept_edits_mode_allows_write_file(
     outcome = await hook(
         tool=tool, args={"path": str(tmp_path / "new.txt")}, state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "mode_accept_edits"
@@ -316,7 +328,7 @@ async def test_accept_edits_mode_allows_edit_file(
     outcome = await hook(
         tool=tool, args={"path": str(tmp_path / "edited.txt")}, state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "mode_accept_edits"
@@ -337,7 +349,7 @@ async def test_accept_edits_mode_still_prompts_bash(tmp_path: Path) -> None:
     outcome = await hook(
         tool=tool, args={"command": "ls"}, state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     # The asker was consulted — proving accept_edits did NOT auto-allow bash.
     assert len(spy.calls) == 1
 
@@ -359,8 +371,8 @@ async def test_accept_edits_respects_safety_floor(tmp_path: Path) -> None:
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=state,
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
     assert isinstance(outcome.decision, Decision)
     assert outcome.decision.reason == "safety_blocked"
 
@@ -383,9 +395,9 @@ async def test_accept_edits_respects_user_deny_rule(tmp_path: Path) -> None:
     outcome = await hook(
         tool=tool, args={"command": "rm -rf /tmp/wat"}, state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error == "denied: user"
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error == "denied: user"  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +431,7 @@ async def test_default_mode_unchanged_ask_flow(tmp_path: Path) -> None:
     )
     tool = _tool("writer")
     outcome = await hook(tool=tool, args={}, state=LoopState())
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert len(spy.calls) == 1
 
 
@@ -434,7 +446,7 @@ async def test_bypass_mode_unchanged_auto_allow() -> None:
     )
     tool = _tool("writer")
     outcome = await hook(tool=tool, args={}, state=LoopState())
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert spy.calls == []
 
 
@@ -494,7 +506,7 @@ async def test_safety_uses_callable_is_destructive_true_branch(tmp_path: Path) -
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=state,
     )
-    assert outcome.short_circuit is not None
+    assert _sc(outcome) is not None
     assert isinstance(outcome.decision, Decision)
     assert outcome.decision.reason == "safety_blocked"
 
@@ -531,7 +543,7 @@ async def test_safety_uses_callable_is_destructive_false_branch(tmp_path: Path) 
         state=state,
     )
     # Not blocked by safety — fell through to the ask path.
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert isinstance(outcome.decision, Decision)
     assert outcome.decision.reason != "safety_blocked"
 
@@ -597,7 +609,7 @@ async def test_safety_callable_exception_fails_safe_to_destructive(
         state=state,
     )
     # Fail-safe: treated as destructive → safety_blocked on protected write path.
-    assert outcome.short_circuit is not None
+    assert _sc(outcome) is not None
     assert isinstance(outcome.decision, Decision)
     assert outcome.decision.reason == "safety_blocked"
 
@@ -629,7 +641,7 @@ async def test_accept_edits_bash_ls_still_prompts_not_auto_allowed(
         tool=real_bash, args={"command": "ls /tmp"}, state=LoopState(),
     )
     # Fell through to ask — the asker was consulted.
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert len(spy.calls) == 1
 
 

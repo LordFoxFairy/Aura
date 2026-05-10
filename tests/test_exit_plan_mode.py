@@ -20,9 +20,21 @@ from aura.core.hooks.permission import AskerResponse, make_permission_hook
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolError
+from aura.schemas.tool import (
+    ToolError,
+    ToolResult,  # noqa: F401
+)
 from aura.tools.base import build_tool
 from aura.tools.exit_plan_mode import ExitPlanMode
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
 
 
 class _FakeAgent:
@@ -339,5 +351,5 @@ async def test_exit_plan_mode_bypasses_plan_mode_blocklist_at_hook() -> None:
     outcome = await hook(
         tool=tool, args={"plan": "x"}, state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert spy.calls == []

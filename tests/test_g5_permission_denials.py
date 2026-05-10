@@ -41,8 +41,18 @@ from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.persistence.storage import SessionStorage
 from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
 
 # -----------------------------------------------------------------------
 # helpers (mirror test_permission.py patterns so the two files read alike)
@@ -215,7 +225,7 @@ async def test_hook_allow_does_not_append_denial_to_sink() -> None:
         state=state,
         tool_call_id="tc_allow_1",
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
     assert state.slots.turn_denials == []
 
 
@@ -231,7 +241,7 @@ async def test_hook_without_sink_key_is_safe_noop() -> None:
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=state)
-    assert outcome.short_circuit is not None  # still a deny
+    assert _sc(outcome) is not None  # still a deny
     # Slot is populated — no bypass / silent-skip path.
     assert len(state.slots.turn_denials) == 1
 

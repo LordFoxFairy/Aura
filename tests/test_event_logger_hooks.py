@@ -18,6 +18,15 @@ from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
+
+
 @pytest.fixture(autouse=True)
 def _journal_to_tmp(tmp_path: Path) -> Any:
     journal_module.reset()
@@ -138,8 +147,8 @@ async def test_pre_tool_records_destructive_flag_and_args(
         tool=tool, args={"x": 5}, state=LoopState(turn_count=2),
     )
 
-    assert outcome.short_circuit is None
-    assert outcome.decision is None
+    assert _sc(outcome) is None
+    assert outcome.decision is None  # type: ignore[union-attr]
     [event] = _events(_journal_to_tmp)
     assert event["event"] == "pre_tool"
     assert event["tool"] == "fake"

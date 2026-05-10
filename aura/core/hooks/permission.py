@@ -62,6 +62,7 @@ from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.permissions.store import PermissionStoreError, save_rule
 from aura.core.persistence import journal
 from aura.core.skills.restrict import has_active_lease, tool_allowed_by_lease
+from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult, resolve_is_destructive
 
@@ -404,7 +405,7 @@ def make_permission_hook(
             # auto-allow reason (rule_allow / mode_bypass) the Loop's
             # auditor will emit a PermissionAudit between Started and
             # Completed.
-            return PreToolOutcome(short_circuit=None, decision=decision)
+            return Allow(decision=decision)  # type: ignore[return-value]
         # G5 / Phase 1 Task 4: append a structured record to the per-turn
         # denials sink, now living on the typed
         # ``state.slots.turn_denials`` slot.
@@ -436,7 +437,7 @@ def make_permission_hook(
             short_circuit = ToolResult(
                 ok=False, error=_deny_message(decision, feedback=feedback),
             )
-        return PreToolOutcome(short_circuit=short_circuit, decision=decision)
+        return Replace(result=short_circuit, decision=decision)  # type: ignore[return-value]
 
     return _hook
 

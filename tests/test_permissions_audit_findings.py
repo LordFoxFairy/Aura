@@ -24,7 +24,17 @@ from aura.core.hooks.permission import (
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
 
 
 class _P(BaseModel):
@@ -119,9 +129,9 @@ async def test_f_04_002_ask_demotes_rule_allow_to_asker_call(
     # Asker WAS called — auto-allow was demoted.
     assert len(asker.calls) == 1
     # Final decision reflects the asker's accept response.
-    assert outcome.decision is not None
-    assert outcome.decision.allow is True
-    assert outcome.decision.reason == "user_accept"
+    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision.allow is True  # type: ignore[union-attr]
+    assert outcome.decision.reason == "user_accept"  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -151,9 +161,9 @@ async def test_f_04_002_ask_demotes_bypass_to_asker_call(
         tool=tool, args={}, state=LoopState(),
     )
     assert len(asker.calls) == 1
-    assert outcome.decision is not None
-    assert outcome.decision.allow is False
-    assert outcome.decision.reason == "user_deny"
+    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision.allow is False  # type: ignore[union-attr]
+    assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -185,8 +195,8 @@ async def test_f_04_002_ask_does_not_override_safety_block(
     )
     # Asker NEVER called — safety wins.
     assert asker.calls == []
-    assert outcome.decision is not None
-    assert outcome.decision.reason == "safety_blocked"
+    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +219,8 @@ async def test_f_04_005_plan_mode_blocks_web_fetch(tmp_path: Path) -> None:
     outcome = await hook(
         tool=tool, args={"url": "https://example.com"}, state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
     assert outcome.decision is not None
     assert outcome.decision.reason == "plan_mode_blocked"
     assert asker.calls == []
@@ -230,8 +240,8 @@ async def test_f_04_005_plan_mode_blocks_web_search(tmp_path: Path) -> None:
     outcome = await hook(
         tool=tool, args={}, state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
     assert outcome.decision is not None
     assert outcome.decision.reason == "plan_mode_blocked"
 

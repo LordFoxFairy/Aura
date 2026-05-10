@@ -316,6 +316,58 @@ def _outcome_to_pretooloutcome(outcome: Outcome) -> PreToolOutcome:
     raise TypeError(f"unknown Outcome variant: {type(outcome).__name__}")
 
 
+def _merge_outcomes(
+    outcomes: list[Outcome],
+    ask_requested: bool,
+) -> Outcome:
+    """Apply spec §3.2 precedence to a pure-Outcome chain, returning an
+    :class:`Outcome` variant directly (no :class:`PreToolOutcome` wrapper).
+
+    Used when every hook in the chain returned an :class:`Outcome` variant
+    so the loop can pattern-match directly on the four variants. The
+    precedence is identical to :func:`_merge_outcomes_to_pretooloutcome`:
+    first Block wins → first Ask wins → first Replace wins → last Allow wins.
+
+    When ``ask_requested`` is True and the winner is :class:`Allow`, the
+    winner is wrapped in an :class:`Ask` so the loop sees the escalation
+    flag (the permission hook in a complete chain would never leave Ask
+    unresolved — this case is defensive for chains without a permission hook).
+    """
+    # 1. First Block.
+    for o in outcomes:
+        if isinstance(o, Block):
+            return o
+    # 2. First Ask.
+    for o in outcomes:
+        if isinstance(o, Ask):
+            return o
+    # 3. First Replace.
+    for o in outcomes:
+        if isinstance(o, Replace):
+            return o
+    # 4. Last Allow (or any Allow if ask_requested).
+    last_allow: Allow | None = None
+    for o in outcomes:
+        if isinstance(o, Allow):
+            last_allow = o
+    if last_allow is not None:
+        if ask_requested:
+            # An Ask was seen but Allow won — escalate via Ask so the
+            # loop sees the pending escalation. In a well-formed chain
+            # (with a permission hook), ask_requested would have caused
+            # the permission hook to prompt and return Allow/Block/Replace
+            # instead — this path is defensive only.
+            return Ask(reason="pending escalation")
+        return last_allow
+    # Empty list — all hooks were passthrough and the chain is purely
+    # legacy; this path should not be reached in a pure-Outcome chain.
+    # Return a neutral Allow so the loop doesn't stall.
+    raise AssertionError(
+        "_merge_outcomes called with empty outcomes list — "
+        "caller should guard against this"
+    )
+
+
 def _merge_outcomes_to_pretooloutcome(
     outcomes: list[Outcome],
     ask_requested: bool,
@@ -427,7 +479,7 @@ class HookChain:
         args: dict[str, Any],
         state: LoopState,
         **kwargs: Any,
-    ) -> PreToolOutcome:
+    ) -> Outcome | PreToolOutcome:
         """Merge pre_tool hook outcomes across the chain.
 
         A hook MAY return either the legacy three-channel
@@ -520,8 +572,36 @@ class HookChain:
                     # Legacy PreToolOutcome (or anything else that
                     # quacks like one) — downgrade the chain to the
                     # legacy merge path by clearing the Outcome bag.
+                    # Before discarding the Outcome bag, apply the
+                    # precedence merge NOW so the first-wins short-circuit
+                    # logic below can fire correctly for prior Replace
+                    # returns that were buffered in Outcome mode.
+                    if outcomes:
+                        _prior_merged = _merge_outcomes(outcomes, ask_requested)
+                        if isinstance(_prior_merged, Replace):
+                            # Inject the Replace as a legacy short-circuit
+                            # so the first-wins check fires on the NEXT
+                            # iteration (after this hook's outcome is
+                            # absorbed into merged_decision).
+                            _legacy_sc = _prior_merged.result
+                            _legacy_d = _prior_merged.decision
+                        else:
+                            _legacy_sc = None
+                            _legacy_d = None
+                    else:
+                        _legacy_sc = None
+                        _legacy_d = None
                     outcomes = None
                     outcome = raw
+                    # If prior Outcome phase had a Replace, synthesize a
+                    # legacy short-circuit return now (before absorbing
+                    # this hook's passthrough outcome into the merge).
+                    if _legacy_sc is not None:
+                        return PreToolOutcome(
+                            short_circuit=_legacy_sc,
+                            decision=_legacy_d or merged_decision,
+                            ask=ask_requested,
+                        )
                 if outcome.ask and not ask_requested:
                     ask_requested = True
                     # Make the ask flag visible to downstream hooks (the
@@ -567,9 +647,7 @@ class HookChain:
                 # end of the chain. (Legacy short-circuit semantics
                 # are restored below for non-Outcome chains.)
                 if outcomes is not None and isinstance(raw, Block):
-                    return _merge_outcomes_to_pretooloutcome(
-                        outcomes, ask_requested,
-                    )
+                    return _merge_outcomes(outcomes, ask_requested)
                 # Legacy first-wins: stop immediately on the first
                 # short-circuit when the chain is in legacy mode.
                 if outcome.short_circuit is not None and outcomes is None:
@@ -581,10 +659,9 @@ class HookChain:
             if outcomes is not None and outcomes:
                 # Pure-Outcome chain — apply spec §3.2 precedence:
                 # first Block wins → first Ask wins → first Replace
-                # wins → last Allow wins.
-                return _merge_outcomes_to_pretooloutcome(
-                    outcomes, ask_requested,
-                )
+                # wins → last Allow wins. Return Outcome directly so
+                # the loop can pattern-match on variants.
+                return _merge_outcomes(outcomes, ask_requested)
             return PreToolOutcome(
                 short_circuit=None,
                 decision=merged_decision,

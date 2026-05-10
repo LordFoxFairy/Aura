@@ -25,9 +25,19 @@ from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.tasks.store import TasksStore
 from aura.core.tasks.types import _SHELL_RECENT_ACTIVITIES_CAP
 from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
 from aura.tools.bash_background import BashBackground
 from aura.tools.task_get import TaskGet
 from aura.tools.task_stop import TaskStop
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    from aura.schemas.permissions import Replace
+    if isinstance(outcome, Replace):
+        return outcome.result
+    return getattr(outcome, "short_circuit", None)
+
 
 
 def _make_tool() -> (
@@ -186,10 +196,10 @@ async def test_safety_rejects_command_substitution() -> None:
             args={"command": bad},
             state=LoopState(),
         )
-        assert outcome.short_circuit is not None, bad
-        assert outcome.short_circuit.ok is False
-        assert outcome.short_circuit.error is not None
-        assert "command substitution" in outcome.short_circuit.error
+        assert _sc(outcome) is not None, bad
+        assert _sc(outcome).ok is False  # type: ignore[union-attr]
+        assert _sc(outcome).error is not None  # type: ignore[union-attr]
+        assert "command substitution" in _sc(outcome).error  # type: ignore[operator,union-attr]
     # No task records should have been created — the hook blocks the
     # call before the tool runs.
     assert store.list() == []
@@ -261,5 +271,3 @@ async def test_task_get_surfaces_shell_kind_and_line_count() -> None:
     assert get_out["kind"] == "shell"
     assert get_out["progress"]["line_count"] >= 3
     assert get_out["progress"]["tool_count"] == 0  # shell never fires tool events
-
-

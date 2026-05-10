@@ -21,8 +21,20 @@ from aura.core.hooks.must_read_first import make_must_read_first_hook
 from aura.core.memory.context import Context
 from aura.core.memory.rules import RulesBundle
 from aura.core.persistence import journal as journal_module
+from aura.schemas.permissions import Replace
 from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
+
+
+def _sc(outcome: object) -> ToolResult | None:
+    """Extract the short-circuit ToolResult from either Replace (Task 9+)
+    or legacy PreToolOutcome. Keeps existing test assertions concise while
+    supporting both shapes during the migration window."""
+    if isinstance(outcome, Replace):
+        return outcome.result
+    sc = getattr(outcome, "short_circuit", None)
+    return sc
 
 
 class _PathOnly(BaseModel):
@@ -114,10 +126,10 @@ async def test_edit_file_rejected_without_prior_read(tmp_path: Path) -> None:
         args={"path": str(target), "old_str": "hello", "new_str": "bye"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "has not been read" in outcome.short_circuit.error
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "has not been read" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
 @pytest.mark.asyncio
@@ -133,7 +145,7 @@ async def test_edit_file_allowed_after_record_read(tmp_path: Path) -> None:
         args={"path": str(target), "old_str": "hello", "new_str": "bye"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 @pytest.mark.asyncio
@@ -151,8 +163,8 @@ async def test_edit_file_rejected_when_different_path_read(tmp_path: Path) -> No
         args={"path": str(b), "old_str": "B", "new_str": "C"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -174,9 +186,9 @@ async def test_other_tools_pass_through_unaffected(tmp_path: Path) -> None:
     r4 = await hook(
         tool=_read_tool(), args={"path": str(target)}, state=LoopState(),
     )
-    assert r1.short_circuit is None
-    assert r3.short_circuit is None
-    assert r4.short_circuit is None
+    assert _sc(r1) is None
+    assert _sc(r3) is None
+    assert _sc(r4) is None
 
 
 @pytest.mark.asyncio
@@ -196,7 +208,7 @@ async def test_relative_and_absolute_paths_normalize(
         args={"path": str(target), "old_str": "pass", "new_str": "return"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 @pytest.mark.asyncio
@@ -214,10 +226,10 @@ async def test_non_existent_path_blocks_as_never_read(tmp_path: Path) -> None:
         args={"path": str(ghost), "old_str": "x", "new_str": "y"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "has not been read" in outcome.short_circuit.error
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "has not been read" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
 @pytest.mark.asyncio
@@ -264,10 +276,10 @@ async def test_edit_file_rejected_when_file_changed_since_read(tmp_path: Path) -
         args={"path": str(target), "old_str": "hello", "new_str": "bye"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "has changed since last read" in outcome.short_circuit.error
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "has changed since last read" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
 @pytest.mark.asyncio
@@ -282,9 +294,9 @@ async def test_stale_and_never_read_errors_are_distinct(tmp_path: Path) -> None:
         args={"path": str(never), "old_str": "x", "new_str": "y"},
         state=LoopState(),
     )
-    assert r_never.short_circuit is not None
-    assert r_never.short_circuit.error is not None
-    assert "has not been read" in r_never.short_circuit.error
+    assert _sc(r_never) is not None
+    assert _sc(r_never).error is not None  # type: ignore[union-attr]
+    assert "has not been read" in _sc(r_never).error  # type: ignore[operator,union-attr]
 
     stale = tmp_path / "stale.txt"
     stale.write_text("x\n")
@@ -298,11 +310,11 @@ async def test_stale_and_never_read_errors_are_distinct(tmp_path: Path) -> None:
         args={"path": str(stale), "old_str": "x", "new_str": "y"},
         state=LoopState(),
     )
-    assert r_stale.short_circuit is not None
-    assert r_stale.short_circuit.error is not None
-    assert "has changed since last read" in r_stale.short_circuit.error
+    assert _sc(r_stale) is not None
+    assert _sc(r_stale).error is not None  # type: ignore[union-attr]
+    assert "has changed since last read" in _sc(r_stale).error  # type: ignore[operator,union-attr]
 
-    assert r_never.short_circuit.error != r_stale.short_circuit.error
+    assert _sc(r_never).error != _sc(r_stale).error  # type: ignore[union-attr]
 
 
 def test_fresh_after_record_returns_fresh_status(tmp_path: Path) -> None:
@@ -417,7 +429,7 @@ async def test_hook_allows_new_file_creation_via_empty_old_str(
         args={"path": str(ghost), "old_str": "", "new_str": "hello\n"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 @pytest.mark.asyncio
@@ -434,10 +446,10 @@ async def test_hook_still_blocks_edit_with_old_str_on_never_read_file(
         args={"path": str(target), "old_str": "hello", "new_str": "bye"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "has not been read" in outcome.short_circuit.error
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "has not been read" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
 @pytest.mark.asyncio
@@ -464,10 +476,10 @@ async def test_partial_read_blocks_edit_with_partial_reason(
             args={"path": str(target), "old_str": "a", "new_str": "A"},
             state=LoopState(),
         )
-        assert outcome.short_circuit is not None
-        assert outcome.short_circuit.ok is False
-        assert outcome.short_circuit.error is not None
-        assert "partially read" in outcome.short_circuit.error
+        assert _sc(outcome) is not None
+        assert _sc(outcome).ok is False  # type: ignore[union-attr]
+        assert _sc(outcome).error is not None  # type: ignore[union-attr]
+        assert "partially read" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
         events = [json.loads(line) for line in log.read_text().splitlines()]
         blocked = [e for e in events if e["event"] == "must_read_first_blocked"]
@@ -498,7 +510,7 @@ async def test_full_read_after_partial_read_recovers_fresh(
         args={"path": str(target), "old_str": "a", "new_str": "A"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 # write_file — file-unchanged guard mirroring claude-code's FileWriteTool.
@@ -518,7 +530,7 @@ async def test_write_file_to_new_path_passes_through_hook(
         args={"path": str(ghost)},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 @pytest.mark.asyncio
@@ -535,11 +547,11 @@ async def test_write_file_overwrite_rejected_without_prior_read(
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "has not been read" in outcome.short_circuit.error
-    assert "overwriting" in outcome.short_circuit.error
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "has not been read" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    assert "overwriting" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
 @pytest.mark.asyncio
@@ -557,7 +569,7 @@ async def test_write_file_overwrite_allowed_after_record_read(
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 @pytest.mark.asyncio
@@ -579,10 +591,10 @@ async def test_write_file_overwrite_rejected_when_stale(
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "has changed since last read" in outcome.short_circuit.error
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "has changed since last read" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
 @pytest.mark.asyncio
@@ -600,10 +612,10 @@ async def test_write_file_overwrite_rejected_when_partial(
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert outcome.short_circuit.error is not None
-    assert "partially read" in outcome.short_circuit.error
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "partially read" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
 @pytest.mark.asyncio
@@ -622,10 +634,10 @@ async def test_write_file_error_messages_say_overwriting_not_editing(
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.error is not None
-    assert "overwriting" in outcome.short_circuit.error
-    assert "before edit" not in outcome.short_circuit.error
+    assert _sc(outcome) is not None
+    assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    assert "overwriting" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    assert "before edit" not in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
 @pytest.mark.asyncio
@@ -645,11 +657,11 @@ async def test_never_read_message_no_duplicated_path(tmp_path: Path) -> None:
             else {"path": str(target)},
             state=LoopState(),
         )
-        assert outcome.short_circuit is not None
-        assert outcome.short_circuit.error is not None
-        assert outcome.short_circuit.error.count(str(target.resolve())) == 1, (
-            f"path appeared {outcome.short_circuit.error.count(str(target.resolve()))}x in: "
-            f"{outcome.short_circuit.error!r}"
+        assert _sc(outcome) is not None
+        assert _sc(outcome).error is not None  # type: ignore[union-attr]
+        assert _sc(outcome).error.count(str(target.resolve())) == 1, (  # type: ignore[union-attr]
+            f"path appeared {_sc(outcome).error.count(str(target.resolve()))}x in: "  # type: ignore[union-attr]
+            f"{_sc(outcome).error!r}"
         )
 
 
@@ -698,10 +710,10 @@ async def test_bash_sed_in_place_blocked_when_target_unread(
         args={"command": f"sed -i 's/1/2/' {target}"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
-    assert "would mutate" in (outcome.short_circuit.error or "")
-    assert str(target.resolve()) in (outcome.short_circuit.error or "")
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert "would mutate" in (_sc(outcome).error or "")  # type: ignore[union-attr]
+    assert str(target.resolve()) in (_sc(outcome).error or "")  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -716,7 +728,7 @@ async def test_bash_sed_in_place_allowed_after_read(tmp_path: Path) -> None:
         args={"command": f"sed -i 's/1/2/' {target}"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 @pytest.mark.asyncio
@@ -732,8 +744,8 @@ async def test_bash_redirect_overwrite_blocked_when_target_unread(
         args={"command": f"echo new > {target}"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
-    assert outcome.short_circuit.ok is False
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio
@@ -747,7 +759,7 @@ async def test_bash_redirect_to_new_file_passes(tmp_path: Path) -> None:
         args={"command": f"echo hi > {target}"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 @pytest.mark.asyncio
@@ -763,7 +775,7 @@ async def test_bash_append_redirect_blocked_when_target_unread(
         args={"command": f"echo entry-2 >> {target}"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
+    assert _sc(outcome) is not None
 
 
 @pytest.mark.asyncio
@@ -777,7 +789,7 @@ async def test_bash_tee_blocked_when_target_unread(tmp_path: Path) -> None:
         args={"command": f"echo v1 | tee {target}"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is not None
+    assert _sc(outcome) is not None
 
 
 @pytest.mark.asyncio
@@ -790,7 +802,7 @@ async def test_bash_redirect_to_dev_null_passes(tmp_path: Path) -> None:
         args={"command": "ls /tmp > /dev/null 2>&1"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 @pytest.mark.asyncio
@@ -803,7 +815,7 @@ async def test_bash_pure_read_command_passes(tmp_path: Path) -> None:
         args={"command": "ls -la /tmp"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert _sc(outcome) is None
 
 
 @pytest.mark.asyncio
@@ -831,3 +843,46 @@ async def test_bash_journal_emits_blocked_event_with_command(
         assert blocked[0]["command"] == cmd
     finally:
         journal_module.reset()
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 Task 9 — Outcome variant assertions.
+# Blocked paths now return Replace; passthrough paths return PRE_TOOL_PASSTHROUGH.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_edit_file_unread_returns_replace_outcome(tmp_path: Path) -> None:
+    target = tmp_path / "file.txt"
+    target.write_text("content")
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    tool = _edit_tool()
+    outcome = await hook(
+        tool=tool,
+        args={"path": str(target), "old_str": "content", "new_str": "new"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Replace), f"expected Replace, got {type(outcome).__name__}"
+    assert outcome.result.ok is False
+    assert "has not been read" in (outcome.result.error or "")
+    assert outcome.decision.allow is False
+    assert outcome.decision.reason == "safety_blocked"
+
+
+@pytest.mark.asyncio
+async def test_write_file_unread_existing_returns_replace_outcome(tmp_path: Path) -> None:
+    target = tmp_path / "file.txt"
+    target.write_text("content")
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    tool = _write_tool()
+    outcome = await hook(
+        tool=tool,
+        args={"path": str(target), "content": "new content"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Replace)
+    assert outcome.result.ok is False
+    assert outcome.decision.allow is False
+    assert outcome.decision.reason == "safety_blocked"

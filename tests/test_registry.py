@@ -233,6 +233,7 @@ def test_assemble_tool_pool_builtin_wins_on_collision_and_journals(
     shadow_events = [e for e in events if e["event"] == "mcp_tool_shadowed"]
     assert len(shadow_events) == 1
     assert shadow_events[0]["tool"] == "bash"
+    assert shadow_events[0]["winner"] == "builtin"
     assert shadow_events[0]["shadowed_by"] == "builtin"
 
 
@@ -260,7 +261,73 @@ def test_assemble_tool_pool_dedupes_intra_mcp_silently(tmp_path: Path) -> None:
     ]
     shadow_events = [e for e in events if e["event"] == "mcp_tool_shadowed"]
     assert len(shadow_events) == 1
+    assert shadow_events[0]["winner"] == "mcp"
     assert shadow_events[0]["shadowed_by"] == "mcp"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 Task 7 — ``mcp_overrides_builtin`` collision policy.
+# Default (False): builtin wins (preserves historical behavior).
+# Opt-in (True): MCP wins, builtin is shadowed.
+# Either branch emits ``mcp_tool_shadowed`` with a ``winner`` field that
+# captures the policy outcome.
+# ---------------------------------------------------------------------------
+
+
+def test_assemble_tool_pool_default_builtin_wins_and_winner_builtin(
+    tmp_path: Path,
+) -> None:
+    """Default flag (False) preserves builtin-wins: the builtin entry stays
+    in the pool and the journal event names ``winner="builtin"``."""
+    from aura.core import journal
+
+    journal_path = tmp_path / "audit.jsonl"
+    journal.configure(journal_path)
+    try:
+        builtin = _mk("collide")
+        mcp = _mk("collide")
+        pool = assemble_tool_pool([builtin], [mcp])
+        assert pool["collide"] is builtin
+        assert len(pool) == 1
+    finally:
+        journal.reset()
+    events = [
+        json.loads(line)
+        for line in journal_path.read_text().splitlines()
+        if line.strip()
+    ]
+    shadow_events = [e for e in events if e["event"] == "mcp_tool_shadowed"]
+    assert len(shadow_events) == 1
+    assert shadow_events[0]["tool"] == "collide"
+    assert shadow_events[0]["winner"] == "builtin"
+
+
+def test_assemble_tool_pool_mcp_overrides_true_mcp_wins_and_winner_mcp(
+    tmp_path: Path,
+) -> None:
+    """Flag flipped to True: the MCP tool replaces the builtin in the pool
+    and the journal event names ``winner="mcp"``."""
+    from aura.core import journal
+
+    journal_path = tmp_path / "audit.jsonl"
+    journal.configure(journal_path)
+    try:
+        builtin = _mk("collide")
+        mcp = _mk("collide")
+        pool = assemble_tool_pool([builtin], [mcp], mcp_overrides=True)
+        assert pool["collide"] is mcp
+        assert len(pool) == 1
+    finally:
+        journal.reset()
+    events = [
+        json.loads(line)
+        for line in journal_path.read_text().splitlines()
+        if line.strip()
+    ]
+    shadow_events = [e for e in events if e["event"] == "mcp_tool_shadowed"]
+    assert len(shadow_events) == 1
+    assert shadow_events[0]["tool"] == "collide"
+    assert shadow_events[0]["winner"] == "mcp"
 
 
 async def test_partition_short_circuited_step_goes_solo() -> None:

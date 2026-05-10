@@ -97,6 +97,8 @@ class ToolRegistry(dict[str, BaseTool]):
 def assemble_tool_pool(
     builtins: Iterable[BaseTool],
     mcp_tools: Iterable[BaseTool],
+    *,
+    mcp_overrides: bool = False,
 ) -> dict[str, BaseTool]:
     """Merge builtin + MCP tools into a stable, dedup'd, ordered mapping.
 
@@ -106,13 +108,22 @@ def assemble_tool_pool(
       ordering for prompt-cache friendliness — re-running with the same
       inputs produces the same tool-schema prefix).
     - Builtins come first in the result; MCP tools follow.
-    - On a name collision between an MCP tool and a builtin, the builtin
-      wins; the MCP tool is dropped and a ``mcp_tool_shadowed`` journal
-      event is emitted naming both sides.
+    - Builtin-vs-MCP name collision policy is governed by ``mcp_overrides``
+      (sourced from ``ToolsConfig.mcp_overrides_builtin``):
+
+      * ``False`` (default): builtin wins; the MCP tool is dropped. A
+        ``mcp_tool_shadowed`` journal event is emitted with
+        ``winner="builtin"`` and ``shadowed_by="builtin"``.
+      * ``True``: MCP wins; the builtin is replaced. The same event fires
+        with ``winner="mcp"`` and ``shadowed_by="mcp"``.
+
+      Either way the event captures the policy outcome so operators can
+      audit which side the collision resolved to.
     - Within the MCP partition itself, first-seen wins after sort (stable
       against duplicate MCP-side names too — second occurrence is dropped
       silently since the audit-relevant case is builtin-vs-MCP, not the
-      degenerate intra-MCP collision).
+      degenerate intra-MCP collision). The intra-MCP shadow is journalled
+      with ``winner="mcp"`` and ``shadowed_by="mcp"``.
     - Returns a plain ``dict`` whose insertion order is the final pool
       order; callers that want ``ToolRegistry`` semantics can wrap.
     """
@@ -131,11 +142,25 @@ def assemble_tool_pool(
 
     for t in mcp_sorted:
         if t.name in pool:
-            shadowed_by = "builtin" if t.name in builtin_names else "mcp"
+            collides_with_builtin = t.name in builtin_names
+            if collides_with_builtin and mcp_overrides:
+                # Operator opted into MCP-wins policy: replace the
+                # builtin entry with the MCP tool. Audit the override.
+                pool[t.name] = t
+                journal.write(
+                    "mcp_tool_shadowed",
+                    tool=t.name,
+                    winner="mcp",
+                    shadowed_by="mcp",
+                )
+                continue
+            # Default policy (builtin wins) OR an intra-MCP duplicate.
+            winner = "builtin" if collides_with_builtin else "mcp"
             journal.write(
                 "mcp_tool_shadowed",
                 tool=t.name,
-                shadowed_by=shadowed_by,
+                winner=winner,
+                shadowed_by=winner,
             )
             continue
         pool[t.name] = t

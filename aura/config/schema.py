@@ -45,6 +45,21 @@ class ToolsConfig(BaseModel):
             "stay so /resume + post-mortem inspection work."
         ),
     )
+    mcp_overrides_builtin: bool = Field(
+        default=False,
+        description=(
+            "Global collision policy for builtin-vs-MCP tool name clashes. "
+            "When False (default), the builtin tool wins and the MCP tool "
+            "is dropped — preserves Aura's historical behavior. When True, "
+            "the MCP tool wins and the builtin is shadowed; useful when an "
+            "operator wants to override a stock tool with an MCP server's "
+            "richer implementation. Either way, ``mcp_tool_shadowed`` "
+            "journal events are emitted with a ``winner`` field "
+            "(``\"builtin\"`` or ``\"mcp\"``) so the policy outcome is "
+            "auditable. ALL-OR-NOTHING — per-tool overrides are out of "
+            "scope until a real use case appears."
+        ),
+    )
 
 
 class StorageConfig(BaseModel):

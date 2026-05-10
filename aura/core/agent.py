@@ -1521,10 +1521,15 @@ class Agent:
             return
         self._mcp_manager = manager
         # F-02-031 — route the merge through ``assemble_tool_pool`` so
-        # builtin-vs-MCP collisions resolve with builtin precedence + a
-        # ``mcp_tool_shadowed`` journal event instead of a silent skip.
+        # builtin-vs-MCP collisions resolve under the configured policy
+        # (``tools.mcp_overrides_builtin``) and emit a ``mcp_tool_shadowed``
+        # journal event with the policy outcome (``winner``).
         from aura.core.registry import assemble_tool_pool  # noqa: PLC0415
-        merged = assemble_tool_pool(self._registry.tools(), tools)
+        merged = assemble_tool_pool(
+            self._registry.tools(),
+            tools,
+            mcp_overrides=self._config.tools.mcp_overrides_builtin,
+        )
         # Replace registry contents with the merged pool. Clear-then-add
         # keeps the existing ToolRegistry instance + its callers (the
         # loop's tool binding, send_message register/unregister, etc.).

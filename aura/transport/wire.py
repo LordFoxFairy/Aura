@@ -104,6 +104,36 @@ def permission_request_to_wire(
     }
 
 
+def compact_event_to_wire(
+    *,
+    trigger: str,
+    tokens_before: int,
+    tokens_after: int,
+    outcome: str,
+    duration_ms: float,
+) -> dict[str, Any]:
+    """Phase 4 §5 — build the ``compact_event`` wire payload.
+
+    Emitted once per :class:`aura.core.compact.compactor.Compactor` method
+    invocation so external consumers (AG-UI ``CUSTOM`` carrier with
+    ``name="aura.compact.event"``, future SSE clients, the desktop
+    headless transport) can render a "compacting…" indicator and an
+    after-the-fact summary line.
+
+    ``outcome`` is one of ``"ok"`` / ``"skipped"`` / ``"failed"`` so a
+    grep over the journal can filter the three lifecycle states without
+    parsing free-form messages.
+    """
+    return {
+        "event": "compact_event",
+        "trigger": trigger,
+        "tokens_before": int(tokens_before),
+        "tokens_after": int(tokens_after),
+        "outcome": outcome,
+        "duration_ms": float(duration_ms),
+    }
+
+
 def agent_state_to_wire(agent: Any, last_turn_seconds: float) -> dict[str, Any]:
     """Snapshot agent state into the external ``aura_state`` event.
 

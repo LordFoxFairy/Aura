@@ -116,6 +116,20 @@ class AguiAdapter:
                 "name": "aura.permission.audit",
                 "value": event,
             }]
+        if kind == "compact_event":
+            # Phase 4 §5 — compaction lifecycle event so UIs can show a
+            # "compacting…" indicator. The wire payload carries
+            # ``trigger`` / ``tokens_before`` / ``tokens_after`` /
+            # ``outcome`` / ``duration_ms`` (see
+            # :class:`aura.core.compact.compactor.Compactor`); we lift
+            # the inner dict directly into the AG-UI ``value`` so
+            # consumers don't have to unwrap a redundant ``event``
+            # field.
+            return [{
+                "type": "CUSTOM",
+                "name": "aura.compact.event",
+                "value": event,
+            }]
         return [{"type": "CUSTOM", "name": "aura.event", "value": event}]
 
     def finish_run(self, *, reason: str = "natural") -> list[dict[str, Any]]:

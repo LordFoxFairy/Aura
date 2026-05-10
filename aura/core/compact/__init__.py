@@ -12,15 +12,19 @@ payloads in the *outgoing* prompt only — stored history is untouched.
 
 The :class:`Compactor` Protocol (Phase 1 §3.3) collapses the three
 historical compaction call sites — microcompact, reactive, auto — into
-one named interface. :class:`aura.core.compact.legacy_adapter.LegacyCompactor`
-satisfies it today by delegating to :func:`apply_microcompact` and
-:func:`run_compact`. Phase 4 replaces the adapter with a first-class
-implementation.
+one named structural interface. The Phase 1
+:class:`aura.core.compact.legacy_adapter.LegacyCompactor` satisfies it
+by delegating to :func:`apply_microcompact` and :func:`run_compact`;
+Phase 4 introduces a first-class concrete class in
+:mod:`aura.core.compact.compactor` (see
+:class:`aura.core.compact.compactor.Compactor`) which structurally
+satisfies the same Protocol and adds an explicit ``manual`` trigger
+plus per-call ``compact_event`` emission. Task 4 swaps the loop wiring
+from the legacy adapter onto the new class.
 """
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from langchain_core.messages import BaseMessage
@@ -33,6 +37,7 @@ from aura.core.compact.constants import (
     MICROCOMPACT_COMPACTABLE_TOOLS,
     MICROCOMPACT_KEEP_RECENT,
     MICROCOMPACT_TRIGGER_PAIRS,
+    CompactionTrigger,
 )
 from aura.core.compact.microcompact import (
     MicrocompactPolicy,
@@ -45,24 +50,6 @@ from aura.core.compact.microcompact import (
 )
 from aura.core.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
 from aura.schemas.state import LoopSlots
-
-
-class CompactionTrigger(StrEnum):
-    """Phase 4 §3 — explicit trigger taxonomy for compact events.
-
-    Every :class:`Compactor` method takes one of these and tags its journal
-    event accordingly. Operators filter ``compact_event`` records by trigger
-    when debugging — e.g. "show me only the reactive (mid-turn PromptTooLong)
-    fires across the last week" vs "show me auto (post-turn threshold) fires".
-
-    StrEnum so the value round-trips through journal JSON as a plain string
-    without a custom encoder.
-    """
-
-    microcompact = "microcompact"  # per-turn view-only compression
-    reactive = "reactive"          # mid-turn PromptTooLong recovery
-    auto = "auto"                  # post-turn token-threshold check
-    manual = "manual"              # user-invoked /compact
 
 
 @runtime_checkable
@@ -111,6 +98,21 @@ class Compactor(Protocol):
         model: str,
     ) -> CompactResult | None: ...
 
+
+# Phase 4 §5 — the concrete :class:`Compactor` class lives in
+# :mod:`aura.core.compact.compactor`. It is intentionally *not*
+# re-exported here so the ``Compactor`` name on this package's surface
+# remains the Phase 1 :class:`Protocol` (preserves
+# ``isinstance(obj, Compactor)`` semantics for the legacy adapter +
+# the Phase 1 protocol-conformance test). New call sites that need
+# the concrete class import it explicitly:
+#
+#     from aura.core.compact.compactor import Compactor as CompactorImpl
+#
+# Task 4 wires the implementation into the loop / agent. After Task 5
+# deletes :class:`LegacyCompactor`, the structural Protocol stays as
+# the type-annotation surface and the concrete class remains the only
+# implementation.
 
 __all__ = [
     "AUTO_COMPACT_THRESHOLD",

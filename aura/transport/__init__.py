@@ -12,11 +12,17 @@ from aura.transport.stream import (
     stream_agent_wire,
     stream_agent_wire_sse,
 )
-from aura.transport.wire import agent_state_to_wire, event_to_wire, permission_request_to_wire
+from aura.transport.wire import (
+    agent_state_to_wire,
+    compact_event_to_wire,
+    event_to_wire,
+    permission_request_to_wire,
+)
 
 __all__ = [
     "AguiAdapter",
     "agent_state_to_wire",
+    "compact_event_to_wire",
     "encode_json_sse",
     "encode_sse",
     "event_to_wire",

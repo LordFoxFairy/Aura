@@ -333,27 +333,27 @@ async def test_user_accept_decision_does_not_emit_permission_audit() -> None:
 async def test_pre_tool_hook_returns_outcome_directly() -> None:
     """AC-G4-1: a permission hook returns its Decision via
     :class:`PreToolOutcome.decision`; the Loop populates
-    ``ToolStep.permission_decision`` without touching ``state.custom``.
+    ``ToolStep.permission_decision`` without any side-channel slot.
 
     Direct-return contract: the Loop reads the decision off the outcome
-    dataclass, never from a transient slot on state.custom. Phase 1
-    Task 4 moved the G5 denials sink off ``state.custom`` onto the typed
-    ``state.slots.turn_denials`` slot, so ``state.custom`` is expected
-    to stay empty here.
+    dataclass, never from a transient slot. Phase 1 Task 4 moved the G5
+    denials sink off the legacy ``state.custom`` dict onto the typed
+    ``state.slots.turn_denials`` slot (Task 7 then deleted ``custom``
+    outright), so the allow path here must leave ``turn_denials`` empty.
     """
     from aura.core.permissions.rule import Rule
 
     expected_decision = Decision(
         allow=True, reason="rule_allow", rule=Rule(tool="echo", content=None),
     )
-    saw_custom_keys: list[set[str]] = []
+    saw_turn_denials: list[int] = []
 
     async def hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
     ) -> PreToolOutcome:
-        # Hook must NOT need to touch state.custom to communicate the
+        # Hook must NOT need a side-channel slot to communicate the
         # decision — that's the whole point of G4.
-        saw_custom_keys.append(set(state.custom))
+        saw_turn_denials.append(len(state.slots.turn_denials))
         return PreToolOutcome(short_circuit=None, decision=expected_decision)
 
     # Spy on the Loop's ToolStep to confirm the decision lands on it.
@@ -387,14 +387,14 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
     assert len(captured_steps) == 1
     assert captured_steps[0].permission_decision is expected_decision
 
-    # AC-G4-2 (locally): no side-channel slot appeared on state.custom
-    # at any hook invocation, nor persisted after the Loop ran. After
-    # Phase 1 Task 4 the G5 denials sink lives on
-    # ``state.slots.turn_denials`` (typed) — ``state.custom`` should
-    # stay empty here.
-    for keys in saw_custom_keys:
-        assert keys == set()
-    assert set(loop._state.custom) == set()
+    # AC-G4-2 (locally): no denial slot was written at any hook
+    # invocation, nor persisted after the Loop ran. The allow path here
+    # must leave ``state.slots.turn_denials`` empty (Phase 1 Task 4
+    # migrated the denials sink onto this typed slot; Task 7 deleted
+    # the legacy ``state.custom`` dict).
+    for n in saw_turn_denials:
+        assert n == 0
+    assert loop._state.slots.turn_denials == []
 
     # And the audit still emitted (auto-allow → PermissionAudit between
     # Started and Completed).
@@ -404,9 +404,9 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
 @pytest.mark.asyncio
 async def test_per_call_decisions_do_not_leak_across_tool_calls() -> None:
     """Each tool call gets its own PreToolOutcome; nothing persists on
-    state.custom across calls. Post-G4 — with direct-return there is no
-    shared slot that could leak, but this test guards regression: the
-    loop must not read stale state between calls.
+    a side-channel across calls. Post-G4 — with direct-return there is
+    no shared slot that could leak, but this test guards regression:
+    the loop must not read stale state between calls.
 
     Each call has a distinct Decision object; the loop must emit one
     PermissionAudit per call, matching the per-call decision."""
@@ -416,18 +416,19 @@ async def test_per_call_decisions_do_not_leak_across_tool_calls() -> None:
         Decision(allow=True, reason="rule_allow", rule=Rule(tool="echo", content=None)),
         Decision(allow=True, reason="mode_bypass"),
     ]
-    seen_customs: list[set[str]] = []
+    seen_denial_counts: list[int] = []
 
     async def per_call_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
     ) -> PreToolOutcome:
-        # Snapshot state.custom keys BEFORE returning — must never
-        # contain any transient per-call decision slot (G4 removed it).
-        seen_customs.append(set(state.custom))
+        # Snapshot the denials slot BEFORE returning — both calls take
+        # the allow path, so the typed sink must stay empty at every
+        # hook invocation.
+        seen_denial_counts.append(len(state.slots.turn_denials))
         # Pop a distinct decision per call.
         return PreToolOutcome(
             short_circuit=None,
-            decision=decisions[len(seen_customs) - 1],
+            decision=decisions[len(seen_denial_counts) - 1],
         )
 
     # Two tool calls in one turn → loop processes them in sequence through
@@ -452,12 +453,12 @@ async def test_per_call_decisions_do_not_leak_across_tool_calls() -> None:
     async for ev in loop.run_turn(history=[HumanMessage(content="go")]):
         events.append(ev)
 
-    assert len(seen_customs) == 2
+    assert len(seen_denial_counts) == 2
     # After Phase 1 Task 4 the G5 denials sink lives on the typed
-    # ``state.slots.turn_denials`` slot, so ``state.custom`` should be
-    # empty at every hook invocation here.
-    for snap in seen_customs:
-        assert snap == set()
+    # ``state.slots.turn_denials`` slot. Both calls allow → no denial
+    # records appended at any hook invocation.
+    for n in seen_denial_counts:
+        assert n == 0
     # Both auto-allow decisions surfaced distinct PermissionAudit events.
     audits = [e for e in events if isinstance(e, PermissionAudit)]
     assert len(audits) == 2

@@ -12,7 +12,7 @@ The two layers stack:
   processed the skill body. Implemented as a turn-count sentinel + per-skill
   whitelist stored on the typed
   :attr:`aura.schemas.state.LoopSlots.skill_restrict_leases` slot
-  (Phase 1 Task 6 — was ``LoopState.custom["_skill_restrict_lease"]``).
+  (Phase 1 Task 6).
 
 Lease shape — why a transient slot, not :class:`SessionRuleSet`:
 

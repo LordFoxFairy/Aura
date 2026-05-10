@@ -20,11 +20,10 @@ Contract invariants:
   a downstream mutation of ``args`` after the hook returns cannot
   retroactively rewrite the audit record.
 
-Phase 1 Task 4 migrated the per-turn denials sink off the legacy
-``LoopState.custom["_aura_denials_sink"]`` scratchpad onto the typed
-``LoopState.slots.turn_denials`` slot. The permission hook (writer),
-:class:`aura.core.loop.AgentLoop` (turn-start clear), and
-:class:`aura.core.agent.Agent` (read view via ``last_turn_denials``)
+The per-turn denials sink lives on the typed
+``LoopState.slots.turn_denials`` slot (Phase 1 Task 4). The permission
+hook (writer), :class:`aura.core.loop.AgentLoop` (turn-start clear),
+and :class:`aura.core.agent.Agent` (read view via ``last_turn_denials``)
 all coordinate through that single typed list.
 """
 

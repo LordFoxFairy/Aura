@@ -2,7 +2,7 @@
 
 Shared data type for both ``aura.tools.todo_write`` (as its ``args_schema``)
 and ``aura.core.memory.context`` (for rendering the ``<todos>`` prompt
-block). ``state.custom["todos"]`` holds ``list[TodoItem]`` — pydantic
+block). ``state.slots.todos`` holds ``list[TodoItem]`` — pydantic
 instances, not dumped dicts — so both the writer and the reader get typed
 attribute access without silent dict-shape drift.
 

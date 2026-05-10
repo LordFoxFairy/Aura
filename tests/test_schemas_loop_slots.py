@@ -1,8 +1,9 @@
 """Tests for ``LoopSlots`` and its supporting frozen dataclasses.
 
-Phase 1 Task 1 — schema contracts only. Migration of existing
-``state.custom`` consumers happens in Tasks 3-6; these tests assert the
-type shape, defaults, frozenness, and the ``replace`` ergonomic.
+Phase 1 Task 1 — schema contracts only. Migration of legacy untyped
+scratchpad consumers landed in Tasks 3-6; Task 7 deleted the dict
+outright. These tests assert the type shape, defaults, frozenness,
+and the ``replace`` ergonomic.
 """
 
 from __future__ import annotations

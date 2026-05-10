@@ -68,8 +68,8 @@ from aura.schemas.tool import ToolResult, resolve_is_destructive
 # Shared empty immutable RuleSet — safe as a default (frozen, no mutable state).
 _EMPTY_RULESET = RuleSet()
 
-# Phase 1 Task 6: the per-turn ResolveOnce cache lives on the typed
-# ``state.slots.perm_dedup_cache`` slot (was ``state.custom["_perm_turn_ask_cache"]``).
+# The per-turn ResolveOnce cache lives on the typed
+# ``state.slots.perm_dedup_cache`` slot (Phase 1 Task 6).
 # Scoped per turn so a user "accept" on call 1 of a batch doesn't silently
 # carry over to turn 2 (where the user might want a fresh prompt if the
 # model acts differently). ``AgentLoop.run_turn`` clears this at turn
@@ -407,7 +407,7 @@ def make_permission_hook(
             return PreToolOutcome(short_circuit=None, decision=decision)
         # G5 / Phase 1 Task 4: append a structured record to the per-turn
         # denials sink, now living on the typed
-        # ``state.slots.turn_denials`` slot (was ``state.custom``).
+        # ``state.slots.turn_denials`` slot.
         # ``_decide`` only reaches this branch for deny reasons, so every
         # deny path is captured here (no need to sprinkle appends across
         # _decide's branches). ``LoopSlots`` is frozen but

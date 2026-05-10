@@ -478,8 +478,7 @@ async def test_pre_tool_ask_propagates_to_merged_outcome() -> None:
 @pytest.mark.asyncio
 async def test_pre_tool_ask_seen_by_downstream_hook_via_state() -> None:
     """When an upstream hook sets ``ask=True``, downstream hooks see
-    ``state.slots.ask_pending`` (Phase 1 Task 6 — was
-    ``state.custom[PRE_TOOL_ASK_PENDING_KEY]``) so a permission hook
+    ``state.slots.ask_pending`` (Phase 1 Task 6) so a permission hook
     later in the chain can detect the demand and demote any auto-allow
     to the asker path."""
     seen: list[bool] = []

@@ -620,12 +620,12 @@ async def test_hook_returns_decision_on_outcome() -> None:
     assert outcome.decision.reason == "rule_allow"
     assert outcome.decision.allow is True
     # Post-G4 direct-return contract: the hook MUST NOT write any
-    # transient decision slot to state.custom. Phase 1 Task 4 also
-    # moved the G5 denials sink off ``state.custom`` onto
-    # ``state.slots.turn_denials``, so for an allow path the dict
-    # stays empty here.
-    assert dict(state.custom) == {}, (
-        f"unexpected state.custom key: {list(state.custom)!r}"
+    # transient decision slot. Phase 1 Task 4 moved the G5 denials sink
+    # onto ``state.slots.turn_denials`` (Task 7 then deleted the legacy
+    # ``state.custom`` dict outright); for an allow path the typed
+    # denials slot must stay empty.
+    assert state.slots.turn_denials == [], (
+        f"unexpected denial recorded on allow path: {state.slots.turn_denials!r}"
     )
 
 

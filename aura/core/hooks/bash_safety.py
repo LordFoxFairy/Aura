@@ -33,8 +33,7 @@ filter on ``permission_decision`` see a uniform denial record regardless
 of which safety axis fired; the ``tool`` field disambiguates.
 
 Additionally, the hook populates the per-turn denials sink
-(``state.slots.turn_denials`` — Phase 1 Task 4 moved it off the legacy
-``state.custom`` dict) with a :class:`PermissionDenial`, so
+(``state.slots.turn_denials``) with a :class:`PermissionDenial`, so
 :meth:`aura.core.agent.Agent.last_turn_denials` surfaces
 bash/bash_background blocks to SDK consumers without them having to
 re-parse ``events.jsonl``.

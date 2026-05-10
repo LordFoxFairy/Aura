@@ -322,12 +322,11 @@ class AgentLoop:
         # §4 step 1). The list identity is stable for the session so
         # ``Agent.last_turn_denials`` always sees the same object.
         self._state.slots.turn_denials.clear()
-        # Reset the permission-hook per-turn ResolveOnce cache. Phase 1
-        # Task 6: lives on the typed ``state.slots.perm_dedup_cache``
-        # slot (was ``state.custom``). In-place ``.clear()`` is the
-        # documented mutation pattern (``LoopSlots`` is frozen at the
-        # *attribute* level, not on its mutable container fields — see
-        # the ``LoopSlots`` docstring).
+        # Reset the permission-hook per-turn ResolveOnce cache. Lives on
+        # the typed ``state.slots.perm_dedup_cache`` slot (Phase 1 Task 6).
+        # In-place ``.clear()`` is the documented mutation pattern
+        # (``LoopSlots`` is frozen at the *attribute* level, not on its
+        # mutable container fields — see the ``LoopSlots`` docstring).
         self._state.slots.perm_dedup_cache.clear()
         # F-01-001 abort plumbing — install the controller into the
         # contextvar so tools (and any spawned subagent on the same task
@@ -876,8 +875,8 @@ class AgentLoop:
                 state=self._state,
                 tool_call_id=tc["id"],
             )
-            # G4: PreToolOutcome carries both channels directly — no more
-            # state.custom side-channel. ``short_circuit`` is the ToolResult
+            # G4: PreToolOutcome carries both channels directly — no
+            # side-channel slot. ``short_circuit`` is the ToolResult
             # that replaces tool.execute(); ``decision`` is the permission
             # Decision (if any) that drives the PermissionAudit emission.
             steps.append(ToolStep(

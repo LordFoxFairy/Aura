@@ -171,16 +171,14 @@ class Agent:
         # hooks append to that list, ``Loop.run_turn`` clears it at the
         # start of every astream call, and ``last_turn_denials()`` reads
         # it back through ``self._state`` (Loop and Agent share the same
-        # ``LoopState``, so no Agent-side alias is needed — the prior
-        # ``_turn_denials`` attribute + ``state.custom`` shared-list
-        # trick was retired with the migration off the untyped scratchpad).
+        # ``LoopState``, so no Agent-side alias is needed).
         # F-0910-002: auto-compact circuit breaker — three consecutive failed
         # auto-compact attempts disable subsequent auto-firings for this
         # session. Manual ``/compact`` bypasses this counter (different code
-        # path), and a successful auto-compact resets it to 0. Phase 1
-        # Task 6: lives on the typed ``state.slots.consecutive_compact_failures``
-        # slot (was ``state.custom``). The default LoopSlots() already has
-        # this at 0, so no explicit seed is needed — kept as an explicit
+        # path), and a successful auto-compact resets it to 0. Lives on
+        # the typed ``state.slots.consecutive_compact_failures`` slot
+        # (Phase 1 Task 6). The default LoopSlots() already has this at
+        # 0, so no explicit seed is needed — kept as an explicit
         # ``replace`` for parity with the old reset-on-construct semantics
         # in case a future refactor reuses an existing LoopSlots.
         self._state.slots = dataclasses.replace(
@@ -936,21 +934,16 @@ class Agent:
             asyncio.ensure_future(self.fire_stop(reason="clear"))
         self._storage.clear(self._session_id)
         self._state.reset()
-        # Phase 1 Task 4: ``LoopState.reset`` wipes ``state.custom`` but
-        # does not touch ``state.slots`` (slots live across sessions for
-        # token-stats etc.). Clear the G5 denials list in place so
-        # ``Agent.last_turn_denials()`` returns ``()`` immediately after
-        # /clear — matches the pre-migration behaviour where the list
-        # was re-bound to a fresh empty list at this exact site.
+        # ``LoopState.reset`` only zeros the counters; slots live across
+        # sessions for legitimate carry-over (token-stats etc.) and are
+        # explicitly reset here per slot, by their owners. Clear the G5
+        # denials list in place so ``Agent.last_turn_denials()`` returns
+        # ``()`` immediately after /clear.
         self._state.slots.turn_denials.clear()
-        # Phase 1 Task 5: ``state.slots.todos`` migrated out of
-        # ``state.custom``; ``LoopState.reset`` no longer wipes it. Clear
-        # the list in place so /clear starts the next session with no
-        # stale plan items — matches the pre-migration behaviour where
-        # ``custom.clear()`` removed the ``"todos"`` key.
+        # Clear the typed ``state.slots.todos`` list in place so /clear
+        # starts the next session with no stale plan items.
         self._state.slots.todos.clear()
-        # Phase 1 Task 6: scratchpad slots that previously rode through
-        # ``LoopState.custom.clear()`` now need explicit reset on /clear.
+        # Per-slot resets — scratchpad state that must reset on /clear.
         # Mutable lists/dicts mutate in place; scalars + the buddy state
         # rebind via ``dataclasses.replace`` (LoopSlots is frozen at the
         # attribute level).
@@ -1474,10 +1467,9 @@ class Agent:
 
         Returns a tuple — mutation attempts raise ``TypeError`` /
         ``AttributeError``. The underlying list lives on
-        ``self._state.slots.turn_denials`` (Phase 1 Task 4 migration —
-        previously aliased through ``state.custom`` and an Agent-side
-        ``_turn_denials`` list); the snapshot tuple isolates the caller
-        from a racy in-place grow between turns.
+        ``self._state.slots.turn_denials`` (Phase 1 Task 4 migration);
+        the snapshot tuple isolates the caller from a racy in-place
+        grow between turns.
 
         Workstream G5 — ``docs/specs/2026-04-23-aura-main-channel-parity.md``.
         """

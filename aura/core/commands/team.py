@@ -8,13 +8,12 @@ form and stays out of the way of the existing CLI's `/task-*` pattern.
 Round V14 — added ``enter`` / ``leave`` / ``view`` / ``teammate``
 verbs that mirror claude-code's ``enterTeammateView`` /
 ``exitTeammateView`` UX. The "active team" pointer lives on
-:attr:`LoopState.slots.active_team` (Phase 1 Task 6 migration — was
-``LoopState.custom["active_team_id"]``) so:
+:attr:`LoopState.slots.active_team` (Phase 1 Task 6) so:
 
 - it survives across turns inside one REPL session,
 - :meth:`Agent.clear_session` resets it (matches claude-code's
-  clear-on-/clear; the typed slot now requires explicit reset because
-  ``LoopState.reset`` no longer wipes scratchpad state),
+  clear-on-/clear; the typed slot requires explicit reset because
+  ``LoopState.reset`` only zeros counters, not slots),
 - it's stored as a *slug*, not a human name, because two teams can
   share a display name and only the slug is unique.
 
@@ -47,10 +46,10 @@ if TYPE_CHECKING:
     from aura.core.agent import Agent
 
 
-#: Logical name of the active-team slot. Phase 1 Task 6 migrated this
-#: off ``LoopState.custom`` onto :attr:`LoopState.slots.active_team`;
-#: the constant is kept as a single string token so docstrings + the
-#: REPL renderer's "active_team" reference share one source of truth.
+#: Logical name of the active-team slot, mirroring
+#: :attr:`LoopState.slots.active_team` (Phase 1 Task 6). The constant
+#: is kept as a single string token so docstrings + the REPL renderer's
+#: "active_team" reference share one source of truth.
 _ACTIVE_TEAM_KEY: str = "active_team"
 
 

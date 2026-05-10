@@ -1439,11 +1439,11 @@ def test_e2e_skill_inline_shell_cmd_neutralised(tmp_path: Path) -> None:
 
 
 def test_e2e_random_seed_resilience(tmp_path: Path) -> None:
-    """Run the dedup driver under 3 different seeds. ResolveOnce uses a
-    state.custom dict ordered by insertion — but if any path in the
-    permission stack ever picked up an order-dependent set/dict
-    iteration, a seed flip would expose it. Empty pass = ResolveOnce
-    is genuinely seed-stable.
+    """Run the dedup driver under 3 different seeds. ResolveOnce uses
+    the typed ``state.slots.perm_dedup_cache`` dict ordered by
+    insertion — but if any path in the permission stack ever picked up
+    an order-dependent set/dict iteration, a seed flip would expose it.
+    Empty pass = ResolveOnce is genuinely seed-stable.
     """
     seeds = ["1", "42", "12345"]
     for seed in seeds:

@@ -60,12 +60,12 @@ class TodoWrite(BaseTool):
     state: LoopState
 
     def _run(self, todos: list[TodoItem]) -> dict[str, Any]:
-        # Phase 1 / Task 5: ``state.slots.todos`` is the typed slot
-        # (replaces ``state.custom["todos"]``). ``LoopSlots`` is frozen so
-        # rebinding ``state.slots.todos`` is blocked, but the contained
-        # list is mutable — clear + extend matches the in-place mutation
-        # pattern used by ``turn_denials`` and preserves list identity for
-        # any external observers (compact reset, /clear).
+        # ``state.slots.todos`` is the typed slot (Phase 1 / Task 5).
+        # ``LoopSlots`` is frozen so rebinding ``state.slots.todos`` is
+        # blocked, but the contained list is mutable — clear + extend
+        # matches the in-place mutation pattern used by ``turn_denials``
+        # and preserves list identity for any external observers
+        # (compact reset, /clear).
         self.state.slots.todos.clear()
         self.state.slots.todos.extend(todos)
         return {"message": "Todos updated."}

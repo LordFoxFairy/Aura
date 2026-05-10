@@ -2,10 +2,10 @@
 
 Phase 1 — Loop redesign — introduces :class:`LoopSlots` plus the
 supporting frozen data types (:class:`TokenStats`,
-:class:`SkillRestrictLease`). These replace the untyped
-``state.custom: dict[str, Any]`` scratchpad. The ``custom`` field
-stays in :class:`LoopState` for now; Tasks 3-7 migrate consumers
-key-by-key, then Task 7 deletes it.
+:class:`SkillRestrictLease`). These replaced the untyped
+``state.custom: dict[str, Any]`` scratchpad; Phase 1 Task 7 deleted
+the ``custom`` field outright. New transient state MUST land on a
+typed :class:`LoopSlots` field — there is no untyped escape hatch.
 
 Type-only references (``Denial``, ``AskerResponse``) are
 ``TYPE_CHECKING`` imports so the leaf invariant — *nothing under
@@ -134,7 +134,12 @@ class BuddyState:
 
 @dataclass(frozen=True)
 class LoopSlots:
-    """Typed replacement for ``LoopState.custom: dict[str, Any]``.
+    """Typed slot bag for per-session transient state.
+
+    Phase 1 replaced the prior untyped ``LoopState.custom: dict[str, Any]``
+    scratchpad with this typed dataclass; Task 7 deleted the legacy dict
+    outright. New transient state MUST land here as a typed field, not on
+    a side-channel.
 
     Spec §3.1 — exactly 11 named slots, one writer per slot. Frozen so
     the slot identity is stable across the turn (the loop refers to
@@ -180,41 +185,26 @@ class LoopState:
     turn_count: int = 0
     # total_tokens_used 由 make_usage_tracking_hook 在 post_model 阶段填入，loop 本身不写。
     total_tokens_used: int = 0
-    # custom — per-session transient scratchpad for hooks / tools.
+    # Typed slot bag for per-session transient state (Phase 1).
+    # Frozen (see :class:`LoopSlots`); writers use :func:`dataclasses.replace`
+    # to swap fields. The attribute itself is rebound
+    # (``state.slots = replace(state.slots, ...)``), so :class:`LoopState`
+    # stays a non-frozen dataclass.
     #
-    # Legitimate keys currently in use (contract lock — any new slot
-    # here MUST land with a matching docstring update and a justified
-    # owner, not silently):
-    #
-    # - ``"todos"`` — populated by ``todo_write`` tool; read by
-    #   compact / system prompt assembly.
-    #
-    # The token-usage scratchpad key was migrated out of this dict by
-    # Phase 1 / Task 3; it now lives on the typed
-    # :class:`LoopSlots.token_stats` slot. The G5 denials sink was
-    # migrated by Phase 1 / Task 4; it now lives on
-    # :class:`LoopSlots.turn_denials`.
-    #
-    # Do NOT add new transient slots for one-shot hook→loop signalling:
-    # G4 removed the last per-call decision side-channel in favor of
-    # :class:`aura.core.hooks.PreToolOutcome` direct-return. New
-    # lifecycle data should ride typed return values, not a dict slot
-    # here.
-    #
-    # Phase 1 deprecation note: ``custom`` is being migrated to
-    # :class:`LoopSlots` key-by-key (Tasks 3-6) and removed in Task 7.
-    # New code MUST NOT add keys here; use a typed slot on
-    # :class:`LoopSlots` instead.
-    custom: dict[str, Any] = field(default_factory=dict)
-    # Typed slot bag — replaces ``custom`` as Tasks 3-6 migrate
-    # consumers key-by-key. Frozen (see :class:`LoopSlots`); writers
-    # use :func:`dataclasses.replace` to swap fields. The attribute
-    # itself is rebound (``state.slots = replace(state.slots, ...)``),
-    # so :class:`LoopState` stays a non-frozen dataclass.
+    # Phase 1 Task 7 deleted the prior untyped ``custom: dict[str, Any]``
+    # scratchpad. New transient state MUST land on a typed slot here;
+    # there is no untyped escape hatch. The
+    # ``tests/test_no_state_custom.py`` invariant test guards against
+    # silent re-introduction.
     slots: LoopSlots = field(default_factory=LoopSlots)
 
     def reset(self) -> None:
         # 必须原地 mutate：AgentLoop 持有同一个 LoopState 引用，新建对象不会被 loop 感知。
+        # ``slots`` is intentionally NOT reset here — typed slot owners
+        # (Agent.clear_session, Loop.run_turn, todo_write, etc.) clear
+        # their own slots in place at the appropriate lifecycle event.
+        # Wiping every slot here would destroy state owners legitimately
+        # carry across /clear (e.g. cumulative token stats for the
+        # status bar).
         self.turn_count = 0
         self.total_tokens_used = 0
-        self.custom.clear()

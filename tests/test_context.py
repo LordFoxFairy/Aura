@@ -659,8 +659,8 @@ def test_context_read_status_stale_after_size_change_and_delete(
 def test_ac17_auto_clear_roundtrip_provider_returning_empty_list(
     tmp_path: Path,
 ) -> None:
-    # Simulates post-auto-clear state: the provider snapshots state.custom["todos"]
-    # after the tool has reset it to [].
+    # Simulates post-auto-clear state: the provider snapshots
+    # ``state.slots.todos`` after the tool has reset it to [].
     store: dict[str, list[TodoItem]] = {"todos": []}
     ctx = Context(
         cwd=tmp_path,

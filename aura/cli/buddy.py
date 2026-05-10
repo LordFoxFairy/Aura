@@ -26,11 +26,10 @@ Design constraints (see T2-B task spec):
   ``str``; the REPL glues it onto the HTML bar in
   :mod:`aura.cli.repl`.
 - **Mood state lives on ``LoopState.slots.buddy``** (Phase 1 Task 6
-  migrated this off the untyped ``state.custom["_buddy_state"]``
-  scratchpad onto the typed :class:`BuddyState` slot). The slot
-  carries ``mood`` + ``last_event_ts`` + ``had_recent_error`` together
-  so the sticky-worry state machine has the room it needs without
-  spreading three coupled fields across the slot bag.
+  introduced the typed :class:`BuddyState` slot). The slot carries
+  ``mood`` + ``last_event_ts`` + ``had_recent_error`` together so the
+  sticky-worry state machine has the room it needs without spreading
+  three coupled fields across the slot bag.
   ``Agent.clear_session`` rebinds the slot to a fresh
   :class:`BuddyState`, so /clear still flips the buddy back to idle.
 
@@ -287,7 +286,7 @@ def current_user_seed() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Mood observer — state machine on LoopState.custom["_buddy_state"]
+# Mood observer — state machine on LoopState.slots.buddy (BuddyState)
 # ---------------------------------------------------------------------------
 
 
@@ -344,8 +343,7 @@ def reset(state: LoopState) -> None:
     """Wipe the buddy state — called by ``/clear`` to undo accumulated mood.
 
     Rebinds ``state.slots.buddy`` to a fresh :class:`BuddyState` so a
-    subsequent ``get_mood`` naturally returns ``idle``. Phase 1 Task 6
-    moved the buddy state off the untyped ``state.custom`` scratchpad;
+    subsequent ``get_mood`` naturally returns ``idle``.
     ``Agent.clear_session`` performs the equivalent rebind itself, so
     this helper stays as a stand-alone seam tests can call."""
     state.slots = dataclasses.replace(state.slots, buddy=BuddyState())

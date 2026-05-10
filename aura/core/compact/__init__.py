@@ -12,15 +12,13 @@ payloads in the *outgoing* prompt only — stored history is untouched.
 
 The :class:`Compactor` Protocol (Phase 1 §3.3) collapses the three
 historical compaction call sites — microcompact, reactive, auto — into
-one named structural interface. The Phase 1
-:class:`aura.core.compact.legacy_adapter.LegacyCompactor` satisfies it
-by delegating to :func:`apply_microcompact` and :func:`run_compact`;
-Phase 4 introduces a first-class concrete class in
+one named structural interface. The first-class concrete class in
 :mod:`aura.core.compact.compactor` (see
-:class:`aura.core.compact.compactor.Compactor`) which structurally
-satisfies the same Protocol and adds an explicit ``manual`` trigger
-plus per-call ``compact_event`` emission. Task 4 swaps the loop wiring
-from the legacy adapter onto the new class.
+:class:`aura.core.compact.compactor.Compactor`) structurally satisfies
+the Protocol and adds an explicit ``manual`` trigger plus per-call
+``compact_event`` emission. A Phase 1 free-function adapter that
+delegated to :func:`apply_microcompact` and :func:`run_compact` was
+removed once the loop wiring switched onto the new class.
 """
 
 from __future__ import annotations
@@ -71,11 +69,10 @@ class Compactor(Protocol):
       not exceeded (so the loop can distinguish "no work to do" from
       "ran and produced these stats").
 
-    Phase 1 ships
-    :class:`aura.core.compact.legacy_adapter.LegacyCompactor` as the only
-    implementation; Phase 4 introduces ``CompactConfig`` + a first-class
-    implementation. The Protocol is async on every method so Phase 4 can
-    swap a streaming implementation in without changing the call sites.
+    Phase 4 ships :class:`aura.core.compact.compactor.Compactor` as the
+    sole implementation, backed by ``CompactConfig``. The Protocol is
+    async on every method so a streaming implementation can swap in
+    without changing the call sites.
     """
 
     async def microcompact(
@@ -103,16 +100,14 @@ class Compactor(Protocol):
 # :mod:`aura.core.compact.compactor`. It is intentionally *not*
 # re-exported here so the ``Compactor`` name on this package's surface
 # remains the Phase 1 :class:`Protocol` (preserves
-# ``isinstance(obj, Compactor)`` semantics for the legacy adapter +
-# the Phase 1 protocol-conformance test). New call sites that need
-# the concrete class import it explicitly:
+# ``isinstance(obj, Compactor)`` semantics for protocol-conformance
+# tests). New call sites that need the concrete class import it
+# explicitly:
 #
 #     from aura.core.compact.compactor import Compactor as CompactorImpl
 #
-# Task 4 wires the implementation into the loop / agent. After Task 5
-# deletes :class:`LegacyCompactor`, the structural Protocol stays as
-# the type-annotation surface and the concrete class remains the only
-# implementation.
+# The structural Protocol stays as the type-annotation surface and the
+# concrete class is the only implementation.
 
 __all__ = [
     "AUTO_COMPACT_THRESHOLD",

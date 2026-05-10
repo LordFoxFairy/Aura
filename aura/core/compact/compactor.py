@@ -22,9 +22,8 @@ here — the loop is the orchestrator. This class is the *executor* each
 trigger calls into; the orchestrator picks which one based on its turn
 state.
 
-Phase 4 Task 4 will swap ``aura/core/loop.py`` and ``aura/core/agent.py``
-from :class:`LegacyCompactor` onto this class. Until then both
-implementations coexist and Task 5 deletes the legacy adapter.
+``aura/core/loop.py`` and ``aura/core/agent.py`` instantiate this class
+directly; the Phase 1 free-function adapter has been removed.
 """
 
 from __future__ import annotations
@@ -191,12 +190,11 @@ class Compactor:
     ) -> CompactResult:
         """Run a full summary compaction in response to context-overflow.
 
-        Mirrors :meth:`LegacyCompactor.reactive` — delegates to
-        ``Agent.compact(source="reactive")`` so test patches on
-        ``Agent.compact`` continue to observe the reactive path, then
-        refreshes the in-memory ``history`` list in place so the loop's
-        local reference points at the post-compact transcript without a
-        re-assignment.
+        Delegates to ``Agent.compact(source="reactive")`` so test
+        patches on ``Agent.compact`` continue to observe the reactive
+        path, then refreshes the in-memory ``history`` list in place so
+        the loop's local reference points at the post-compact
+        transcript without a re-assignment.
         """
         before = self._agent._state.total_tokens_used
         started = time.monotonic()
@@ -239,9 +237,7 @@ class Compactor:
         frozen) and re-raises; on success, resets it to 0.
 
         The circuit-breaker limit comes from
-        ``self._config.max_consecutive_failures`` (Phase 4 lifted it
-        from the hardcoded ``_AUTO_COMPACT_CIRCUIT_BREAKER_LIMIT`` in
-        the legacy adapter).
+        ``self._config.max_consecutive_failures``.
         """
         threshold = self._agent._effective_auto_compact_threshold()
         before = self._agent._state.total_tokens_used

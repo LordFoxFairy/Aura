@@ -284,7 +284,7 @@ class AgentLoop:
         # that drive AgentLoop directly without an Agent.
         self._compact_callback = compact_callback
         # Phase 1 §3.3 — Compactor Protocol entry point. When supplied
-        # (Agent always supplies a :class:`LegacyCompactor`), the loop
+        # (Agent always supplies a :class:`Compactor`), the loop
         # routes microcompact + reactive compaction through this
         # interface instead of the legacy direct paths. Tests that drive
         # AgentLoop without an Agent leave this ``None`` and the legacy

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import uuid
 from pathlib import Path
@@ -12,7 +13,7 @@ from langchain_core.tools import BaseTool
 
 from aura.core.hooks import HookChain, PostModelHook, PostToolHook, PreModelHook
 from aura.core.tokens import estimate_message_tokens, estimate_text_tokens
-from aura.schemas.state import LoopState
+from aura.schemas.state import LoopState, TokenStats
 from aura.schemas.tool import ToolResult
 
 
@@ -58,7 +59,7 @@ def make_size_budget_hook(
     return _hook
 
 
-def _extract_token_stats(ai_message: AIMessage) -> dict[str, int]:
+def _extract_token_usage(ai_message: AIMessage) -> dict[str, int]:
     """Pull per-turn input / output / cache-read token counts from *ai_message*.
 
     LangChain normalizes most providers into ``usage_metadata`` with
@@ -108,7 +109,7 @@ def make_usage_tracking_hook() -> PostModelHook:
                 state.total_tokens_used += total
 
         # New structured stats for the status bar.
-        per_turn = _extract_token_stats(ai_message)
+        per_turn = _extract_token_usage(ai_message)
         # Char-estimator fallback when the provider omits usage_metadata
         # (DashScope, some Ollama, self-hosted backends). Without this the
         # status bar would render 0% utilization right before a provider-
@@ -129,27 +130,26 @@ def make_usage_tracking_hook() -> PostModelHook:
                 per_turn["input_tokens"] + per_turn["output_tokens"]
             )
 
-        stats = state.custom.setdefault(
-            "_token_stats",
-            {
-                "last_input_tokens": 0,
-                "last_cache_read_tokens": 0,
-                "last_output_tokens": 0,
-                "total_input_tokens": 0,
-                "total_output_tokens": 0,
-                "total_cache_read_tokens": 0,
-                "turn_count": 0,
-            },
+        # ``TokenStats`` is frozen — replace per turn so a stale snapshot
+        # held by the renderer can't retroactively re-attribute tokens
+        # to a different turn. The owning ``LoopSlots`` is also frozen,
+        # so we rebind ``state.slots`` to a new instance carrying the
+        # bumped token-stats slot. Wire/UI consumers read the typed
+        # ``state.slots.token_stats`` (Phase 1 / Task 3 migration —
+        # replaces the legacy untyped scratchpad dict).
+        prev = state.slots.token_stats
+        new_stats = TokenStats(
+            last_input_tokens=per_turn["input_tokens"],
+            last_output_tokens=per_turn["output_tokens"],
+            last_cache_read_tokens=per_turn["cache_read_tokens"],
+            total_input_tokens=prev.total_input_tokens + per_turn["input_tokens"],
+            total_output_tokens=prev.total_output_tokens + per_turn["output_tokens"],
+            total_cache_read_tokens=(
+                prev.total_cache_read_tokens + per_turn["cache_read_tokens"]
+            ),
+            turn_count=prev.turn_count + 1,
         )
-        stats["last_input_tokens"] = per_turn["input_tokens"]
-        stats["last_cache_read_tokens"] = per_turn["cache_read_tokens"]
-        stats["last_output_tokens"] = per_turn["output_tokens"]
-        stats["total_input_tokens"] += per_turn["input_tokens"]
-        stats["total_output_tokens"] += per_turn["output_tokens"]
-        stats["total_cache_read_tokens"] = (
-            stats.get("total_cache_read_tokens", 0) + per_turn["cache_read_tokens"]
-        )
-        stats["turn_count"] = stats.get("turn_count", 0) + 1
+        state.slots = dataclasses.replace(state.slots, token_stats=new_stats)
 
         # Always-on ``turn_usage`` journal event. Unlike the optional
         # event-logger's ``post_model`` (attached via ``--log``), this fires

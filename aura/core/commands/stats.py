@@ -2,8 +2,8 @@
 
 Three modes, picked by argument:
 
-- ``/stats`` (no arg) — current session totals, read from
-  ``state.custom["_token_stats"]`` populated by ``make_usage_tracking_hook``.
+- ``/stats`` (no arg) — current session totals, read from the typed
+  ``state.slots.token_stats`` slot populated by ``make_usage_tracking_hook``.
   Always works (no journal opt-in required).
 - ``/stats 7d`` — last 7 days, replays ``turn_usage`` journal events.
 - ``/stats all`` — all-time totals, full journal replay.
@@ -65,8 +65,13 @@ class StatsCommand:
     # ------------------------------------------------------------------
 
     def _current_session(self, agent: Agent) -> CommandResult:
-        stats = agent._state.custom.get("_token_stats")
-        if not isinstance(stats, dict) or not stats:
+        # Typed slot (Phase 1 / Task 3 — replaces the legacy untyped
+        # scratchpad dict). The "no usage yet" short-circuit fires when
+        # ``turn_count == 0`` — the field is always present (default
+        # :class:`TokenStats`) so we no longer need an
+        # ``isinstance(dict)`` guard.
+        stats = agent._state.slots.token_stats
+        if stats.turn_count == 0:
             return CommandResult(
                 handled=True,
                 kind="print",
@@ -76,13 +81,13 @@ class StatsCommand:
                 ),
             )
 
-        turns = int(stats.get("turn_count", 0))
-        total_input = int(stats.get("total_input_tokens", 0))
-        total_output = int(stats.get("total_output_tokens", 0))
-        total_cache = int(stats.get("total_cache_read_tokens", 0))
-        last_input = int(stats.get("last_input_tokens", 0))
-        last_output = int(stats.get("last_output_tokens", 0))
-        last_cache = int(stats.get("last_cache_read_tokens", 0))
+        turns = stats.turn_count
+        total_input = stats.total_input_tokens
+        total_output = stats.total_output_tokens
+        total_cache = stats.total_cache_read_tokens
+        last_input = stats.last_input_tokens
+        last_output = stats.last_output_tokens
+        last_cache = stats.last_cache_read_tokens
 
         grand_total = total_input + total_output
 

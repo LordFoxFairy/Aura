@@ -14,7 +14,7 @@ Two callers, two output formats:
 Design notes
 ------------
 - ``input_tokens`` is the *last turn's* prompt size — the dynamic part of
-  the context bill. Cumulative totals live on ``state.custom['_token_stats']``
+  the context bill. Cumulative totals live on ``state.slots.token_stats``
   but aren't shown here: operators care about "how much did THIS turn cost",
   not an ever-growing running total.
 - ``cache_read_tokens`` is the portion of this turn's input that hit the

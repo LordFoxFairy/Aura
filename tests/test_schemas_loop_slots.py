@@ -120,12 +120,12 @@ def test_loop_slots_collections_mutable_in_place_under_frozen() -> None:
     assert slots.turn_denials == []
 
 
-def test_token_stats_is_frozen_and_zero_default() -> None:
+def test_tokenstats_is_frozen_and_zero_default() -> None:
     """``TokenStats`` is a frozen dataclass; default instance is all zeros.
 
-    Field shape mirrors the dict produced by today's
-    ``make_usage_tracking_hook`` so wire/status_bar consumers see the
-    same numbers when Task 3 migrates them.
+    Field shape mirrors the per-turn token-usage counters
+    ``make_usage_tracking_hook`` writes; wire/status_bar consumers read
+    these same fields off ``state.slots.token_stats`` (Task 3 migration).
     """
     ts = TokenStats()
     assert ts.last_input_tokens == 0
@@ -140,7 +140,7 @@ def test_token_stats_is_frozen_and_zero_default() -> None:
         ts.last_input_tokens = 5  # type: ignore[misc]
 
 
-def test_token_stats_replace_yields_new_instance() -> None:
+def test_tokenstats_replace_yields_new_instance() -> None:
     ts = TokenStats()
     bumped = dataclasses.replace(ts, last_input_tokens=42, turn_count=1)
     assert bumped.last_input_tokens == 42

@@ -415,12 +415,15 @@ def test_prompt_session_bottom_toolbar_shows_context_when_agent_passed(
     tmp_path: Path,
 ) -> None:
     # Real REPL wiring: pass an Agent, get a live toolbar callable. The
-    # toolbar reads _token_stats fresh on each render; exercise it with
-    # seeded stats and assert the rendered HTML carries model + bar +
-    # pinned cached + cwd.
+    # toolbar reads ``slots.token_stats`` fresh on each render; exercise
+    # it with seeded stats and assert the rendered HTML carries model +
+    # bar + pinned cached + cwd.
+    import dataclasses
+
     from aura.cli.repl import _build_prompt_session
     from aura.core.agent import Agent
     from aura.core.commands import CommandRegistry
+    from aura.schemas.state import TokenStats
     from tests.conftest import FakeChatModel
     from tests.test_agent import _minimal_config, _storage
 
@@ -429,10 +432,13 @@ def test_prompt_session_bottom_toolbar_shows_context_when_agent_passed(
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
     )
-    agent.state.custom["_token_stats"] = {
-        "last_input_tokens": 5400,
-        "last_cache_read_tokens": 34_000,
-    }
+    agent.state.slots = dataclasses.replace(
+        agent.state.slots,
+        token_stats=TokenStats(
+            last_input_tokens=5400,
+            last_cache_read_tokens=34_000,
+        ),
+    )
 
     session = _build_prompt_session(CommandRegistry(), agent=agent)
     assert callable(session.bottom_toolbar)
@@ -661,15 +667,21 @@ def test_post_turn_status_is_slim_done_marker(tmp_path: Path) -> None:
     # then collided with pt's live bottom_toolbar above the prompt.
     # Shape is now: a single dim line with "done" + elapsed seconds.
     # Nothing from the live toolbar should show up inline.
+    import dataclasses
+
     from aura.cli.repl import _print_post_turn_status
+    from aura.schemas.state import TokenStats
 
     agent = _agent(tmp_path)
     # Seed stats that WOULD have shown up in the old render — they must
     # NOT appear in the new slim line.
-    agent.state.custom["_token_stats"] = {
-        "last_input_tokens": 9900,
-        "last_cache_read_tokens": 2600,
-    }
+    agent.state.slots = dataclasses.replace(
+        agent.state.slots,
+        token_stats=TokenStats(
+            last_input_tokens=9900,
+            last_cache_read_tokens=2600,
+        ),
+    )
     console, buf = _capture_console()
 
     _print_post_turn_status(agent, console, last_turn_seconds=21.4)

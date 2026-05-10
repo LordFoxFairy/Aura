@@ -52,10 +52,13 @@ PermissionKey: TypeAlias = str
 class TokenStats:
     """Per-session cumulative + last-turn token usage.
 
-    Mirrors the dict shape today's :func:`aura.core.hooks.budget.make_usage_tracking_hook`
-    writes into ``state.custom["_token_stats"]`` (Task 3 migrates the
-    writer + the four readers to this typed slot). All fields default
-    to zero so the empty :class:`TokenStats` is a valid starting state.
+    Owned by :func:`aura.core.hooks.budget.make_usage_tracking_hook` —
+    the post-model writer ``replace``-s the slot every turn (Task 3
+    migration replaced the legacy untyped scratchpad dict with this
+    typed slot; readers in ``transport/wire.py``, ``commands/stats.py``,
+    and the REPL bottom toolbar now go through
+    ``state.slots.token_stats``). All fields default to zero so the
+    empty :class:`TokenStats` is a valid starting state.
 
     Frozen so a stale snapshot held by the renderer cannot retroactively
     re-attribute tokens to a different turn — the writer ``replace``-s
@@ -147,10 +150,12 @@ class LoopState:
     #   (G5). Shared list reference between the permission hook
     #   (writer) and :class:`aura.core.agent.Agent` (owner + reader
     #   via ``last_turn_denials()``).
-    # - ``"_token_stats"`` — populated by ``make_usage_tracking_hook``;
-    #   read by the status bar + ``/verbose``.
     # - ``"todos"`` — populated by ``todo_write`` tool; read by
     #   compact / system prompt assembly.
+    #
+    # The token-usage scratchpad key was migrated out of this dict by
+    # Phase 1 / Task 3; it now lives on the typed
+    # :class:`LoopSlots.token_stats` slot.
     #
     # Do NOT add new transient slots for one-shot hook→loop signalling:
     # G4 removed the last per-call decision side-channel in favor of

@@ -101,18 +101,20 @@ def test_permission_request_to_wire_uses_frontend_contract_and_safe_args() -> No
 
 
 def test_agent_state_to_wire_uses_stable_numeric_shape() -> None:
+    from aura.schemas.state import LoopSlots, TokenStats
+
     agent = SimpleNamespace(
-        state=SimpleNamespace(custom={
-            "_token_stats": {
-                "last_input_tokens": 10,
-                "last_output_tokens": 20,
-                "last_cache_read_tokens": 3,
-                "total_input_tokens": 100,
-                "total_output_tokens": 200,
-                "total_cache_read_tokens": 30,
-                "turn_count": 4,
-            },
-        }),
+        state=SimpleNamespace(slots=LoopSlots(
+            token_stats=TokenStats(
+                last_input_tokens=10,
+                last_output_tokens=20,
+                last_cache_read_tokens=3,
+                total_input_tokens=100,
+                total_output_tokens=200,
+                total_cache_read_tokens=30,
+                turn_count=4,
+            ),
+        )),
         current_model="openai:gpt-4o-mini",
         mode="default",
         pinned_tokens_estimate=123,

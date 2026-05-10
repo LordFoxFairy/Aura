@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from aura.schemas.events import AssistantDelta, Final, ToolCallStarted
+from aura.schemas.state import LoopSlots
 from aura.transport.agui import AguiAdapter
 from aura.transport.sse import encode_json_sse
 from aura.transport.stream import (
@@ -24,7 +25,7 @@ class _FakeAgent:
     mode = "default"
     pinned_tokens_estimate = 0
     context_window = 100
-    state = SimpleNamespace(custom={})
+    state = SimpleNamespace(slots=LoopSlots())
 
     async def astream(self, prompt: str) -> Any:
         assert prompt == "hello"

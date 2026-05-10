@@ -90,21 +90,26 @@ def permission_request_to_wire(
 
 
 def agent_state_to_wire(agent: Any, last_turn_seconds: float) -> dict[str, Any]:
-    """Snapshot agent state into the external ``aura_state`` event."""
-    stats = agent.state.custom.get("_token_stats", {})
+    """Snapshot agent state into the external ``aura_state`` event.
+
+    Reads from the typed :class:`aura.schemas.state.TokenStats` slot
+    (``state.slots.token_stats``); the wire shape (``last_input`` etc.)
+    is preserved verbatim so external JSON consumers see no change.
+    """
+    stats = agent.state.slots.token_stats
     return {
         "event": "aura_state",
         "model": agent.current_model or "",
         "mode": agent.mode,
         "cwd": str(Path.cwd()),
         "tokens": {
-            "last_input": int(stats.get("last_input_tokens", 0)),
-            "last_output": int(stats.get("last_output_tokens", 0)),
-            "last_cache_read": int(stats.get("last_cache_read_tokens", 0)),
-            "total_input": int(stats.get("total_input_tokens", 0)),
-            "total_output": int(stats.get("total_output_tokens", 0)),
-            "total_cache_read": int(stats.get("total_cache_read_tokens", 0)),
-            "turn_count": int(stats.get("turn_count", 0)),
+            "last_input": int(stats.last_input_tokens),
+            "last_output": int(stats.last_output_tokens),
+            "last_cache_read": int(stats.last_cache_read_tokens),
+            "total_input": int(stats.total_input_tokens),
+            "total_output": int(stats.total_output_tokens),
+            "total_cache_read": int(stats.total_cache_read_tokens),
+            "turn_count": int(stats.turn_count),
         },
         "pinned": int(agent.pinned_tokens_estimate or 0),
         "window": int(agent.context_window or 0),

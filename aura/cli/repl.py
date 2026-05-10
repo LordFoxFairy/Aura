@@ -461,8 +461,8 @@ def _make_bottom_toolbar(
 ) -> Callable[[], Any]:
     """Build a pt-compatible bottom_toolbar callable that reads live agent
     state on each render. Closing over ``agent`` rather than snapshotting
-    the values is the whole point: every turn's new ``_token_stats`` +
-    any mid-session ``/model`` switch show up in the bar without manual
+    the values is the whole point: every turn's new ``slots.token_stats``
+    + any mid-session ``/model`` switch show up in the bar without manual
     re-wiring. ``Agent.mode`` and ``Agent.context_window`` encapsulate
     the mode / window resolution so the toolbar stays a thin projection.
 
@@ -522,10 +522,10 @@ def _make_bottom_toolbar(
             return ""
 
     def _snapshot() -> dict[str, Any]:
-        stats = agent.state.custom.get("_token_stats", {})
+        stats = agent.state.slots.token_stats
         return {
-            "input_tokens": int(stats.get("last_input_tokens", 0)),
-            "cache_tokens": int(stats.get("last_cache_read_tokens", 0)),
+            "input_tokens": int(stats.last_input_tokens),
+            "cache_tokens": int(stats.last_cache_read_tokens),
             "model": agent.current_model or "",
             "last_secs": (
                 last_turn_seconds_getter() if last_turn_seconds_getter else 0.0

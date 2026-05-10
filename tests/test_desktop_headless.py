@@ -128,8 +128,10 @@ def test_event_to_dict_matches_frontend_contract() -> None:
 
 
 def test_build_aura_state_uses_numeric_defaults() -> None:
+    from aura.schemas.state import LoopSlots
+
     agent = SimpleNamespace(
-        state=SimpleNamespace(custom={}),
+        state=SimpleNamespace(slots=LoopSlots()),
         current_model=None,
         mode="default",
         pinned_tokens_estimate=None,
@@ -175,19 +177,21 @@ def test_build_aura_state_uses_numeric_defaults() -> None:
     assert payload["last_turn_seconds"] == 1.25
 
 
-def test_build_aura_state_preserves_token_stats() -> None:
+def test_build_aura_state_preserves_typed_token_usage() -> None:
+    from aura.schemas.state import LoopSlots, TokenStats
+
     agent = SimpleNamespace(
-        state=SimpleNamespace(custom={
-            "_token_stats": {
-                "last_input_tokens": 11,
-                "last_output_tokens": 12,
-                "last_cache_read_tokens": 13,
-                "total_input_tokens": 21,
-                "total_output_tokens": 22,
-                "total_cache_read_tokens": 23,
-                "turn_count": 3,
-            },
-        }),
+        state=SimpleNamespace(slots=LoopSlots(
+            token_stats=TokenStats(
+                last_input_tokens=11,
+                last_output_tokens=12,
+                last_cache_read_tokens=13,
+                total_input_tokens=21,
+                total_output_tokens=22,
+                total_cache_read_tokens=23,
+                turn_count=3,
+            ),
+        )),
         current_model="openai:gpt-4o-mini",
         mode="accept_edits",
         pinned_tokens_estimate=100,
@@ -341,11 +345,13 @@ async def test_run_wires_permission_deny_ask_and_disable_bypass(
 
         return _hook
 
+    from aura.schemas.state import LoopSlots
+
     class FakeAgent:
         session_id = "session-1"
         current_model = "p1:fake-model"
         mode = "default"
-        state = SimpleNamespace(custom={})
+        state = SimpleNamespace(slots=LoopSlots())
         pinned_tokens_estimate = 0
         context_window = 0
 

@@ -3,9 +3,10 @@
 The hook must extract per-turn input / output / cached-prompt tokens from
 whichever shape the provider hands back (LangChain normalizes most of this
 into ``usage_metadata``, but cache-read info lives in ``response_metadata``
-for Anthropic). Results land in ``state.custom['_token_stats']`` for the
-status bar to read, and ``state.total_tokens_used`` stays a cumulative
-total so legacy callers keep working.
+for Anthropic). Results land in :attr:`state.slots.token_stats` (typed
+:class:`TokenStats`) for the status bar to read, and
+``state.total_tokens_used`` stays a cumulative total so legacy callers
+keep working.
 """
 
 from __future__ import annotations
@@ -40,12 +41,12 @@ async def test_usage_hook_extracts_anthropic_style_token_metadata() -> None:
     )
     await hook(ai_message=ai, history=[], state=state)
 
-    stats = state.custom["_token_stats"]
-    assert stats["last_input_tokens"] == 5400
-    assert stats["last_cache_read_tokens"] == 34000
-    assert stats["last_output_tokens"] == 120
-    assert stats["total_input_tokens"] == 5400
-    assert stats["total_output_tokens"] == 120
+    stats = state.slots.token_stats
+    assert stats.last_input_tokens == 5400
+    assert stats.last_cache_read_tokens == 34000
+    assert stats.last_output_tokens == 120
+    assert stats.total_input_tokens == 5400
+    assert stats.total_output_tokens == 120
 
 
 async def test_usage_hook_extracts_openai_style_token_metadata() -> None:
@@ -71,10 +72,10 @@ async def test_usage_hook_extracts_openai_style_token_metadata() -> None:
     )
     await hook(ai_message=ai, history=[], state=state)
 
-    stats = state.custom["_token_stats"]
-    assert stats["last_input_tokens"] == 321
-    assert stats["last_output_tokens"] == 88
-    assert stats["last_cache_read_tokens"] == 0
+    stats = state.slots.token_stats
+    assert stats.last_input_tokens == 321
+    assert stats.last_output_tokens == 88
+    assert stats.last_cache_read_tokens == 0
 
 
 async def test_usage_hook_falls_back_to_char_estimator_when_usage_missing() -> None:
@@ -92,11 +93,11 @@ async def test_usage_hook_falls_back_to_char_estimator_when_usage_missing() -> N
     ai = AIMessage(content="no usage here")
     await hook(ai_message=ai, history=[], state=state)
 
-    stats = state.custom.get("_token_stats", {})
+    stats = state.slots.token_stats
     # Estimator kicked in — output picks up the AI body.
-    assert stats.get("last_output_tokens", 0) == estimate_text_tokens("no usage here")
-    assert stats.get("last_input_tokens", 0) == 0  # empty history
-    assert stats.get("last_cache_read_tokens", 0) == 0
+    assert stats.last_output_tokens == estimate_text_tokens("no usage here")
+    assert stats.last_input_tokens == 0  # empty history
+    assert stats.last_cache_read_tokens == 0
     # total_tokens_used now accumulates estimated tokens too so auto-
     # compact thresholds arm at the right time on these providers.
     assert state.total_tokens_used == estimate_text_tokens("no usage here")
@@ -117,16 +118,16 @@ async def test_usage_hook_accumulates_totals_across_turns() -> None:
     await hook(ai_message=ai1, history=[], state=state)
     await hook(ai_message=ai2, history=[], state=state)
 
-    stats = state.custom["_token_stats"]
+    stats = state.slots.token_stats
     # Last-turn values reflect turn 2 only.
-    assert stats["last_input_tokens"] == 200
-    assert stats["last_output_tokens"] == 20
+    assert stats.last_input_tokens == 200
+    assert stats.last_output_tokens == 20
     # Totals accumulate.
-    assert stats["total_input_tokens"] == 300
-    assert stats["total_output_tokens"] == 30
+    assert stats.total_input_tokens == 300
+    assert stats.total_output_tokens == 30
 
 
-async def test_usage_hook_stores_stats_on_state_custom() -> None:
+async def test_usage_hook_stores_stats_on_typed_slot() -> None:
     hook = make_usage_tracking_hook()
     state = LoopState()
 
@@ -136,9 +137,13 @@ async def test_usage_hook_stores_stats_on_state_custom() -> None:
     )
     await hook(ai_message=ai, history=[], state=state)
 
-    # Key lives on state.custom so it doesn't pollute the LoopState schema.
-    assert "_token_stats" in state.custom
-    assert isinstance(state.custom["_token_stats"], dict)
+    # Stats land on the typed ``LoopSlots.token_stats`` slot — not the
+    # legacy untyped scratchpad dict (Phase 1 / Task 3 migration).
+    from aura.schemas.state import TokenStats
+
+    assert isinstance(state.slots.token_stats, TokenStats)
+    assert state.slots.token_stats.last_input_tokens == 10
+    assert state.slots.token_stats.last_output_tokens == 2
 
 
 async def test_usage_hook_backward_compat_total_tokens_used_still_tracked() -> None:

@@ -80,6 +80,14 @@ def load_rules(cwd: Path, *, force_reload: bool = False) -> RulesBundle:
         resolved_cwd / _AURA_DIR / _RULES_DIR, base_dir=resolved_cwd, bundle=bundle
     )
 
+    # Phase 3 §5 — pair the cwd-boundary unification in Context with a
+    # one-shot load-time warning for rules whose globs anchor outside the
+    # current cwd. Such rules can never match a tool-touched path (Context
+    # drops out-of-cwd paths before reaching ``match()``), so they're
+    # effectively dead — we surface that fact in the journal once per rule
+    # instead of letting it silently no-op.
+    _warn_out_of_cwd_rules(bundle, resolved_cwd)
+
     _rules_cache[resolved_cwd] = bundle
     return bundle
 
@@ -322,6 +330,64 @@ def _rule_matches_path(rule: Rule, resolved_path: Path) -> bool:
             )
             continue
     return False
+
+
+def _warn_out_of_cwd_rules(bundle: RulesBundle, cwd: Path) -> None:
+    """Emit ``out_of_cwd_rule_warning`` once per rule with out-of-cwd patterns.
+
+    Phase 3 §5 — Context unifies the cwd-boundary check across nested-memory
+    and rule-match, so a conditional rule whose glob list contains absolute
+    paths outside ``cwd`` can never trigger. We log this at load time to
+    make the dead-rule visible. One event per rule (not per offending
+    pattern) keeps journal noise bounded; ``patterns`` lists every offender
+    on that rule.
+
+    Detection rule: an absolute glob (POSIX-form ``"/..."``) whose
+    pattern prefix (everything up to the first ``*`` or ``?`` meta-char)
+    cannot be resolved into a path under ``cwd``. Relative globs like
+    ``"**/*.py"`` always pair with ``rule.base_dir`` at match time and
+    are out of scope for this warning.
+    """
+    for rule in bundle.conditional:
+        offenders: list[str] = []
+        for glob in rule.globs:
+            if not glob.startswith("/"):
+                continue
+            # Strip wildcard tail so "/tmp/x/**/*.py" → "/tmp/x".
+            prefix = _glob_static_prefix(glob)
+            try:
+                if not Path(prefix).resolve().is_relative_to(cwd):
+                    offenders.append(glob)
+            except (OSError, ValueError):
+                offenders.append(glob)
+        if offenders:
+            from aura.core import journal
+
+            journal.write(
+                "out_of_cwd_rule_warning",
+                path=str(rule.source_path),
+                patterns=offenders,
+                cwd=str(cwd),
+            )
+
+
+def _glob_static_prefix(glob: str) -> str:
+    """Return the leading path portion of ``glob`` before any wildcard meta-char.
+
+    ``"/tmp/x/**/*.py"`` → ``"/tmp/x"``. A glob with no meta-char returns
+    itself. Empty / root-only inputs return ``"/"``.
+    """
+    cut = len(glob)
+    for i, ch in enumerate(glob):
+        if ch in "*?[":
+            cut = i
+            break
+    prefix = glob[:cut]
+    # Drop any trailing path separators so ``Path("/tmp/x/").resolve()`` and
+    # ``Path("/tmp/x").resolve()`` give the same answer; also normalise
+    # "/" → "/" (avoids degenerate "" prefix when glob is just "/").
+    prefix = prefix.rstrip("/")
+    return prefix or "/"
 
 
 def _relative_or_absolute(path: Path, base_dir: Path) -> str:

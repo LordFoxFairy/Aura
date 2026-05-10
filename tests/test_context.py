@@ -878,3 +878,98 @@ def test_fresh_rejects_carryover_and_clear_reads_together(tmp_path: Path) -> Non
     )
     with pytest.raises(ValueError, match="not both"):
         ctx.fresh(carryover=carry, clear_reads=True)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 Task 6 — cwd-boundary unification
+# ---------------------------------------------------------------------------
+
+
+def test_path_in_scope_helper_under_cwd(tmp_path: Path) -> None:
+    """``_path_in_scope`` returns True for paths at or below cwd."""
+    cwd = tmp_path / "p"
+    inside = cwd / "src" / "x.py"
+    inside.parent.mkdir(parents=True)
+    inside.write_text("")
+
+    ctx = Context(
+        cwd=cwd,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    assert ctx._path_in_scope(inside) is True
+    assert ctx._path_in_scope(cwd) is True
+
+
+def test_path_in_scope_helper_outside_cwd(tmp_path: Path) -> None:
+    """``_path_in_scope`` returns False for paths outside cwd."""
+    cwd = tmp_path / "p"
+    cwd.mkdir()
+    outside = tmp_path / "outside" / "y.py"
+    outside.parent.mkdir()
+    outside.write_text("")
+
+    ctx = Context(
+        cwd=cwd,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    assert ctx._path_in_scope(outside) is False
+
+
+def test_out_of_cwd_path_skips_rule_match(tmp_path: Path) -> None:
+    """Phase 3 §5: out-of-cwd paths must not trigger conditional rule match."""
+    cwd = tmp_path / "p"
+    cwd.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    py_outside = outside / "x.py"
+    py_outside.write_text("")
+
+    # User-layer style rule: base_dir = home, glob = "**/*.py" (matches any .py).
+    # Pre-fix: this would match an out-of-cwd path. Post-fix: it must not.
+    rule = _rule(
+        tmp_path / "rules" / "py.md",
+        tmp_path,
+        ("**/*.py",),
+        "USER-PY-BODY",
+    )
+    ctx = Context(
+        cwd=cwd,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(unconditional=[], conditional=[rule]),
+    )
+    ctx.on_tool_touched_path(py_outside)
+    out = ctx.build([])
+    # No rule match triggered — only the SystemMessage should remain.
+    assert all("<rule " not in str(m.content) for m in out)
+    assert ctx._matched_rules == []
+
+
+def test_out_of_cwd_path_skips_nested_memory(tmp_path: Path) -> None:
+    """Phase 3 §5: out-of-cwd paths must not trigger nested-memory load.
+
+    Re-affirms the existing `test_06` invariant alongside the rule-match
+    one, so the unified behaviour is locked in test-by-test.
+    """
+    cwd = tmp_path / "p"
+    cwd.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "AURA.md").write_text("OUTSIDE-MEMO")
+    py_outside = outside / "x.py"
+    py_outside.write_text("")
+
+    ctx = Context(
+        cwd=cwd,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    ctx.on_tool_touched_path(py_outside)
+    assert ctx._nested_fragments == []
+    out = ctx.build([])
+    assert all("<nested-memory " not in str(m.content) for m in out)

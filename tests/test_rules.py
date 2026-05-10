@@ -492,3 +492,138 @@ class TestCache:
         reads_after_first = counter["calls"]
         load_rules(cwd, force_reload=True)
         assert counter["calls"] > reads_after_first
+
+
+def _read_events(log: Path) -> list[dict[str, Any]]:
+    """Read journal events; tolerate the file being absent (no events emitted)."""
+    if not log.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in log.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+class TestOutOfCwdRuleWarning:
+    """Phase 3 Task 6 — rules anchored outside cwd warn at load time."""
+
+    def test_absolute_pattern_outside_cwd_emits_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = cwd / ".aura" / "rules"
+        rules_dir.mkdir(parents=True)
+        # Absolute pattern anchored outside the project root.
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        rule_md = rules_dir / "stray.md"
+        rule_md.write_text(
+            f"---\npaths: \"{outside}/**/*.py\"\n---\nSTRAY-BODY\n"
+        )
+
+        log = tmp_path / "events.jsonl"
+        journal_module.configure(log)
+        try:
+            load_rules(cwd, force_reload=True)
+        finally:
+            journal_module.reset()
+
+        events = [
+            json.loads(line)
+            for line in log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        warnings = [e for e in events if e["event"] == "out_of_cwd_rule_warning"]
+        assert len(warnings) == 1, f"expected 1 warning, got {events}"
+        ev = warnings[0]
+        assert ev["path"] == str(rule_md.resolve())
+        assert ev["patterns"] == [f"{outside}/**/*.py"]
+        assert ev["cwd"] == str(cwd.resolve())
+
+    def test_relative_pattern_does_not_warn(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = cwd / ".aura" / "rules"
+        rules_dir.mkdir(parents=True)
+        rule_md = rules_dir / "ok.md"
+        rule_md.write_text("---\npaths: \"src/**/*.py\"\n---\nbody\n")
+
+        log = tmp_path / "events.jsonl"
+        journal_module.configure(log)
+        try:
+            load_rules(cwd, force_reload=True)
+        finally:
+            journal_module.reset()
+
+        events = _read_events(log)
+        warnings = [e for e in events if e["event"] == "out_of_cwd_rule_warning"]
+        assert warnings == []
+
+    def test_absolute_pattern_under_cwd_does_not_warn(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = cwd / ".aura" / "rules"
+        rules_dir.mkdir(parents=True)
+        rule_md = rules_dir / "abs_inside.md"
+        rule_md.write_text(
+            f"---\npaths: \"{cwd}/**/*.py\"\n---\nbody\n"
+        )
+
+        log = tmp_path / "events.jsonl"
+        journal_module.configure(log)
+        try:
+            load_rules(cwd, force_reload=True)
+        finally:
+            journal_module.reset()
+
+        events = _read_events(log)
+        warnings = [e for e in events if e["event"] == "out_of_cwd_rule_warning"]
+        assert warnings == []
+
+    def test_warning_emitted_once_per_rule(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Multiple offending patterns on one rule → single event with all of them."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = cwd / ".aura" / "rules"
+        rules_dir.mkdir(parents=True)
+        outside1 = tmp_path / "out1"
+        outside2 = tmp_path / "out2"
+        outside1.mkdir()
+        outside2.mkdir()
+        rule_md = rules_dir / "many.md"
+        # YAML list with two absolute out-of-cwd patterns and one relative.
+        rule_md.write_text(
+            "---\npaths:\n"
+            f"  - \"{outside1}/**/*.py\"\n"
+            f"  - \"{outside2}/**/*.py\"\n"
+            "  - \"src/*.py\"\n"
+            "---\nbody\n"
+        )
+
+        log = tmp_path / "events.jsonl"
+        journal_module.configure(log)
+        try:
+            load_rules(cwd, force_reload=True)
+        finally:
+            journal_module.reset()
+
+        events = [
+            json.loads(line)
+            for line in log.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        warnings = [e for e in events if e["event"] == "out_of_cwd_rule_warning"]
+        assert len(warnings) == 1, f"expected 1 warning, got {events}"
+        ev = warnings[0]
+        assert ev["patterns"] == [
+            f"{outside1}/**/*.py",
+            f"{outside2}/**/*.py",
+        ]

@@ -211,17 +211,39 @@ class Context:
         self._invoked_skill_paths.add(skill.source_path)
         self._invoked_skills.append(skill)
 
+    def _path_in_scope(self, path: Path) -> bool:
+        """Phase 3 §5 — single cwd-boundary helper for path-based memory triggers.
+
+        Returns True iff ``path`` resolves to a location at or under
+        ``self._cwd``. Both nested-memory loading and conditional rule
+        matching consult this; out-of-scope paths skip both. Resolves
+        the path through symlinks so a symlink under cwd that points
+        outside is treated as "outside" (matches the resolved-cwd
+        invariant baked into ``__init__``).
+        """
+        try:
+            resolved_path = path.resolve()
+        except OSError:
+            return False
+        return _is_under(resolved_path, self._cwd)
+
     def on_tool_touched_path(self, path: Path) -> None:
         try:
             resolved_path = path.resolve()
         except OSError:
             return
 
-        if _is_under(resolved_path, self._cwd):
-            self._load_nested_for(resolved_path)
+        # Phase 3 §5 — both nested-memory load AND conditional rule
+        # match honor the same cwd boundary. Out-of-cwd paths have no
+        # defensible scope for either trigger; the matching path is
+        # silently dropped here. Out-of-cwd *rule patterns* (absolute
+        # paths in rule glob lists) are warned about once at load time
+        # in ``rules.load_rules`` — see ``out_of_cwd_rule_warning``.
+        if not self._path_in_scope(resolved_path):
+            return
 
-        # User-layer conditional rules with `**/*.py` 可匹配任何绝对路径，
-        # 因此 rule match 不受 "path 是否在 cwd 下" 的限制。
+        self._load_nested_for(resolved_path)
+
         for rule in match_rules(self._rules, resolved_path):
             if rule.source_path in self._matched_rule_paths:
                 continue

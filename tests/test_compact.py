@@ -222,15 +222,16 @@ async def test_compact_preserves_todos(tmp_path: Path) -> None:
     agent = _make_agent(tmp_path)
     _seed_history(agent, pairs=10)
 
-    agent._state.custom["todos"] = [
+    agent._state.slots.todos.clear()
+    agent._state.slots.todos.append(
         TodoItem(
             content="TASK-A", status="pending", active_form="Doing TASK-A",
         )
-    ]
+    )
 
     await agent.compact(source="manual")
 
-    todos = agent._state.custom.get("todos", [])
+    todos = agent._state.slots.todos
     assert len(todos) == 1
     assert todos[0].content == "TASK-A"
     await agent.aclose()

@@ -1078,11 +1078,11 @@ async def test_clear_session_wipes_todos(tmp_path: Path) -> None:
     # Turn establishing todos.
     async for _ in agent.astream("hi"):
         pass
-    assert agent._state.custom.get("todos")
+    assert agent._state.slots.todos
 
     # clear_session wipes custom state including todos.
     agent.clear_session()
-    assert agent._state.custom.get("todos", []) == []
+    assert agent._state.slots.todos == []
 
     # The next turn must not carry a <todos> HumanMessage.
     async for _ in agent.astream("after-clear"):

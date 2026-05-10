@@ -380,7 +380,7 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
         primary_memory=agent._primary_memory,
         rules=agent._rules,
         skills=agent._skill_registry.list(),
-        todos_provider=lambda: agent._state.custom.get("todos", []),
+        todos_provider=lambda: agent._state.slots.todos,
     )
 
     # Lift preserved state onto the new instance.

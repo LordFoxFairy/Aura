@@ -16,7 +16,7 @@ async def test_single_pending_todo_sets_state_and_returns_message() -> None:
     out = await tool.ainvoke(
         {"todos": [{"content": "a", "status": "pending", "active_form": "Doing a"}]}
     )
-    assert state.custom["todos"] == [
+    assert state.slots.todos == [
         TodoItem(content="a", status="pending", active_form="Doing a")
     ]
     assert out == {"message": "Todos updated."}
@@ -26,7 +26,7 @@ async def test_empty_list_sets_empty_state() -> None:
     state = LoopState()
     tool = TodoWrite(state=state)
     out = await tool.ainvoke({"todos": []})
-    assert state.custom["todos"] == []
+    assert state.slots.todos == []
     assert out == {"message": "Todos updated."}
 
 
@@ -72,7 +72,7 @@ async def test_second_call_replaces_first() -> None:
             ]
         }
     )
-    assert state.custom["todos"] == [
+    assert state.slots.todos == [
         TodoItem(content="b", status="in_progress", active_form="Doing b"),
         TodoItem(content="c", status="pending", active_form="Doing c"),
     ]
@@ -89,10 +89,10 @@ async def test_two_instances_are_independent() -> None:
     await tool2.ainvoke(
         {"todos": [{"content": "b", "status": "pending", "active_form": "Doing b"}]}
     )
-    assert state1.custom["todos"] == [
+    assert state1.slots.todos == [
         TodoItem(content="a", status="pending", active_form="Doing a")
     ]
-    assert state2.custom["todos"] == [
+    assert state2.slots.todos == [
         TodoItem(content="b", status="pending", active_form="Doing b")
     ]
 
@@ -109,9 +109,9 @@ async def test_empty_list_overwrites_existing() -> None:
             ]
         }
     )
-    assert len(state.custom["todos"]) == 3
+    assert len(state.slots.todos) == 3
     await tool.ainvoke({"todos": []})
-    assert state.custom["todos"] == []
+    assert state.slots.todos == []
 
 
 async def test_stored_items_are_pydantic_instances() -> None:
@@ -120,7 +120,7 @@ async def test_stored_items_are_pydantic_instances() -> None:
     await tool.ainvoke(
         {"todos": [{"content": "a", "status": "pending", "active_form": "Doing a"}]}
     )
-    assert isinstance(state.custom["todos"][0], TodoItem)
+    assert isinstance(state.slots.todos[0], TodoItem)
 
 
 def test_tool_metadata_and_name() -> None:

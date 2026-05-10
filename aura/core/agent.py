@@ -937,6 +937,12 @@ class Agent:
         # /clear — matches the pre-migration behaviour where the list
         # was re-bound to a fresh empty list at this exact site.
         self._state.slots.turn_denials.clear()
+        # Phase 1 Task 5: ``state.slots.todos`` migrated out of
+        # ``state.custom``; ``LoopState.reset`` no longer wipes it. Clear
+        # the list in place so /clear starts the next session with no
+        # stale plan items — matches the pre-migration behaviour where
+        # ``custom.clear()`` removed the ``"todos"`` key.
+        self._state.slots.todos.clear()
         # Drop any captured prior mode — /clear starts a fresh session so
         # a leftover "accept_edits" from a previous plan cycle shouldn't
         # bleed into the next one.
@@ -1503,7 +1509,7 @@ class Agent:
             primary_memory=self._primary_memory,
             rules=self._rules,
             skills=self._skill_registry.list(),
-            todos_provider=lambda: self._state.custom.get("todos", []),
+            todos_provider=lambda: self._state.slots.todos,
             notifications_drainer=self._drain_task_notifications,
             inherited_reads=inherited_reads,
         )

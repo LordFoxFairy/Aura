@@ -23,6 +23,8 @@ from aura.schemas.events import (
 from aura.schemas.permissions import (
     Allow,
     Ask,
+    AskerPrompt,
+    AskerResponse,
     Block,
     Outcome,
     PermissionsConfig,
@@ -51,6 +53,8 @@ __all__ = [
     "AgentEvent",
     "Allow",
     "Ask",
+    "AskerPrompt",
+    "AskerResponse",
     "AssistantDelta",
     "Block",
     "Final",

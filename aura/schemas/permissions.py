@@ -200,3 +200,90 @@ class Replace:
 #         case Replace(result=r, decision=d): ...
 #
 Outcome = Allow | Block | Ask | Replace
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — :class:`AskerPrompt` + :class:`AskerResponse` (spec §6).
+#
+# The four-state user choice contract (yes / yes-always / no / no-always)
+# crossing the asker boundary. Today the same shape is encoded ad-hoc in
+# CLI picker, IPC asker (desktop), and subagent auto-deny — Phase 5 Task 3
+# formalizes the dataclasses; Tasks 4-6 migrate each asker. The wire
+# format on the desktop transport (``aura.permission.request`` /
+# ``aura.permission.response``) maps 1:1 to these shapes.
+# ---------------------------------------------------------------------------
+
+
+_ASKER_CHOICES: frozenset[str] = frozenset(
+    {"yes", "yes-always", "no", "no-always"}
+)
+
+
+@dataclass(frozen=True)
+class AskerPrompt:
+    """Everything an asker needs to render the permission prompt.
+
+    Carries display strings (``tool``, ``args_preview``, ``rule_hint``)
+    plus the ``is_destructive`` hint the widget uses to flip styling.
+    ``request_id`` is the IPC correlation key — the desktop frontend
+    matches each ``aura.permission.response`` envelope back to its
+    pending request by string equality.
+
+    Invariants enforced at construction so a malformed prompt fails at
+    the asker boundary, not deep inside the widget render path:
+
+    - ``tool`` non-empty (the widget uses it as the prompt label).
+    - ``request_id`` non-empty (no correlation key = unroutable response).
+    """
+
+    tool: str
+    args_preview: str
+    rule_hint: str
+    is_destructive: bool
+    request_id: str
+
+    def __post_init__(self) -> None:
+        if not self.tool:
+            raise ValueError("AskerPrompt requires a non-empty tool name")
+        if not self.request_id:
+            raise ValueError(
+                "AskerPrompt requires a non-empty request_id "
+                "(used for IPC correlation)"
+            )
+
+
+@dataclass(frozen=True)
+class AskerResponse:
+    """The user's four-state choice plus the echoed correlation id.
+
+    The gate (Phase 5 Task 8) translates each ``choice`` value into a
+    :class:`Decision` via the strict factories:
+
+    - ``yes``         → ``decision_allow_user_once()``
+    - ``yes-always``  → save rule + ``decision_allow_user_always(rule)``
+    - ``no``          → ``decision_block_user_once()``
+    - ``no-always``   → save deny rule + ``decision_block_rule(rule)``
+
+    Invariants enforced at construction:
+
+    - ``choice`` is one of the four literal values. ``Literal`` only
+      constrains static typing; a malformed IPC payload deserialized
+      to a foreign string would slip past mypy, so we validate at
+      runtime too.
+    - ``request_id`` non-empty (echoes the prompt's id verbatim).
+    """
+
+    choice: Literal["yes", "yes-always", "no", "no-always"]
+    request_id: str
+
+    def __post_init__(self) -> None:
+        if self.choice not in _ASKER_CHOICES:
+            raise ValueError(
+                f"AskerResponse.choice must be one of {sorted(_ASKER_CHOICES)!r}; "
+                f"got {self.choice!r}"
+            )
+        if not self.request_id:
+            raise ValueError(
+                "AskerResponse requires a non-empty request_id "
+                "(must echo AskerPrompt.request_id for IPC correlation)"
+            )

@@ -8,9 +8,14 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.schemas.tool import ToolError, ToolResult
+from aura.schemas.tool import (
+    ToolError,
+    ToolMetadata,
+    ToolResult,
+    ValidationResult,
+)
 from aura.schemas.tool_meta_access import meta_dict
-from aura.tools.base import build_tool
+from aura.tools.base import Tool, build_tool
 
 
 def test_tool_result_required_ok() -> None:
@@ -140,3 +145,71 @@ def test_build_tool_without_new_kwargs_has_none_slots() -> None:
     meta = meta_dict(tool)
     assert meta.get("rule_matcher") is None
     assert meta.get("args_preview") is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Task 1: ``Tool.validate_input`` default
+# ---------------------------------------------------------------------------
+
+
+class _AcceptAllTool(Tool):
+    """Minimal ``Tool`` subclass used to exercise the default
+    ``validate_input`` — it doesn't override the method, so callers
+    should observe the base class's accept-everything behaviour.
+    """
+
+    name: str = "accept_all"
+    description: str = "test fixture"
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=True,
+        is_destructive=False,
+        is_concurrency_safe=True,
+        rule_matcher=None,
+        args_preview=None,
+        timeout_sec=None,
+    )
+
+    def _run(self, **_kwargs: Any) -> dict[str, Any]:
+        return {"ok": True}
+
+
+def test_tool_default_validate_input_accepts_empty_args() -> None:
+    """Spec §4 — the base ``Tool.validate_input`` returns
+    ``ValidationResult(invalid=False)`` regardless of args. Empty
+    dict path: nothing to inspect, still accepted.
+    """
+    result = _AcceptAllTool().validate_input({})
+    assert isinstance(result, ValidationResult)
+    assert result.invalid is False
+    assert result.reason == ""
+
+
+def test_tool_default_validate_input_accepts_arbitrary_args() -> None:
+    """Default impl is shape-agnostic — it ignores the contents and
+    accepts. Subclasses opt into validation by overriding the method.
+    """
+    result = _AcceptAllTool().validate_input(
+        {"path": "../etc/passwd", "scheme": "file://", "anything": object()},
+    )
+    assert result.invalid is False
+    assert result.reason == ""
+
+
+def test_tool_subclass_can_override_validate_input() -> None:
+    """A subclass that overrides ``validate_input`` returns its own
+    verdict — pins the override hook contract that Task 2 relies on.
+    """
+
+    class _RejectingTool(_AcceptAllTool):
+        def validate_input(self, args: dict[str, Any]) -> ValidationResult:
+            if args.get("path", "").startswith(".."):
+                return ValidationResult(invalid=True, reason="relative path")
+            return ValidationResult(invalid=False)
+
+    tool = _RejectingTool()
+    bad = tool.validate_input({"path": "../x"})
+    assert bad.invalid is True
+    assert bad.reason == "relative path"
+
+    ok = tool.validate_input({"path": "/abs/x"})
+    assert ok.invalid is False

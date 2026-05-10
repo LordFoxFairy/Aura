@@ -22,6 +22,7 @@ from aura.schemas.tool import (
     ToolArgsPreview,
     ToolMetadata,
     ToolRuleMatcher,
+    ValidationResult,
     tool_metadata,
 )
 
@@ -192,3 +193,60 @@ def test_tool_metadata_exported_from_aura_schemas() -> None:
     assert hasattr(schemas, "ToolMetadata")
     assert schemas.ToolMetadata is ToolMetadata
     assert "ToolMetadata" in schemas.__all__
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Task 1: ``ValidationResult`` contract
+# ---------------------------------------------------------------------------
+
+
+def test_validation_result_default_reason_is_empty() -> None:
+    """Spec §4 — ``reason`` defaults to ``""`` so a "valid" result needs
+    only ``invalid=False``. Asserts the default factory behaves as
+    documented and that ``invalid`` is required.
+    """
+    vr = ValidationResult(invalid=False)
+    assert vr.invalid is False
+    assert vr.reason == ""
+
+
+def test_validation_result_carries_reason_when_invalid() -> None:
+    """An invalid result should round-trip its reason verbatim — the
+    permission gate (Task 8) surfaces it in the resulting ``Block``.
+    """
+    vr = ValidationResult(invalid=True, reason="path escapes cwd")
+    assert vr.invalid is True
+    assert vr.reason == "path escapes cwd"
+
+
+def test_validation_result_is_frozen() -> None:
+    """``ValidationResult`` is frozen — once constructed, neither field
+    can be mutated. Guards against a stray consumer rewriting the
+    reason or flipping the verdict in flight.
+    """
+    vr = ValidationResult(invalid=True, reason="bad")
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        vr.invalid = False  # type: ignore[misc]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        vr.reason = "other"  # type: ignore[misc]
+
+
+def test_validation_result_invalid_is_required() -> None:
+    """Constructing without ``invalid`` is a programmer error — the
+    field has no default precisely so callers must make the verdict
+    explicit at the construction site.
+    """
+    with pytest.raises(TypeError):
+        ValidationResult()  # type: ignore[call-arg]
+
+
+def test_validation_result_exported_from_aura_schemas() -> None:
+    """``ValidationResult`` is part of the leaf package's public
+    surface — Task 8's permission gate imports via
+    ``from aura.schemas import ValidationResult``.
+    """
+    from aura import schemas
+
+    assert hasattr(schemas, "ValidationResult")
+    assert schemas.ValidationResult is ValidationResult
+    assert "ValidationResult" in schemas.__all__

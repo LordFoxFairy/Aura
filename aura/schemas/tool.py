@@ -78,6 +78,30 @@ class ToolResult:
 
 
 @dataclass(frozen=True)
+class ValidationResult:
+    """Outcome of ``Tool.validate_input(args)`` — Phase 5 Task 1.
+
+    Splits "can these args work at all" (tool-author concern) from
+    "should the user approve this" (operator concern, the permission
+    gate). A tool returns ``ValidationResult(invalid=True, reason=...)``
+    when its arguments are structurally unusable (e.g., a relative
+    path that escapes cwd, an unsupported URL scheme); the loop turns
+    this into a clean ``Block`` without going through the ``ToolError``
+    exception path.
+
+    Frozen so a validation outcome can be cached or passed across
+    layers without risk of mutation. ``reason`` is required when
+    ``invalid=True`` by convention — empty ``reason`` on an invalid
+    result yields a useless error message — but the dataclass does
+    not enforce it (kept simple; callers that care assert at the
+    construction site).
+    """
+
+    invalid: bool
+    reason: str = ""
+
+
+@dataclass(frozen=True)
 class ToolMetadata:
     """Typed replacement for the ``tool_metadata(...)`` dict.
 

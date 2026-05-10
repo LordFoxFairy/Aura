@@ -4,6 +4,14 @@ Production tools subclass ``BaseTool`` directly and set
 ``aura_metadata: ToolMetadata``; this factory is a terser way to spin up
 a one-off ``StructuredTool`` when writing tests. ``ToolResult``/``ToolError``/
 ``ToolMetadata`` live in ``aura.schemas.tool``.
+
+Phase 5 Task 1 also introduces :class:`Tool`, a thin Aura mixin over
+LangChain's ``BaseTool`` that supplies a default ``validate_input``
+(accept-everything). Production tools migrate to subclass ``Tool`` in
+later tasks (per-tool override of ``validate_input``); the loop's
+permission gate (Task 8) calls ``validate_input`` on every tool, so
+tools that don't yet inherit from :class:`Tool` are handled by a
+``getattr`` fallback at the call site.
 """
 
 from __future__ import annotations
@@ -14,9 +22,42 @@ from typing import Any, TypeVar
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from aura.schemas.tool import ToolArgsPreview, ToolMetadata, ToolRuleMatcher
+from aura.schemas.tool import (
+    ToolArgsPreview,
+    ToolMetadata,
+    ToolRuleMatcher,
+    ValidationResult,
+)
 
 _TParams = TypeVar("_TParams", bound=BaseModel)
+
+
+class Tool(BaseTool):
+    """Aura tool base — adds ``validate_input`` over LangChain's ``BaseTool``.
+
+    Phase 5 Task 1 contract: every Aura tool exposes
+    ``validate_input(args) -> ValidationResult``. The default returns
+    ``ValidationResult(invalid=False)`` (accept) so subclasses only
+    override when they have non-permission-related input constraints
+    (e.g., ``read_file`` rejects relative paths above cwd, ``web_fetch``
+    rejects unsupported URL schemes).
+
+    The split mirrors claude-code's ``validateInput`` vs.
+    ``checkPermissions``: the tool author owns "are these args
+    structurally usable", the operator (permission gate) owns "should
+    the user approve this". Surfacing the former as a structured
+    ``ValidationResult`` lets the loop ``Block`` cleanly without
+    routing through the ``ToolError`` exception path.
+
+    Validation is intentionally synchronous — it should be cheap and
+    not require I/O. Tools whose validity depends on async work raise
+    ``ToolError`` from ``_arun`` instead.
+    """
+
+    def validate_input(self, args: dict[str, Any]) -> ValidationResult:
+        """Default: accept any args. Subclasses override to constrain."""
+        del args  # default impl is shape-agnostic; subclasses inspect
+        return ValidationResult(invalid=False)
 
 
 def build_tool(

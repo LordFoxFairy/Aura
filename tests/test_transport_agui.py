@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from aura.transport.agui import AguiAdapter
 
 
@@ -91,19 +93,40 @@ def test_agui_adapter_maps_tool_events_and_progress() -> None:
             "chunk": "hi\n",
         },
     }]
+    # Phase 2 Task 9: AG-UI ``TOOL_CALL_RESULT.content`` carries a
+    # JSON-encoded structured payload {text, error}.
     assert adapter.convert({
         "event": "tool_call_completed",
         "id": "tc_1",
         "name": "bash",
-        "output": {"stdout": "hi\n"},
-        "error": None,
+        "content": {"text": "{\"stdout\":\"hi\\n\"}", "error": False},
     }) == [{
         "type": "TOOL_CALL_RESULT",
         "messageId": "run-2-message",
         "toolCallId": "tc_1",
-        "content": "{\"stdout\":\"hi\\n\"}",
+        "content": "{\"text\":\"{\\\"stdout\\\":\\\"hi\\\\n\\\"}\",\"error\":false}",
         "role": "tool",
     }]
+
+
+def test_agui_adapter_tool_completed_error_payload_carries_error_flag() -> None:
+    # Phase 2 Task 9: a failing tool's ``TOOL_CALL_RESULT.content`` is
+    # the JSON-encoded structured payload — clients can decode and
+    # see the boolean ``error`` flag (no more guessing whether bare
+    # text is success-output or an error message).
+    adapter = AguiAdapter(run_id="run-err")
+
+    out = adapter.convert({
+        "event": "tool_call_completed",
+        "id": "tc_1",
+        "name": "bash",
+        "content": {"text": "permission denied", "error": True},
+    })
+
+    assert len(out) == 1
+    assert out[0]["type"] == "TOOL_CALL_RESULT"
+    parsed = json.loads(out[0]["content"])
+    assert parsed == {"text": "permission denied", "error": True}
 
 
 def test_agui_adapter_gives_idless_tool_calls_distinct_fallback_ids() -> None:
@@ -122,14 +145,12 @@ def test_agui_adapter_gives_idless_tool_calls_distinct_fallback_ids() -> None:
     first_completed = adapter.convert({
         "event": "tool_call_completed",
         "name": "bash",
-        "output": {"ok": True},
-        "error": None,
+        "content": {"text": "{\"ok\":true}", "error": False},
     })
     second_completed = adapter.convert({
         "event": "tool_call_completed",
         "name": "bash",
-        "output": {"ok": True},
-        "error": None,
+        "content": {"text": "{\"ok\":true}", "error": False},
     })
 
     first_id = first[0]["toolCallId"]

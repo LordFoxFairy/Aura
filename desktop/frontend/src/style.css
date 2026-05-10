@@ -908,6 +908,17 @@ body {
   overflow: hidden;
 }
 
+/* Phase 2 Task 9 — error variant: thin terracotta top border + matching
+   header label color signals a failed tool dispatch. The ⊘ prefix
+   ships from the component side. */
+.tool-card--error {
+  border-top: 2px solid var(--terracotta);
+}
+
+.tool-card--error .tool-card__label {
+  color: var(--terracotta);
+}
+
 .tool-card__head {
   display: flex;
   align-items: center;

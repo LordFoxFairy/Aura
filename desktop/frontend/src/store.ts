@@ -7,7 +7,13 @@
  */
 
 import { create } from "zustand";
-import type { Message, PendingPermission, Status, AuraStateSnapshot } from "./types";
+import type {
+  AuraToolCallCompletedContent,
+  Message,
+  PendingPermission,
+  Status,
+  AuraStateSnapshot,
+} from "./types";
 
 export interface AuraStore {
   messages: Message[];
@@ -30,8 +36,7 @@ export interface AuraStore {
   completeToolCall(
     id: string | undefined,
     name: string,
-    output: unknown,
-    error: string | null,
+    content: AuraToolCallCompletedContent,
   ): void;
   appendPermissionAudit(tool: string, text: string): void;
   showPermission(req: PendingPermission): void;
@@ -182,8 +187,7 @@ export const useAuraStore = create<AuraStore>((set) => ({
   completeToolCall(
     id: string | undefined,
     name: string,
-    output: unknown,
-    error: string | null,
+    content: AuraToolCallCompletedContent,
   ): void {
     set((state) => {
       const msgs = state.messages;
@@ -199,8 +203,7 @@ export const useAuraStore = create<AuraStore>((set) => ({
           const updated: Extract<Message, { kind: "tool" }> = {
             ...(m as Extract<Message, { kind: "tool" }>),
             completed: true,
-            output,
-            error,
+            content,
           };
           return {
             messages: [

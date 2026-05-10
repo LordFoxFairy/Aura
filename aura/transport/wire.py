@@ -46,11 +46,26 @@ def event_to_wire(event: Any) -> dict[str, Any]:
             progress_payload["id"] = event.id
         return progress_payload
     if isinstance(event, ToolCallCompleted):
+        # Phase 2 Task 9 — unified tool-result wire shape. The legacy
+        # ``output``/``error`` split is replaced by a single
+        # ``content: {"text": ..., "error": bool}`` payload so the
+        # frontend has ONE shape to render (and ``error: true`` drives
+        # the red banner). ``text`` is the same string the model sees
+        # in the ToolMessage (success → JSON of output, failure →
+        # error+hint), so the frontend never has to re-format JSON
+        # for display.
+        is_error = event.error is not None
+        if is_error:
+            text = str(event.error)
+        else:
+            try:
+                text = json.dumps(event.output, default=str, ensure_ascii=False)
+            except (TypeError, ValueError):
+                text = repr(event.output)
         completed_payload: dict[str, Any] = {
             "event": "tool_call_completed",
             "name": event.name,
-            "output": event.output,
-            "error": event.error,
+            "content": {"text": text, "error": is_error},
         }
         if event.id:
             completed_payload["id"] = event.id

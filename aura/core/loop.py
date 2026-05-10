@@ -999,6 +999,16 @@ class AgentLoop:
         # Tools that own their own internal timeout ladder (bash) set this
         # to ``None`` so the outer wrapper doesn't stack on top.
         timeout: float | None = meta_dict(step.tool).get("timeout_sec")
+        # Phase 2 Task 9: ONE shape for both success and failure. The
+        # split ``except ToolError → user-facing string`` vs ``except
+        # Exception → type-prefixed`` codepaths used to live as two
+        # sibling ``except`` clauses; collapsed to a single defensive
+        # ``except Exception`` (per spec §7) so the loop has a single
+        # tool-result projection. ``ToolError`` is still recognised as
+        # a tool-author-raised user-facing message (no ``RuntimeError:``
+        # prefix); every other exception type is type-prefixed so the
+        # model can distinguish a programmer bug from a deliberate
+        # user-facing error.
         try:
             if timeout is not None:
                 try:
@@ -1013,13 +1023,13 @@ class AgentLoop:
                 output = await step.tool.ainvoke(step.args)
             result = ToolResult(ok=True, output=output)
             self._maybe_trigger_path(step, result)
-        except ToolError as exc:
-            # 工具作者主动抛的用户态错误，消息原样给模型看。
-            result = ToolResult(ok=False, error=str(exc))
         except Exception as exc:  # noqa: BLE001
-            # 任意异常兜底：保证结果总能写回 history，避免 tool_call id 漏匹配。
-            # CancelledError 继承 BaseException（非 Exception），不会被这里吞掉。
-            result = ToolResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+            # 单一兜底：所有异常 → ToolResult(ok=False)。CancelledError 继承
+            # BaseException（非 Exception），不会被这里吞掉。ToolError 是工具
+            # 作者主动抛的用户态错误（保留原文），其余异常 type-prefix 让模型
+            # 能区分编程错误与用户态错误。
+            text = str(exc) if isinstance(exc, ToolError) else f"{type(exc).__name__}: {exc}"
+            result = ToolResult(ok=False, error=text)
         return await self._hooks.run_post_tool(
             tool=step.tool, args=step.args, result=result, state=self._state
         )

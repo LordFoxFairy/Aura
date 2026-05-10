@@ -67,7 +67,7 @@ Each line on the headless subprocess's stdout is one JSON object produced by `au
 | `assistant_delta` | `text` | Streaming model output — append to active assistant bubble |
 | `tool_call_started` | `id?`, `name`, `input` | Tool dispatch begins; render a tool card |
 | `tool_call_progress` | `id?`, `name`, `stream`, `chunk` | Mid-tool streaming chunk (`stream` = `stdout` / `stderr`) |
-| `tool_call_completed` | `id?`, `name`, `output`, `error` | Tool returned; `error` is `null` on success |
+| `tool_call_completed` | `id?`, `name`, `content` | Tool returned; `content = {text, error}` carries one shape for both success and failure. `error: true` flags a failed dispatch. |
 | `final` | `message`, `reason` | Turn ended (`reason` = `natural` / `aborted` / `max_turns`) |
 | `permission_request` | `id`, `tool`, `args`, `rule_hint`, `is_destructive` | Headless permission prompt request; frontend responds with `permission_response` |
 | `permission_audit` | `tool`, `text` | Permission decision audit entry emitted by the core loop |

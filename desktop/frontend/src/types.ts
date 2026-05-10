@@ -10,7 +10,19 @@ export interface AuraReadyEvent        { event: "ready"; session_id?: string; mo
 export interface AuraAssistantDeltaEvent { event: "assistant_delta"; text: string; }
 export interface AuraToolCallStartedEvent { event: "tool_call_started"; id?: string; name: string; input: unknown; }
 export interface AuraToolCallProgressEvent { event: "tool_call_progress"; id?: string; name: string; stream: "stdout" | "stderr"; chunk: string; }
-export interface AuraToolCallCompletedEvent { event: "tool_call_completed"; id?: string; name: string; output: unknown; error: string | null; }
+/**
+ * Phase 2 Task 9 — unified tool-result wire shape. The legacy
+ * `output`/`error` split is replaced by a single structured
+ * `content: {text, error}` payload, mirroring the spec's
+ * "one shape for both success and failure" contract.
+ */
+export interface AuraToolCallCompletedContent { text: string; error: boolean; }
+export interface AuraToolCallCompletedEvent {
+  event: "tool_call_completed";
+  id?: string;
+  name: string;
+  content: AuraToolCallCompletedContent;
+}
 export interface AuraPermissionAuditEvent { event: "permission_audit"; tool: string; text: string; }
 export interface AuraPermissionRequestEvent {
   event: "permission_request";
@@ -55,8 +67,10 @@ export type Message =
       name: string;
       args: unknown;
       completed: boolean;
-      output?: unknown;
-      error?: string | null;
+      // Phase 2 Task 9: structured tool-result content. Populated only
+      // when ``completed`` is true. ``error: true`` drives the red
+      // banner / ⊘ glyph in ToolCard.
+      content?: AuraToolCallCompletedContent;
       progress: Array<{ stream: "stdout" | "stderr"; chunk: string }>;
     }
   | { kind: "audit"; id: string; tool: string; text: string }

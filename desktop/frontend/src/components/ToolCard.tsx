@@ -13,28 +13,28 @@ export function formatToolProgress(
 }
 
 export default function ToolCard({ msg }: Props): React.ReactElement {
+  // Phase 2 Task 9 — unified ``content: {text, error}`` shape. The
+  // boolean ``error`` flag drives the red banner / ⊘ glyph.
+  const isError = msg.completed && msg.content?.error === true;
   const statusClass = !msg.completed
     ? "tool-card__status--running"
-    : msg.error
+    : isError
       ? "tool-card__status--err"
       : "tool-card__status--ok";
 
   const statusText = !msg.completed
     ? "running…"
-    : msg.error
+    : isError
       ? "error"
       : "ok";
   const progressText = formatToolProgress(msg.progress);
-  const outputText = msg.output === undefined
-    ? ""
-    : typeof msg.output === "string"
-      ? msg.output
-      : JSON.stringify(msg.output, null, 2);
+  const outputText = msg.content?.text ?? "";
+  const cardClass = isError ? "tool-card tool-card--error" : "tool-card";
 
   return (
-    <div className="tool-card">
+    <div className={cardClass}>
       <header className="tool-card__head">
-        <span className="tool-card__label">tool</span>
+        <span className="tool-card__label">{isError ? "⊘" : "tool"}</span>
         <span className="tool-card__name">{msg.name}</span>
         <span className={`tool-card__status ${statusClass}`}>{statusText}</span>
       </header>

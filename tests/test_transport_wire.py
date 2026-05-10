@@ -48,14 +48,16 @@ def test_event_to_wire_preserves_desktop_event_shapes() -> None:
         "stream": "stdout",
         "chunk": "ok\n",
     }
+    # Phase 2 Task 9: tool_call_completed now carries a unified
+    # ``content: {"text": str, "error": bool}`` instead of split
+    # output/error fields.
     assert event_to_wire(
         ToolCallCompleted("grep", {"matches": 1}, id="tc_3"),
     ) == {
         "event": "tool_call_completed",
         "id": "tc_3",
         "name": "grep",
-        "output": {"matches": 1},
-        "error": None,
+        "content": {"text": '{"matches": 1}', "error": False},
     }
     assert event_to_wire(PermissionAudit("bash", "auto-allowed: rule")) == {
         "event": "permission_audit",
@@ -73,6 +75,22 @@ def test_event_to_wire_omits_absent_optional_ids_for_compatibility() -> None:
     assert "id" not in event_to_wire(ToolCallStarted("read_file", {}))
     assert "id" not in event_to_wire(ToolCallProgress("bash", "stderr", "x"))
     assert "id" not in event_to_wire(ToolCallCompleted("bash", None))
+
+
+def test_event_to_wire_tool_completed_error_carries_structured_content() -> None:
+    # Phase 2 Task 9: a failing tool surfaces as
+    # ``content: {"text": <error msg>, "error": True}`` — one shape
+    # for both success and failure, with the boolean flag visible to
+    # the frontend so it can render the red banner.
+    payload = event_to_wire(
+        ToolCallCompleted("bash", output=None, error="boom: rm refused"),
+    )
+    assert payload["event"] == "tool_call_completed"
+    assert payload["name"] == "bash"
+    assert payload["content"] == {"text": "boom: rm refused", "error": True}
+    # Legacy split fields are gone — back-compat dropped per Phase 2 §7.
+    assert "output" not in payload
+    assert "error" not in payload
 
 
 def test_event_to_wire_omits_empty_optional_ids_for_compatibility() -> None:

@@ -87,15 +87,19 @@ class AguiAdapter:
                 },
             }]
         if kind == "tool_call_completed":
+            # Phase 2 Task 9 — wire format unified on
+            # ``content: {"text": ..., "error": bool}``. AG-UI
+            # ``TOOL_CALL_RESULT.content`` is a string slot, so we
+            # JSON-encode the structured payload — clients that
+            # previously treated content as a bare string still parse
+            # it as text, but now-aware clients can decode the
+            # ``error`` flag and switch rendering.
+            content = event.get("content") or {"text": "", "error": False}
             return [{
                 "type": "TOOL_CALL_RESULT",
                 "messageId": self._message_id,
                 "toolCallId": self._complete_tool_call_id(event),
-                "content": (
-                    str(event.get("error"))
-                    if event.get("error") is not None
-                    else _compact_json(event.get("output"))
-                ),
+                "content": _compact_json(content),
                 "role": "tool",
             }]
         if kind == "aura_state":

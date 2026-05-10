@@ -81,21 +81,22 @@ def test_event_to_dict_matches_frontend_contract() -> None:
         "stream": "stdout",
         "chunk": "ok\n",
     }
+    # Phase 2 Task 9: tool_call_completed wire shape carries
+    # ``content: {"text": str, "error": bool}`` instead of split
+    # output/error fields.
     assert headless._event_to_dict(
         ToolCallCompleted(name="grep", output={"matches": 1}, error=None),
     ) == {
         "event": "tool_call_completed",
         "name": "grep",
-        "output": {"matches": 1},
-        "error": None,
+        "content": {"text": '{"matches": 1}', "error": False},
     }
     assert headless._event_to_dict(
         ToolCallCompleted(name="bash", output=None, error="boom"),
     ) == {
         "event": "tool_call_completed",
         "name": "bash",
-        "output": None,
-        "error": "boom",
+        "content": {"text": "boom", "error": True},
     }
     assert headless._event_to_dict(
         ToolCallCompleted(
@@ -108,8 +109,7 @@ def test_event_to_dict_matches_frontend_contract() -> None:
         "event": "tool_call_completed",
         "id": "tc_bash",
         "name": "bash",
-        "output": None,
-        "error": "boom",
+        "content": {"text": "boom", "error": True},
     }
     assert headless._event_to_dict(Final("done")) == {
         "event": "final",

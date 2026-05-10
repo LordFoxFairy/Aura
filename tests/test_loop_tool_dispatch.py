@@ -28,7 +28,7 @@ from aura.schemas.events import (
     ToolCallStarted,
 )
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
+from aura.schemas.tool import ToolError, ToolResult
 from aura.tools.base import build_tool
 from aura.tools.progress import get_progress_callback
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
@@ -153,6 +153,62 @@ async def test_run_turn_tool_call_output_serialized_as_json() -> None:
     assert isinstance(tool_msg_content, str)
     parsed = json.loads(tool_msg_content)
     assert parsed == {"echoed": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_tool_error_produces_single_tool_message_no_separate_path() -> None:
+    # Phase 2 Task 9 acceptance — the loop's dual ``except ToolError``
+    # branch is gone. A tool author raising ``ToolError`` must produce
+    # the SAME shape as a tool that returns a normal result: exactly
+    # one ``ToolMessage`` appended (so tool_call.id alignment holds)
+    # AND exactly one ``ToolCallCompleted`` event with ``error`` set.
+    class _NoArgs(BaseModel):
+        pass
+
+    def _raise() -> dict[str, Any]:
+        raise ToolError("user-facing failure")
+
+    failing = build_tool(
+        name="failer",
+        description="raises ToolError",
+        args_schema=_NoArgs,
+        func=_raise,
+        is_read_only=True,
+    )
+
+    tool_calls = [{"name": "failer", "args": {}, "id": "tc_fail"}]
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(content="", tool_calls=tool_calls)),
+        FakeTurn(message=AIMessage(content="recovered")),
+    ])
+    registry = ToolRegistry([failing])
+    loop = AgentLoop(
+        model=model, registry=registry, context=make_minimal_context(),
+        hooks=HookChain(),
+    )
+
+    events: list[AgentEvent] = []
+    history: list[BaseMessage] = [HumanMessage(content="go")]
+    async for ev in loop.run_turn(history=history):
+        events.append(ev)
+
+    # Single ToolMessage — same shape as success — no extra append from
+    # the deleted ``except ToolError`` branch.
+    tool_msgs = [m for m in history if isinstance(m, ToolMessage)]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0].tool_call_id == "tc_fail"
+    assert tool_msgs[0].status == "error"
+    # The ToolError text is preserved verbatim — no ``ToolError:`` prefix
+    # (only non-ToolError exceptions get the type prefix).
+    content = str(tool_msgs[0].content)
+    assert "user-facing failure" in content
+    assert "ToolError:" not in content
+
+    # Single ToolCallCompleted event with error populated.
+    completed = [e for e in events if isinstance(e, ToolCallCompleted)]
+    assert len(completed) == 1
+    assert completed[0].name == "failer"
+    assert completed[0].error == "user-facing failure"
 
 
 @pytest.mark.asyncio

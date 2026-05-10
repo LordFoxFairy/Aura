@@ -45,7 +45,7 @@ function dispatch(ev: AuraEvent): void {
       break;
 
     case "tool_call_completed":
-      completeToolCall(ev.id, ev.name, ev.output, ev.error);
+      completeToolCall(ev.id, ev.name, ev.content);
       break;
 
     case "permission_audit":

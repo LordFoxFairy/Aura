@@ -40,11 +40,11 @@ import sys
 from asyncio.subprocess import Process
 from typing import Any, Literal
 
-from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from aura.core.permissions.matchers import exact_match_on
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
+from aura.tools.base import Tool
 from aura.tools.progress import get_progress_callback
 
 _DEFAULT_TIMEOUT = 30
@@ -308,7 +308,7 @@ async def _drain_pipes(proc: Process) -> None:
             transport.close()
 
 
-class Bash(BaseTool):
+class Bash(Tool):
     name: str = "bash"
     description: str = (
         "Run a shell command with a timeout. Returns stdout, stderr, exit_code, "
@@ -326,6 +326,24 @@ class Bash(BaseTool):
         args_preview=_preview,
         timeout_sec=None,
     )
+
+    def validate_input(self, args: dict[str, Any]) -> ValidationResult:
+        """Reject bash invocations with structurally unusable args.
+
+        Phase 5 Task 2 — args-only check. The dangerous-pattern table
+        feeds the input-aware ``is_destructive`` classifier (the
+        permission gate's safety direction), NOT this method:
+        validation is "can this run at all?" while destructiveness is
+        "does the operator need to approve?". A blank command is the
+        only invariant we can pin without filesystem / process state.
+        """
+        command = args.get("command", "")
+        if not isinstance(command, str) or command.strip() == "":
+            return ValidationResult(
+                invalid=True,
+                reason="bash requires a non-empty command",
+            )
+        return ValidationResult(invalid=False)
 
     def _run(self, command: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
         # Bash is async-only: cancellation must be able to kill the child
@@ -418,4 +436,4 @@ class Bash(BaseTool):
         }
 
 
-bash: BaseTool = Bash()
+bash: Bash = Bash()

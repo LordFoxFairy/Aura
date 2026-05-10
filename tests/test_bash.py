@@ -11,7 +11,7 @@ import time
 import pytest
 from pydantic import ValidationError
 
-from aura.schemas.tool import ToolError, resolve_is_destructive
+from aura.schemas.tool import ToolError, ValidationResult, resolve_is_destructive
 from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.bash import BashParams, bash
 
@@ -498,3 +498,26 @@ async def test_bash_sigterm_race_cleaned_up_with_sigkill() -> None:
     finally:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(pid_path)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Task 2 — ``validate_input`` rejects blank commands
+# ---------------------------------------------------------------------------
+
+
+def test_validate_input_rejects_empty_command() -> None:
+    result = bash.validate_input({"command": ""})
+    assert isinstance(result, ValidationResult)
+    assert result.invalid is True
+    assert "non-empty" in result.reason
+
+
+def test_validate_input_rejects_whitespace_only_command() -> None:
+    result = bash.validate_input({"command": "   \t\n"})
+    assert result.invalid is True
+
+
+def test_validate_input_accepts_real_command() -> None:
+    result = bash.validate_input({"command": "echo hi"})
+    assert result.invalid is False
+    assert result.reason == ""

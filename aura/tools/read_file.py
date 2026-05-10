@@ -35,11 +35,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from aura.core.permissions.matchers import path_prefix_on
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
+from aura.tools.base import Tool
 
 _MAX_BYTES = 1024 * 1024
 
@@ -84,22 +84,37 @@ _BLOCKED_DEVICE_PATHS: frozenset[str] = frozenset({
 })
 
 
-def _reject_blocked_device(path: str) -> None:
-    """Refuse to read paths that point at non-file kernel surfaces.
+def _resolve_blocked_device(path: str) -> str | None:
+    """Return the resolved path iff it points at a blocked device, else None.
 
     Resolves the path WITHOUT requiring it to exist (``strict=False``)
     so a missing file gets the existing "not found" diagnostic from the
     main read path rather than this device-block error. Comparing the
     resolved string against the closed set catches both literal paths
-    and symlink chains that point at the same target.
+    and symlink chains that point at the same target. Returns None if
+    resolution itself fails (cycle, permission) so the main read path
+    surfaces the OS error verbatim.
     """
     try:
         resolved = str(Path(path).resolve(strict=False))
     except (OSError, RuntimeError):
-        # Resolution itself failed (cycle, permission). Fall through —
-        # the main read will surface the OS error verbatim.
-        return
+        return None
     if resolved in _BLOCKED_DEVICE_PATHS:
+        return resolved
+    return None
+
+
+def _reject_blocked_device(path: str) -> None:
+    """Defense-in-depth raise for the device-path block.
+
+    The validation gate (``ReadFile.validate_input``) catches the same
+    set as a structured ``ValidationResult``; this raise stays on the
+    ``_run`` path so direct ``ainvoke`` callers (e.g., the SDK or tests
+    that bypass the loop's validate-then-execute split) still get a
+    clean error.
+    """
+    resolved = _resolve_blocked_device(path)
+    if resolved is not None:
         raise ToolError(
             f"refusing to read {resolved!r} — kernel/interactive device "
             "endpoint (would block, return garbage, or expose kernel memory)",
@@ -155,7 +170,7 @@ def _preview(args: dict[str, Any]) -> str:
     return f"path: {args.get('path', '')}"
 
 
-class ReadFile(BaseTool):
+class ReadFile(Tool):
     name: str = "read_file"
     description: str = (
         "Read a text file (UTF-8 / UTF-16 LE / UTF-16 BE / UTF-8-BOM) with "
@@ -184,12 +199,42 @@ class ReadFile(BaseTool):
         capability_flags=frozenset({"search_command"}),
     )
 
+    def validate_input(self, args: dict[str, Any]) -> ValidationResult:
+        """Reject reads pointing at the blocked-device closed set.
+
+        Phase 5 Task 2 — args-only check, no I/O. Path resolution
+        happens via ``Path.resolve(strict=False)``; symlink chains that
+        target a blocked device are caught here just like the ``_run``
+        defense-in-depth raise.
+        """
+        path = args.get("path", "")
+        if not isinstance(path, str):
+            # Arg-schema validation should reject non-string paths
+            # before this method runs; defensive accept here so a
+            # malformed args dict surfaces via the schema layer rather
+            # than this validator.
+            return ValidationResult(invalid=False)
+        resolved = _resolve_blocked_device(path)
+        if resolved is not None:
+            return ValidationResult(
+                invalid=True,
+                reason=(
+                    f"refusing to read {resolved!r} — kernel/interactive "
+                    "device endpoint (would block, return garbage, or "
+                    "expose kernel memory)"
+                ),
+            )
+        return ValidationResult(invalid=False)
+
     def _run(
         self, path: str, offset: int = 0, limit: int | None = None,
     ) -> dict[str, Any]:
         # Round 1C — block the kernel/interactive device set BEFORE the
         # filesystem touch. Catches direct paths and symlink chains;
         # missing files fall through to the main read path's "not found".
+        # Defense-in-depth: ``validate_input`` already covers this set
+        # for callers going through the loop's validation gate (Task 8);
+        # this raise keeps direct ``ainvoke`` callers (SDK, tests) honest.
         _reject_blocked_device(path)
         p = Path(path)
         if not p.exists():

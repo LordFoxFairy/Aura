@@ -14,11 +14,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from aura.core.permissions.matchers import path_prefix_on
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
+from aura.tools.base import Tool
 
 
 class WriteFileParams(BaseModel):
@@ -32,7 +32,7 @@ def _preview(args: dict[str, Any]) -> str:
     return f"path: {args.get('path', '')}  ({len(args.get('content', ''))} chars)"
 
 
-class WriteFile(BaseTool):
+class WriteFile(Tool):
     name: str = "write_file"
     description: str = (
         "Create or overwrite a UTF-8 text file. "
@@ -48,6 +48,21 @@ class WriteFile(BaseTool):
         timeout_sec=None,
     )
 
+    def validate_input(self, args: dict[str, Any]) -> ValidationResult:
+        """Reject writes with structurally unusable args.
+
+        Phase 5 Task 2 — args-only check. ``is_dir`` / ``mkdir``
+        rejections need filesystem state and stay in ``_run``. An
+        empty path is a pure args-shape problem and surfaces here.
+        """
+        path = args.get("path", "")
+        if not isinstance(path, str) or path == "":
+            return ValidationResult(
+                invalid=True,
+                reason="write_file requires a non-empty path",
+            )
+        return ValidationResult(invalid=False)
+
     def _run(self, path: str, content: str) -> dict[str, Any]:
         p = Path(path)
         if p.is_dir():
@@ -61,4 +76,4 @@ class WriteFile(BaseTool):
         return {"written": len(data)}
 
 
-write_file: BaseTool = WriteFile()
+write_file: WriteFile = WriteFile()

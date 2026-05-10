@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from aura.schemas.tool import ToolError
+from aura.schemas.tool import ToolError, ValidationResult
 from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.web_fetch import WebFetchParams, _fetch
 
@@ -158,3 +158,35 @@ def test_web_fetch_metadata_includes_matcher_and_preview() -> None:
     preview = meta.get("args_preview")
     assert callable(preview)
     assert preview({"url": "https://x.com"}) == "url: https://x.com"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Task 2 — ``validate_input`` rejects unsupported URL schemes / hosts
+# ---------------------------------------------------------------------------
+
+
+def test_validate_input_rejects_non_http_scheme() -> None:
+    from aura.tools.web_fetch import web_fetch
+
+    result = web_fetch.validate_input({"url": "file:///etc/passwd", "prompt": "x"})
+    assert isinstance(result, ValidationResult)
+    assert result.invalid is True
+    assert "http(s)" in result.reason
+
+
+def test_validate_input_rejects_url_without_host() -> None:
+    from aura.tools.web_fetch import web_fetch
+
+    result = web_fetch.validate_input({"url": "https://", "prompt": "x"})
+    assert result.invalid is True
+    assert "no host" in result.reason
+
+
+def test_validate_input_accepts_https_url() -> None:
+    from aura.tools.web_fetch import web_fetch
+
+    result = web_fetch.validate_input(
+        {"url": "https://example.com/page", "prompt": "x"},
+    )
+    assert result.invalid is False
+    assert result.reason == ""

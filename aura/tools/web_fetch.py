@@ -45,11 +45,11 @@ from urllib.request import (
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
-from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from aura.core.permissions.matchers import exact_match_on
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
+from aura.tools.base import Tool
 
 _DEFAULT_TIMEOUT = 30
 _MAX_BYTES = 1024 * 1024
@@ -376,7 +376,7 @@ def _failure_payload(
     }
 
 
-class WebFetch(BaseTool):
+class WebFetch(Tool):
     """Fetch + summarise via a cheap model with optional caching."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -428,6 +428,30 @@ class WebFetch(BaseTool):
             "Agent.__init__ usually wires this; build the tool with "
             "make_web_fetch(factory) for SDK use.",
         )
+
+    def validate_input(self, args: dict[str, Any]) -> ValidationResult:
+        """Reject URLs with unsupported schemes or no host.
+
+        Phase 5 Task 2 — args-only check, no DNS. The SSRF guard
+        (``_reject_private_host``) does need DNS resolution, so it
+        stays on the network path inside ``_fetch`` as a runtime
+        rejection. Scheme + presence-of-host are pure URL-parse work.
+        """
+        url = args.get("url", "")
+        if not isinstance(url, str) or not (
+            url.startswith("http://") or url.startswith("https://")
+        ):
+            return ValidationResult(
+                invalid=True,
+                reason=f"not an http(s) URL: {url}",
+            )
+        parsed = urlparse(url)
+        if not parsed.hostname:
+            return ValidationResult(
+                invalid=True,
+                reason=f"malformed URL (no host): {url}",
+            )
+        return ValidationResult(invalid=False)
 
     def _run(
         self,
@@ -533,7 +557,7 @@ def make_web_fetch(
 # Agent.__init__. The first invocation without a wired factory raises a
 # clear ToolError pointing at ``set_default_model_factory``; production
 # callers always have it set before the LLM ever invokes the tool.
-web_fetch: BaseTool = WebFetch()
+web_fetch: WebFetch = WebFetch()
 
 
 # Bind the wiring helpers onto the singleton itself so call sites that

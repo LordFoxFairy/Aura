@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
 from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.read_file import ReadFileParams, read_file
 
@@ -241,3 +241,25 @@ async def test_total_lines_reflects_file_not_slice(tmp_path: Path) -> None:
     # Slice has 1 line, but total_lines is the whole file.
     assert out["lines"] == 1
     assert out["total_lines"] == 5
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Task 2 — ``validate_input`` mirrors the device-path block
+# ---------------------------------------------------------------------------
+
+
+def test_validate_input_rejects_blocked_device() -> None:
+    """A blocked-device path resolves to the closed set ⇒ invalid."""
+    result = read_file.validate_input({"path": "/dev/stdin"})
+    assert isinstance(result, ValidationResult)
+    assert result.invalid is True
+    assert "device" in result.reason
+
+
+def test_validate_input_accepts_regular_path(tmp_path: Path) -> None:
+    """A normal path (whether or not it exists) is structurally valid;
+    existence / decode failures stay on the runtime path.
+    """
+    result = read_file.validate_input({"path": str(tmp_path / "any.txt")})
+    assert result.invalid is False
+    assert result.reason == ""

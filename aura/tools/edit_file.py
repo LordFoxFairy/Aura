@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from aura.core.permissions.matchers import path_prefix_on
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
+from aura.tools.base import Tool
 
 # F-02-009 — pre-stat size cap mirroring claude-code's edit-pre-stat
 # guard. 256 MB is well above any reasonable source file but well below
@@ -41,7 +41,7 @@ def _preview(args: dict[str, Any]) -> str:
     return f"path: {args.get('path', '')}  +{new_lines}/-{old_lines} lines"
 
 
-class EditFile(BaseTool):
+class EditFile(Tool):
     name: str = "edit_file"
     description: str = (
         "Edit a file by string replacement. Finds old_str (which must be unique unless "
@@ -57,6 +57,22 @@ class EditFile(BaseTool):
         args_preview=_preview,
         timeout_sec=None,
     )
+
+    def validate_input(self, args: dict[str, Any]) -> ValidationResult:
+        """Reject edits with structurally unusable args.
+
+        Phase 5 Task 2 — args-only check. Existence / "is a file" /
+        empty-old_str-when-file-exists / size-cap rejections all need
+        filesystem state, so they stay in ``_run`` as runtime errors.
+        Empty path is a pure args-shape problem and surfaces here.
+        """
+        path = args.get("path", "")
+        if not isinstance(path, str) or path == "":
+            return ValidationResult(
+                invalid=True,
+                reason="edit_file requires a non-empty path",
+            )
+        return ValidationResult(invalid=False)
 
     def _run(
         self, path: str, old_str: str, new_str: str, replace_all: bool = False,
@@ -160,4 +176,4 @@ class EditFile(BaseTool):
         return {"replacements": occurrences if replace_all else 1}
 
 
-edit_file: BaseTool = EditFile()
+edit_file: EditFile = EditFile()

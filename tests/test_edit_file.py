@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from aura.schemas.tool import ToolError
+from aura.schemas.tool import ToolError, ValidationResult
 from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.edit_file import _MAX_EDIT_SIZE, edit_file
 
@@ -277,3 +277,25 @@ async def test_edit_file_at_size_cap_accepted(tmp_path: Path) -> None:
         {"path": str(f), "old_str": "hello", "new_str": "goodbye"}
     )
     assert out == {"replacements": 1}
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Task 2 — ``validate_input`` rejects empty paths
+# ---------------------------------------------------------------------------
+
+
+def test_validate_input_rejects_empty_path() -> None:
+    result = edit_file.validate_input(
+        {"path": "", "old_str": "a", "new_str": "b"},
+    )
+    assert isinstance(result, ValidationResult)
+    assert result.invalid is True
+    assert "non-empty path" in result.reason
+
+
+def test_validate_input_accepts_non_empty_path() -> None:
+    result = edit_file.validate_input(
+        {"path": "/tmp/whatever", "old_str": "a", "new_str": "b"},
+    )
+    assert result.invalid is False
+    assert result.reason == ""

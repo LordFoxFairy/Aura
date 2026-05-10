@@ -2,9 +2,29 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
-## [Unreleased] — Teams feature gate + persistence layout alignment + audit MED clearance
+## [Unreleased] — Phase 1 agent loop redesign + teams feature gate + persistence layout alignment + audit MED clearance
 
-Headline: the teams (multi-agent swarm) subsystem is now feature-gated, default off, mirroring claude-code's `isAgentSwarmsEnabled()`. Same-release the persistence layout flips to the per-project nested shape that claude-code ships. Version bumps `0.17.0 → 0.18.0`. **40/40 OPEN MED audit findings (2026-04-25 audit) closed across 17 commits — see Audit-MED-clearance section below.**
+Headline: Phase 1 of the architecture refactor (per `docs/superpowers/specs/2026-05-10-aura-architecture-vision.md`) lands the typed `LoopSlots` + `Outcome` + `Compactor` foundation across 13 commits. Plus the prior unreleased work: the teams (multi-agent swarm) subsystem is now feature-gated, default off, mirroring claude-code's `isAgentSwarmsEnabled()`. Same-release the persistence layout flips to the per-project nested shape that claude-code ships. Version bumps `0.17.0 → 0.18.0`. **40/40 OPEN MED audit findings (2026-04-25 audit) closed across 17 commits — see Audit-MED-clearance section below.**
+
+### Phase 1 — Agent loop redesign (13 commits, ~6800 LoC churn)
+
+Anchored by the target architecture vision; replaces the untyped `state.custom` scratchpad, collapses the three-channel `PreToolOutcome`, unifies compaction call sites, fixes a latent batch-cancel bug, surfaces output truncation cleanly, and extracts the first runtime peer (`SessionRuntime`) out of `Agent`. 2615 → 2701 tests (+86); `make check` green at every commit.
+
+- **`feat(schemas): introduce LoopSlots and Outcome contracts`** (`f51fe5b`): typed slot dataclass replacing `state.custom`, plus `Outcome` tagged union (`Allow | Block | Ask | Replace`) for permission decisions. Both frozen; runtime-fallback `Denial = Any` / `Decision = Any` / `Skill = Any` aliases preserve the `aura.schemas` leaf invariant while keeping mypy strict via `TYPE_CHECKING`.
+- **`feat(schemas): add LoopSlots to LoopState`** (`6c999d2`): wires the slot field. Side-fixes a latent pydantic introspection bug from the prior commit (`Denial`/`AskerResponse` were import-only at type-check time, but pydantic walks `LoopState → LoopSlots` field types at runtime).
+- **`refactor(loop): migrate token_stats to LoopSlots`** (`e17d578`): writer (`make_usage_tracking_hook`) and 4 readers (transport/wire, /stats, status bar, repl bottom toolbar) move to the typed slot. External wire JSON shape preserved verbatim.
+- **`refactor(perm): migrate DENIALS_SINK_KEY to LoopSlots.turn_denials`** (`01579f8`): the shared-list-by-reference trick between `Agent` and `Loop` is gone. `Agent.last_turn_denials()` now reads through the typed slot. `DENIALS_SINK_KEY` constant + `Agent._turn_denials` attribute deleted.
+- **`refactor(tools): migrate todos to LoopSlots`** (`b6d3e7d`): in-place list-mutation pattern (frozen blocks rebinding the slot, not the contained list).
+- **`refactor(loop): migrate remaining state.custom keys to LoopSlots`** (`b9df7b3`): 8 more keys absorbed. New `BuddyState` frozen dataclass for the buddy state machine (mood + last_event_ts + had_recent_error). `SkillRestrictLease` clarified as `list` rather than `| None` for skill-stacking. `PermissionDedupEntry` type alias for the per-turn dedup cache.
+- **`refactor(loop): delete LoopState.custom dict in favor of LoopSlots`** (`0caacb9`): the dict is gone. `tests/test_no_state_custom.py` invariant test prevents regression.
+- **`feat(hooks): accept Outcome alongside legacy PreToolOutcome`** (`1bc404d`): `HookChain.run_pre_tool` becomes shape-agnostic. New 4×4 merge precedence matrix test (Block > Ask > Replace > Allow). Mixed Outcome+legacy chains downgrade to legacy merge for back-compat.
+- **`refactor(hooks): migrate built-in pre_tool hooks to Outcome`** (`3e99cc3`): all 4 built-in pre_tool hooks (permission, bash_safety, must_read_first, restrict) return `Outcome`. Loop's `_dispatch_one_tool_call` pattern-matches on the variant.
+- **`refactor(hooks): delete PreToolOutcome — Outcome is the only contract`** (`c1f0ddb`): `PreToolOutcome` + `PRE_TOOL_PASSTHROUGH` deleted. `PreToolHook` Protocol return type widens to `Outcome`. Sentinel `chain_empty` reason added to `Decision` for the empty-chain case.
+- **`feat(compact): introduce Compactor Protocol with LegacyCompactor adapter`** (`5e5c679`): `runtime_checkable` Protocol with three async methods (`microcompact`, `reactive`, `auto`). `LegacyCompactor` adapter wraps existing free functions so call-site rerouting is behavior-neutral. Loop's three call sites collapse to `self._compactor.<trigger>(...)`. `Agent.compact(source=...)` is the public surface preserved for test spies.
+- **`fix(loop): batch timeout applies to single-tool batches; surface length_recovery_exhausted`** (`a02c6dd`): drops the `if len(batch) > 1` guard so size-1 batches respect `_batch_timeout_sec`. New `Final.reason="length_recovery_exhausted"` literal carries the partial assistant text on max_output_tokens exhaustion (was previously discarded). CLI renderer adds an amber banner. Side-fixed a latent `asyncio.wait`-vs-cancel propagation gap that the size-1 guard had been masking — outer cancel was leaving slow tool coroutines running.
+- **`refactor(agent): extract SessionRuntime from Agent god object`** (`4c7bcfe`): `aura/core/runtime/session.py` (270 LoC) owns session_id, storage, history load/save, partial-assistant buffer, SessionStart re-arm, pending TaskNotification queue, inherited_reads carry-over. Public Agent API (`clear_session` / `aclose` / `resume_session` / `session_id` / `history`) preserved via forwarding. 16 new isolation tests prove `SessionRuntime` exercises lifecycle without an `Agent`. `agent.py` line target ≤900 NOT met (1841) — Phase 0 spec §9 anticipated this; Phase 2 (`McpRuntime`) and Phase 6 (`SubagentRuntime`) absorb the remainder.
+
+
 
 ### Audit-MED-clearance (Round 9)
 

@@ -40,7 +40,7 @@ def _agent(tmp_path: Path, threshold: int = 10) -> Agent:
 
 def test_breaker_counter_seeded_at_session_start(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    assert agent._state.custom["consecutive_compact_failures"] == 0
+    assert agent._state.slots.consecutive_compact_failures == 0
 
 
 @pytest.mark.asyncio
@@ -60,7 +60,7 @@ async def test_breaker_blocks_after_three_failures(tmp_path: Path) -> None:
                 async for _ev in agent.astream("hi"):
                     pass
 
-    assert agent._state.custom["consecutive_compact_failures"] == 3
+    assert agent._state.slots.consecutive_compact_failures == 3
     # Fourth attempt — same conditions, but breaker tripped → no more calls.
     pre = len(calls)
     with patch.object(Agent, "compact", _fail):
@@ -72,9 +72,12 @@ async def test_breaker_blocks_after_three_failures(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_breaker_resets_on_success(tmp_path: Path) -> None:
+    import dataclasses as _dc
     agent = _agent(tmp_path)
     agent._state.total_tokens_used = 100
-    agent._state.custom["consecutive_compact_failures"] = 2
+    agent._state.slots = _dc.replace(
+        agent._state.slots, consecutive_compact_failures=2,
+    )
 
     async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:
         return CompactResult(
@@ -86,7 +89,7 @@ async def test_breaker_resets_on_success(tmp_path: Path) -> None:
         async for _ev in agent.astream("hi"):
             pass
 
-    assert agent._state.custom["consecutive_compact_failures"] == 0
+    assert agent._state.slots.consecutive_compact_failures == 0
     await agent.aclose()
 
 
@@ -96,8 +99,11 @@ async def test_manual_compact_bypasses_breaker(tmp_path: Path) -> None:
     not the auto-compact branch in ``astream``, so the breaker never gates
     it. Tripping the counter to 99 must not stop a manual call from at
     least *attempting* to run."""
+    import dataclasses as _dc
     agent = _agent(tmp_path)
-    agent._state.custom["consecutive_compact_failures"] = 99
+    agent._state.slots = _dc.replace(
+        agent._state.slots, consecutive_compact_failures=99,
+    )
 
     # Short history → run_compact short-circuits to a noop, returning a
     # CompactResult without invoking the model. That's enough to confirm
@@ -122,14 +128,17 @@ def _read_journal_lines(log: Path) -> list[dict[str, Any]]:
 
 @pytest.mark.asyncio
 async def test_breaker_emits_skip_journal_event(tmp_path: Path) -> None:
-    from aura.core.persistence import journal
+    import dataclasses as _dc
 
+    from aura.core.persistence import journal
     log = tmp_path / "audit.jsonl"
     journal.configure(log)
     try:
         agent = _agent(tmp_path)
         agent._state.total_tokens_used = 100
-        agent._state.custom["consecutive_compact_failures"] = 5
+        agent._state.slots = _dc.replace(
+            agent._state.slots, consecutive_compact_failures=5,
+        )
 
         async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:
             return CompactResult(

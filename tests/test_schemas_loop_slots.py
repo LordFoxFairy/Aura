@@ -12,6 +12,7 @@ import dataclasses
 import pytest
 
 from aura.schemas.state import (
+    BuddyState,
     LoopSlots,
     SkillRestrictLease,
     TokenStats,
@@ -37,12 +38,20 @@ def test_loop_slots_constructible_with_defaults() -> None:
     assert slots.invoked_skills == []
     assert slots.consecutive_compact_failures == 0
     assert slots.active_team is None
-    assert slots.mood == "neutral"
-    assert slots.skill_restrict_lease is None
+    assert slots.buddy == BuddyState()
+    assert slots.skill_restrict_leases == []
 
 
 def test_loop_slots_has_eleven_fields_per_spec() -> None:
-    """Spec §3.1 lists exactly 11 named fields. No extras, no missing."""
+    """Spec §3.1 lists exactly 11 named fields. No extras, no missing.
+
+    ``mood`` from the spec sketch is realised as ``buddy: BuddyState``
+    (a frozen dataclass packing ``mood`` + ``last_event_ts`` +
+    ``had_recent_error`` so the buddy state machine has the room it
+    needs without spreading three coupled fields across the slot bag).
+    Likewise ``skill_restrict_lease`` is plural (``skill_restrict_leases``):
+    multiple skills can stack leases, so the slot is a list.
+    """
     expected = {
         "token_stats",
         "turn_denials",
@@ -53,8 +62,8 @@ def test_loop_slots_has_eleven_fields_per_spec() -> None:
         "invoked_skills",
         "consecutive_compact_failures",
         "active_team",
-        "mood",
-        "skill_restrict_lease",
+        "buddy",
+        "skill_restrict_leases",
     }
     actual = {f.name for f in dataclasses.fields(LoopSlots)}
     assert actual == expected
@@ -69,7 +78,7 @@ def test_loop_slots_is_frozen() -> None:
     with pytest.raises(dataclasses.FrozenInstanceError):
         slots.ask_pending = True  # type: ignore[misc]
     with pytest.raises(dataclasses.FrozenInstanceError):
-        slots.mood = "happy"  # type: ignore[misc]
+        slots.buddy = BuddyState(mood="happy")  # type: ignore[misc]
 
 
 def test_loop_slots_replace_returns_new_instance() -> None:
@@ -77,13 +86,15 @@ def test_loop_slots_replace_returns_new_instance() -> None:
     while keeping the frozen invariant. Returns a NEW instance; old
     instance is untouched."""
     original = LoopSlots()
-    updated = dataclasses.replace(original, ask_pending=True, mood="busy")
+    updated = dataclasses.replace(
+        original, ask_pending=True, buddy=BuddyState(mood="busy"),
+    )
 
     assert updated.ask_pending is True
-    assert updated.mood == "busy"
+    assert updated.buddy.mood == "busy"
     # Original untouched.
     assert original.ask_pending is False
-    assert original.mood == "neutral"
+    assert original.buddy.mood == "idle"
     # Different instances.
     assert updated is not original
 
@@ -98,8 +109,8 @@ def test_loop_slots_default_factories_isolate_per_instance() -> None:
     a.turn_denials.append("sentinel")  # type: ignore[arg-type]
     a.todos.append(TodoItem(content="x", status="pending", active_form="x"))
     a.perm_dedup_cache["k"] = "v"  # type: ignore[assignment]
-    a.invoked_skills.append("skill_a")
-    a.preserved_invoked_skills.append("preserved_a")
+    a.invoked_skills.append("skill_a")  # type: ignore[arg-type]
+    a.preserved_invoked_skills.append("preserved_a")  # type: ignore[arg-type]
 
     assert b.turn_denials == []
     assert b.todos == []
@@ -170,3 +181,21 @@ def test_loop_slots_exported_from_schemas_state_module() -> None:
     assert hasattr(state_mod, "LoopSlots")
     assert hasattr(state_mod, "TokenStats")
     assert hasattr(state_mod, "SkillRestrictLease")
+    assert hasattr(state_mod, "BuddyState")
+
+
+def test_buddy_state_defaults_match_idle_observer() -> None:
+    """``BuddyState()`` is the "no events yet" shape — :func:`get_mood`
+    on a fresh :class:`LoopState` must return ``"idle"`` because the
+    default mood is ``"idle"`` (matches the pre-migration lazy-init
+    contract)."""
+    bs = BuddyState()
+    assert bs.mood == "idle"
+    assert bs.last_event_ts == 0.0
+    assert bs.had_recent_error is False
+
+
+def test_buddy_state_is_frozen() -> None:
+    bs = BuddyState()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        bs.mood = "happy"  # type: ignore[misc]

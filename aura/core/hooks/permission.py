@@ -50,7 +50,6 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from langchain_core.tools import BaseTool
 
 from aura.core.hooks import (
-    PRE_TOOL_ASK_PENDING_KEY,
     PreToolHook,
     PreToolOutcome,
 )
@@ -69,14 +68,15 @@ from aura.schemas.tool import ToolResult, resolve_is_destructive
 # Shared empty immutable RuleSet — safe as a default (frozen, no mutable state).
 _EMPTY_RULESET = RuleSet()
 
-# state.custom key for the per-turn ResolveOnce cache. Scoped per turn so a
-# user "accept" on call 1 of a batch doesn't silently carry over to turn 2
-# (where the user might want a fresh prompt if the model acts differently).
-# ``AgentLoop.run_turn`` clears this at turn start; within a turn the cache
-# dedupes same-signature ask branches so the user isn't re-prompted for the
-# same tool+args twice. "Always" decisions go through the Rule path and never
-# reach this cache (step 5 auto-allows on the stored rule).
-_PERM_DEDUP_CACHE_KEY = "_perm_turn_ask_cache"
+# Phase 1 Task 6: the per-turn ResolveOnce cache lives on the typed
+# ``state.slots.perm_dedup_cache`` slot (was ``state.custom["_perm_turn_ask_cache"]``).
+# Scoped per turn so a user "accept" on call 1 of a batch doesn't silently
+# carry over to turn 2 (where the user might want a fresh prompt if the
+# model acts differently). ``AgentLoop.run_turn`` clears this at turn
+# start; within a turn the cache dedupes same-signature ask branches so
+# the user isn't re-prompted for the same tool+args twice. "Always"
+# decisions go through the Rule path and never reach this cache (step 5
+# auto-allows on the stored rule).
 
 
 def _dedup_key(tool_name: str, args: dict[str, Any]) -> str:
@@ -492,7 +492,7 @@ async def _decide(
     # fires (a planner can't pretend to act with side effects). The
     # signal is set by HookChain.run_pre_tool when any earlier hook
     # returned ``PreToolOutcome(ask=True)``.
-    ask_demote = bool(state.custom.get(PRE_TOOL_ASK_PENDING_KEY))
+    ask_demote = state.slots.ask_pending
 
     # 1. Bypass mode — loud and first. Note: bypass deliberately does NOT
     # run through safety here; the safety floor for bypass lives at the
@@ -604,7 +604,7 @@ async def _decide(
     # path at step 5, so the cache only holds ``user_accept`` /
     # ``user_deny`` outcomes.
     cache_key = _dedup_key(tool.name, args)
-    cache = state.custom.setdefault(_PERM_DEDUP_CACHE_KEY, {})
+    cache = state.slots.perm_dedup_cache
     cached = cache.get(cache_key)
     if cached is not None and not ask_demote:
         cached_decision, cached_feedback = cached

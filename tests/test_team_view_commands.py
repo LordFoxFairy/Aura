@@ -2,7 +2,7 @@
 
 Covers:
 
-- ``enter`` stamps ``state.custom["active_team_id"]`` and short-errors
+- ``enter`` stamps ``state.slots.active_team`` and short-errors
   on unknown teams.
 - ``leave`` clears the slot (and detaches the leader if joined).
 - ``view`` returns a snapshot for the active team or an explicit name,
@@ -10,7 +10,8 @@ Covers:
 - ``teammate`` reads the last 50 transcript lines from the team's
   on-disk transcript and rejects unknown member names.
 - ``Agent.clear_session`` resets the active-team pointer (the slot
-  lives on ``LoopState.custom`` which ``reset()`` clears).
+  lives on ``LoopState.slots.active_team`` which ``clear_session``
+  rebinds to ``None`` via ``dataclasses.replace``).
 
 Tests bypass the runtime by passing ``runtime_runner=_no_runtime`` to
 the manager so adding members never actually spawns a background loop —
@@ -96,11 +97,11 @@ async def test_team_enter_sets_active_team(tmp_path: Path) -> None:
     cmd = TeamCommand()
     await cmd.handle("create demo", agent)
     # /create has joined the leader; verify the entered slot was empty
-    assert agent.state.custom.get("active_team_id") is None
+    assert agent.state.slots.active_team is None
     result = await cmd.handle("enter demo", agent)
     assert result.handled is True
     assert "entered team" in result.text
-    assert agent.state.custom.get("active_team_id") == "demo"
+    assert agent.state.slots.active_team == "demo"
 
 
 @pytest.mark.asyncio
@@ -110,7 +111,7 @@ async def test_team_enter_unknown_team_errors(tmp_path: Path) -> None:
     cmd = TeamCommand()
     result = await cmd.handle("enter ghost", agent)
     assert "team not found" in result.text
-    assert agent.state.custom.get("active_team_id") is None
+    assert agent.state.slots.active_team is None
 
 
 @pytest.mark.asyncio
@@ -120,10 +121,10 @@ async def test_team_leave_clears_active_team(tmp_path: Path) -> None:
     cmd = TeamCommand()
     await cmd.handle("create demo", agent)
     await cmd.handle("enter demo", agent)
-    assert agent.state.custom.get("active_team_id") == "demo"
+    assert agent.state.slots.active_team == "demo"
     result = await cmd.handle("leave", agent)
     assert "left team" in result.text
-    assert agent.state.custom.get("active_team_id") is None
+    assert agent.state.slots.active_team is None
 
 
 @pytest.mark.asyncio
@@ -161,7 +162,7 @@ async def test_team_view_explicit_name_works_without_active(
     cmd = TeamCommand()
     await cmd.handle("create alpha", agent)
     # No /team enter — active_team_id stays None.
-    assert agent.state.custom.get("active_team_id") is None
+    assert agent.state.slots.active_team is None
     result = await cmd.handle("view alpha", agent)
     assert result.kind == "view"
     assert "alpha" in result.text
@@ -219,16 +220,16 @@ async def test_team_teammate_unknown_member_errors(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_clear_session_resets_active_team(tmp_path: Path) -> None:
-    """Agent.clear_session calls LoopState.reset → custom.clear; the
-    active-team pointer must NOT survive a /clear."""
+    """``Agent.clear_session`` rebinds ``state.slots.active_team=None``;
+    the active-team pointer must NOT survive a /clear."""
     agent = _agent(tmp_path)
     _install_no_runtime_manager(agent)
     cmd = TeamCommand()
     await cmd.handle("create demo", agent)
     await cmd.handle("enter demo", agent)
-    assert agent.state.custom.get("active_team_id") == "demo"
+    assert agent.state.slots.active_team == "demo"
     agent.clear_session()
-    assert agent.state.custom.get("active_team_id") is None
+    assert agent.state.slots.active_team is None
 
 
 @pytest.mark.asyncio

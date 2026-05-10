@@ -10,7 +10,9 @@ The two layers stack:
 - ``restrict_tools`` (restrictive, this module): block every tool NOT in
   the union of declared sets, scoped to the model response chain that
   processed the skill body. Implemented as a turn-count sentinel + per-skill
-  whitelist stored in :attr:`aura.schemas.state.LoopState.custom`.
+  whitelist stored on the typed
+  :attr:`aura.schemas.state.LoopSlots.skill_restrict_leases` slot
+  (Phase 1 Task 6 — was ``LoopState.custom["_skill_restrict_lease"]``).
 
 Lease shape — why a transient slot, not :class:`SessionRuleSet`:
 
@@ -20,8 +22,9 @@ Lease shape — why a transient slot, not :class:`SessionRuleSet`:
   mechanism anyway.
 - A single skill can install multiple leases over a session (one per
   invocation); each must independently expire when its triggering turn
-  ends. A list of ``(turn, frozenset)`` entries on state.custom captures
-  this naturally; ``SessionRuleSet`` rules are flat with no per-rule TTL.
+  ends. A list of :class:`SkillRestrictLease` entries on
+  ``slots.skill_restrict_leases`` captures this naturally;
+  ``SessionRuleSet`` rules are flat with no per-rule TTL.
 - Internal/asker tools (``ask_user_question``) need to bypass the
   restriction. Adding "but-not-this-tool" exemptions on top of a Rule
   matcher would muddy the rule path; a separate lease kept the
@@ -41,14 +44,13 @@ Contract:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from aura.core.skills.types import Skill
-from aura.schemas.state import LoopState
+from aura.schemas.state import LoopState, SkillRestrictLease
 
-# state.custom slot. Exported so the permission hook (reader) and skill
-# install path (writer) can reference one source of truth.
-RESTRICT_LEASE_KEY = "_skill_restrict_lease"
+# Re-exported for back-compat with consumers that imported the legacy
+# constant. New code should reach the slot via
+# ``state.slots.skill_restrict_leases`` directly.
+RESTRICT_LEASE_KEY = "skill_restrict_leases"
 
 # Tools the restrict-tools lease never blocks. ``ask_user_question`` is
 # internal infrastructure — the agent itself uses it for clarification
@@ -65,12 +67,11 @@ _INTERNAL_EXEMPT_TOOLS: frozenset[str] = frozenset({
 })
 
 
-@dataclass(frozen=True)
-class _RestrictEntry:
-    """One installed lease — captures install turn + the declared whitelist."""
-
-    install_turn: int
-    tools: frozenset[str]
+# Public lease type — the typed runtime + audit shape used everywhere.
+# Re-exported here so existing ``from aura.core.skills.restrict import
+# _RestrictEntry`` callers still land on a valid name; new code should
+# import :class:`SkillRestrictLease` directly from ``aura.schemas.state``.
+_RestrictEntry = SkillRestrictLease
 
 
 def install_restrict_lease(skill: Skill, state: LoopState) -> None:
@@ -85,11 +86,9 @@ def install_restrict_lease(skill: Skill, state: LoopState) -> None:
     """
     if not skill.restrict_tools:
         return
-    leases: list[_RestrictEntry] = state.custom.setdefault(
-        RESTRICT_LEASE_KEY, [],
-    )
+    leases = state.slots.skill_restrict_leases
     install_turn = state.turn_count
-    new_entry = _RestrictEntry(
+    new_entry = SkillRestrictLease(
         install_turn=install_turn, tools=frozenset(skill.restrict_tools),
     )
     # De-dup: drop any existing entry with same (install_turn, tools).
@@ -98,7 +97,7 @@ def install_restrict_lease(skill: Skill, state: LoopState) -> None:
     leases.append(new_entry)
 
 
-def _active_leases(state: LoopState) -> list[_RestrictEntry]:
+def _active_leases(state: LoopState) -> list[SkillRestrictLease]:
     """Return non-expired leases, pruning expired ones in place.
 
     Lease expiry rule: a lease installed on turn N is active for turn N
@@ -107,14 +106,14 @@ def _active_leases(state: LoopState) -> list[_RestrictEntry]:
     contract "scope by turn count: install at invocation, expire when
     state.turn_count advances past a recorded sentinel".
     """
-    raw = state.custom.get(RESTRICT_LEASE_KEY)
-    if not isinstance(raw, list) or not raw:
+    raw = state.slots.skill_restrict_leases
+    if not raw:
         return []
     current = state.turn_count
-    active: list[_RestrictEntry] = []
+    active: list[SkillRestrictLease] = []
     expired_any = False
     for entry in raw:
-        if not isinstance(entry, _RestrictEntry):
+        if not isinstance(entry, SkillRestrictLease):
             # Defensive: foreign payload (someone else used the slot).
             # Skip rather than crash.
             expired_any = True
@@ -125,7 +124,10 @@ def _active_leases(state: LoopState) -> list[_RestrictEntry]:
             expired_any = True
     if expired_any:
         # Prune in place so future calls don't re-walk dead entries.
-        state.custom[RESTRICT_LEASE_KEY] = active
+        # ``LoopSlots`` is frozen at the attribute level but its mutable
+        # list field accepts ``[:] = ...`` reassignment; same pattern as
+        # ``slots.preserved_invoked_skills[:]`` in ``compact.py``.
+        raw[:] = active
     return active
 
 
@@ -163,4 +165,4 @@ def has_active_lease(state: LoopState) -> bool:
 
 def expire_lease(state: LoopState) -> None:
     """Force-clear all leases (test hook + ``/clear`` integration point)."""
-    state.custom.pop(RESTRICT_LEASE_KEY, None)
+    state.slots.skill_restrict_leases.clear()

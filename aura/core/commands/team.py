@@ -8,16 +8,18 @@ form and stays out of the way of the existing CLI's `/task-*` pattern.
 Round V14 — added ``enter`` / ``leave`` / ``view`` / ``teammate``
 verbs that mirror claude-code's ``enterTeammateView`` /
 ``exitTeammateView`` UX. The "active team" pointer lives on
-:attr:`LoopState.custom` under ``"active_team_id"`` so:
+:attr:`LoopState.slots.active_team` (Phase 1 Task 6 migration — was
+``LoopState.custom["active_team_id"]``) so:
 
 - it survives across turns inside one REPL session,
-- :meth:`Agent.clear_session` (which calls ``LoopState.reset`` →
-  ``custom.clear()``) drops it (matches claude-code's clear-on-/clear),
+- :meth:`Agent.clear_session` resets it (matches claude-code's
+  clear-on-/clear; the typed slot now requires explicit reset because
+  ``LoopState.reset`` no longer wipes scratchpad state),
 - it's stored as a *slug*, not a human name, because two teams can
   share a display name and only the slug is unique.
 
-Reading ``active_team_id`` via ``agent.state.custom`` is the public
-path (``Agent.state`` is a documented property). It deliberately
+Reading ``active_team`` via ``agent.state.slots.active_team`` is the
+public path (``Agent.state`` is a documented property). It deliberately
 avoids a typed property on ``Agent`` for now — Phase B will lift this
 to ``Agent.active_team_id`` once the Agent surface is being touched
 for sidebar / rehydration work, so we don't churn the public API for
@@ -26,6 +28,7 @@ a single REPL feature.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import time
 from datetime import UTC, datetime
@@ -44,12 +47,25 @@ if TYPE_CHECKING:
     from aura.core.agent import Agent
 
 
-#: Slot name on :attr:`LoopState.custom` holding the slug of the team
-#: the user has "entered". ``None`` / missing means no active team.
-#: Stored under a stable key so the REPL renderer + every subcommand
-#: agree on the same cell without a typed property to coordinate
-#: through.
-_ACTIVE_TEAM_KEY: str = "active_team_id"
+#: Logical name of the active-team slot. Phase 1 Task 6 migrated this
+#: off ``LoopState.custom`` onto :attr:`LoopState.slots.active_team`;
+#: the constant is kept as a single string token so docstrings + the
+#: REPL renderer's "active_team" reference share one source of truth.
+_ACTIVE_TEAM_KEY: str = "active_team"
+
+
+def _set_active_team(agent: Agent, team_id: str | None) -> None:
+    """Single writer onto :attr:`LoopState.slots.active_team`.
+
+    ``LoopSlots`` is frozen at the attribute level, so updates flow
+    through ``dataclasses.replace`` (matching the pattern used for
+    ``consecutive_compact_failures`` / ``ask_pending``). Centralising
+    the write keeps the spec's "one writer per slot" contract visible
+    in one place.
+    """
+    agent.state.slots = dataclasses.replace(
+        agent.state.slots, active_team=team_id,
+    )
 
 
 _HELP = """\
@@ -471,7 +487,7 @@ class TeamCommand:
             # Drop the active-team pointer too — the team it pointed
             # at no longer exists, leaving the slot stale would surface
             # as a "team not found" the next time the renderer ran.
-            agent.state.custom.pop(_ACTIVE_TEAM_KEY, None)
+            _set_active_team(agent, None)
             return f"team {tid!r} deleted", "print"
         return f"unknown subcommand {verb!r} — try /team help", "print"
 
@@ -497,7 +513,7 @@ class TeamCommand:
         team_id = _resolve_team_id(name=rest, manager=mgr, agent=agent)
         if team_id is None:
             return f"team not found: {rest}", "print"
-        agent.state.custom[_ACTIVE_TEAM_KEY] = team_id
+        _set_active_team(agent, team_id)
         # If the leader Agent isn't in any team yet AND the resolved
         # team is the manager's live team, auto-join. We deliberately
         # don't auto-join when the team is off-record — the manager
@@ -532,7 +548,8 @@ class TeamCommand:
         otherwise the silently-cleared status line could feel like
         nothing happened.
         """
-        prev = agent.state.custom.pop(_ACTIVE_TEAM_KEY, None)
+        prev = agent.state.slots.active_team
+        _set_active_team(agent, None)
         joined = agent.team is not None
         if joined:
             agent.leave_team()
@@ -560,7 +577,7 @@ class TeamCommand:
             if target_team_id is None:
                 return f"team not found: {rest}", "print"
         else:
-            target_team_id = agent.state.custom.get(_ACTIVE_TEAM_KEY)
+            target_team_id = agent.state.slots.active_team
             if target_team_id is None:
                 return (
                     "no active team; pass /team view <name> "
@@ -583,7 +600,7 @@ class TeamCommand:
         if not rest:
             return "usage: /team teammate <member>", "print"
         member = rest.split()[0]
-        target_team_id = agent.state.custom.get(_ACTIVE_TEAM_KEY)
+        target_team_id = agent.state.slots.active_team
         if target_team_id is None:
             return (
                 "no active team; /team enter <name> first, "

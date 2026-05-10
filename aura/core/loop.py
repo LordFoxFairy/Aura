@@ -322,8 +322,13 @@ class AgentLoop:
         # §4 step 1). The list identity is stable for the session so
         # ``Agent.last_turn_denials`` always sees the same object.
         self._state.slots.turn_denials.clear()
-        # Reset the permission-hook per-turn ResolveOnce cache.
-        self._state.custom.pop("_perm_turn_ask_cache", None)
+        # Reset the permission-hook per-turn ResolveOnce cache. Phase 1
+        # Task 6: lives on the typed ``state.slots.perm_dedup_cache``
+        # slot (was ``state.custom``). In-place ``.clear()`` is the
+        # documented mutation pattern (``LoopSlots`` is frozen at the
+        # *attribute* level, not on its mutable container fields — see
+        # the ``LoopSlots`` docstring).
+        self._state.slots.perm_dedup_cache.clear()
         # F-01-001 abort plumbing — install the controller into the
         # contextvar so tools (and any spawned subagent on the same task
         # tree) inherit the same signal. Tests that drive AgentLoop

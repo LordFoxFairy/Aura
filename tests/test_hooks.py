@@ -10,7 +10,6 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.core.hooks import (
-    PRE_TOOL_ASK_PENDING_KEY,
     PRE_TOOL_PASSTHROUGH,
     HookChain,
     PreToolOutcome,
@@ -479,7 +478,8 @@ async def test_pre_tool_ask_propagates_to_merged_outcome() -> None:
 @pytest.mark.asyncio
 async def test_pre_tool_ask_seen_by_downstream_hook_via_state() -> None:
     """When an upstream hook sets ``ask=True``, downstream hooks see
-    ``state.custom[PRE_TOOL_ASK_PENDING_KEY]`` so a permission hook
+    ``state.slots.ask_pending`` (Phase 1 Task 6 — was
+    ``state.custom[PRE_TOOL_ASK_PENDING_KEY]``) so a permission hook
     later in the chain can detect the demand and demote any auto-allow
     to the asker path."""
     seen: list[bool] = []
@@ -492,7 +492,7 @@ async def test_pre_tool_ask_seen_by_downstream_hook_via_state() -> None:
     async def downstream(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
     ) -> PreToolOutcome:
-        seen.append(bool(state.custom.get(PRE_TOOL_ASK_PENDING_KEY)))
+        seen.append(state.slots.ask_pending)
         return PRE_TOOL_PASSTHROUGH
 
     chain = HookChain(pre_tool=[upstream, downstream])
@@ -501,18 +501,16 @@ async def test_pre_tool_ask_seen_by_downstream_hook_via_state() -> None:
     assert seen == [True]
     # Sentinel must NOT leak past the chain run — next tool call should
     # see no pending ask unless re-requested.
-    assert PRE_TOOL_ASK_PENDING_KEY not in state.custom
+    assert state.slots.ask_pending is False
 
 
 @pytest.mark.asyncio
 async def test_pre_tool_ask_does_not_leak_when_no_hook_asks() -> None:
     state = LoopState()
-    state.custom["unrelated"] = "x"
     chain = HookChain(pre_tool=[])
     out = await chain.run_pre_tool(tool=_stub_tool, args={}, state=state)
     assert out.ask is False
-    assert PRE_TOOL_ASK_PENDING_KEY not in state.custom
-    assert state.custom["unrelated"] == "x"
+    assert state.slots.ask_pending is False
 
 
 @pytest.mark.asyncio

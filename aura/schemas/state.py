@@ -26,8 +26,9 @@ if TYPE_CHECKING:
     # imports to preserve the ``aura.schemas`` leaf invariant
     # (``aura/schemas/__init__.py`` enforces that nothing under
     # ``aura/schemas`` reaches into other ``aura`` modules at runtime).
-    from aura.core.hooks.permission import AskerResponse
+    from aura.core.permissions.decision import Decision
     from aura.core.permissions.denials import PermissionDenial as Denial
+    from aura.core.skills.types import Skill
 else:
     # Runtime fallbacks — needed because :class:`LoopState` (a stdlib
     # dataclass) is used as a pydantic field type on stateful tools
@@ -37,7 +38,8 @@ else:
     # name without dragging the real modules into ``aura.schemas`` at
     # runtime. The ``if TYPE_CHECKING`` branch above keeps mypy strict.
     Denial = Any
-    AskerResponse = Any
+    Decision = Any
+    Skill = Any
 
 
 # A canonical signature string (`<tool_name>::<json-args>`) used by the
@@ -46,6 +48,14 @@ else:
 # promoting to a TypeAlias documents the contract without forcing
 # every consumer through a wrapper.
 PermissionKey: TypeAlias = str
+
+# The cached permission outcome — a ``(decision, feedback)`` tuple. The
+# permission hook stores ``user_accept`` / ``user_deny`` outcomes here
+# so a same-signature follow-up call within the same turn reuses the
+# decision instead of re-prompting. ``feedback`` is the asker's free-form
+# rationale string (often empty); kept alongside the decision so the
+# audit emit path can replay it identically.
+PermissionDedupEntry: TypeAlias = "tuple[Decision, str]"
 
 
 @dataclass(frozen=True)
@@ -86,10 +96,40 @@ class SkillRestrictLease:
     Frozen — once a lease is recorded, its install turn and whitelist
     must not mutate (audit consumers must see the value at install
     time, not a later overwrite).
+
+    Multiplicity note: a single skill installs zero or one lease per
+    turn, but multiple skills can stack leases concurrently. The
+    ``LoopSlots.skill_restrict_leases`` slot therefore holds a
+    ``list[SkillRestrictLease]`` (default empty) — each entry expires
+    independently when ``LoopState.turn_count`` advances past its
+    ``install_turn`` (see :func:`aura.core.skills.restrict._active_leases`).
     """
 
     install_turn: int
     tools: frozenset[str]
+
+
+@dataclass(frozen=True)
+class BuddyState:
+    """Status-bar pet observer state — mood + last-event metadata.
+
+    Owned by the buddy hooks in :mod:`aura.cli.buddy`. The spec §3.1
+    sketch named the slot ``mood: str``; in practice the state machine
+    needs three coupled fields (mood label + last event timestamp +
+    sticky-worry flag) to avoid flicker and preserve worry across
+    turns. Bundling them on one frozen value keeps the spec's "one
+    writer per slot" contract while giving the buddy enough room to
+    encode its full state machine.
+
+    Defaults match the pre-migration "no events fired yet" shape:
+    ``mood="idle"``, ``last_event_ts=0.0``, ``had_recent_error=False``
+    — reading :func:`aura.cli.buddy.get_mood` on a fresh
+    :class:`LoopState` returns ``"idle"`` as before.
+    """
+
+    mood: str = "idle"
+    last_event_ts: float = 0.0
+    had_recent_error: bool = False
 
 
 @dataclass(frozen=True)
@@ -117,21 +157,21 @@ class LoopSlots:
     - ``invoked_skills``               — :meth:`Context.record_skill_invocation`
     - ``consecutive_compact_failures`` — :class:`Compactor`
     - ``active_team``                  — ``/team`` slash commands
-    - ``mood``                         — buddy ``pre_model`` hook
-    - ``skill_restrict_lease``         — skill loader (`install_restrict_lease`)
+    - ``buddy``                        — buddy observer hooks
+    - ``skill_restrict_leases``        — skill loader (`install_restrict_lease`)
     """
 
     token_stats: TokenStats = field(default_factory=TokenStats)
     turn_denials: list[Denial] = field(default_factory=list)
     todos: list[TodoItem] = field(default_factory=list)
     ask_pending: bool = False
-    perm_dedup_cache: dict[PermissionKey, AskerResponse] = field(default_factory=dict)
-    preserved_invoked_skills: list[str] = field(default_factory=list)
-    invoked_skills: list[str] = field(default_factory=list)
+    perm_dedup_cache: dict[PermissionKey, PermissionDedupEntry] = field(default_factory=dict)
+    preserved_invoked_skills: list[Skill] = field(default_factory=list)
+    invoked_skills: list[Skill] = field(default_factory=list)
     consecutive_compact_failures: int = 0
     active_team: str | None = None
-    mood: str = "neutral"
-    skill_restrict_lease: SkillRestrictLease | None = None
+    buddy: BuddyState = field(default_factory=BuddyState)
+    skill_restrict_leases: list[SkillRestrictLease] = field(default_factory=list)
 
 
 @dataclass

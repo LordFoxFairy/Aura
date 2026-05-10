@@ -972,16 +972,17 @@ def _print_post_turn_status(
 def _print_active_team_status(agent: Agent, console: Console) -> None:
     """Print a one-line `· in team: <name> ·` reminder when active.
 
-    Reads ``agent.state.custom["active_team_id"]`` (the slot owned by
-    the ``/team enter`` command, see ``aura.core.commands.team``).
-    Resolves the slug to the human-readable team name via the manager
-    when the slug points at the live team; falls back to displaying
-    the slug otherwise (off-record teams). Silent no-op when the slot
-    is absent — the common path. The print is dim + framed by ``·``
-    glyphs so it sits between the post-turn ``done`` line and the
-    next prompt without disrupting the existing layout.
+    Reads ``agent.state.slots.active_team`` (Phase 1 Task 6 — the slot
+    owned by the ``/team enter`` command, see
+    ``aura.core.commands.team``). Resolves the slug to the
+    human-readable team name via the manager when the slug points at
+    the live team; falls back to displaying the slug otherwise
+    (off-record teams). Silent no-op when the slot is unset — the
+    common path. The print is dim + framed by ``·`` glyphs so it sits
+    between the post-turn ``done`` line and the next prompt without
+    disrupting the existing layout.
     """
-    active_id = agent.state.custom.get("active_team_id")
+    active_id = agent.state.slots.active_team
     if not active_id:
         return
     label = active_id

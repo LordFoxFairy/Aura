@@ -80,8 +80,8 @@ async def test_state_custom_holds_preserved_invoked_skills(tmp_path: Path) -> No
 
     await agent.compact(source="manual")
 
-    preserved = agent._state.custom.get("preserved_invoked_skills")
-    assert preserved is not None
+    preserved = agent._state.slots.preserved_invoked_skills
+    assert preserved
     names = [s.name for s in preserved]
     assert names == ["ping"]
 

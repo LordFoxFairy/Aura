@@ -202,7 +202,7 @@ async def test_cache_cleared_when_state_custom_reset(tmp_path: Path) -> None:
 
     await hook(tool=tool, args=args, state=state)
     # Simulate what run_turn does at the start of the next turn.
-    state.custom.pop("_perm_turn_ask_cache", None)
+    state.slots.perm_dedup_cache.clear()
     await hook(tool=tool, args=args, state=state)
 
     assert len(asker.calls) == 2
@@ -283,5 +283,5 @@ async def test_always_decision_not_stored_in_dedup_cache(tmp_path: Path) -> None
     assert out.decision.reason == "user_always"
     # Cache should be created (by the setdefault in _decide) but the
     # ``always`` branch must NOT have inserted this signature into it.
-    cache = state.custom.get("_perm_turn_ask_cache", {})
+    cache = state.slots.perm_dedup_cache
     assert not cache, f"expected empty cache, got {cache!r}"

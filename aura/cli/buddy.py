@@ -25,10 +25,14 @@ Design constraints (see T2-B task spec):
 - **No prompt_toolkit dependency.** Status fragment returns a plain
   ``str``; the REPL glues it onto the HTML bar in
   :mod:`aura.cli.repl`.
-- **Mood state lives on ``LoopState.custom["_buddy_state"]``.** Same
-  per-session scratchpad that the token-stats hook uses, so
-  ``LoopState.reset()`` (called by ``/clear``) wipes our mood along
-  with everything else without special-casing.
+- **Mood state lives on ``LoopState.slots.buddy``** (Phase 1 Task 6
+  migrated this off the untyped ``state.custom["_buddy_state"]``
+  scratchpad onto the typed :class:`BuddyState` slot). The slot
+  carries ``mood`` + ``last_event_ts`` + ``had_recent_error`` together
+  so the sticky-worry state machine has the room it needs without
+  spreading three coupled fields across the slot bag.
+  ``Agent.clear_session`` rebinds the slot to a fresh
+  :class:`BuddyState`, so /clear still flips the buddy back to idle.
 
 Mulberry32 reference: claude-code v2.1.88 ``companion.ts`` lines
 16–25; this module ports the same 4-step integer mixer so the species
@@ -38,6 +42,7 @@ their claude-code pet.
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import time
 from collections.abc import Callable, Mapping
@@ -45,7 +50,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from aura.schemas.state import LoopState
+from aura.schemas.state import BuddyState, LoopState
 from aura.schemas.tool import ToolResult
 
 # ---------------------------------------------------------------------------
@@ -288,8 +293,6 @@ def current_user_seed() -> str:
 
 Mood = Literal["idle", "thinking", "happy", "worried"]
 
-_MOOD_KEY = "_buddy_state"
-
 #: Per-mood glyph shown AFTER the species emoji in the status fragment.
 #: Operators scan the bar at a glance — a text suffix ("happy") reads
 #: faster than a secondary emoji and stays single-line in any terminal.
@@ -301,25 +304,31 @@ _MOOD_LABEL: Mapping[Mood, str] = {
 }
 
 
-def _buddy_state(state: LoopState) -> dict[str, object]:
-    """Lazy-init the buddy state slot on the loop's per-session scratchpad."""
-    slot = state.custom.get(_MOOD_KEY)
-    if not isinstance(slot, dict):
-        slot = {"mood": "idle", "last_event_ts": 0.0, "had_recent_error": False}
-        state.custom[_MOOD_KEY] = slot
-    return slot
+def _buddy_snapshot(state: LoopState) -> BuddyState:
+    """Return the typed :class:`BuddyState` snapshot for the current state."""
+    return state.slots.buddy
+
+
+def _set_buddy(state: LoopState, **fields: object) -> None:
+    """Rebind ``state.slots.buddy`` with the given field overrides.
+
+    ``BuddyState`` is frozen so updates flow through
+    ``dataclasses.replace``; rebind the parent ``LoopSlots`` (also
+    frozen at the attribute level) the same way. One helper keeps the
+    "one writer per slot" contract visible across the four observer
+    callbacks below.
+    """
+    new_buddy = dataclasses.replace(state.slots.buddy, **fields)  # type: ignore[arg-type]
+    state.slots = dataclasses.replace(state.slots, buddy=new_buddy)
 
 
 def get_mood(state: LoopState) -> Mood:
     """Read the current mood — ``idle`` when no events have fired yet.
 
-    Safe to call before any observer has run; lazy-init keeps the state
-    slot absent until we actually need it (avoids polluting ``/stats``
-    output with an empty buddy stub on bare agents)."""
-    slot = state.custom.get(_MOOD_KEY)
-    if not isinstance(slot, dict):
-        return "idle"
-    mood = slot.get("mood")
+    Reads the typed :class:`BuddyState` slot directly; the default
+    instance has ``mood="idle"`` so a bare :class:`LoopState` reports
+    idle without any observer having run."""
+    mood = state.slots.buddy.mood
     if mood == "idle":
         return "idle"
     if mood == "thinking":
@@ -334,12 +343,12 @@ def get_mood(state: LoopState) -> Mood:
 def reset(state: LoopState) -> None:
     """Wipe the buddy state — called by ``/clear`` to undo accumulated mood.
 
-    Delete rather than rewriting the dict so a subsequent ``get_mood``
-    naturally returns ``idle`` via the lazy-init path. Matches the
-    ``LoopState.reset()`` contract: in-place mutation preserves the
-    caller's reference.
-    """
-    state.custom.pop(_MOOD_KEY, None)
+    Rebinds ``state.slots.buddy`` to a fresh :class:`BuddyState` so a
+    subsequent ``get_mood`` naturally returns ``idle``. Phase 1 Task 6
+    moved the buddy state off the untyped ``state.custom`` scratchpad;
+    ``Agent.clear_session`` performs the equivalent rebind itself, so
+    this helper stays as a stand-alone seam tests can call."""
+    state.slots = dataclasses.replace(state.slots, buddy=BuddyState())
 
 
 async def observe_pre_model(*, state: LoopState, **_: object) -> None:
@@ -358,11 +367,11 @@ async def observe_pre_model(*, state: LoopState, **_: object) -> None:
     next "worried" would be more confusing than helpful. Worry sticks
     until a successful tool clears the flag.
     """
-    slot = _buddy_state(state)
-    slot["last_event_ts"] = time.time()
-    if slot.get("had_recent_error"):
+    snap = _buddy_snapshot(state)
+    if snap.had_recent_error:
+        _set_buddy(state, last_event_ts=time.time())
         return
-    slot["mood"] = "thinking"
+    _set_buddy(state, last_event_ts=time.time(), mood="thinking")
 
 
 async def observe_post_model(*, state: LoopState, **_: object) -> None:
@@ -376,12 +385,9 @@ async def observe_post_model(*, state: LoopState, **_: object) -> None:
     so the operator notices something went sideways even if the next
     reply looks fine.
     """
-    slot = _buddy_state(state)
-    slot["last_event_ts"] = time.time()
-    if slot.get("had_recent_error"):
-        slot["mood"] = "worried"
-    else:
-        slot["mood"] = "happy"
+    snap = _buddy_snapshot(state)
+    new_mood = "worried" if snap.had_recent_error else "happy"
+    _set_buddy(state, last_event_ts=time.time(), mood=new_mood)
 
 
 async def observe_post_tool(
@@ -398,15 +404,21 @@ async def observe_post_tool(
     doesn't mask the worry: mood only turns happy after BOTH the tool
     chain has recovered AND the model has spoken again.
     """
-    slot = _buddy_state(state)
-    slot["last_event_ts"] = time.time()
     if not result.ok:
-        slot["had_recent_error"] = True
-        slot["mood"] = "worried"
+        _set_buddy(
+            state,
+            last_event_ts=time.time(),
+            had_recent_error=True,
+            mood="worried",
+        )
     else:
         # Success clears the worry flag; mood itself waits for the
         # next post_model to transition (see above).
-        slot["had_recent_error"] = False
+        _set_buddy(
+            state,
+            last_event_ts=time.time(),
+            had_recent_error=False,
+        )
 
 
 # ---------------------------------------------------------------------------

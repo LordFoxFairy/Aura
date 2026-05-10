@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
@@ -176,8 +177,15 @@ class Agent:
         # F-0910-002: auto-compact circuit breaker — three consecutive failed
         # auto-compact attempts disable subsequent auto-firings for this
         # session. Manual ``/compact`` bypasses this counter (different code
-        # path), and a successful auto-compact resets it to 0.
-        self._state.custom["consecutive_compact_failures"] = 0
+        # path), and a successful auto-compact resets it to 0. Phase 1
+        # Task 6: lives on the typed ``state.slots.consecutive_compact_failures``
+        # slot (was ``state.custom``). The default LoopSlots() already has
+        # this at 0, so no explicit seed is needed — kept as an explicit
+        # ``replace`` for parity with the old reset-on-construct semantics
+        # in case a future refactor reuses an existing LoopSlots.
+        self._state.slots = dataclasses.replace(
+            self._state.slots, consecutive_compact_failures=0,
+        )
         self._session_rules = session_rules
         # Permission mode — the CLI resolves the effective mode (config +
         # --bypass-permissions flag) and hands it in. Stored here so the
@@ -840,11 +848,7 @@ class Agent:
                     # consecutive failures so a permanently-broken summary
                     # turn can't burn provider quota every turn. Manual
                     # /compact bypasses this — see Agent.compact().
-                    failures = int(
-                        self._state.custom.get(
-                            "consecutive_compact_failures", 0,
-                        )
-                    )
+                    failures = self._state.slots.consecutive_compact_failures
                     if failures >= 3:
                         journal.write(
                             "auto_compact_skipped_circuit_breaker",
@@ -866,9 +870,10 @@ class Agent:
                             await self.compact(source="auto")
                         except Exception as exc:  # noqa: BLE001
                             new_failures = failures + 1
-                            self._state.custom[
-                                "consecutive_compact_failures"
-                            ] = new_failures
+                            self._state.slots = dataclasses.replace(
+                                self._state.slots,
+                                consecutive_compact_failures=new_failures,
+                            )
                             journal.write(
                                 "auto_compact_failed",
                                 session=self._session_id,
@@ -877,9 +882,10 @@ class Agent:
                             )
                             raise
                         else:
-                            self._state.custom[
-                                "consecutive_compact_failures"
-                            ] = 0
+                            self._state.slots = dataclasses.replace(
+                                self._state.slots,
+                                consecutive_compact_failures=0,
+                            )
 
     def switch_model(self, spec: str) -> None:
         """Swap the live model. Raises ``AuraConfigError`` on failure.
@@ -943,6 +949,23 @@ class Agent:
         # stale plan items — matches the pre-migration behaviour where
         # ``custom.clear()`` removed the ``"todos"`` key.
         self._state.slots.todos.clear()
+        # Phase 1 Task 6: scratchpad slots that previously rode through
+        # ``LoopState.custom.clear()`` now need explicit reset on /clear.
+        # Mutable lists/dicts mutate in place; scalars + the buddy state
+        # rebind via ``dataclasses.replace`` (LoopSlots is frozen at the
+        # attribute level).
+        from aura.schemas.state import BuddyState as _BuddyState
+        self._state.slots.perm_dedup_cache.clear()
+        self._state.slots.invoked_skills.clear()
+        self._state.slots.preserved_invoked_skills.clear()
+        self._state.slots.skill_restrict_leases.clear()
+        self._state.slots = dataclasses.replace(
+            self._state.slots,
+            active_team=None,
+            ask_pending=False,
+            consecutive_compact_failures=0,
+            buddy=_BuddyState(),
+        )
         # Drop any captured prior mode — /clear starts a fresh session so
         # a leftover "accept_edits" from a previous plan cycle shouldn't
         # bleed into the next one.

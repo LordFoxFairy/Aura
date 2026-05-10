@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -72,12 +73,18 @@ class PreToolOutcome:
 # to share by reference.
 PRE_TOOL_PASSTHROUGH: PreToolOutcome = PreToolOutcome()
 
-# state.custom key for the ``ask`` channel signal. Set to True by
-# HookChain.run_pre_tool while the chain has an unresolved ask request,
-# so a downstream permission hook can detect "an earlier hook said ask"
-# and route the call into its asker rather than an auto-allow branch.
-# Cleared at the end of every run_pre_tool — never leaks across tool
-# calls.
+# Phase 1 Task 6: the ``ask`` channel signal lives on the typed
+# ``state.slots.ask_pending`` slot (was ``state.custom["_pre_tool_ask_pending"]``).
+# Set to True by ``HookChain.run_pre_tool`` while the chain has an
+# unresolved ask request, so a downstream permission hook can detect
+# "an earlier hook said ask" and route the call into its asker rather
+# than an auto-allow branch. Restored to the prior value at the end of
+# every ``run_pre_tool`` — never leaks across tool calls.
+#
+# The legacy constant is kept as a back-compat re-export for tests that
+# imported it directly (``from aura.core.hooks import
+# PRE_TOOL_ASK_PENDING_KEY``); it's no longer a state.custom key but a
+# documentation string that points at the slot.
 PRE_TOOL_ASK_PENDING_KEY = "_pre_tool_ask_pending"
 
 
@@ -314,10 +321,12 @@ class HookChain:
           ``rule_allow`` / ``mode_bypass`` reason as the authoritative
           allow audit trail.
         - ``ask`` is **deny > ask > allow**. Once any hook sets
-          ``ask=True``, downstream hooks see ``state.custom[
-          PRE_TOOL_ASK_PENDING_KEY]=True`` so a permission hook can
-          force-prompt instead of auto-allowing. A subsequent deny still
-          wins over the ask; an allow CANNOT erase a pending ask.
+          ``ask=True``, downstream hooks see
+          ``state.slots.ask_pending=True`` (Phase 1 Task 6 — was
+          ``state.custom[PRE_TOOL_ASK_PENDING_KEY]``) so a permission
+          hook can force-prompt instead of auto-allowing. A subsequent
+          deny still wins over the ask; an allow CANNOT erase a
+          pending ask.
 
         Audit trail: every hook that emits a non-None decision also
         triggers a ``pre_tool_hook_decision`` journal event (with the
@@ -344,9 +353,11 @@ class HookChain:
         merged_decision_locked = False  # set True once a deny is recorded
         ask_requested = False
         # Snapshot the prior value so we can restore it after this run
-        # — state.custom is shared across turns and we must not leak
-        # ``_pre_tool_ask_pending`` into the next tool call.
-        prior_ask_pending = state.custom.get(PRE_TOOL_ASK_PENDING_KEY)
+        # — state.slots is shared across turns and we must not leak
+        # ``ask_pending`` into the next tool call. Phase 1 Task 6: the
+        # signal lives on the typed ``slots.ask_pending`` (was
+        # ``state.custom[PRE_TOOL_ASK_PENDING_KEY]``).
+        prior_ask_pending = state.slots.ask_pending
         try:
             for hook in self.pre_tool:
                 outcome = await hook(tool=tool, args=args, state=state, **kwargs)
@@ -356,7 +367,9 @@ class HookChain:
                     # permission hook is typically last) so it can demote
                     # an auto-allow to the asker path within the SAME
                     # chain run, not on a follow-up turn.
-                    state.custom[PRE_TOOL_ASK_PENDING_KEY] = True
+                    state.slots = dataclasses.replace(
+                        state.slots, ask_pending=True,
+                    )
                 if outcome.decision is not None:
                     # Per-hook audit event — fires for every non-None
                     # decision the chain produces, regardless of merge
@@ -396,12 +409,12 @@ class HookChain:
                 ask=ask_requested,
             )
         finally:
-            # Always restore the prior value (or remove the key) so the
-            # ask flag never leaks across run_pre_tool invocations.
-            if prior_ask_pending is None:
-                state.custom.pop(PRE_TOOL_ASK_PENDING_KEY, None)
-            else:
-                state.custom[PRE_TOOL_ASK_PENDING_KEY] = prior_ask_pending
+            # Always restore the prior value so the ask flag never leaks
+            # across run_pre_tool invocations.
+            if state.slots.ask_pending != prior_ask_pending:
+                state.slots = dataclasses.replace(
+                    state.slots, ask_pending=prior_ask_pending,
+                )
 
     async def run_post_tool(
         self,

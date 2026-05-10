@@ -333,11 +333,15 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
     # (an incomplete view confuses the model more than omitting the body).
     recent_file_msgs = _build_recent_file_messages(preserved_read_records)
 
-    # F-0910-008: stash the pre-compact invoked-skill list on state.custom so
-    # the producer side is observable from the test surface + so the
-    # SUBAGENT-STOP / future post-compact hooks can find it without reaching
-    # back into the (now-replaced) Context.
-    agent._state.custom["preserved_invoked_skills"] = list(
+    # F-0910-008 / Phase 1 Task 6: stash the pre-compact invoked-skill list
+    # on the typed ``state.slots.preserved_invoked_skills`` slot (was
+    # ``state.custom``) so the producer side is observable from the test
+    # surface + so the SUBAGENT-STOP / future post-compact hooks can find
+    # it without reaching back into the (now-replaced) Context. In-place
+    # ``[:] = ...`` keeps the list identity stable (the slot is frozen at
+    # the attribute level but the contained list accepts mutation; same
+    # pattern as ``slots.turn_denials.clear()``).
+    agent._state.slots.preserved_invoked_skills[:] = list(
         preserved_invoked_skills,
     )
     # F-0910-008: re-inject one HumanMessage per active skill (body capped

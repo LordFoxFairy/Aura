@@ -112,7 +112,8 @@ def test_status_fragment_present_by_default(
 
 def _fake_ai_message(*, had_errors: bool = False) -> Any:
     """Minimal duck-typed AIMessage stand-in — observe_post_model only cares
-    that the argument exists; it reads mood signal from ``state.custom``."""
+    that the argument exists; it reads the mood signal from
+    ``state.slots.buddy``."""
     class _M:
         pass
     return _M()
@@ -164,8 +165,14 @@ async def test_successful_tool_clears_worry() -> None:
 
 
 def test_clear_session_resets_mood() -> None:
+    import dataclasses as _dc
+
+    from aura.schemas.state import BuddyState
     state = LoopState()
-    state.custom["_buddy_state"] = {"mood": "worried", "last_event_ts": 1.0}
+    state.slots = _dc.replace(
+        state.slots,
+        buddy=BuddyState(mood="worried", last_event_ts=1.0),
+    )
     buddy.reset(state)
     assert buddy.get_mood(state) == "idle"
 
@@ -174,10 +181,16 @@ def test_status_fragment_includes_species_emoji_and_mood(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Rendered status fragment contains the species emoji AND a mood glyph."""
+    import dataclasses as _dc
+
+    from aura.schemas.state import BuddyState
     monkeypatch.delenv("AURA_NO_BUDDY", raising=False)
     state = LoopState()
     # Put the buddy in worried mood so we can look for its glyph.
-    state.custom["_buddy_state"] = {"mood": "worried", "last_event_ts": 0.0}
+    state.slots = _dc.replace(
+        state.slots,
+        buddy=BuddyState(mood="worried", last_event_ts=0.0),
+    )
     frag = buddy.buddy_status_fragment(state=state, seed="alice")
     b = buddy.generate_buddy("alice")
     assert b.emoji in frag
@@ -302,8 +315,14 @@ def test_time_aware_fragment_carries_mood_label(
     — same emoji + mood text, plus the glyph. Operators don't lose
     information by enabling animation.
     """
+    import dataclasses as _dc
+
+    from aura.schemas.state import BuddyState
     monkeypatch.delenv("AURA_NO_BUDDY", raising=False)
     state = LoopState()
-    state.custom["_buddy_state"] = {"mood": "worried", "last_event_ts": 0.0}
+    state.slots = _dc.replace(
+        state.slots,
+        buddy=BuddyState(mood="worried", last_event_ts=0.0),
+    )
     frag = buddy.time_aware_status_fragment(state=state, seed="alice", now=0.0)
     assert "worried" in frag

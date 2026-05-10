@@ -46,10 +46,17 @@ DecisionReason = Literal[
     # BEFORE bypass / safety / rule resolution — restrict is a strict
     # whitelist that cannot be overridden by any other branch.
     "restrict_tools_blocked",
+    # Sentinel for an empty pre_tool hook chain — no hook produced a real
+    # verdict. NOT included in ``_AUTO_ALLOW_REASONS`` so the loop does not
+    # emit a PermissionAudit event when there is no permission hook at all.
+    "chain_empty",
 ]
 
 _ALLOW_REASONS: frozenset[str] = frozenset(
-    {"rule_allow", "user_accept", "user_always", "mode_bypass", "mode_accept_edits"}
+    {
+        "rule_allow", "user_accept", "user_always",
+        "mode_bypass", "mode_accept_edits", "chain_empty",
+    }
 )
 _DENY_REASONS: frozenset[str] = frozenset(
     {
@@ -125,3 +132,5 @@ class Decision:
                 return "blocked: plan mode (dry-run)"
             case "restrict_tools_blocked":
                 return "blocked: skill restrict-tools whitelist"
+            case "chain_empty":
+                return "allowed: no permission hook"

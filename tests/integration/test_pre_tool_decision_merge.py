@@ -38,7 +38,7 @@ from pydantic import BaseModel
 
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.hooks import PRE_TOOL_PASSTHROUGH, HookChain, PreToolOutcome
+from aura.core.hooks import HookChain
 from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.hooks.permission import AskerResponse, make_permission_hook
 from aura.core.permissions import store as perm_store
@@ -46,6 +46,7 @@ from aura.core.permissions.decision import Decision
 from aura.core.permissions.session import SessionRuleSet
 from aura.core.persistence.storage import SessionStorage
 from aura.schemas.events import ToolCallCompleted
+from aura.schemas.permissions import Allow, Block, Outcome, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
@@ -126,14 +127,14 @@ async def test_first_deny_beats_later_allow_in_real_agent_turn(
         args: dict[str, Any],
         state: LoopState,
         **_: Any,
-    ) -> PreToolOutcome:
+    ) -> Outcome:
         if tool.name != "bash":
-            return PRE_TOOL_PASSTHROUGH
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
         # Pair the deny with a short_circuit so the model still sees
         # an error ToolResult — this is the realistic shape; the merge
         # bug is independent of whether short_circuit is set.
-        return PreToolOutcome(
-            short_circuit=soft_deny_short_circuit,
+        return Replace(
+            result=soft_deny_short_circuit,
             decision=Decision(allow=False, reason="user_deny"),
         )
 
@@ -214,46 +215,27 @@ async def test_first_deny_beats_later_allow_in_real_agent_turn(
         f"hook field should identify the source; got {deny_records[0]['hook']!r}"
     )
     assert deny_records[0]["tool"] == "bash"
-
-
 @pytest.mark.asyncio
 async def test_multiple_non_short_circuiting_decisions_merge_first_deny_wins(
     tmp_path: Path,
 ) -> None:
-    """The pure merge-bug exposure: two hooks both emit decisions
-    WITHOUT short-circuiting (so the chain runs to completion), the
-    first deny wins, and BOTH hook decisions land in the journal.
+    """Block beats Allow in merged outcome: soft_allow (first) + soft_deny/Block (second).
 
-    This is the test that pre-fix would have silently let the allow
-    win. The agent never short-circuits the chain itself — only the
-    final merged decision determines the outcome. We confirm:
+    In the Outcome world, Block short-circuits immediately only when it is the
+    FIRST outcome the chain sees. When Allow precedes Block, the chain processes
+    both hooks and _merge_outcomes picks Block (first Block wins per spec §3.2)
+    — so the tool is blocked even though the first hook allowed it.
 
-    - merged decision = the first deny
-    - both hook_decision journal events fire
-    - no short_circuit happened, so the tool would have run if not
-      for the loop's own permission-decision handling (which today
-      consumes ``ToolStep.permission_decision`` for audit but does
-      NOT block the call — the short_circuit is what blocks). So in
-      this test we expect the tool to RUN, but the audit captures
-      the chain accurately. This is intentional: ``decision`` is for
-      audit; ``short_circuit`` is for blocking. They're independent.
+    This verifies "first Block wins" in the merge sense: the deny from soft_deny
+    overrides the allow from soft_allow even though soft_allow ran first.
+
+    - merged outcome = Block (deny wins over prior Allow)
+    - Block journal event fires for soft_deny; Allow is not journaled (implicit)
+    - tool does NOT run
+    - no permission_decision=mode_bypass audit event fires (deny wins)
     """
     run_log: list[str] = []
     bash_tool = _make_bash_tool(run_log)
-
-    async def soft_deny(
-        *,
-        tool: BaseTool,
-        args: dict[str, Any],
-        state: LoopState,
-        **_: Any,
-    ) -> PreToolOutcome:
-        if tool.name != "bash":
-            return PRE_TOOL_PASSTHROUGH
-        return PreToolOutcome(
-            short_circuit=None,  # KEY: no short-circuit, chain continues
-            decision=Decision(allow=False, reason="user_deny"),
-        )
 
     async def soft_allow(
         *,
@@ -261,15 +243,23 @@ async def test_multiple_non_short_circuiting_decisions_merge_first_deny_wins(
         args: dict[str, Any],
         state: LoopState,
         **_: Any,
-    ) -> PreToolOutcome:
-        if tool.name != "bash":
-            return PRE_TOOL_PASSTHROUGH
-        return PreToolOutcome(
-            short_circuit=None,
-            decision=Decision(allow=True, reason="mode_bypass"),
-        )
+    ) -> Outcome:
+        return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
-    hooks = HookChain(pre_tool=[soft_deny, soft_allow])
+    async def soft_deny(
+        *,
+        tool: BaseTool,
+        args: dict[str, Any],
+        state: LoopState,
+        **_: Any,
+    ) -> Outcome:
+        if tool.name != "bash":
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
+        return Block(decision=Decision(allow=False, reason="user_deny"))
+
+    # soft_allow runs first (returns Allow), then soft_deny (returns Block).
+    # _merge_outcomes picks Block — tool should be denied.
+    hooks = HookChain(pre_tool=[soft_allow, soft_deny])
 
     storage = SessionStorage(tmp_path / "aura.db")
     session_log_dir = tmp_path / "logs"
@@ -290,8 +280,8 @@ async def test_multiple_non_short_circuiting_decisions_merge_first_deny_wins(
     finally:
         await agent.aclose()
 
-    # No short-circuit → tool ran (decision is for audit, not blocking).
-    assert run_log == ["echo hi"]
+    # Block from soft_deny → tool did NOT run.
+    assert run_log == []
 
     log_path = session_log_dir / "test-merge-no-sc.jsonl"
     events = [
@@ -302,30 +292,18 @@ async def test_multiple_non_short_circuiting_decisions_merge_first_deny_wins(
     hook_decisions = [
         e for e in events if e["event"] == "pre_tool_hook_decision"
     ]
-    # BOTH hooks recorded their decision — pre-fix, the second one
-    # would silently overwrite the first in the merge with no audit
-    # trail of the first. Post-fix, both are journaled separately.
-    assert len(hook_decisions) == 2, (
-        f"expected 2 hook decisions; got {hook_decisions!r}"
+    # Only Block/Ask/Replace get journaled. soft_allow (Allow) is not journaled.
+    # soft_deny (Block) produces one journal entry.
+    assert len(hook_decisions) == 1, (
+        f"expected 1 hook decision (Block only); got {hook_decisions!r}"
     )
-    deny_first = hook_decisions[0]
-    allow_second = hook_decisions[1]
-    assert deny_first["allow"] is False
-    assert deny_first["reason"] == "user_deny"
-    assert "soft_deny" in deny_first["hook"]
-    assert allow_second["allow"] is True
-    assert allow_second["reason"] == "mode_bypass"
-    assert "soft_allow" in allow_second["hook"]
+    deny_record = hook_decisions[0]
+    assert deny_record["allow"] is False
+    assert deny_record["reason"] == "user_deny"
+    assert "soft_deny" in deny_record["hook"]
+    assert deny_record["tool"] == "bash"
 
-    # The merged decision (loop emits ``permission_decision`` based on
-    # ``ToolStep.permission_decision`` only when the auto-allow audit
-    # line fires — see loop.py _AUTO_ALLOW_REASONS). For ``user_deny``
-    # the loop does not emit a separate permission_decision audit
-    # event itself (deny audit is the hook's own responsibility).
-    # What we verify here is that the chain's MERGE locked on deny:
-    # if last-wins were still in effect, the loop would have stamped
-    # ``permission_decision = mode_bypass`` and the auto-allow audit
-    # line would have fired. Confirm it did NOT.
+    # The merged Block means no mode_bypass permission_decision audit event.
     perm_audits = [
         e for e in events
         if e["event"] == "permission_decision"

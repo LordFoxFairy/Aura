@@ -57,7 +57,7 @@ from tests.conftest import FakeChatModel
 
 
 def _sc(outcome: object) -> ToolResult | None:
-    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    """Extract the short-circuit result from Replace Outcome."""
     from aura.schemas.permissions import Replace
     if isinstance(outcome, Replace):
         return outcome.result
@@ -183,9 +183,9 @@ async def test_restrict_tools_blocks_undeclared_tool(tmp_path: Path) -> None:
         assert _sc(outcome) is not None
         assert _sc(outcome).ok is False  # type: ignore[union-attr]
         assert asker.calls == []
-        assert outcome.decision is not None
-        assert outcome.decision.reason == "restrict_tools_blocked"
-        assert outcome.decision.allow is False
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
+        assert outcome.decision.allow is False  # type: ignore[union-attr]
     finally:
         await agent.aclose()
 
@@ -224,8 +224,8 @@ async def test_restrict_tools_allows_declared_tool(tmp_path: Path) -> None:
         assert len(asker.calls) == 1
         assert asker.calls[0]["tool"] == "read_file"
         assert _sc(outcome) is None
-        assert outcome.decision is not None
-        assert outcome.decision.reason == "user_accept"
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.reason == "user_accept"  # type: ignore[union-attr]
     finally:
         await agent.aclose()
 
@@ -260,8 +260,8 @@ async def test_lease_expires_when_turn_advances(tmp_path: Path) -> None:
         outcome = await hook(
             tool=bash_tool, args={}, state=agent._state,
         )
-        assert outcome.decision is not None
-        assert outcome.decision.reason == "restrict_tools_blocked"
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
 
         # Advance turn → lease expires → bash falls through to asker.
         agent._state.turn_count = 6
@@ -315,8 +315,8 @@ async def test_multiple_active_skills_union(tmp_path: Path) -> None:
             args={},
             state=agent._state,
         )
-        assert outcome.decision is not None
-        assert outcome.decision.reason == "restrict_tools_blocked"
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
     finally:
         await agent.aclose()
 
@@ -422,8 +422,8 @@ async def test_restrict_lease_via_tool_path(tmp_path: Path) -> None:
             args={},
             state=agent._state,
         )
-        assert outcome.decision is not None
-        assert outcome.decision.reason == "restrict_tools_blocked"
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
         assert asker.calls == []
     finally:
         await agent.aclose()
@@ -458,8 +458,8 @@ async def test_internal_tools_exempt_from_restrict(tmp_path: Path) -> None:
             state=agent._state,
         )
         # Not short-circuited by restrict — flows through to asker.
-        assert outcome.decision is not None
-        assert outcome.decision.reason != "restrict_tools_blocked"
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.reason != "restrict_tools_blocked"  # type: ignore[union-attr]
     finally:
         await agent.aclose()
 

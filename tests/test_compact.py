@@ -291,6 +291,7 @@ async def test_compact_reruns_must_read_first_hook_with_new_context(
     # regresses, the invariant breaks silently.
     from pydantic import BaseModel
 
+    from aura.schemas.permissions import Allow
     from aura.schemas.state import LoopState
     from aura.tools.base import build_tool
 
@@ -322,8 +323,8 @@ async def test_compact_reruns_must_read_first_hook_with_new_context(
         args={"path": str(target), "old_str": "body", "new_str": "BODY"},
         state=LoopState(),
     )
-    # Preserved record = fresh → no short_circuit (no block).
-    assert outcome.short_circuit is None
+    # Preserved record = fresh → hook passes through as Allow (no block).
+    assert isinstance(outcome, Allow)
     await agent.aclose()
 
 

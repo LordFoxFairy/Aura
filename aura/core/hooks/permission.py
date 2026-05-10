@@ -29,7 +29,7 @@ Decision order (short-circuits at first match):
 Layer boundaries (enforced by construction, not convention):
 
 - **Hook** decides: assembles inputs into a ``Decision``, emits journal,
-  returns a :class:`aura.core.hooks.PreToolOutcome` carrying both the
+  returns an :class:`Outcome` variant carrying both the
   :class:`Decision` (for the auditor) and a ``short_circuit``
   :class:`ToolResult` on deny paths.
 - **Asker** asks: presents the choice to the user, returns
@@ -49,10 +49,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
 
-from aura.core.hooks import (
-    PreToolHook,
-    PreToolOutcome,
-)
+from aura.core.hooks import PreToolHook
 from aura.core.permissions.decision import Decision
 from aura.core.permissions.denials import PermissionDenial
 from aura.core.permissions.mode import DEFAULT_MODE, Mode
@@ -357,7 +354,7 @@ def make_permission_hook(
         state: LoopState,
         tool_call_id: str = "",
         **_: Any,
-    ) -> PreToolOutcome:
+    ) -> Allow | Replace:
         # ``tool_call_id`` flows in from ``AgentLoop._plan_tool_calls`` via
         # run_pre_tool's ``**kwargs`` pass-through (see hooks/__init__.py).
         # Defaulted to "" so unit tests that build the hook standalone
@@ -405,7 +402,7 @@ def make_permission_hook(
             # auto-allow reason (rule_allow / mode_bypass) the Loop's
             # auditor will emit a PermissionAudit between Started and
             # Completed.
-            return Allow(decision=decision)  # type: ignore[return-value]
+            return Allow(decision=decision)
         # G5 / Phase 1 Task 4: append a structured record to the per-turn
         # denials sink, now living on the typed
         # ``state.slots.turn_denials`` slot.
@@ -437,7 +434,7 @@ def make_permission_hook(
             short_circuit = ToolResult(
                 ok=False, error=_deny_message(decision, feedback=feedback),
             )
-        return Replace(result=short_circuit, decision=decision)  # type: ignore[return-value]
+        return Replace(result=short_circuit, decision=decision)
 
     return _hook
 
@@ -492,7 +489,7 @@ async def _decide(
     # never silently promote a deny to a prompt. Plan-mode also still
     # fires (a planner can't pretend to act with side effects). The
     # signal is set by HookChain.run_pre_tool when any earlier hook
-    # returned ``PreToolOutcome(ask=True)``.
+    # returned ``Ask()``.
     ask_demote = state.slots.ask_pending
 
     # 1. Bypass mode — loud and first. Note: bypass deliberately does NOT

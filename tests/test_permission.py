@@ -39,14 +39,14 @@ from aura.tools.base import build_tool
 
 def _sc(outcome: object) -> ToolResult | None:
     """Extract the short-circuit result from either Replace (Task 9+) or
-    legacy PreToolOutcome. Keeps existing test assertions concise."""
+    Keeps existing test assertions concise."""
     if isinstance(outcome, Replace):
         return outcome.result
     return getattr(outcome, "short_circuit", None)
 
 
 def _decision(outcome: object) -> object:
-    """Extract the Decision from Allow, Block, Replace, or PreToolOutcome."""
+    """Extract the Decision from Allow, Block, or Replace Outcome."""
     if isinstance(outcome, (Allow, Replace)):
         return outcome.decision
     return getattr(outcome, "decision", None)
@@ -621,7 +621,7 @@ async def test_asker_basexception_propagates_does_not_deny(
 
 
 async def test_hook_returns_decision_on_outcome() -> None:
-    """The hook returns the Decision directly on PreToolOutcome (G4)."""
+    """The hook returns the Decision directly via Allow/Block/Replace (G4)."""
     from aura.core.permissions.decision import Decision
 
     rules = RuleSet(rules=(Rule(tool="writer", content=None),))
@@ -647,7 +647,7 @@ async def test_hook_returns_decision_on_outcome() -> None:
 
 
 async def test_hook_decision_refreshes_across_calls() -> None:
-    """Each call returns its own PreToolOutcome; no persistence on state."""
+    """Each call returns its own Outcome; no persistence on state."""
     spy = _SpyAsker(response=AskerResponse(choice="accept"))
     rules = RuleSet(rules=(Rule(tool="writer", content=None),))
     hook = make_permission_hook(

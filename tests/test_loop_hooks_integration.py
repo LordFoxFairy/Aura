@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import PRE_TOOL_PASSTHROUGH, HookChain, PreToolOutcome
+from aura.core.hooks import HookChain
 from aura.core.hooks.budget import make_size_budget_hook
 from aura.core.loop import AgentLoop
 from aura.core.permissions.decision import Decision
@@ -22,6 +22,7 @@ from aura.schemas.events import (
     ToolCallCompleted,
     ToolCallStarted,
 )
+from aura.schemas.permissions import Allow, Outcome, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
@@ -115,8 +116,8 @@ async def test_pre_tool_fires_before_invoke_and_can_deny() -> None:
 
     async def deny(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=denied, decision=None)
+    ) -> Outcome:
+        return Replace(result=denied, decision=Decision(allow=False, reason="safety_blocked"))
 
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     registry = ToolRegistry([_echo_tool])
@@ -177,9 +178,9 @@ async def test_hooks_all_fire_in_order_for_tool_turn() -> None:
 
     async def pre_tool(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
+    ) -> Outcome:
         event_log.append("pre_tool")
-        return PRE_TOOL_PASSTHROUGH
+        return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
     async def post_tool(
         *, tool: BaseTool, args: dict[str, Any], result: ToolResult, state: LoopState,
@@ -237,21 +238,19 @@ async def test_hooks_see_monotonic_turn_count() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_allow_decision_emits_permission_audit_between_started_and_completed() -> None:
-    """A pre_tool hook returning an auto-allow Decision via PreToolOutcome →
+    """A pre_tool hook returning an auto-allow Decision via Allow →
     loop emits PermissionAudit right after ToolCallStarted.
 
-    Proves the plumbing: hook returns PreToolOutcome(decision=...) → loop
+    Proves the plumbing: hook returns Allow(decision=...) → loop
     reads it directly onto ToolStep.permission_decision → emits
-    PermissionAudit → sequence is Started → Audit → Completed. (Post-G4 —
-    no more state.custom side-channel.)
+    PermissionAudit → sequence is Started → Audit → Completed.
     """
     from aura.core.permissions.rule import Rule
 
     async def stashing_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(
-            short_circuit=None,
+    ) -> Outcome:
+        return Allow(
             decision=Decision(
                 allow=True,
                 reason="rule_allow",
@@ -307,11 +306,8 @@ async def test_user_accept_decision_does_not_emit_permission_audit() -> None:
     audit line — the prompt itself was the audit."""
     async def stashing_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(
-            short_circuit=None,
-            decision=Decision(allow=True, reason="user_accept"),
-        )
+    ) -> Outcome:
+        return Allow(decision=Decision(allow=True, reason="user_accept"))
 
     model = FakeChatModel(turns=[_tool_turn(), _final_turn()])
     hooks = HookChain(pre_tool=[stashing_hook])
@@ -332,14 +328,11 @@ async def test_user_accept_decision_does_not_emit_permission_audit() -> None:
 @pytest.mark.asyncio
 async def test_pre_tool_hook_returns_outcome_directly() -> None:
     """AC-G4-1: a permission hook returns its Decision via
-    :class:`PreToolOutcome.decision`; the Loop populates
+    :class:`Allow.decision`; the Loop populates
     ``ToolStep.permission_decision`` without any side-channel slot.
 
     Direct-return contract: the Loop reads the decision off the outcome
-    dataclass, never from a transient slot. Phase 1 Task 4 moved the G5
-    denials sink off the legacy ``state.custom`` dict onto the typed
-    ``state.slots.turn_denials`` slot (Task 7 then deleted ``custom``
-    outright), so the allow path here must leave ``turn_denials`` empty.
+    dataclass, never from a transient slot.
     """
     from aura.core.permissions.rule import Rule
 
@@ -350,11 +343,9 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
 
     async def hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        # Hook must NOT need a side-channel slot to communicate the
-        # decision — that's the whole point of G4.
+    ) -> Outcome:
         saw_turn_denials.append(len(state.slots.turn_denials))
-        return PreToolOutcome(short_circuit=None, decision=expected_decision)
+        return Allow(decision=expected_decision)
 
     # Spy on the Loop's ToolStep to confirm the decision lands on it.
     from aura.core.loop import ToolStep
@@ -403,7 +394,7 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
 
 @pytest.mark.asyncio
 async def test_per_call_decisions_do_not_leak_across_tool_calls() -> None:
-    """Each tool call gets its own PreToolOutcome; nothing persists on
+    """Each tool call gets its own Outcome; nothing persists on
     a side-channel across calls. Post-G4 — with direct-return there is
     no shared slot that could leak, but this test guards regression:
     the loop must not read stale state between calls.
@@ -420,16 +411,13 @@ async def test_per_call_decisions_do_not_leak_across_tool_calls() -> None:
 
     async def per_call_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
+    ) -> Outcome:
         # Snapshot the denials slot BEFORE returning — both calls take
         # the allow path, so the typed sink must stay empty at every
         # hook invocation.
         seen_denial_counts.append(len(state.slots.turn_denials))
         # Pop a distinct decision per call.
-        return PreToolOutcome(
-            short_circuit=None,
-            decision=decisions[len(seen_denial_counts) - 1],
-        )
+        return Allow(decision=decisions[len(seen_denial_counts) - 1])
 
     # Two tool calls in one turn → loop processes them in sequence through
     # _plan_tool_calls.

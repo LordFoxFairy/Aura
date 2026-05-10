@@ -48,7 +48,7 @@ from tests.conftest import FakeChatModel
 
 
 def _sc(outcome: object) -> ToolResult | None:
-    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    """Extract the short-circuit result from Replace Outcome."""
     from aura.schemas.permissions import Replace
     if isinstance(outcome, Replace):
         return outcome.result
@@ -264,10 +264,10 @@ async def test_declared_tool_auto_allowed(tmp_path: Path) -> None:
         )
         assert _sc(outcome) is None
         assert asker.calls == []
-        assert outcome.decision is not None
-        assert outcome.decision.reason == "rule_allow"
-        assert outcome.decision.rule is not None
-        assert outcome.decision.rule.tool == "grep"
+        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision.reason == "rule_allow"  # type: ignore[union-attr]
+        assert outcome.decision.rule is not None  # type: ignore[union-attr]
+        assert outcome.decision.rule.tool == "grep"  # type: ignore[union-attr]
     finally:
         await agent.aclose()
 

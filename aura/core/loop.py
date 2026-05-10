@@ -178,7 +178,7 @@ class ToolStep:
     args: dict[str, object] | None
     decision: ToolResult | None
     # Permission decision captured directly from the pre_tool hook chain's
-    # merged ``PreToolOutcome.decision``. Only populated when a permission
+    # merged Outcome decision. Only populated when a permission
     # hook is installed AND the hook ran to a Decision; None otherwise.
     # Used to emit PermissionAudit after ToolCallStarted.
     permission_decision: Decision | None = None
@@ -876,9 +876,8 @@ class AgentLoop:
                 state=self._state,
                 tool_call_id=tc["id"],
             )
-            # Phase 1 Task 9: pattern-match on Outcome variants from hooks
-            # that have migrated. Legacy PreToolOutcome falls through to
-            # the attribute-access path so mixed chains keep working.
+            # Pattern-match on Outcome variants (spec §3.2).
+            # run_pre_tool always returns one of the four variants.
             match outcome:
                 case Allow(decision=perm_decision):
                     # Hook allowed; tool will run. Carry the decision for
@@ -916,16 +915,6 @@ class AgentLoop:
                         tool_call=tc, tool=tool, args=raw_args,
                         decision=sc_result,
                         permission_decision=perm_decision,
-                    ))
-                case _:
-                    # Legacy PreToolOutcome (or any unknown shape) — use
-                    # attribute access so pre-migration hooks keep working.
-                    # This arm is removed in Task 10 once PreToolOutcome
-                    # is deleted.
-                    steps.append(ToolStep(
-                        tool_call=tc, tool=tool, args=raw_args,
-                        decision=getattr(outcome, "short_circuit", None),
-                        permission_decision=getattr(outcome, "decision", None),
                     ))
         return steps
 

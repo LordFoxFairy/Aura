@@ -100,7 +100,7 @@ class PermissionsConfig(BaseModel):
 # ---------------------------------------------------------------------------
 # Phase 1 — :class:`Outcome` tagged union (spec §3.2).
 #
-# Replaces the ``PreToolOutcome(short_circuit, decision, ask)`` triple
+# The unified pre-tool hook result contract (replaces legacy three-channel triple).
 # with one of four variants. The loop pattern-matches on the variant;
 # audit consumers read one channel. Hook authors migrate in Tasks 8-10.
 # ---------------------------------------------------------------------------

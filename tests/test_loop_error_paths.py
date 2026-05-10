@@ -9,10 +9,11 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import PRE_TOOL_PASSTHROUGH, HookChain, PreToolOutcome
+from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
 from aura.schemas.events import AgentEvent, Final, ToolCallCompleted
+from aura.schemas.permissions import Allow, Outcome
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
@@ -178,9 +179,10 @@ async def test_pre_tool_not_fired_for_unknown_tool() -> None:
 
     async def record(
         *, tool: BaseTool, args: dict[str, Any], state: object, **_: object
-    ) -> PreToolOutcome:
+    ) -> Outcome:
+        from aura.core.permissions.decision import Decision
         calls.append(tool.name)
-        return PRE_TOOL_PASSTHROUGH
+        return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
     hooks = HookChain(pre_tool=[record])
     model = FakeChatModel(turns=[

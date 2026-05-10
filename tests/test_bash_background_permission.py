@@ -43,7 +43,7 @@ from tests.conftest import FakeChatModel, FakeTurn
 
 
 def _sc(outcome: object) -> ToolResult | None:
-    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    """Extract the short-circuit result from Replace Outcome."""
     from aura.schemas.permissions import Replace
     if isinstance(outcome, Replace):
         return outcome.result
@@ -134,7 +134,7 @@ async def test_bash_safety_hook_populates_denials_sink_for_bash_background() -> 
 
 @pytest.mark.asyncio
 async def test_bash_safety_hook_sets_decision_on_outcome_for_bash_background() -> None:
-    """The hook must return ``PreToolOutcome.decision`` populated so the
+    """The hook must return an Outcome with a decision populated so the
     Loop can stamp it on :attr:`ToolStep.permission_decision` and the
     auditor emits a ``PermissionAudit`` event between Started and
     Completed — same channel path the permission hook uses."""
@@ -144,9 +144,9 @@ async def test_bash_safety_hook_sets_decision_on_outcome_for_bash_background() -
         args={"command": "zmodload zsh/system"},
         state=LoopState(),
     )
-    assert outcome.decision is not None
-    assert outcome.decision.allow is False
-    assert outcome.decision.reason == "safety_blocked"
+    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision.allow is False  # type: ignore[union-attr]
+    assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
 
 
 # -----------------------------------------------------------------------

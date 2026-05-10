@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.persistence import journal as journal_module
-from aura.schemas.permissions import Replace
+from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
 from aura.tools.base import build_tool
 
@@ -55,7 +55,7 @@ async def test_non_bash_tool_passes_through() -> None:
         args={"path": "/tmp/x"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert isinstance(outcome, Allow)
 
 
 @pytest.mark.asyncio
@@ -66,7 +66,7 @@ async def test_safe_bash_passes_through() -> None:
         args={"command": "ls -la"},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert isinstance(outcome, Allow)
 
 
 @pytest.mark.asyncio
@@ -77,7 +77,7 @@ async def test_dangerous_bash_short_circuits() -> None:
         args={"command": "zmodload zsh/system"},
         state=LoopState(),
     )
-    # Task 9: hook now returns Replace (not PreToolOutcome).
+    # Hook returns Replace.
     assert isinstance(outcome, Replace)
     assert outcome.result.ok is False
     assert outcome.result.error is not None
@@ -93,7 +93,7 @@ async def test_cd_git_compound_short_circuits() -> None:
         args={"command": "cd /x && git status"},
         state=LoopState(),
     )
-    # Task 9: hook now returns Replace (not PreToolOutcome).
+    # Hook returns Replace.
     assert isinstance(outcome, Replace)
     assert outcome.result.ok is False
     assert outcome.result.error is not None
@@ -133,7 +133,7 @@ async def test_empty_command_arg_passes_through() -> None:
         args={"command": ""},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert isinstance(outcome, Allow)
 
 
 @pytest.mark.asyncio
@@ -144,7 +144,7 @@ async def test_missing_command_arg_passes_through() -> None:
         args={},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert isinstance(outcome, Allow)
 
 
 @pytest.mark.asyncio
@@ -155,12 +155,12 @@ async def test_non_string_command_arg_passes_through() -> None:
         args={"command": 42},
         state=LoopState(),
     )
-    assert outcome.short_circuit is None
+    assert isinstance(outcome, Allow)
 
 
 # ---------------------------------------------------------------------------
 # Phase 1 Task 9 — Outcome variant assertions.
-# Blocked paths now return Replace; passthrough paths return PRE_TOOL_PASSTHROUGH
+# Blocked paths return Replace; passthrough paths return Allow.
 # (legacy, resolved in Task 10).
 # ---------------------------------------------------------------------------
 

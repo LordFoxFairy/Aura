@@ -11,15 +11,16 @@ from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
 from aura.core import journal as journal_module
-from aura.core.hooks import PRE_TOOL_PASSTHROUGH, HookChain, PreToolOutcome
+from aura.core.hooks import HookChain
 from aura.core.hooks.logging import make_event_logger_hooks, wrap_with_event_logger
+from aura.schemas.permissions import Allow
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 
 def _sc(outcome: object) -> ToolResult | None:
-    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    """Extract the short-circuit result from Replace Outcome."""
     from aura.schemas.permissions import Replace
     if isinstance(outcome, Replace):
         return outcome.result
@@ -148,8 +149,8 @@ async def test_pre_tool_records_destructive_flag_and_args(
     )
 
     assert _sc(outcome) is None
-    assert outcome.decision is None  # type: ignore[union-attr]
-    [event] = _events(_journal_to_tmp)
+    assert isinstance(outcome, Allow)  # logging hook is passthrough allow
+    [event] = [e for e in _events(_journal_to_tmp) if e["event"] == "pre_tool"]
     assert event["event"] == "pre_tool"
     assert event["tool"] == "fake"
     assert event["is_destructive"] is True
@@ -163,7 +164,7 @@ async def test_pre_tool_defaults_is_destructive_false(_journal_to_tmp: Path) -> 
 
     await chain.run_pre_tool(tool=tool, args={}, state=LoopState())
 
-    [event] = _events(_journal_to_tmp)
+    [event] = [e for e in _events(_journal_to_tmp) if e["event"] == "pre_tool"]
     assert event["is_destructive"] is False
 
 
@@ -180,7 +181,7 @@ async def test_pre_tool_preview_survives_unserializable_args(
 
     await chain.run_pre_tool(tool=tool, args={"w": _Weird()}, state=LoopState())
 
-    [event] = _events(_journal_to_tmp)
+    [event] = [e for e in _events(_journal_to_tmp) if e["event"] == "pre_tool"]
     assert event["args_preview"] == "<unserializable>"
 
 
@@ -245,9 +246,11 @@ def test_wrap_with_event_logger_preserves_inner_order() -> None:
     async def _inner_post_model(**_: Any) -> None:
         inner_calls.append("inner_post_model")
 
-    async def _inner_pre_tool(**_: Any) -> PreToolOutcome:
+    async def _inner_pre_tool(**_: Any) -> Any:
+        from aura.core.permissions.decision import Decision
+        from aura.schemas.permissions import Allow
         inner_calls.append("inner_pre_tool")
-        return PRE_TOOL_PASSTHROUGH
+        return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
     async def _inner_post_tool(**kw: Any) -> ToolResult:
         inner_calls.append("inner_post_tool")

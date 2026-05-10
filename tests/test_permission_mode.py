@@ -33,7 +33,7 @@ from aura.tools.base import build_tool
 
 
 def _sc(outcome: object) -> ToolResult | None:
-    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    """Extract the short-circuit result from Replace Outcome."""
     from aura.schemas.permissions import Replace
     if isinstance(outcome, Replace):
         return outcome.result
@@ -236,8 +236,8 @@ async def test_plan_mode_respects_safety_floor(tmp_path: Path) -> None:
     assert _sc(outcome) is not None
     assert _sc(outcome).ok is False  # type: ignore[union-attr]
     # Safety wins: the decision must report safety_blocked, not plan_mode_blocked.
-    assert isinstance(outcome.decision, Decision)
-    assert outcome.decision.reason == "safety_blocked"
+    assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
+    assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
 
 
 async def test_plan_mode_stashes_plan_decision_in_state(
@@ -255,9 +255,9 @@ async def test_plan_mode_stashes_plan_decision_in_state(
     outcome = await hook(
         tool=tool, args={"path": "/tmp/x"}, state=state,
     )
-    assert isinstance(outcome.decision, Decision)
-    assert outcome.decision.reason == "plan_mode_blocked"
-    assert outcome.decision.allow is False
+    assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
+    assert outcome.decision.reason == "plan_mode_blocked"  # type: ignore[union-attr]
+    assert outcome.decision.allow is False  # type: ignore[union-attr]
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "plan_mode_blocked"
     assert decision_event[1]["mode"] == "plan"
@@ -373,8 +373,8 @@ async def test_accept_edits_respects_safety_floor(tmp_path: Path) -> None:
     )
     assert _sc(outcome) is not None
     assert _sc(outcome).ok is False  # type: ignore[union-attr]
-    assert isinstance(outcome.decision, Decision)
-    assert outcome.decision.reason == "safety_blocked"
+    assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
+    assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
 
 
 async def test_accept_edits_respects_user_deny_rule(tmp_path: Path) -> None:
@@ -507,8 +507,8 @@ async def test_safety_uses_callable_is_destructive_true_branch(tmp_path: Path) -
         state=state,
     )
     assert _sc(outcome) is not None
-    assert isinstance(outcome.decision, Decision)
-    assert outcome.decision.reason == "safety_blocked"
+    assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
+    assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
 
 
 async def test_safety_uses_callable_is_destructive_false_branch(tmp_path: Path) -> None:
@@ -544,8 +544,8 @@ async def test_safety_uses_callable_is_destructive_false_branch(tmp_path: Path) 
     )
     # Not blocked by safety — fell through to the ask path.
     assert _sc(outcome) is None
-    assert isinstance(outcome.decision, Decision)
-    assert outcome.decision.reason != "safety_blocked"
+    assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
+    assert outcome.decision.reason != "safety_blocked"  # type: ignore[union-attr]
 
 
 async def test_safety_callable_receives_actual_args(tmp_path: Path) -> None:
@@ -610,8 +610,8 @@ async def test_safety_callable_exception_fails_safe_to_destructive(
     )
     # Fail-safe: treated as destructive → safety_blocked on protected write path.
     assert _sc(outcome) is not None
-    assert isinstance(outcome.decision, Decision)
-    assert outcome.decision.reason == "safety_blocked"
+    assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
+    assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
 
 
 async def test_accept_edits_bash_ls_still_prompts_not_auto_allowed(

@@ -9,11 +9,10 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import (
-    PRE_TOOL_PASSTHROUGH,
-    HookChain,
-    PreToolOutcome,
-)
+from aura.core.hooks import HookChain
+from aura.core.permissions.decision import Decision
+from aura.core.permissions.rule import Rule
+from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
@@ -35,6 +34,18 @@ _stub_tool: BaseTool = build_tool(
 )
 
 
+def _allow(reason: str = "mode_bypass") -> Decision:
+    return Decision(allow=True, reason=reason)  # type: ignore[arg-type]
+
+
+def _allow_with_rule(tool: str) -> Decision:
+    return Decision(allow=True, reason="rule_allow", rule=Rule(tool=tool, content=None))
+
+
+def _deny(reason: str = "safety_blocked") -> Decision:
+    return Decision(allow=False, reason=reason)  # type: ignore[arg-type]
+
+
 @pytest.mark.asyncio
 async def test_hookchain_empty_is_noop() -> None:
     chain = HookChain()
@@ -52,8 +63,8 @@ async def test_hookchain_empty_is_noop() -> None:
     )
 
     assert history == []
-    assert outcome.short_circuit is None  # type: ignore[union-attr]
-    assert outcome.decision is None  # type: ignore[union-attr]
+    # Empty chain returns a neutral Allow sentinel.
+    assert isinstance(outcome, Allow)
     assert final is result
 
 
@@ -91,221 +102,304 @@ async def test_post_model_sees_ai_message() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_short_circuits_with_tool_result() -> None:
+async def test_pre_tool_replace_carries_result() -> None:
+    """A Replace hook carries a synthetic ToolResult."""
     denied = ToolResult(ok=False, error="denied")
 
-    async def deny(
+    async def replace_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=denied, decision=None)
+    ) -> Outcome:
+        return Replace(result=denied, decision=_deny())
 
-    chain = HookChain(pre_tool=[deny])
+    chain = HookChain(pre_tool=[replace_hook])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.short_circuit is denied  # type: ignore[union-attr]
+    assert isinstance(outcome, Replace)
+    assert outcome.result is denied
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_first_short_circuit_wins() -> None:
+async def test_pre_tool_first_block_wins() -> None:
+    """First Block in the chain wins; subsequent hooks are NOT called."""
     call_log: list[str] = []
-    first_denial = ToolResult(ok=False, error="first")
 
     async def first(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
+    ) -> Outcome:
         call_log.append("first")
-        return PreToolOutcome(short_circuit=first_denial, decision=None)
+        return Block(decision=_deny("safety_blocked"))
 
     async def second(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
+    ) -> Outcome:
         call_log.append("second")
-        return PreToolOutcome(
-            short_circuit=ToolResult(ok=False, error="second"), decision=None,
-        )
+        return Block(decision=_deny("rule_deny"))
 
     chain = HookChain(pre_tool=[first, second])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.short_circuit is first_denial  # type: ignore[union-attr]
+    assert isinstance(outcome, Block)
+    assert outcome.decision.reason == "safety_blocked"
     assert call_log == ["first"]
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_decision_last_allow_wins_when_no_deny() -> None:
-    """Among ALLOW decisions (no hook denies), last-wins applies — the
-    permission hook (typically last in the chain) gets to stamp its
-    ``rule_allow`` / ``mode_bypass`` reason as the authoritative audit
-    line."""
-    from aura.core.permissions.decision import Decision
-    from aura.core.permissions.rule import Rule
+async def test_pre_tool_decision_first_authoritative_allow_wins() -> None:
+    """Among ALLOW decisions, the first authoritative (non-mode_bypass) reason
+    wins. Passthrough hooks return mode_bypass to signal "no opinion"; the
+    first hook with a real verdict (rule_allow, user_accept, …) is the
+    authoritative audit line.
 
-    first_decision = Decision(
-        allow=True, reason="rule_allow", rule=Rule(tool="stub", content=None),
-    )
-    last_decision = Decision(allow=True, reason="mode_bypass")
+    Hook order: early(rule_allow) → late(mode_bypass).
+    early's rule_allow is authoritative; late's mode_bypass is passthrough.
+    Merged outcome = early's decision (rule_allow).
+    """
+    first_decision = _allow_with_rule("stub")
+    passthrough_decision = _allow("mode_bypass")
 
     async def early(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=None, decision=first_decision)
+    ) -> Outcome:
+        return Allow(decision=first_decision)
 
     async def late(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=None, decision=last_decision)
+    ) -> Outcome:
+        return Allow(decision=passthrough_decision)
 
     chain = HookChain(pre_tool=[early, late])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.decision is last_decision  # type: ignore[union-attr]
+    assert isinstance(outcome, Allow)
+    assert outcome.decision is first_decision
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_first_deny_beats_later_allow() -> None:
-    """BUG-AUDIT-B1 regression — a deny decision must not be silently
-    overridden by a later allow. Pre-fix the merge was last-wins, which
-    meant a permission hook returning ``mode_bypass`` (allow) would
-    erase a safety hook's earlier ``safety_blocked`` (deny) and an
-    audit reader would only see the allow."""
-    from aura.core.permissions.decision import Decision
+async def test_pre_tool_decision_passthrough_only_allows_use_last() -> None:
+    """When every Allow is mode_bypass (all passthrough, no authoritative
+    decision), the last mode_bypass Allow is the merged result."""
+    first_passthrough = _allow("mode_bypass")
+    last_passthrough = _allow("mode_bypass")
 
-    deny_first = Decision(allow=False, reason="safety_blocked")
-    allow_later = Decision(allow=True, reason="mode_bypass")
-
-    async def deny_hook(
+    async def early(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        # Deliberately does NOT short_circuit — exercises the merge
-        # path where a later hook would otherwise silently win.
-        return PreToolOutcome(short_circuit=None, decision=deny_first)
+    ) -> Outcome:
+        return Allow(decision=first_passthrough)
 
-    async def allow_hook(
+    async def late(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=None, decision=allow_later)
+    ) -> Outcome:
+        return Allow(decision=last_passthrough)
 
-    chain = HookChain(pre_tool=[deny_hook, allow_hook])
+    chain = HookChain(pre_tool=[early, late])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.decision is deny_first  # type: ignore[union-attr]
+    assert isinstance(outcome, Allow)
+    assert outcome.decision is last_passthrough
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_first_deny_wins_regardless_of_position() -> None:
-    """First-deny-wins must hold whether the deny is the first or the
-    last hook to fire. An allow that ran before the deny is replaced
-    by the deny (deny supersedes prior allows); a later allow cannot
-    override the deny."""
-    from aura.core.permissions.decision import Decision
-    from aura.core.permissions.rule import Rule
+async def test_pre_tool_first_block_beats_later_allow() -> None:
+    """BUG-AUDIT-B1 regression — a Block must not be silently overridden
+    by a later Allow. First Block wins over any later Allow."""
+    block_decision = _deny("safety_blocked")
+    allow_decision = _allow("mode_bypass")
 
-    allow_first = Decision(
-        allow=True, reason="rule_allow", rule=Rule(tool="stub", content=None),
-    )
-    deny_second = Decision(allow=False, reason="safety_blocked")
+    async def block_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> Outcome:
+        return Block(decision=block_decision)
 
     async def allow_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=None, decision=allow_first)
+    ) -> Outcome:
+        return Allow(decision=allow_decision)
 
-    async def deny_hook(
-        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=None, decision=deny_second)
-
-    chain = HookChain(pre_tool=[allow_hook, deny_hook])
+    chain = HookChain(pre_tool=[block_hook, allow_hook])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.decision is deny_second  # type: ignore[union-attr]
+    # Block short-circuits; allow_hook never runs (Block is first-wins).
+    assert isinstance(outcome, Block)
+    assert outcome.decision is block_decision
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_block_beats_prior_allow() -> None:
+    """Allow first, Block second — Block still wins (first Block in
+    registration order, not first in execution order)."""
+    allow_first = _allow_with_rule("stub")
+    block_second = _deny("safety_blocked")
+
+    async def allow_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> Outcome:
+        return Allow(decision=allow_first)
+
+    async def block_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> Outcome:
+        return Block(decision=block_second)
+
+    chain = HookChain(pre_tool=[allow_hook, block_hook])
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+
+    assert isinstance(outcome, Block)
+    assert outcome.decision is block_second
 
 
 @pytest.mark.asyncio
 async def test_pre_tool_per_hook_decision_journaled(tmp_path: Any) -> None:
-    """Every non-None hook decision must emit its own
-    ``pre_tool_hook_decision`` journal event before the merge fires —
-    so even when a later hook overrides an earlier one (or vice-versa
-    under first-deny-wins), the audit trail captures BOTH verdicts."""
+    """Every hook carrying a decision emits a pre_tool_hook_decision
+    journal event — audit readers can reconstruct the full chain."""
     import json
 
-    from aura.core.permissions.decision import Decision
     from aura.core.persistence import journal
 
-    deny = Decision(allow=False, reason="safety_blocked")
-    allow = Decision(allow=True, reason="mode_bypass")
+    deny = _deny("safety_blocked")
+    allow = _allow("mode_bypass")
 
     async def deny_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=None, decision=deny)
+    ) -> Outcome:
+        return Block(decision=deny)
 
     async def allow_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=None, decision=allow)
+    ) -> Outcome:
+        return Allow(decision=allow)
 
+    # allow_hook never runs because Block short-circuits — so only one
+    # audit event fires. Test with Block first to verify short-circuit.
     chain = HookChain(pre_tool=[deny_hook, allow_hook])
     log_path = tmp_path / "audit.jsonl"
     journal.configure(log_path)
     try:
-        outcome = await chain.run_pre_tool(
-            tool=_stub_tool, args={}, state=LoopState(),
-        )
+        await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
     finally:
         journal.reset()
 
-    assert outcome.decision is deny  # type: ignore[union-attr]  # first-deny-wins
-
-    # Replay the audit trail: BOTH hook decisions must be present.
     events = [
         json.loads(line) for line in log_path.read_text().splitlines() if line
     ]
     decisions = [e for e in events if e["event"] == "pre_tool_hook_decision"]
-    assert len(decisions) == 2, decisions
+    assert len(decisions) == 1
     assert decisions[0]["allow"] is False
     assert decisions[0]["reason"] == "safety_blocked"
-    assert decisions[1]["allow"] is True
-    assert decisions[1]["reason"] == "mode_bypass"
-    # ``hook`` field must identify the source — closure qualname is
-    # acceptable (matches the production hooks emitted via
-    # make_*_hook factories).
     assert "deny_hook" in decisions[0]["hook"]
-    assert "allow_hook" in decisions[1]["hook"]
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_decision_preserved_when_short_circuit_fires() -> None:
-    """When a hook short-circuits the chain, any decision collected so
-    far (from earlier hooks that ran) is preserved on the outcome —
-    the short-circuit does not erase decisions. A later hook's decision
-    that would have been last-wins is naturally not considered because
-    its hook never runs."""
-    from aura.core.permissions.decision import Decision
+async def test_pre_tool_per_hook_decision_journaled_for_block_replace(
+    tmp_path: Any,
+) -> None:
+    """Block and Replace outcomes produce pre_tool_hook_decision journal events;
+    Allow (implicit passthrough) is NOT journaled — only non-trivial verdicts
+    need an explicit audit trail entry.
 
-    early_decision = Decision(allow=True, reason="mode_bypass")
-    sc = ToolResult(ok=False, error="stopped by middle hook")
+    Chain: Allow (passthrough) → Replace → Allow (passthrough).
+    Block short-circuits immediately, so this verifies Replace + later Allow.
+    Expect exactly 1 journal event (for the Replace).
+    """
+    import json
 
-    async def decider(
+    from aura.core.persistence import journal
+    from aura.schemas.tool import ToolResult
+
+    sc = ToolResult(ok=False, error="canned")
+
+    async def passthrough_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=None, decision=early_decision)
+    ) -> Outcome:
+        return Allow(decision=_allow("mode_bypass"))
 
-    async def blocker(
+    async def replace_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=sc, decision=None)
+    ) -> Outcome:
+        return Replace(result=sc, decision=_deny("safety_blocked"))
 
-    async def never_ran(
+    async def trailing_allow(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        raise AssertionError("hook must not run after a short-circuit")
+    ) -> Outcome:
+        return Allow(decision=_allow("mode_bypass"))
 
-    chain = HookChain(pre_tool=[decider, blocker, never_ran])
+    chain = HookChain(pre_tool=[passthrough_hook, replace_hook, trailing_allow])
+    log_path = tmp_path / "audit.jsonl"
+    journal.configure(log_path)
+    try:
+        await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+    finally:
+        journal.reset()
+
+    events = [
+        json.loads(line) for line in log_path.read_text().splitlines() if line
+    ]
+    decisions = [e for e in events if e["event"] == "pre_tool_hook_decision"]
+    # Only Replace produced a journal entry; both Allow hooks are silent.
+    assert len(decisions) == 1, f"expected 1 (Replace only), got {decisions!r}"
+    assert "replace_hook" in decisions[0]["hook"]
+    assert decisions[0]["allow"] is False
+    assert decisions[0]["reason"] == "safety_blocked"
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_allow_outcomes_not_journaled(tmp_path: Any) -> None:
+    """Allow is the implicit passthrough default — it is NOT journaled.
+    Journaling only non-trivial outcomes (Block/Ask/Replace) keeps the audit
+    log focused on decisions that actually constrain execution.
+    """
+    import json
+
+    from aura.core.persistence import journal
+
+    async def allow_hook_1(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> Outcome:
+        return Allow(decision=_allow_with_rule("stub"))
+
+    async def allow_hook_2(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> Outcome:
+        return Allow(decision=_allow("mode_bypass"))
+
+    chain = HookChain(pre_tool=[allow_hook_1, allow_hook_2])
+    log_path = tmp_path / "audit.jsonl"
+    journal.configure(log_path)
+    try:
+        await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+    finally:
+        journal.reset()
+
+    # Journal file may not exist if no events were written.
+    if log_path.exists():
+        events = [
+            json.loads(line)
+            for line in log_path.read_text().splitlines()
+            if line
+        ]
+        decisions = [e for e in events if e["event"] == "pre_tool_hook_decision"]
+        assert decisions == [], f"Allow hooks must not journal; got {decisions!r}"
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_replace_then_allow_replace_wins() -> None:
+    """Replace beats Allow — a Replace hook followed by Allow yields Replace."""
+    sc = ToolResult(ok=False, error="canned")
+
+    async def replace_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> Outcome:
+        return Replace(result=sc, decision=_deny())
+
+    async def allow_hook(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> Outcome:
+        return Allow(decision=_allow())
+
+    chain = HookChain(pre_tool=[replace_hook, allow_hook])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.short_circuit is sc  # type: ignore[union-attr]
-    assert outcome.decision is early_decision  # type: ignore[union-attr]
+    assert isinstance(outcome, Replace)
+    assert outcome.result is sc
 
 
 @pytest.mark.asyncio
@@ -355,17 +449,53 @@ async def test_multiple_hooks_of_same_type_run_in_registration_order() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_chain_passes_through_when_all_passthrough() -> None:
-    async def pass_through(
-        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
-    ) -> PreToolOutcome:
-        return PRE_TOOL_PASSTHROUGH
+async def test_pre_tool_chain_authoritative_allow_beats_passthrough() -> None:
+    """First authoritative (non-mode_bypass) Allow wins over passthrough Allow.
 
-    chain = HookChain(pre_tool=[pass_through, pass_through])
+    hook1 returns rule_allow (authoritative); hook2 returns mode_bypass (passthrough).
+    Expected winner: hook1's rule_allow decision.
+    """
+    d1 = _allow_with_rule("stub")   # authoritative
+    d2 = _allow("mode_bypass")      # passthrough
+
+    async def hook1(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> Outcome:
+        return Allow(decision=d1)
+
+    async def hook2(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> Outcome:
+        return Allow(decision=d2)
+
+    chain = HookChain(pre_tool=[hook1, hook2])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
 
-    assert outcome.short_circuit is None  # type: ignore[union-attr]
-    assert outcome.decision is None  # type: ignore[union-attr]
+    assert isinstance(outcome, Allow)
+    assert outcome.decision is d1
+
+
+@pytest.mark.asyncio
+async def test_pre_tool_chain_all_passthrough_last_wins() -> None:
+    """When all Allow hooks are passthrough (mode_bypass), last-wins applies."""
+    d1 = _allow("mode_bypass")
+    d2 = _allow("mode_bypass")
+
+    async def hook1(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> Outcome:
+        return Allow(decision=d1)
+
+    async def hook2(
+        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
+    ) -> Outcome:
+        return Allow(decision=d2)
+
+    chain = HookChain(pre_tool=[hook1, hook2])
+    outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
+
+    assert isinstance(outcome, Allow)
+    assert outcome.decision is d2
 
 
 @pytest.mark.asyncio
@@ -426,8 +556,8 @@ def test_merge_concatenates_all_turn_cycle_slots() -> None:
     async def _pre_tool(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState,
         **_: object,
-    ) -> PreToolOutcome:
-        return PRE_TOOL_PASSTHROUGH
+    ) -> Outcome:
+        return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
     async def _post_tool(
         *, tool: BaseTool, args: dict[str, Any], result: ToolResult,
@@ -459,47 +589,47 @@ def test_merge_concatenates_all_turn_cycle_slots() -> None:
 
 
 # ---------------------------------------------------------------------------
-# F-04-002 — PreToolOutcome.ask channel + merge precedence (deny > ask > allow)
+# Ask escalation channel — Ask propagates via state.slots.ask_pending so
+# downstream hooks (permission) see the escalation demand.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_ask_propagates_to_merged_outcome() -> None:
+async def test_pre_tool_ask_propagates_as_outcome() -> None:
+    """A single Ask hook returns Ask as the merged outcome."""
     async def asker(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PreToolOutcome(ask=True)
+    ) -> Outcome:
+        return Ask(reason="needs confirmation")
 
     chain = HookChain(pre_tool=[asker])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
-    assert outcome.ask is True  # type: ignore[union-attr]
+    assert isinstance(outcome, Ask)
 
 
 @pytest.mark.asyncio
 async def test_pre_tool_ask_seen_by_downstream_hook_via_state() -> None:
-    """When an upstream hook sets ``ask=True``, downstream hooks see
-    ``state.slots.ask_pending`` (Phase 1 Task 6) so a permission hook
-    later in the chain can detect the demand and demote any auto-allow
-    to the asker path."""
+    """When an upstream hook returns Ask, downstream hooks see
+    state.slots.ask_pending=True so a permission hook later in the
+    chain can detect the demand and demote any auto-allow to the asker path."""
     seen: list[bool] = []
 
     async def upstream(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PreToolOutcome(ask=True)
+    ) -> Outcome:
+        return Ask(reason="needs confirmation")
 
     async def downstream(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
+    ) -> Outcome:
         seen.append(state.slots.ask_pending)
-        return PRE_TOOL_PASSTHROUGH
+        return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
     chain = HookChain(pre_tool=[upstream, downstream])
     state = LoopState()
     await chain.run_pre_tool(tool=_stub_tool, args={}, state=state)
     assert seen == [True]
-    # Sentinel must NOT leak past the chain run — next tool call should
-    # see no pending ask unless re-requested.
+    # Sentinel must NOT leak past the chain run.
     assert state.slots.ask_pending is False
 
 
@@ -508,57 +638,45 @@ async def test_pre_tool_ask_does_not_leak_when_no_hook_asks() -> None:
     state = LoopState()
     chain = HookChain(pre_tool=[])
     out = await chain.run_pre_tool(tool=_stub_tool, args={}, state=state)
-    assert out.ask is False  # type: ignore[union-attr]
+    assert isinstance(out, Allow)
     assert state.slots.ask_pending is False
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_deny_beats_ask() -> None:
-    """deny > ask. Even if a hook upstream said ``ask``, a downstream
-    deny is the final verdict."""
-    from aura.core.permissions.decision import Decision
-
-    deny = Decision(allow=False, reason="safety_blocked")
+async def test_pre_tool_block_beats_ask() -> None:
+    """Block > Ask precedence. A Block hook beats a prior Ask."""
+    deny = _deny("safety_blocked")
 
     async def asker(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PreToolOutcome(ask=True)
+    ) -> Outcome:
+        return Ask(reason="needs confirmation")
 
-    async def denier(
+    async def blocker(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PreToolOutcome(decision=deny)
+    ) -> Outcome:
+        return Block(decision=deny)
 
-    chain = HookChain(pre_tool=[asker, denier])
+    chain = HookChain(pre_tool=[asker, blocker])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
-    # ask flag still propagates as a side-channel; the deny is the
-    # authoritative decision.
-    assert outcome.decision is deny  # type: ignore[union-attr]
-    assert outcome.ask is True  # type: ignore[union-attr]
+    # Block short-circuits as soon as it is seen.
+    assert isinstance(outcome, Block)
+    assert outcome.decision is deny
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_ask_overrides_prior_allow() -> None:
-    """ask > allow. A prior allow does not survive a subsequent ask."""
-    from aura.core.permissions.decision import Decision
-
-    allow = Decision(allow=True, reason="mode_bypass")
-
+async def test_pre_tool_ask_beats_allow() -> None:
+    """Ask > Allow. A subsequent Ask overrides a prior Allow."""
     async def allower(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PreToolOutcome(decision=allow)
+    ) -> Outcome:
+        return Allow(decision=_allow("mode_bypass"))
 
     async def asker(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PreToolOutcome(ask=True)
+    ) -> Outcome:
+        return Ask(reason="needs confirmation")
 
     chain = HookChain(pre_tool=[allower, asker])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
-    assert outcome.ask is True  # type: ignore[union-attr]
-    # decision channel still records the prior allow, but the ask
-    # signal demands the loop re-prompt — the permission hook in
-    # production reads PRE_TOOL_ASK_PENDING_KEY to do exactly that.
-    assert outcome.decision is allow  # type: ignore[union-attr]
+    assert isinstance(outcome, Ask)

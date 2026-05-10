@@ -29,14 +29,16 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.cli._coordination import prompt_mutex
-from aura.core.hooks import HookChain, PreToolOutcome
+from aura.core.hooks import HookChain
 from aura.core.hooks.permission import (
     AskerResponse,
     PermissionAsker,
     make_permission_hook,
 )
+from aura.core.permissions.decision import Decision
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
+from aura.schemas.permissions import Outcome, Replace
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from tests.conftest import FakeTurn
@@ -307,18 +309,18 @@ async def test_asker_timeout_is_per_call_not_shared(tmp_path: Path) -> None:
             args: dict[str, Any],
             state: Any,
             **_: Any,
-        ) -> PreToolOutcome:
+        ) -> Outcome:
             try:
                 return await asyncio.wait_for(
                     base_hook(tool=tool, args=args, state=state),
                     timeout=timeout,
                 )
             except TimeoutError:
-                return PreToolOutcome(
-                    short_circuit=ToolResult(
+                return Replace(
+                    result=ToolResult(
                         ok=False, error="denied: asker timed out",
                     ),
-                    decision=None,
+                    decision=Decision(allow=False, reason="user_deny"),
                 )
 
         return HookChain(pre_tool=[_timed_hook])

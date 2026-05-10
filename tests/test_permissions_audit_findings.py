@@ -13,23 +13,21 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.config.schema import AuraConfigError
-from aura.core.hooks import (
-    HookChain,
-    PreToolOutcome,
-)
+from aura.core.hooks import HookChain
 from aura.core.hooks.permission import (
     AskerResponse,
     make_permission_hook,
 )
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
+from aura.schemas.permissions import Ask, Outcome
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 
 def _sc(outcome: object) -> ToolResult | None:
-    """Extract the short-circuit result from Outcome or PreToolOutcome."""
+    """Extract the short-circuit result from Replace Outcome."""
     from aura.schemas.permissions import Replace
     if isinstance(outcome, Replace):
         return outcome.result
@@ -117,8 +115,8 @@ async def test_f_04_002_ask_demotes_rule_allow_to_asker_call(
 
     async def upstream_ask(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PreToolOutcome(ask=True)
+    ) -> Outcome:
+        return Ask(reason="upstream_ask")
 
     chain = HookChain(pre_tool=[upstream_ask, perm_hook])
     tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
@@ -152,8 +150,8 @@ async def test_f_04_002_ask_demotes_bypass_to_asker_call(
 
     async def upstream_ask(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PreToolOutcome(ask=True)
+    ) -> Outcome:
+        return Ask(reason="upstream_ask")
 
     chain = HookChain(pre_tool=[upstream_ask, perm_hook])
     tool = _tool("bash", is_destructive=True)
@@ -183,8 +181,8 @@ async def test_f_04_002_ask_does_not_override_safety_block(
 
     async def upstream_ask(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PreToolOutcome(ask=True)
+    ) -> Outcome:
+        return Ask(reason="upstream_ask")
 
     chain = HookChain(pre_tool=[upstream_ask, perm_hook])
     tool = _tool("read_file", is_read_only=True, args_schema=_PathArgs)
@@ -221,8 +219,8 @@ async def test_f_04_005_plan_mode_blocks_web_fetch(tmp_path: Path) -> None:
     )
     assert _sc(outcome) is not None
     assert _sc(outcome).ok is False  # type: ignore[union-attr]
-    assert outcome.decision is not None
-    assert outcome.decision.reason == "plan_mode_blocked"
+    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision.reason == "plan_mode_blocked"  # type: ignore[union-attr]
     assert asker.calls == []
 
 
@@ -242,8 +240,8 @@ async def test_f_04_005_plan_mode_blocks_web_search(tmp_path: Path) -> None:
     )
     assert _sc(outcome) is not None
     assert _sc(outcome).ok is False  # type: ignore[union-attr]
-    assert outcome.decision is not None
-    assert outcome.decision.reason == "plan_mode_blocked"
+    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision.reason == "plan_mode_blocked"  # type: ignore[union-attr]
 
 
 def test_f_04_005_plan_mode_read_tools_excludes_outbound() -> None:
@@ -295,9 +293,9 @@ async def test_f_04_015_disable_bypass_clamps_runtime_bypass(
     # The hook must NOT have taken the bypass auto-allow path; instead
     # it falls through to the asker (clamped to default mode).
     assert len(asker.calls) == 1
-    assert outcome.decision is not None
-    assert outcome.decision.reason != "mode_bypass"
-    assert outcome.decision.reason == "user_accept"
+    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision.reason != "mode_bypass"  # type: ignore[union-attr]
+    assert outcome.decision.reason == "user_accept"  # type: ignore[union-attr]
 
     # The clamp must journal a warning the first time it fires.
     clamp_events = [e for e in events if e[0] == "bypass_clamped"]
@@ -359,8 +357,8 @@ async def test_f_04_015_disable_bypass_false_lets_bypass_through(
     outcome = await hook(
         tool=tool, args={}, state=LoopState(),
     )
-    assert outcome.decision is not None
-    assert outcome.decision.reason == "mode_bypass"
+    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision.reason == "mode_bypass"  # type: ignore[union-attr]
     assert asker.calls == []
 
 

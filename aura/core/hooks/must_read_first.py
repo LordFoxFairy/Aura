@@ -40,10 +40,10 @@ from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
 
-from aura.core.hooks import PRE_TOOL_PASSTHROUGH, PreToolHook, PreToolOutcome
+from aura.core.hooks import PreToolHook
 from aura.core.memory.context import Context
 from aura.core.permissions.decision import Decision
-from aura.schemas.permissions import Replace
+from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 
@@ -179,9 +179,9 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
         args: dict[str, Any],
         state: LoopState,
         **_: Any,
-    ) -> PreToolOutcome:
+    ) -> Allow | Replace:
         if tool.name not in ("edit_file", "write_file", "bash"):
-            return PRE_TOOL_PASSTHROUGH
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         # Lazy import — same pattern as aura/core/memory/rules.py to keep
         # the journal dependency out of the module-load path.
@@ -190,7 +190,7 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
         if tool.name == "bash":
             command = args.get("command")
             if not isinstance(command, str) or not command:
-                return PRE_TOOL_PASSTHROUGH
+                return Allow(decision=Decision(allow=True, reason="mode_bypass"))
             for raw_target in _extract_bash_mutation_targets(command):
                 try:
                     resolved = Path(raw_target).resolve()
@@ -209,7 +209,7 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
                     reason=status,
                     command=command,
                 )
-                return Replace(  # type: ignore[return-value]
+                return Replace(
                     result=ToolResult(
                         ok=False,
                         error=(
@@ -220,35 +220,35 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
                     ),
                     decision=Decision(allow=False, reason="safety_blocked"),
                 )
-            return PRE_TOOL_PASSTHROUGH
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         raw = args.get("path")
         if not isinstance(raw, str) or not raw:
             # Tool's own arg-validation (pydantic schema) will reject —
             # don't pre-empt that error with a less specific one.
-            return PRE_TOOL_PASSTHROUGH
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         try:
             resolved = Path(raw).resolve()
         except OSError:
             # Let the tool's own error path surface (e.g. "not found").
-            return PRE_TOOL_PASSTHROUGH
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         if tool.name == "edit_file":
             # Mirror claude-code: allow new-file creation via empty old_str
             # without a prior read — there is nothing on disk to have read.
             # Narrowly scoped: requires old_str == "" AND path does not exist.
             if args.get("old_str") == "" and not resolved.exists():
-                return PRE_TOOL_PASSTHROUGH
+                return Allow(decision=Decision(allow=True, reason="mode_bypass"))
         else:  # write_file
             # File-unchanged guard only applies when there's a file to be
             # unchanged. Pure creation always passes through.
             if not resolved.exists():
-                return PRE_TOOL_PASSTHROUGH
+                return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         status = context.read_status(resolved)
         if status == "fresh":
-            return PRE_TOOL_PASSTHROUGH
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         journal.write(
             "must_read_first_blocked",
@@ -256,7 +256,7 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
             path=str(resolved),
             reason=status,
         )
-        return Replace(  # type: ignore[return-value]
+        return Replace(
             result=ToolResult(
                 ok=False, error=_error_text(tool.name, status, resolved),
             ),

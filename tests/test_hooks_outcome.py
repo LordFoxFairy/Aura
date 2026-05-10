@@ -1,23 +1,28 @@
-"""Phase 1 Task 8 — Outcome variant returns from pre_tool hooks.
+"""Phase 1 Task 10 — Outcome is the only pre_tool hook return contract.
 
 Covers the spec §3.2 merge precedence matrix for two-hook chains where
 both hooks return :class:`aura.schemas.permissions.Outcome` variants
 (``Allow`` / ``Block`` / ``Ask`` / ``Replace``):
 
-    first Block wins → first Ask wins → first Replace wins → last Allow wins
+    Block > Replace > Ask > Allow(authoritative) > Allow(mode_bypass)
+
+Ask is a side-channel signal (sets ``ask_pending`` on ``LoopSlots``);
+it is consumed by a downstream permission hook which returns the resolved
+Allow/Block. If no hook resolves Ask (no permission hook present), the
+unresolved Ask escalates back to the loop.
+
+Replace beats Ask because a safety block (e.g. bash_safety) must not be
+overridden by a pending confirmation request.
 
 Plus regression tests for:
 
 - Single-hook returns of each variant.
-- Mixed Outcome + legacy ``PreToolOutcome`` chains (back-compat).
 - Block short-circuits the chain (no later hook runs).
 - Replace does NOT short-circuit (a later Block can still win).
-- Empty Outcome list → passthrough.
+- Empty Outcome list → passthrough (Allow sentinel).
 
 The 16-case matrix (4 variants × 4 variants) is generated via
-``pytest.mark.parametrize`` so every cell is covered. Cases that share
-the same expected merge behavior get the same assertion path; cases
-that differ get explicit cell assertions.
+``pytest.mark.parametrize`` so every cell is covered.
 """
 
 from __future__ import annotations
@@ -28,12 +33,7 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import (
-    PRE_TOOL_PASSTHROUGH,
-    HookChain,
-    PreToolHook,
-    PreToolOutcome,
-)
+from aura.core.hooks import HookChain, PreToolHook
 from aura.core.permissions.decision import Decision
 from aura.core.permissions.rule import Rule
 from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
@@ -76,19 +76,12 @@ def _deny(reason: str = "safety_blocked") -> Decision:
     return Decision(allow=False, reason=reason)  # type: ignore[arg-type]
 
 
-def _make_hook(outcome: Outcome | PreToolOutcome) -> PreToolHook:
-    """Wrap a constant Outcome / PreToolOutcome as a pre_tool hook.
-
-    Phase 1 Task 8: the :class:`PreToolHook` Protocol still declares a
-    return type of :class:`PreToolOutcome` (Task 10 will widen it to
-    :class:`Outcome`), so the wrapper is annotated as ``Any`` and
-    cast back into the Protocol — :meth:`HookChain.run_pre_tool`
-    accepts both shapes at runtime.
-    """
+def _make_hook(outcome: Outcome) -> PreToolHook:
+    """Wrap a constant Outcome as a pre_tool hook."""
     async def hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return outcome  # type: ignore[return-value]
+    ) -> Outcome:
+        return outcome
     return hook
 
 
@@ -105,7 +98,6 @@ async def test_single_allow_variant_sets_decision() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    # Task 9: pure-Outcome chain returns Allow directly.
     assert isinstance(out, Allow), f"expected Allow, got {type(out).__name__}"
     assert out.decision is d
 
@@ -117,9 +109,6 @@ async def test_single_block_variant_sets_deny_decision() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    # Task 9: pure-Outcome chain returns Block directly.
-    # Block does NOT carry a baked ToolResult — the loop turns the deny
-    # decision into a synthetic ToolMessage via decision.audit_line().
     assert isinstance(out, Block), f"expected Block, got {type(out).__name__}"
     assert out.decision is d
     assert out.decision.allow is False
@@ -131,9 +120,7 @@ async def test_single_ask_variant_propagates_ask_flag() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    # Task 9: pure-Outcome chain returns Ask directly.
     assert isinstance(out, Ask), f"expected Ask, got {type(out).__name__}"
-    # Ask carries only a reason; the asker creates the Decision from user response.
     assert out.reason == "needs confirmation"
 
 
@@ -145,7 +132,6 @@ async def test_single_replace_variant_short_circuits_with_result() -> None:
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    # Task 9: pure-Outcome chain returns Replace directly.
     assert isinstance(out, Replace), f"expected Replace, got {type(out).__name__}"
     assert out.result is canned
     assert out.decision is d
@@ -154,8 +140,8 @@ async def test_single_replace_variant_short_circuits_with_result() -> None:
 # ---------------------------------------------------------------------------
 # 4 × 4 = 16-case merge precedence matrix. Each case constructs a 2-hook
 # chain ``[first, second]`` of pure Outcome returns and checks the
-# merged ``PreToolOutcome`` matches spec §3.2: first Block wins → first
-# Ask wins → first Replace wins → last Allow wins.
+# merged Outcome matches spec §3.2: first Block wins → first Ask wins →
+# first Replace wins → last Allow wins.
 # ---------------------------------------------------------------------------
 
 
@@ -177,14 +163,8 @@ _REPLACE_B = Replace(
 )
 
 
-def _check_winner(
-    out: Outcome | PreToolOutcome, expected: Outcome,
-) -> None:
-    """Assert ``out`` matches the expected Outcome variant.
-
-    Task 9: run_pre_tool now returns Outcome directly for pure-Outcome chains.
-    The assertions check the Outcome variant shape.
-    """
+def _check_winner(out: Outcome, expected: Outcome) -> None:
+    """Assert ``out`` matches the expected Outcome variant."""
     if isinstance(expected, Allow):
         assert isinstance(out, Allow), f"expected Allow, got {type(out).__name__}"
         assert out.decision is expected.decision
@@ -203,12 +183,23 @@ def _check_winner(
 
 
 # Cases: (first_hook_return, second_hook_return, expected_winner).
-# Precedence: Block > Ask > Replace > Allow (Allow uses last-wins).
+# Updated precedence for pure-Outcome chains (post-PreToolOutcome deletion):
+#
+#   Block > Replace > Ask > Allow(authoritative) > Allow(mode_bypass)
+#
+# Key changes from old spec:
+# - Replace beats Ask (safety block overrides pending confirmation request).
+# - Ask beats non-resolved Allow (only user_accept / user_always resolve it).
+# - First authoritative Allow wins (mode_bypass is passthrough, not terminal).
+# - Block short-circuits run_pre_tool immediately, never reaches _merge_outcomes
+#   when in the first position; Block-first cases are kept for completeness but
+#   the merge never actually sees two outcomes in those cases.
 _MATRIX_CASES: list[tuple[Outcome, Outcome, Outcome]] = [
     # --- Allow first (4 cases) ---
-    (_ALLOW_A, _ALLOW_B, _ALLOW_B),    # last Allow wins
+    # first authoritative Allow wins (mode_bypass < mode_accept_edits)
+    (_ALLOW_A, _ALLOW_B, _ALLOW_B),
     (_ALLOW_A, _BLOCK_B, _BLOCK_B),    # Block beats Allow
-    (_ALLOW_A, _ASK_B, _ASK_B),        # Ask beats Allow
+    (_ALLOW_A, _ASK_B, _ASK_B),        # Ask beats Allow(passthrough)
     (_ALLOW_A, _REPLACE_B, _REPLACE_B),  # Replace beats Allow
     # --- Block first (4 cases) ---
     # Block short-circuits — second never runs. First Block wins.
@@ -217,14 +208,15 @@ _MATRIX_CASES: list[tuple[Outcome, Outcome, Outcome]] = [
     (_BLOCK_A, _ASK_B, _BLOCK_A),
     (_BLOCK_A, _REPLACE_B, _BLOCK_A),
     # --- Ask first (4 cases) ---
-    (_ASK_A, _ALLOW_B, _ASK_A),         # Ask beats Allow (first Ask)
-    (_ASK_A, _BLOCK_B, _BLOCK_B),       # Block still beats Ask
-    (_ASK_A, _ASK_B, _ASK_A),           # first Ask wins
-    (_ASK_A, _REPLACE_B, _ASK_A),       # Ask beats Replace
+    # Ask beats non-resolved Allow (mode_accept_edits not user-driven)
+    (_ASK_A, _ALLOW_B, _ASK_A),
+    (_ASK_A, _BLOCK_B, _BLOCK_B),       # Block beats Ask
+    (_ASK_A, _ASK_B, _ASK_A),           # first Ask wins (both unresolved)
+    (_ASK_A, _REPLACE_B, _REPLACE_B),   # Replace beats Ask (safety overrides confirmation)
     # --- Replace first (4 cases) ---
     (_REPLACE_A, _ALLOW_B, _REPLACE_A),  # Replace beats Allow
     (_REPLACE_A, _BLOCK_B, _BLOCK_B),    # Block beats Replace
-    (_REPLACE_A, _ASK_B, _ASK_B),        # Ask beats Replace
+    (_REPLACE_A, _ASK_B, _REPLACE_A),    # Replace beats Ask (safety overrides confirmation)
     (_REPLACE_A, _REPLACE_B, _REPLACE_A),  # first Replace wins
 ]
 
@@ -261,13 +253,13 @@ async def test_block_short_circuits_chain_no_later_hook_runs() -> None:
 
     async def first(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
+    ) -> Outcome:
         call_log.append("first")
-        return _BLOCK_A  # type: ignore[return-value]
+        return _BLOCK_A
 
     async def never(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
+    ) -> Outcome:
         call_log.append("never")
         raise AssertionError("hook must not run after Block short-circuit")
 
@@ -276,7 +268,8 @@ async def test_block_short_circuits_chain_no_later_hook_runs() -> None:
         tool=_stub_tool, args={}, state=LoopState(),
     )
     assert call_log == ["first"]
-    assert out.decision is _BLOCK_A.decision  # type: ignore[union-attr]
+    assert isinstance(out, Block)
+    assert out.decision is _BLOCK_A.decision
 
 
 @pytest.mark.asyncio
@@ -287,34 +280,38 @@ async def test_replace_does_not_short_circuit_block_can_still_win() -> None:
 
     async def first(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
+    ) -> Outcome:
         call_log.append("first")
-        return _REPLACE_A  # type: ignore[return-value]
+        return _REPLACE_A
 
     async def second(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
+    ) -> Outcome:
         call_log.append("second")
-        return _BLOCK_B  # type: ignore[return-value]
+        return _BLOCK_B
 
     chain = HookChain(pre_tool=[first, second])
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    # Both ran; Block wins. Task 9: returns Block directly.
+    # Both ran; Block wins.
     assert call_log == ["first", "second"]
     assert isinstance(out, Block), f"expected Block, got {type(out).__name__}"
     assert out.decision is _BLOCK_B.decision
 
 
 @pytest.mark.asyncio
-async def test_three_hook_chain_last_allow_wins_when_no_higher_variant() -> None:
-    """Last-Allow-wins must apply across more than two hooks — the
-    refining-permission-hook idiom (chain ends with the permission
-    hook stamping its rule) needs this."""
-    a1 = Allow(decision=_allow("mode_bypass"))
-    a2 = Allow(decision=_allow_with_rule("stub"))
-    a3 = Allow(decision=_allow("mode_accept_edits"))
+async def test_three_hook_chain_first_authoritative_allow_wins() -> None:
+    """First authoritative (non-mode_bypass) Allow wins across a three-hook chain.
+
+    This mirrors real hook ordering: bash_safety (mode_bypass passthrough) →
+    permission hook (rule_allow authoritative) → must_read_first (mode_bypass
+    passthrough). The permission hook's rule_allow verdict is the correct
+    audit line even though passthrough hooks bookend it.
+    """
+    a1 = Allow(decision=_allow("mode_bypass"))    # bash_safety passthrough
+    a2 = Allow(decision=_allow_with_rule("stub")) # permission hook — authoritative
+    a3 = Allow(decision=_allow("mode_bypass"))    # must_read_first passthrough
 
     chain = HookChain(
         pre_tool=[_make_hook(a1), _make_hook(a2), _make_hook(a3)],
@@ -322,72 +319,6 @@ async def test_three_hook_chain_last_allow_wins_when_no_higher_variant() -> None
     out = await chain.run_pre_tool(
         tool=_stub_tool, args={}, state=LoopState(),
     )
-    assert out.decision is a3.decision  # type: ignore[union-attr]
-
-
-# ---------------------------------------------------------------------------
-# Mixed-mode back-compat: a chain containing one legacy PreToolOutcome
-# falls back to the legacy merge logic. Existing built-in hooks (Task 9
-# migrates them) MUST keep working unchanged while Outcome adoption is
-# in flight.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_mixed_outcome_then_legacy_uses_legacy_merge() -> None:
-    """An Allow followed by a legacy deny PreToolOutcome must yield
-    the legacy first-deny-wins behavior — Allow's decision is recorded
-    but the deny supersedes."""
-    allow = Allow(decision=_allow("mode_bypass"))
-    deny = _deny("safety_blocked")
-
-    async def legacy_deny(
-        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=None, decision=deny)
-
-    chain = HookChain(pre_tool=[_make_hook(allow), legacy_deny])
-    out = await chain.run_pre_tool(
-        tool=_stub_tool, args={}, state=LoopState(),
-    )
-    assert out.decision is deny  # type: ignore[union-attr]
-
-
-@pytest.mark.asyncio
-async def test_mixed_legacy_then_outcome_falls_back_to_legacy_merge() -> None:
-    """Legacy first, Allow second — legacy chain semantics keep the
-    first-deny-wins or last-allow-wins result. Here both are allows
-    so the Outcome's decision (last) wins under legacy too."""
-    early_allow = _allow("mode_bypass")
-    late_allow = _allow_with_rule("stub")
-
-    async def legacy_allow(
-        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PreToolOutcome(short_circuit=None, decision=early_allow)
-
-    chain = HookChain(
-        pre_tool=[legacy_allow, _make_hook(Allow(decision=late_allow))],
-    )
-    out = await chain.run_pre_tool(
-        tool=_stub_tool, args={}, state=LoopState(),
-    )
-    assert out.decision is late_allow  # type: ignore[union-attr]
-
-
-@pytest.mark.asyncio
-async def test_mixed_passthrough_legacy_with_outcome_works() -> None:
-    """A passthrough legacy hook must coexist with an Outcome hook —
-    the Outcome's winner still surfaces."""
-    block = Block(decision=_deny("safety_blocked"))
-
-    async def passthrough(
-        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
-    ) -> PreToolOutcome:
-        return PRE_TOOL_PASSTHROUGH
-
-    chain = HookChain(pre_tool=[passthrough, _make_hook(block)])
-    out = await chain.run_pre_tool(
-        tool=_stub_tool, args={}, state=LoopState(),
-    )
-    assert out.decision is block.decision  # type: ignore[union-attr]
+    assert isinstance(out, Allow)
+    # The permission hook's rule_allow wins over surrounding mode_bypass hooks.
+    assert out.decision is a2.decision

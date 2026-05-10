@@ -46,12 +46,12 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
-from aura.core.hooks import PRE_TOOL_PASSTHROUGH, PreToolHook, PreToolOutcome
+from aura.core.hooks import PreToolHook
 from aura.core.permissions.bash_safety import check_bash_safety
 from aura.core.permissions.decision import Decision
 from aura.core.permissions.denials import PermissionDenial
 from aura.core.permissions.mode import DEFAULT_MODE, Mode
-from aura.schemas.permissions import Replace
+from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 
@@ -97,25 +97,25 @@ def make_bash_safety_hook(
         state: LoopState,
         tool_call_id: str = "",
         **_: Any,
-    ) -> PreToolOutcome:
+    ) -> Allow | Replace:
         if tool.name not in tool_names:
-            return PRE_TOOL_PASSTHROUGH
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         # Bypass mode — loud and first. Parity with the permission hook
         # which skips its own safety check under bypass: the user has
         # opted into "run anything", and re-applying safety here would
         # create a one-off drift between policy layers.
         if _mode_provider() == "bypass":
-            return PRE_TOOL_PASSTHROUGH
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         command = args.get("command")
         if not isinstance(command, str) or not command:
             # Tool's own arg-validation rejects; don't pre-empt.
-            return PRE_TOOL_PASSTHROUGH
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         violation = check_bash_safety(command)
         if violation is None:
-            return PRE_TOOL_PASSTHROUGH
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         # Lazy import — mirrors must_read_first.py — keeps the journal
         # dependency out of the module-load path.
@@ -157,7 +157,7 @@ def make_bash_safety_hook(
             )
         )
 
-        return Replace(  # type: ignore[return-value]
+        return Replace(
             result=ToolResult(
                 ok=False,
                 error=(

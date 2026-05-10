@@ -29,7 +29,7 @@ from aura.tools.base import build_tool
 
 def _sc(outcome: object) -> ToolResult | None:
     """Extract the short-circuit ToolResult from either Replace (Task 9+)
-    or legacy PreToolOutcome. Keeps existing test assertions concise while
+    Keeps existing test assertions concise while
     supporting both shapes during the migration window."""
     if isinstance(outcome, Replace):
         return outcome.result
@@ -847,7 +847,7 @@ async def test_bash_journal_emits_blocked_event_with_command(
 
 # ---------------------------------------------------------------------------
 # Phase 1 Task 9 — Outcome variant assertions.
-# Blocked paths now return Replace; passthrough paths return PRE_TOOL_PASSTHROUGH.
+# Blocked paths return Replace; passthrough paths return Allow.
 # ---------------------------------------------------------------------------
 
 

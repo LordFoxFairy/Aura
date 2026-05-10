@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aura.config.schema import WebSearchConfig
 from aura.core.permissions.matchers import exact_match_on
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 # Optional dependency. ``DDGS`` and ``RatelimitException`` are imported at
 # module load so test code can ``monkeypatch.setattr`` on the attribute
@@ -106,16 +106,14 @@ class WebSearch(BaseTool):
         "web_fetch on a hit's url to read its contents."
     )
     args_schema: type[BaseModel] = WebSearchParams
-    metadata: dict[str, Any] | None = tool_metadata(
+    aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=True,
+        is_destructive=False,
         is_concurrency_safe=True,
-        max_result_size_chars=8_000,
         rule_matcher=exact_match_on("query"),
         args_preview=_preview,
-        # DDGS has no explicit timeout knob; a 30s outer deadline stops a
-        # throttled / hung query from freezing the turn.
         timeout_sec=30.0,
-        is_search_command=True,
+        capability_flags=frozenset({"search_command"}),
     )
     # Injected at Agent construction. None means "use defaults" (DuckDuckGo,
     # max_results=5). A non-None config pins the provider and may override

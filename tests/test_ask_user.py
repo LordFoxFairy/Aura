@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.ask_user import (
     AskUserQuestion,
     AskUserQuestionParams,
@@ -106,7 +107,7 @@ def test_schema_rejects_question_over_500_chars() -> None:
 def test_tool_metadata_not_concurrency_safe() -> None:
     asker, _ = _stub_asker()
     tool = AskUserQuestion(asker=asker)
-    meta = tool.metadata or {}
+    meta = meta_dict(tool)
     assert meta.get("is_concurrency_safe") is False
 
 

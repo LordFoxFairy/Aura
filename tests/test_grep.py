@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from aura.schemas.tool import ToolError
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.grep import grep
 
 
@@ -157,14 +158,14 @@ async def test_real_error_raises_tool_error(tmp_path: Path) -> None:
 
 
 def test_grep_capability_flags() -> None:
-    meta = grep.metadata or {}
+    meta = meta_dict(grep)
     assert meta.get("is_read_only") is True
     assert meta.get("is_concurrency_safe") is True
     assert meta.get("is_destructive") is False
 
 
 def test_grep_metadata_includes_matcher_and_preview() -> None:
-    meta = grep.metadata or {}
+    meta = meta_dict(grep)
     assert meta.get("rule_matcher") is not None
     preview = meta.get("args_preview")
     assert callable(preview)

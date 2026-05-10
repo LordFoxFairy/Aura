@@ -224,8 +224,9 @@ async def test_deprecated_tool_still_works_for_programmatic_sdk_users() -> None:
             [("fake", "mem://doc", "doc", "", None)],
         ),
     )
-    # Deprecation marker is on metadata, but the tool still functions.
-    assert tool.metadata and tool.metadata.get("deprecated") is True
+    # Deprecation marker is on aura_metadata capability_flags, but the tool still functions.
+    assert tool.aura_metadata is not None
+    assert "deprecated" in tool.aura_metadata.capability_flags
     out = await tool.ainvoke({"uri": "mem://doc"})
     assert out["uri"] == "mem://doc"
     assert out["contents"][0]["text"] == "body-of-mem://doc"

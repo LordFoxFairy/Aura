@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aura.core.tasks.store import TasksStore
 from aura.core.tasks.types import TaskRecord
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 
 class TaskGetParams(BaseModel):
@@ -114,11 +114,13 @@ class TaskGet(BaseTool):
         "child transcript."
     )
     args_schema: type[BaseModel] = TaskGetParams
-    metadata: dict[str, Any] | None = tool_metadata(
+    aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=True,
+        is_destructive=False,
         is_concurrency_safe=True,
-        max_result_size_chars=16000,
+        rule_matcher=None,
         args_preview=_preview,
+        timeout_sec=None,
     )
     store: TasksStore
 

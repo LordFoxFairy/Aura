@@ -19,7 +19,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, model_validator
 
 from aura.core.permissions.matchers import exact_match_on
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 OutputMode = Literal["content", "files_with_matches", "count"]
 
@@ -176,17 +176,14 @@ class Grep(BaseTool):
         "(default 500 chars) are elided with '[...]'."
     )
     args_schema: type[BaseModel] = GrepParams
-    metadata: dict[str, Any] | None = tool_metadata(
+    aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=True,
+        is_destructive=False,
         is_concurrency_safe=True,
-        max_result_size_chars=80_000,
         rule_matcher=exact_match_on("pattern"),
         args_preview=_preview,
-        # 30s matches the internal subprocess.run timeout we pass to ripgrep;
-        # the outer loop wrapper is a belt-and-braces guard in case the rg
-        # process ignores SIGALRM or Python's timeout plumbing is bypassed.
         timeout_sec=30.0,
-        is_search_command=True,
+        capability_flags=frozenset({"search_command"}),
     )
 
     def _run(self, **kwargs: Any) -> dict[str, Any]:

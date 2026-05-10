@@ -49,7 +49,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from aura.core.permissions.matchers import exact_match_on
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 _DEFAULT_TIMEOUT = 30
 _MAX_BYTES = 1024 * 1024
@@ -395,18 +395,13 @@ class WebFetch(BaseTool):
     # machine. Under prompt injection, the LLM could exfil data to an
     # attacker-controlled host. Our SSRF guard (``_reject_private_host``)
     # blocks internal-network scanning but NOT exfil. So: prompt by default.
-    metadata: dict[str, Any] | None = tool_metadata(
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=False,
+        is_destructive=False,
         is_concurrency_safe=True,
-        max_result_size_chars=60_000,
         rule_matcher=exact_match_on("url"),
         args_preview=_preview,
-        # 30s outer deadline. ``WebFetchParams.timeout`` still caps the
-        # inner urlopen at its own value (default 30s) — the wait_for wrap
-        # covers the socket-hang case where the internal timeout is
-        # bypassed (DNS resolver stalls, TLS handshake stuck, etc.).
         timeout_sec=30.0,
-        # Fetched documents are user-requested; do NOT fold.
-        is_search_command=False,
     )
 
     # Optional per-instance factory (test override). When None, the

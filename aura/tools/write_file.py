@@ -18,7 +18,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from aura.core.permissions.matchers import path_prefix_on
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 
 class WriteFileParams(BaseModel):
@@ -39,10 +39,13 @@ class WriteFile(BaseTool):
         "Missing parent directories are created automatically."
     )
     args_schema: type[BaseModel] = WriteFileParams
-    metadata: dict[str, Any] | None = tool_metadata(
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=False,
         is_destructive=True,
+        is_concurrency_safe=False,
         rule_matcher=path_prefix_on("path"),
         args_preview=_preview,
+        timeout_sec=None,
     )
 
     def _run(self, path: str, content: str) -> dict[str, Any]:

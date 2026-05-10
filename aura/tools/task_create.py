@@ -37,7 +37,7 @@ from aura.core.tasks.agent_types import all_agent_types, get_agent_type
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.run import run_task
 from aura.core.tasks.store import TasksStore
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 
 def _agent_type_field_description() -> str:
@@ -115,13 +115,13 @@ class TaskCreate(BaseTool):
         "The subagent runs in the background; your turn continues."
     )
     args_schema: type[BaseModel] = TaskCreateParams
-    metadata: dict[str, Any] | None = tool_metadata(
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=False,
         is_destructive=False,
-        # State-mutating (adds to TasksStore + creates an asyncio.Task on
-        # the loop); can't be batched with siblings.
         is_concurrency_safe=False,
-        max_result_size_chars=1000,
+        rule_matcher=None,
         args_preview=_preview,
+        timeout_sec=None,
     )
     # Stateful deps: store + factory + the running-tasks map (shared with
     # the owning Agent so Agent.close() can cancel). ``running`` lives as a

@@ -16,7 +16,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from aura.core.permissions.matchers import exact_match_on
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 
 class GlobParams(BaseModel):
@@ -88,15 +88,14 @@ class Glob(BaseTool):
         "repo, .gitignored and untracked files are excluded automatically."
     )
     args_schema: type[BaseModel] = GlobParams
-    metadata: dict[str, Any] | None = tool_metadata(
-        is_read_only=True, is_concurrency_safe=True, max_result_size_chars=40_000,
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=True,
+        is_destructive=False,
+        is_concurrency_safe=True,
         rule_matcher=exact_match_on("pattern"),
         args_preview=_preview,
-        # Pathlib enumeration plus an optional `git ls-files` subprocess;
-        # 10s already indicates a pathological repo (10M+ entries or NFS
-        # stall) — bail rather than freeze the turn.
         timeout_sec=10.0,
-        is_search_command=True,
+        capability_flags=frozenset({"search_command"}),
     )
 
     def _run(

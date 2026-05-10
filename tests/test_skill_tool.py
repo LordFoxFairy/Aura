@@ -28,6 +28,7 @@ from aura.core.persistence.storage import SessionStorage
 from aura.core.skills.registry import SkillRegistry
 from aura.core.skills.types import Skill
 from aura.schemas.tool import ToolError
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.skill import SkillTool
 from tests.conftest import FakeChatModel
 
@@ -125,7 +126,7 @@ def test_skill_tool_empty_name_rejected_by_schema() -> None:
 def test_skill_tool_metadata_is_read_only_and_not_destructive() -> None:
     reg = SkillRegistry()
     tool = _tool(reg, _RecorderSpy())
-    meta = tool.metadata or {}
+    meta = meta_dict(tool)
     assert meta.get("is_read_only") is True
     assert meta.get("is_destructive") is False
 

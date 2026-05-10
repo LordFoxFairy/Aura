@@ -30,7 +30,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from aura.core.tasks.store import TasksStore
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 # Upper bound on how long we wait for the child to unwind after
 # ``.cancel()``. Most subagents unwind in a single event-loop tick; this
@@ -64,13 +64,13 @@ class TaskStop(BaseTool):
         "the task is unknown or already in a terminal state."
     )
     args_schema: type[BaseModel] = TaskStopParams
-    metadata: dict[str, Any] | None = tool_metadata(
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=False,
         is_destructive=False,
-        # Mutates the running-tasks map + triggers a state transition on
-        # the TaskRecord; not safe to run alongside its siblings.
         is_concurrency_safe=False,
-        max_result_size_chars=500,
+        rule_matcher=None,
         args_preview=_preview,
+        timeout_sec=None,
     )
     store: TasksStore
     # See task_create for why ``running`` / ``running_shells`` are

@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from aura.schemas.tool import ToolError
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.web_fetch import WebFetchParams, _fetch
 
 _wf_mod = importlib.import_module("aura.tools.web_fetch")
@@ -131,7 +132,7 @@ def test_web_fetch_rejects_malformed_url() -> None:
 def test_web_fetch_capability_flags() -> None:
     from aura.tools.web_fetch import web_fetch
 
-    meta = web_fetch.metadata or {}
+    meta = meta_dict(web_fetch)
     # Deliberately NOT is_read_only — auto-approving network reach would
     # let a prompt-injected LLM exfiltrate via URL. See the class comment
     # in aura/tools/web_fetch.py.
@@ -152,7 +153,7 @@ def test_web_fetch_timeout_bounds() -> None:
 def test_web_fetch_metadata_includes_matcher_and_preview() -> None:
     from aura.tools.web_fetch import web_fetch
 
-    meta = web_fetch.metadata or {}
+    meta = meta_dict(web_fetch)
     assert meta.get("rule_matcher") is not None
     preview = meta.get("args_preview")
     assert callable(preview)

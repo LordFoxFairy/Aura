@@ -20,16 +20,15 @@ def _fake_tool(
     rule_matcher: Callable[[dict[str, Any], str], bool] | None = None,
 ) -> BaseTool:
     """Minimal BaseTool for matcher tests; optionally carries ``rule_matcher``
-    in its metadata dict (the slot ``Rule.matches`` consults)."""
+    via ``aura_metadata`` (the slot ``Rule.matches`` consults via ``meta_dict``)."""
 
     class _P(BaseModel):
         pass
 
-    tool = build_tool(name=name, description=name, args_schema=_P, func=lambda: {})
-    if rule_matcher is not None:
-        assert tool.metadata is not None
-        tool.metadata["rule_matcher"] = rule_matcher
-    return tool
+    return build_tool(
+        name=name, description=name, args_schema=_P,
+        func=lambda: {}, rule_matcher=rule_matcher,
+    )
 
 
 def test_parse_bare_tool_name_yields_tool_wide_rule() -> None:

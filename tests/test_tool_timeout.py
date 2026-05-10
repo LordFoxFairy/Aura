@@ -72,12 +72,8 @@ async def test_slow_tool_with_timeout_raises_tool_error() -> None:
         description="slow",
         args_schema=_NoArgs,
         coroutine=_slow,
+        timeout_sec=0.1,
     )
-    # build_tool doesn't forward timeout_sec, so patch the metadata post hoc.
-    # Production tools set this declaratively in tool_metadata(...); the
-    # factory stays minimal for tests.
-    assert slow.metadata is not None
-    slow.metadata["timeout_sec"] = 0.1
 
     loop, history = _make_loop_with_tool(slow)
     completed: list[ToolCallCompleted] = []
@@ -104,9 +100,8 @@ async def test_fast_tool_with_timeout_returns_normally() -> None:
         description="fast",
         args_schema=_NoArgs,
         coroutine=_fast,
+        timeout_sec=0.1,
     )
-    assert fast.metadata is not None
-    fast.metadata["timeout_sec"] = 0.1
 
     loop, history = _make_loop_with_tool(fast)
     completed: list[ToolCallCompleted] = []
@@ -137,8 +132,7 @@ async def test_timeout_sec_none_enforces_no_deadline() -> None:
         args_schema=_NoArgs,
         coroutine=_slow_but_ok,
     )
-    assert t.metadata is not None
-    assert t.metadata.get("timeout_sec") is None
+    assert meta_dict(t).get("timeout_sec") is None
 
     loop, history = _make_loop_with_tool(t)
     completed: list[ToolCallCompleted] = []
@@ -159,7 +153,7 @@ def test_bash_metadata_timeout_sec_is_none() -> None:
     # double-fire on real timeouts and interfere with the cleanup ladder
     # that kills the subprocess. Leave this explicit so future edits
     # don't accidentally set it.
-    assert (bash.metadata or {}).get("timeout_sec") is None
+    assert meta_dict(bash).get("timeout_sec") is None
 
 
 def test_bash_background_metadata_timeout_sec_is_none() -> None:
@@ -170,7 +164,7 @@ def test_bash_background_metadata_timeout_sec_is_none() -> None:
     from aura.core.tasks.store import TasksStore
 
     tool = BashBackground(store=TasksStore(), running_shells={})
-    assert (tool.metadata or {}).get("timeout_sec") is None
+    assert meta_dict(tool).get("timeout_sec") is None
 
 
 # --------------------------------------------------------------------------
@@ -179,11 +173,11 @@ def test_bash_background_metadata_timeout_sec_is_none() -> None:
 # rather than sneaks through review.
 # --------------------------------------------------------------------------
 def test_grep_timeout_default_is_30() -> None:
-    assert (grep.metadata or {}).get("timeout_sec") == 30.0
+    assert meta_dict(grep).get("timeout_sec") == 30.0
 
 
 def test_glob_timeout_default_is_10() -> None:
-    assert (glob.metadata or {}).get("timeout_sec") == 10.0
+    assert meta_dict(glob).get("timeout_sec") == 10.0
 
 
 def test_read_file_timeout_default_is_10() -> None:
@@ -195,10 +189,10 @@ def test_read_file_timeout_default_is_10() -> None:
 
 
 def test_web_fetch_timeout_default_is_30() -> None:
-    assert (web_fetch.metadata or {}).get("timeout_sec") == 30.0
+    assert meta_dict(web_fetch).get("timeout_sec") == 30.0
 
 
 def test_web_search_timeout_default_is_30() -> None:
     # WebSearch is a class — instantiate once for metadata check.
     ws = WebSearch()
-    assert (ws.metadata or {}).get("timeout_sec") == 30.0
+    assert meta_dict(ws).get("timeout_sec") == 30.0

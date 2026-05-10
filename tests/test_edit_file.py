@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from aura.schemas.tool import ToolError
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.edit_file import _MAX_EDIT_SIZE, edit_file
 
 
@@ -71,7 +72,7 @@ async def test_edit_file_delete_via_empty_new_str(tmp_path: Path) -> None:
 
 
 def test_edit_file_capability_flags() -> None:
-    meta = edit_file.metadata or {}
+    meta = meta_dict(edit_file)
     assert meta.get("is_destructive") is True
     assert meta.get("is_read_only") is False
 
@@ -79,7 +80,7 @@ def test_edit_file_capability_flags() -> None:
 def test_edit_file_metadata_includes_matcher_and_preview() -> None:
     from aura.tools.edit_file import edit_file
 
-    meta = edit_file.metadata or {}
+    meta = meta_dict(edit_file)
     assert meta.get("rule_matcher") is not None
     preview = meta.get("args_preview")
     assert callable(preview)

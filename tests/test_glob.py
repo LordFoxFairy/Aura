@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from aura.schemas.tool import ToolError
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.glob import glob
 
 
@@ -65,7 +66,7 @@ async def test_glob_returns_relative_paths(tmp_path: Path) -> None:
 
 
 def test_glob_capability_flags() -> None:
-    meta = glob.metadata or {}
+    meta = meta_dict(glob)
     assert meta.get("is_read_only") is True
     assert meta.get("is_concurrency_safe") is True
     assert meta.get("is_destructive") is False
@@ -74,7 +75,7 @@ def test_glob_capability_flags() -> None:
 def test_glob_metadata_includes_matcher_and_preview() -> None:
     from aura.tools.glob import glob
 
-    meta = glob.metadata or {}
+    meta = meta_dict(glob)
     assert meta.get("rule_matcher") is not None
     preview = meta.get("args_preview")
     assert callable(preview)

@@ -98,7 +98,7 @@ class ToolMetadata:
     """
 
     is_read_only: bool
-    is_destructive: bool
+    is_destructive: bool | ToolFlagResolver
     is_concurrency_safe: bool
     rule_matcher: ToolRuleMatcher | None
     args_preview: ToolArgsPreview | None

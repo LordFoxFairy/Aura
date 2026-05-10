@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from aura.core.abort import current_abort_signal
 from aura.core.tasks.store import TasksStore
 from aura.core.tasks.types import TaskRecord
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 # Timeout bounds for ``wait=True``. The lower bound is set to a small
 # positive value so tests can drive sub-second timeouts deterministically;
@@ -104,11 +104,13 @@ class TaskOutput(BaseTool):
         "task reaches a terminal state (timeout-bounded; default 60s)."
     )
     args_schema: type[BaseModel] = TaskOutputParams
-    metadata: dict[str, Any] | None = tool_metadata(
+    aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=True,
+        is_destructive=False,
         is_concurrency_safe=True,
-        max_result_size_chars=8000,
+        rule_matcher=None,
         args_preview=_preview,
+        timeout_sec=None,
     )
     store: TasksStore
 

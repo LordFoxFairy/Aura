@@ -9,7 +9,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from aura.core.permissions.matchers import path_prefix_on
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 # F-02-009 — pre-stat size cap mirroring claude-code's edit-pre-stat
 # guard. 256 MB is well above any reasonable source file but well below
@@ -49,10 +49,13 @@ class EditFile(BaseTool):
         "ambiguous matches."
     )
     args_schema: type[BaseModel] = EditFileParams
-    metadata: dict[str, Any] | None = tool_metadata(
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=False,
         is_destructive=True,
+        is_concurrency_safe=False,
         rule_matcher=path_prefix_on("path"),
         args_preview=_preview,
+        timeout_sec=None,
     )
 
     def _run(

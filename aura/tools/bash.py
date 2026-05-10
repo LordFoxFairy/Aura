@@ -44,7 +44,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from aura.core.permissions.matchers import exact_match_on
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 from aura.tools.progress import get_progress_callback
 
 _DEFAULT_TIMEOUT = 30
@@ -318,14 +318,13 @@ class Bash(BaseTool):
         "100 MB hard ceiling into Python memory)."
     )
     args_schema: type[BaseModel] = BashParams
-    metadata: dict[str, Any] | None = tool_metadata(
-        # Input-aware: a command like ``ls`` resolves to False (read-like,
-        # safety layer picks the protected_reads list); ``rm -rf`` resolves
-        # to True (destructive, protected_writes list). See
-        # ``_is_bash_destructive`` and ``resolve_is_destructive``.
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=False,
         is_destructive=_is_bash_destructive,
+        is_concurrency_safe=False,
         rule_matcher=exact_match_on("command"),
         args_preview=_preview,
+        timeout_sec=None,
     )
 
     def _run(self, command: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:

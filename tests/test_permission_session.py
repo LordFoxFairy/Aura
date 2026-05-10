@@ -21,11 +21,10 @@ def _fake_tool(
     class _P(BaseModel):
         pass
 
-    tool = build_tool(name=name, description=name, args_schema=_P, func=lambda: {})
-    if rule_matcher is not None:
-        assert tool.metadata is not None
-        tool.metadata["rule_matcher"] = rule_matcher
-    return tool
+    return build_tool(
+        name=name, description=name, args_schema=_P,
+        func=lambda: {}, rule_matcher=rule_matcher,
+    )
 
 
 def test_empty_ruleset_matches_nothing() -> None:

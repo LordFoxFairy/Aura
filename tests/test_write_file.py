@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from aura.schemas.tool import ToolError
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.write_file import write_file
 
 
@@ -92,7 +93,7 @@ async def test_write_file_path_is_directory_fails(tmp_path: Path) -> None:
 
 
 def test_write_file_capability_flags() -> None:
-    meta = write_file.metadata or {}
+    meta = meta_dict(write_file)
     assert meta.get("is_read_only") is False
     assert meta.get("is_destructive") is True
     assert meta.get("is_concurrency_safe") is False
@@ -105,7 +106,7 @@ def test_write_file_no_check_permissions_method() -> None:
 def test_write_file_metadata_includes_matcher_and_preview() -> None:
     from aura.tools.write_file import write_file
 
-    meta = write_file.metadata or {}
+    meta = meta_dict(write_file)
     assert meta.get("rule_matcher") is not None
     preview = meta.get("args_preview")
     assert callable(preview)

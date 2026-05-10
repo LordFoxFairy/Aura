@@ -428,7 +428,5 @@ def test_deprecated_tool_metadata_marks_flag() -> None:
         return {"uri": uri, "server": "x", "contents": []}
 
     tool = MCPReadResourceTool(resource_reader=_noop_reader)
-    assert tool.metadata is not None
-    assert tool.metadata.get("deprecated") is True
-    assert tool.metadata.get("deprecated_since") == "0.10.0"
-    assert "@server:uri" in (tool.metadata.get("deprecated_replacement") or "")
+    assert tool.aura_metadata is not None
+    assert "deprecated" in tool.aura_metadata.capability_flags

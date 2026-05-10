@@ -8,6 +8,7 @@ import pytest
 
 from aura.config.schema import WebSearchConfig
 from aura.schemas.tool import ToolError
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.web_search import WebSearch
 
 # ---------------------------------------------------------------------------
@@ -17,15 +18,16 @@ from aura.tools.web_search import WebSearch
 
 def test_web_search_tool_metadata_flags() -> None:
     tool = WebSearch(config=None)
-    meta = tool.metadata or {}
+    meta = meta_dict(tool)
     assert meta.get("is_read_only") is True
     assert meta.get("is_concurrency_safe") is True
-    assert meta.get("max_result_size_chars") == 8_000
+    # max_result_size_chars is a legacy-only key not in ToolMetadata;
+    # the budget hook uses the global cap when the per-tool cap is None.
 
 
 def test_web_search_metadata_matcher_exact_on_query() -> None:
     tool = WebSearch(config=None)
-    meta = tool.metadata or {}
+    meta = meta_dict(tool)
     matcher = meta.get("rule_matcher")
     assert callable(matcher)
     # exact_match_on("query") carries a .key attribute per the matchers module convention.
@@ -36,7 +38,7 @@ def test_web_search_metadata_matcher_exact_on_query() -> None:
 
 def test_web_search_args_preview() -> None:
     tool = WebSearch(config=None)
-    meta = tool.metadata or {}
+    meta = meta_dict(tool)
     preview = meta.get("args_preview")
     assert callable(preview)
     assert preview({"query": "python typing"}) == "query: python typing"

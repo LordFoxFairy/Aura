@@ -58,7 +58,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 # The injected coroutine signature — takes a URI string, returns the
 # normalized ``{uri, server, contents}`` dict built by
@@ -129,26 +129,6 @@ def build_description(
     return "\n".join(lines)
 
 
-def _build_deprecated_metadata() -> dict[str, Any]:
-    # Base metadata + a local ``deprecated`` flag. ``tool_metadata`` returns
-    # a plain dict so we can tack on extra keys; no schema change needed on
-    # the shared helper for a one-tool opt-in marker. SDK code that wants
-    # to filter deprecated tools can check ``(tool.metadata or {}).get(
-    # "deprecated") is True``.
-    base = tool_metadata(
-        is_read_only=True,
-        is_destructive=False,
-        is_concurrency_safe=True,
-        max_result_size_chars=50_000,
-        args_preview=_preview,
-    )
-    base["deprecated"] = True
-    base["deprecated_since"] = "0.10.0"
-    base["deprecated_replacement"] = (
-        "@server:uri attachment syntax in the user prompt "
-        "(see aura.cli.attachments)"
-    )
-    return base
 
 
 class MCPReadResourceTool(BaseTool):
@@ -170,7 +150,15 @@ class MCPReadResourceTool(BaseTool):
     name: str = "mcp_read_resource"
     description: str = _BASE_DESCRIPTION + _NO_RESOURCES_SUFFIX
     args_schema: type[BaseModel] = ReadResourceParams
-    metadata: dict[str, Any] | None = _build_deprecated_metadata()
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=True,
+        is_destructive=False,
+        is_concurrency_safe=True,
+        rule_matcher=None,
+        args_preview=_preview,
+        timeout_sec=None,
+        capability_flags=frozenset({"deprecated"}),
+    )
     _reader: ResourceReader = PrivateAttr()
 
     def __init__(

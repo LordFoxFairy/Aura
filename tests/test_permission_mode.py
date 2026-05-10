@@ -26,6 +26,7 @@ from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
 from aura.schemas.tool import (
+    ToolMetadata,
     ToolResult,  # noqa: F401
     tool_metadata,
 )
@@ -464,19 +465,31 @@ def _tool_with_classifier(
     args_schema: type[BaseModel],
     is_destructive_fn: Any,
 ) -> BaseTool:
-    """Build a StructuredTool with a callable is_destructive in metadata.
+    """Build a StructuredTool with a callable is_destructive in aura_metadata.
 
     ``build_tool`` accepts only static bools for is_destructive; this
-    helper sidesteps it by calling ``tool_metadata`` directly so we
+    helper constructs a ``ToolMetadata`` with the callable directly so we
     can exercise the callable branch end-to-end through the hook.
+    ``ToolMetadata.is_destructive`` accepts ``bool | ToolFlagResolver``
+    (extended in Phase 2 Task 3) so the callable passes type-checking.
     """
-    return StructuredTool.from_function(
+    tool = StructuredTool.from_function(
         func=lambda **_kw: {},
         name=name,
         description=name,
         args_schema=args_schema,
         metadata=tool_metadata(is_destructive=is_destructive_fn),
     )
+    aura_meta = ToolMetadata(
+        is_read_only=False,
+        is_destructive=is_destructive_fn,
+        is_concurrency_safe=False,
+        rule_matcher=None,
+        args_preview=None,
+        timeout_sec=None,
+    )
+    object.__setattr__(tool, "aura_metadata", aura_meta)
+    return tool
 
 
 async def test_safety_uses_callable_is_destructive_true_branch(tmp_path: Path) -> None:

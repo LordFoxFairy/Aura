@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from aura.schemas.state import LoopState
 from aura.schemas.todos import TodoItem
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.todo_write import TodoWrite, TodoWriteParams
 
 
@@ -127,7 +128,7 @@ def test_tool_metadata_and_name() -> None:
     state = LoopState()
     tool = TodoWrite(state=state)
     assert tool.name == "todo_write"
-    meta = tool.metadata or {}
+    meta = meta_dict(tool)
     assert meta.get("is_read_only") is False
     assert meta.get("is_destructive") is False
     assert meta.get("is_concurrency_safe") is False
@@ -138,7 +139,7 @@ def test_todo_write_metadata_includes_matcher_and_preview() -> None:
 
     state = LoopState()
     tool = TodoWrite(state=state)
-    meta = tool.metadata or {}
+    meta = meta_dict(tool)
     assert meta.get("rule_matcher") is None
     preview = meta.get("args_preview")
     assert callable(preview)

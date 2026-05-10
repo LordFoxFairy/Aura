@@ -27,7 +27,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from aura.schemas.tool import tool_metadata
+from aura.schemas.tool import ToolMetadata
 
 # Async callable the tool delegates to. CLI provides a prompt_toolkit-backed
 # implementation; tests / SDK callers provide their own.
@@ -79,8 +79,13 @@ class AskUserQuestion(BaseTool):
     # No rule_matcher / args_preview: this tool is auto-allowed via
     # DEFAULT_ALLOW_RULES (prompting the user before letting the LLM prompt
     # the user would be nonsense). See aura/core/permissions/defaults.py.
-    metadata: dict[str, Any] | None = tool_metadata(
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=False,
+        is_destructive=False,
         is_concurrency_safe=False,
+        rule_matcher=None,
+        args_preview=None,
+        timeout_sec=None,
     )
     asker: QuestionAsker
 

@@ -180,6 +180,19 @@ class TasksStore:
         rec.progress.last_activity_at = time.time()
         _append_recent(rec.progress, activity)
 
+    def record_activity_note(self, task_id: str, activity: str) -> None:
+        """Note non-tool task activity without bumping ``tool_count``.
+
+        Teammate runtimes and other long-lived tasks can be active without
+        starting a tool. This updates ``last_activity_at`` and the recent
+        activity ring while preserving the stricter meaning of ``tool_count``.
+        """
+        rec = self._records.get(task_id)
+        if rec is None:
+            return
+        rec.progress.last_activity_at = time.time()
+        _append_recent(rec.progress, activity)
+
     def record_shell_line(self, task_id: str, line: str) -> None:
         """Append a shell output line to the task's progress ring.
 

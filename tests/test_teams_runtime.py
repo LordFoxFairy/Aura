@@ -11,10 +11,11 @@ import pytest
 
 from aura.core.abort import AbortController
 from aura.core.persistence.storage import SessionStorage
+from aura.core.tasks.store import TasksStore
 from aura.core.teams.mailbox import Mailbox
 from aura.core.teams.runtime import _format_envelope, run_teammate
 from aura.core.teams.types import TeamMessage
-from aura.schemas.events import Final
+from aura.schemas.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
 
 
 def _msg(body: str = "hi", kind: str = "text", sender: str = "leader") -> TeamMessage:
@@ -41,12 +42,23 @@ class _ScriptedAgent:
         self.replies = replies or ["ack"]
         self.prompts_seen: list[str] = []
         self._idx = 0
+        self._teammate_task_id: str | None = None
+        self._teammate_tasks_store: TasksStore | None = None
 
     async def astream(self, prompt: str, *, abort: Any = None) -> Any:
         self.prompts_seen.append(prompt)
         msg = self.replies[min(self._idx, len(self.replies) - 1)]
         self._idx += 1
         yield Final(message=msg, reason="natural")
+
+
+class _ProgressAgent(_ScriptedAgent):
+    async def astream(self, prompt: str, *, abort: Any = None) -> Any:
+        self.prompts_seen.append(prompt)
+        yield ToolCallStarted("bash", {"command": "echo hi"}, id="tc_1")
+        yield ToolCallProgress("bash", "stdout", "hi\n", id="tc_1")
+        yield PermissionAudit("bash", "auto-allowed")
+        yield Final(message="done", reason="natural")
 
 
 def test_format_envelope_wraps_each_sender() -> None:
@@ -88,6 +100,49 @@ async def test_runtime_processes_text_message(tmp_path: Path) -> None:
     assert "please work" in agent.prompts_seen[0]
     # And the .seen cursor advanced — no more unseen.
     assert box.read_unseen("alice") == []
+
+
+@pytest.mark.asyncio
+async def test_runtime_records_teammate_task_progress(tmp_path: Path) -> None:
+    storage = _storage(tmp_path)
+    box = Mailbox(storage, "team-a")
+    store = TasksStore()
+    record = store.create(
+        "teammate: alice",
+        "(idle teammate; awaiting messages)",
+        kind="teammate",
+    )
+    agent = _ProgressAgent(replies=["got it"])
+    agent._teammate_task_id = record.id
+    agent._teammate_tasks_store = store
+    abort = AbortController()
+    stop = asyncio.Event()
+    box.append(_msg(body="please work"))
+
+    task = asyncio.create_task(run_teammate(
+        agent=agent,  # type: ignore[arg-type]
+        team_id="team-a",
+        member_name="alice",
+        storage=storage,
+        stop_event=stop,
+        abort=abort,
+    ))
+    for _ in range(40):
+        await asyncio.sleep(0.05)
+        refreshed = store.get(record.id)
+        if refreshed is not None and refreshed.progress.tool_count > 0:
+            break
+    stop.set()
+    await asyncio.wait_for(task, timeout=10)
+
+    refreshed = store.get(record.id)
+    assert refreshed is not None
+    assert refreshed.progress.tool_count == 1
+    assert refreshed.progress.last_activity_at is not None
+    assert "bash" in refreshed.progress.recent_activities
+    assert "bash:stdout> hi" in refreshed.progress.recent_activities
+    assert "permission:bash" in refreshed.progress.recent_activities
+    assert "final" in refreshed.progress.recent_activities
 
 
 @pytest.mark.asyncio

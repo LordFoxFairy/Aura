@@ -471,6 +471,8 @@ class TeamManager:
         # tool can resolve the (team_id, sender) pair without reaching
         # back through the manager's private state.
         child.join_team(manager=self, member_name=name)
+        object.__setattr__(child, "_teammate_task_id", record.id)
+        object.__setattr__(child, "_teammate_tasks_store", self._tasks_store)
         self._member_agents[name] = child
         self._member_task_ids[name] = record.id
         # Allocate the abort controller and register it with the
@@ -660,6 +662,8 @@ class TeamManager:
             model_spec=model_name,
         )
         child.join_team(manager=self, member_name=name)
+        object.__setattr__(child, "_teammate_task_id", record.id)
+        object.__setattr__(child, "_teammate_tasks_store", self._tasks_store)
         self._member_agents[name] = child
         self._member_task_ids[name] = record.id
         abort = AbortController()

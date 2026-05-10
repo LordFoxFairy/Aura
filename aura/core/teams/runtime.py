@@ -38,15 +38,32 @@ from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.teams.mailbox import Mailbox
 from aura.core.teams.types import TeamMessage
-from aura.schemas.events import Final
+from aura.schemas.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
+    from aura.core.tasks.store import TasksStore
 
 #: How long to block per ``read_unseen`` poll cycle before checking the
 #: stop_event again. 5s keeps shutdowns snappy without busy-spinning the
 #: filesystem.
 _POLL_SLICE_SEC: float = 5.0
+
+
+def _task_tracking(agent: Agent) -> tuple[TasksStore, str] | None:
+    store = getattr(agent, "_teammate_tasks_store", None)
+    task_id = getattr(agent, "_teammate_task_id", None)
+    if store is None or not isinstance(task_id, str) or task_id == "":
+        return None
+    return store, task_id
+
+
+def _record_teammate_note(agent: Agent, activity: str) -> None:
+    tracking = _task_tracking(agent)
+    if tracking is None:
+        return
+    store, task_id = tracking
+    store.record_activity_note(task_id, activity)
 
 
 def _format_envelope(messages: list[TeamMessage]) -> str:
@@ -81,7 +98,25 @@ async def _drive_one_turn(
     final_text = ""
     transcript = storage.team_transcript_path(team_id, member_name)
     try:
+        _record_teammate_note(agent, "turn_started")
         async for event in agent.astream(prompt, abort=abort):
+            tracking = _task_tracking(agent)
+            if tracking is not None:
+                store, task_id = tracking
+                if isinstance(event, ToolCallStarted):
+                    store.record_activity(task_id, event.name)
+                elif isinstance(event, ToolCallProgress):
+                    chunk = event.chunk.strip()
+                    if chunk:
+                        store.record_activity_note(
+                            task_id,
+                            f"{event.name}:{event.stream}> {chunk}",
+                        )
+                elif isinstance(event, PermissionAudit):
+                    store.record_activity_note(
+                        task_id,
+                        f"permission:{event.tool}",
+                    )
             # Append a one-line representation of each event for
             # post-mortem inspection. We deliberately don't try to
             # round-trip BaseMessage objects here — the teammate's own
@@ -96,6 +131,7 @@ async def _drive_one_turn(
                     f.write(event.message[:500])
                 f.write("\n")
             if isinstance(event, Final):
+                _record_teammate_note(agent, "final")
                 final_text = event.message
     except AbortException:
         journal.write(

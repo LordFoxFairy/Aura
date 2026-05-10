@@ -121,9 +121,9 @@ def build_integration_agent(
     return agent, model
 
 
-async def drain(agent: Agent, prompt: str) -> list[AgentEvent]:
+async def drain(agent: Agent, prompt: str) -> list[AgentEvent | dict[str, Any]]:
     """Run ``agent.astream(prompt)`` to completion; return every event."""
-    events: list[AgentEvent] = []
+    events: list[AgentEvent | dict[str, Any]] = []
     async for event in agent.astream(prompt):
         events.append(event)
     return events

@@ -7,7 +7,7 @@ import contextlib
 import dataclasses
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from aura.core.tasks.types import TaskNotification
@@ -26,11 +26,11 @@ from aura.core.compact import (
     MicrocompactPolicy,
     run_compact,
 )
+from aura.core.compact.compactor import Compactor as CompactorImpl
 from aura.core.compact.constants import (
     AUTO_COMPACT_THRESHOLD,
     auto_compact_threshold_for,
 )
-from aura.core.compact.legacy_adapter import LegacyCompactor
 from aura.core.hooks import HookChain
 from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.hooks.budget import default_hooks
@@ -567,6 +567,13 @@ class Agent:
         )
         self._hooks.file_changed.append(make_aura_md_reload_hook(self))
         self._hooks.cwd_changed.append(make_cwd_rules_reload_hook(self))
+        # Phase 4 Task 4: AG-UI ``compact_event`` buffer. Populated by
+        # :class:`Compactor`'s ``event_emitter`` (constructed in
+        # :meth:`_build_loop`); drained by :meth:`astream` between loop
+        # yields so consumers see compact lifecycle events interleaved
+        # with the normal event stream. Each entry is a wire-format dict
+        # produced by :func:`aura.transport.wire.compact_event_to_wire`.
+        self._pending_compact_events: list[dict[str, Any]] = []
         self._loop = self._build_loop()
         # Phase 2 Task 8 — MCP lifecycle (manager + commands + connect /
         # disconnect + journal events) lives on McpRuntime. Factory
@@ -625,7 +632,7 @@ class Agent:
         *,
         attachments: list[HumanMessage] | None = None,
         abort: AbortController | None = None,
-    ) -> AsyncIterator[AgentEvent]:
+    ) -> AsyncIterator[AgentEvent | dict[str, Any]]:
         # Persistence order (matches claude-code QueryEngine.ts:431+451):
         #   1. Build history with attachments + user HumanMessage,
         #   2. ``storage.save`` BEFORE any model.ainvoke call,
@@ -704,6 +711,11 @@ class Agent:
             )
             self._current_abort = local_abort
             self._partial_assistant_text = ""
+            # Phase 4 Task 4 — flush any compact events buffered from a
+            # PRIOR turn (e.g. /compact between astream calls would have
+            # appended via ``Compactor.manual``'s emitter). Most turns
+            # find this empty.
+            self._pending_compact_events.clear()
 
             saw_ai_message = False
             try:
@@ -713,7 +725,21 @@ class Agent:
                     ):
                         if isinstance(event, AssistantDelta):
                             self._partial_assistant_text += event.text
+                        # Drain compact events buffered by the Compactor
+                        # during ``_invoke_model`` (microcompact runs
+                        # before every ainvoke; reactive runs on
+                        # context-overflow). Yield each as a wire-format
+                        # dict — typed AgentEvent consumers
+                        # ``isinstance``-check past it; transport adapters
+                        # forward it verbatim.
+                        while self._pending_compact_events:
+                            yield self._pending_compact_events.pop(0)
                         yield event
+                    # Final drain inside the success path so a microcompact
+                    # that fired on the last ainvoke (with no following
+                    # event) still surfaces.
+                    while self._pending_compact_events:
+                        yield self._pending_compact_events.pop(0)
                     saw_ai_message = any(
                         isinstance(m, AIMessage)
                         for m in history[history_len_before_user_turn:]
@@ -794,6 +820,12 @@ class Agent:
                 self._state.slots,
                 model=self._current_model_spec,
             )
+            # Phase 4 Task 4 — drain compact events emitted by ``auto``
+            # so the AG-UI / wire transport sees the post-turn lifecycle
+            # event. Skipped events (threshold not crossed, breaker
+            # tripped) still emit a ``"skipped"`` outcome dict here.
+            while self._pending_compact_events:
+                yield self._pending_compact_events.pop(0)
 
     def switch_model(self, spec: str) -> None:
         """Swap the live model. Raises ``AuraConfigError`` on failure.
@@ -1470,17 +1502,24 @@ class Agent:
             )
         else:
             policy = None
-        # Phase 1 §3.3: build a fresh LegacyCompactor every time so a
-        # ``switch_model`` (which rebuilds the loop) gets a compactor
+        # Phase 4 Task 4: build a fresh :class:`Compactor` every time so
+        # a ``switch_model`` (which rebuilds the loop) gets a compactor
         # whose microcompact policy reflects the current Agent config.
         # Stored on ``self._compactor`` so the post-turn auto-compact
         # site in :meth:`astream` can reach it without going through
-        # the loop.
-        self._compactor = LegacyCompactor(
-            self,
+        # the loop. ``event_emitter`` appends each per-call wire dict to
+        # ``self._pending_compact_events``; :meth:`astream` drains that
+        # buffer between loop yields so AG-UI consumers see
+        # ``aura.compact.event`` interleaved with the regular event
+        # stream.
+        self._compactor = CompactorImpl(
+            agent=self,
+            config=self._config.compact,
+            summary_model=self._model,
             microcompact_policy=policy,
             session_id=self._session_id,
             turn_provider=lambda: self._state.turn_count,
+            event_emitter=self._pending_compact_events.append,
         )
         return AgentLoop(
             model=self._model,

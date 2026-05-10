@@ -188,8 +188,8 @@ async def test_abort_before_any_ai_message_rolls_back_user_turn(
         config=cfg, model=model, storage=SessionStorage(tmp_path / "db"),
     )
 
-    async def _drive() -> list[AgentEvent]:
-        events: list[AgentEvent] = []
+    async def _drive() -> list[AgentEvent | dict[str, Any]]:
+        events: list[AgentEvent | dict[str, Any]] = []
         try:
             async for ev in agent.astream("the user prompt"):
                 events.append(ev)
@@ -259,8 +259,8 @@ async def test_abort_between_tool_batch_and_next_model_persists_balanced_history
         available_tools={"quick": quick_tool},
     )
 
-    async def _drive() -> list[AgentEvent]:
-        events: list[AgentEvent] = []
+    async def _drive() -> list[AgentEvent | dict[str, Any]]:
+        events: list[AgentEvent | dict[str, Any]] = []
         async for ev in agent.astream("run quick"):
             events.append(ev)
         return events
@@ -305,7 +305,7 @@ async def test_abort_after_partial_text_preserves_text(tmp_path: Path) -> None:
         config=cfg, model=model, storage=SessionStorage(tmp_path / "db"),
     )
 
-    events: list[AgentEvent] = []
+    events: list[AgentEvent | dict[str, Any]] = []
 
     async def _drive() -> None:
         try:

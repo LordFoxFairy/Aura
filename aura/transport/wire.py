@@ -23,7 +23,18 @@ from aura.schemas.events import (
 
 
 def event_to_wire(event: Any) -> dict[str, Any]:
-    """Convert one internal event into Aura's stable external shape."""
+    """Convert one internal event into Aura's stable external shape.
+
+    Pass-through for already-wire-format dicts: Phase 4 Task 4 lets
+    :class:`aura.core.compact.compactor.Compactor` emit
+    :func:`compact_event_to_wire` payloads directly through
+    ``Agent.astream`` (alongside typed :class:`AgentEvent` dataclasses).
+    Those dicts are already the canonical wire shape, so we forward
+    them verbatim instead of routing through the dataclass-dispatch
+    block below.
+    """
+    if isinstance(event, dict):
+        return event
     if isinstance(event, AssistantDelta):
         return {"event": "assistant_delta", "text": event.text}
     if isinstance(event, ToolCallStarted):

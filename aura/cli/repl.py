@@ -1049,6 +1049,12 @@ async def _run_turn(
             resolved_prompt, attachments=attachment_messages or None,
         ):
             await _stop_spinner()
+            if isinstance(event, dict):
+                # Phase 4 Task 4 — wire-format compact events flow alongside
+                # typed AgentEvent. The CLI renderer is dataclass-only;
+                # compact lifecycle is silent here (visible via AG-UI in
+                # desktop). Skip cleanly.
+                continue
             renderer.on_event(event)
         await _stop_spinner()
         renderer.finish()

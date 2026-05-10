@@ -14,6 +14,7 @@ from aura.core.persistence import journal
 from aura.schemas.permissions import Allow
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
+from aura.schemas.tool_meta_access import meta_dict
 
 
 def make_event_logger_hooks() -> HookChain:
@@ -56,7 +57,7 @@ def make_event_logger_hooks() -> HookChain:
             "pre_tool",
             turn=state.turn_count,
             tool=tool.name,
-            is_destructive=(tool.metadata or {}).get("is_destructive", False),
+            is_destructive=meta_dict(tool).get("is_destructive", False),
             args_preview=args_preview,
         )
         return Allow(decision=Decision(allow=True, reason="mode_bypass"))

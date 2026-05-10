@@ -26,6 +26,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 from aura.core.permissions.rule import Rule
+from aura.schemas.tool_meta_access import meta_dict
 
 
 def derive_rule_hint(tool: BaseTool, args: dict[str, Any]) -> Rule | None:
@@ -34,7 +35,7 @@ def derive_rule_hint(tool: BaseTool, args: dict[str, Any]) -> Rule | None:
     See module docstring for derivation rules. Caller decides the fallback
     when ``None`` — this function never invents a tool-wide ``Rule``.
     """
-    matcher = (tool.metadata or {}).get("rule_matcher")
+    matcher = meta_dict(tool).get("rule_matcher")
     key = getattr(matcher, "key", None)
     if not isinstance(key, str):
         return None

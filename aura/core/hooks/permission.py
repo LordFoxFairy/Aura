@@ -62,6 +62,7 @@ from aura.core.skills.restrict import has_active_lease, tool_allowed_by_lease
 from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult, resolve_is_destructive
+from aura.schemas.tool_meta_access import meta_dict
 
 # Shared empty immutable RuleSet — safe as a default (frozen, no mutable state).
 _EMPTY_RULESET = RuleSet()
@@ -186,7 +187,7 @@ def _plan_args_preview(tool: BaseTool, args: dict[str, Any]) -> str:
     character so very large args (a bash command embedding a script,
     a write_file body) don't explode the model-facing error.
     """
-    preview_fn = (tool.metadata or {}).get("args_preview")
+    preview_fn = meta_dict(tool).get("args_preview")
     if callable(preview_fn):
         try:
             out = preview_fn(args)
@@ -511,7 +512,7 @@ async def _decide(
     # and misclassify every invocation as destructive.
     target = _safety_target(args)
     if target is not None:
-        is_write = resolve_is_destructive(tool.metadata, args)
+        is_write = resolve_is_destructive(meta_dict(tool), args)
         if is_protected(target, safety, is_write=is_write):
             return Decision(allow=False, reason="safety_blocked", target=target), ""
 

@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from aura.schemas.tool import ToolError
+from aura.schemas.tool import ToolError, ToolMetadata
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.read_file import ReadFileParams, read_file
 
 
@@ -106,15 +107,44 @@ async def test_read_file_utf8_bom_stripped(tmp_path: Path) -> None:
     assert "﻿" not in out["content"]
 
 
-def test_read_file_is_read_only() -> None:
-    meta = read_file.metadata or {}
-    assert meta.get("is_read_only") is True
-    assert meta.get("is_destructive") is False
-    assert meta.get("is_concurrency_safe") is True
+def test_read_file_aura_metadata_is_typed() -> None:
+    """Phase 2 Task 2 pilot — ``read_file`` ships the typed
+    ``ToolMetadata`` (the legacy ``metadata`` dict has been retired
+    on this tool; consumers reach the values via
+    ``aura.schemas.tool_meta_access.meta_dict``). Asserting the
+    dataclass type AND each capability flag pins both halves of the
+    migration: a future tool that flips off ``aura_metadata`` would
+    fail this test before silently degrading to legacy semantics.
+    """
+    assert isinstance(read_file.aura_metadata, ToolMetadata)
+    assert read_file.aura_metadata.is_read_only is True
+    assert read_file.aura_metadata.is_destructive is False
+    assert read_file.aura_metadata.is_concurrency_safe is True
+    assert read_file.aura_metadata.timeout_sec == 10.0
+    # ``is_search_command`` lived on the legacy dict; on the typed
+    # surface it's promoted to the open-ended capability_flags set
+    # (spec §3 keeps the named-field surface narrow). The reader
+    # bridge in ``meta_dict`` projects it back to the legacy key.
+    assert "search_command" in read_file.aura_metadata.capability_flags
+
+
+def test_read_file_meta_dict_bridge_exposes_legacy_keys() -> None:
+    """The reader bridge must produce the same dict shape consumers
+    have always read from, so the loop / hook / CLI sites that go
+    through ``meta_dict(read_file)`` see no behavioural change after
+    the typed-metadata migration.
+    """
+    meta = meta_dict(read_file)
+    assert meta["is_read_only"] is True
+    assert meta["is_destructive"] is False
+    assert meta["is_concurrency_safe"] is True
+    assert meta["timeout_sec"] == 10.0
+    assert meta["is_search_command"] is True
+    assert meta["max_result_size_chars"] is None
 
 
 def test_read_file_metadata_includes_matcher_and_preview() -> None:
-    meta = read_file.metadata or {}
+    meta = meta_dict(read_file)
     matcher = meta.get("rule_matcher")
     assert callable(matcher)
     # Path-prefix matcher: /tmp covers /tmp/foo but not /tmpfoo.

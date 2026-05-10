@@ -43,6 +43,7 @@ from aura.schemas.events import (
 from aura.schemas.permissions import Allow, Ask, Block, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError, ToolResult
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.errors import hint_for_error
 from aura.tools.progress import (
     ProgressCallback,
@@ -198,7 +199,7 @@ def partition_batches(steps: list[ToolStep]) -> list[list[ToolStep]]:
         tool = step.tool
         safe = (
             tool is not None
-            and (tool.metadata or {}).get("is_concurrency_safe", False)
+            and meta_dict(tool).get("is_concurrency_safe", False)
             and step.decision is None
         )
         if safe:
@@ -997,7 +998,7 @@ class AgentLoop:
         # 10 GB repo or a hung web_fetch cannot freeze the turn forever.
         # Tools that own their own internal timeout ladder (bash) set this
         # to ``None`` so the outer wrapper doesn't stack on top.
-        timeout: float | None = (step.tool.metadata or {}).get("timeout_sec")
+        timeout: float | None = meta_dict(step.tool).get("timeout_sec")
         try:
             if timeout is not None:
                 try:

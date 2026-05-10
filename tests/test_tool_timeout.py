@@ -22,6 +22,7 @@ from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
 from aura.schemas.events import ToolCallCompleted
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.base import build_tool
 from aura.tools.bash import bash
 from aura.tools.bash_background import BashBackground
@@ -186,7 +187,11 @@ def test_glob_timeout_default_is_10() -> None:
 
 
 def test_read_file_timeout_default_is_10() -> None:
-    assert (read_file.metadata or {}).get("timeout_sec") == 10.0
+    # ``read_file`` was the Phase 2 Task 2 pilot for ``ToolMetadata`` —
+    # its timeout now lives on ``aura_metadata.timeout_sec`` and the
+    # legacy ``metadata`` dict is gone. Read via the bridge so this
+    # test stays in lock-step with what the loop actually consults.
+    assert meta_dict(read_file).get("timeout_sec") == 10.0
 
 
 def test_web_fetch_timeout_default_is_30() -> None:

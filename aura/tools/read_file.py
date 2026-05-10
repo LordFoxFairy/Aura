@@ -39,7 +39,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from aura.core.permissions.matchers import path_prefix_on
-from aura.schemas.tool import ToolError, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata
 
 _MAX_BYTES = 1024 * 1024
 
@@ -163,18 +163,25 @@ class ReadFile(BaseTool):
         "the cap with partial=True and truncated_at_bytes set."
     )
     args_schema: type[BaseModel] = ReadFileParams
-    metadata: dict[str, Any] | None = tool_metadata(
-        is_read_only=True, is_concurrency_safe=True,
+    # Phase 2 Task 2 pilot — typed metadata replaces the legacy
+    # ``tool_metadata(...)`` dict. Loop / hook / CLI readers see the same
+    # values via ``aura.tools._meta_access.meta_dict`` while the 20 other
+    # builtins finish migrating in Task 3. ``capability_flags`` carries
+    # the legacy ``is_search_command`` signal so the renderer's
+    # search-fold heuristic continues to fire on long read output;
+    # Task 3 promotes this signal across the board (or replaces it
+    # outright if the renderer learns a different folding policy).
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=True,
+        is_destructive=False,
+        is_concurrency_safe=True,
         rule_matcher=path_prefix_on("path"),
         args_preview=_preview,
-        # Plain filesystem I/O up to 1 MB. 10s is generous — anything slower
-        # is a stuck NFS mount or a dying disk; surface the error rather
-        # than hang.
+        # Plain filesystem I/O up to 1 MB. 10s is generous — anything
+        # slower is a stuck NFS mount or a dying disk; surface the error
+        # rather than hang.
         timeout_sec=10.0,
-        # Partial reads (offset/limit) benefit from UI fold: they're
-        # search-like slices. Full reads also fold — the renderer's
-        # threshold (>20 lines) protects short reads.
-        is_search_command=True,
+        capability_flags=frozenset({"search_command"}),
     )
 
     def _run(
@@ -246,4 +253,10 @@ class ReadFile(BaseTool):
         }
 
 
-read_file: BaseTool = ReadFile()
+# Annotated as concrete ``ReadFile`` (not the wider ``BaseTool``) so
+# typed callers can read the new ``aura_metadata: ToolMetadata`` field
+# without a cast. Phase 2 Task 4 will add ``aura_metadata`` to a
+# typed base class so this narrowing isn't needed; until then, the
+# concrete type is the cheapest way to keep mypy happy at the access
+# sites without sprinkling ``cast(...)`` everywhere.
+read_file: ReadFile = ReadFile()

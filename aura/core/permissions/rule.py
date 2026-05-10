@@ -14,6 +14,7 @@ from typing import Any, Literal, cast
 from langchain_core.tools import BaseTool
 
 from aura.errors import AuraError
+from aura.schemas.tool_meta_access import meta_dict
 
 
 class InvalidRuleError(AuraError):
@@ -54,7 +55,7 @@ class Rule:
             return False
         if self.content is None:
             return True
-        matcher = (tool.metadata or {}).get("rule_matcher")
+        matcher = meta_dict(tool).get("rule_matcher")
         if matcher is None:
             return False
         return cast(_RuleMatcher, matcher)(args, self.content)

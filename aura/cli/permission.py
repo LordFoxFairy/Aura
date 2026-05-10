@@ -47,6 +47,7 @@ from aura.core.hooks.permission import AskerResponse, PermissionAsker
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.rule_hint import derive_rule_hint
 from aura.core.persistence import journal
+from aura.schemas.tool_meta_access import meta_dict
 
 # Re-export the preview cap so external tests / callers that poked the
 # old module-level constant still find it.
@@ -65,7 +66,7 @@ def _tag(tool: BaseTool) -> Literal["destructive", "read-only", "safe"]:
     """Classification tag. Kept for journal/telemetry; NOT rendered in
     the widget header — claude-code's design uses a clean title and
     lets the command preview carry the risk signal."""
-    metadata = tool.metadata or {}
+    metadata = meta_dict(tool)
     if metadata.get("is_destructive"):
         return "destructive"
     if metadata.get("is_read_only"):
@@ -81,7 +82,7 @@ def _preview(tool: BaseTool, args: dict[str, Any]) -> str:
     prefix when present: that prefix was redundant under the
     "Bash command" header.
     """
-    preview_fn = (tool.metadata or {}).get("args_preview")
+    preview_fn = meta_dict(tool).get("args_preview")
     if callable(preview_fn):
         try:
             out = preview_fn(args)

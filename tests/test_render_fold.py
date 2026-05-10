@@ -20,6 +20,7 @@ from aura.cli.render import (
     Renderer,
 )
 from aura.schemas.events import ToolCallCompleted
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.glob import glob
 from aura.tools.grep import grep
 from aura.tools.read_file import read_file
@@ -157,11 +158,11 @@ def test_search_command_set_matches_tool_metadata() -> None:
     # this test forces the two updates to land together.
     ws = WebSearch()
     tool_flag: dict[str, bool] = {
-        "grep": bool((grep.metadata or {}).get("is_search_command")),
-        "glob": bool((glob.metadata or {}).get("is_search_command")),
-        "read_file": bool((read_file.metadata or {}).get("is_search_command")),
-        "web_fetch": bool((web_fetch.metadata or {}).get("is_search_command")),
-        "web_search": bool((ws.metadata or {}).get("is_search_command")),
+        "grep": bool(meta_dict(grep).get("is_search_command")),
+        "glob": bool(meta_dict(glob).get("is_search_command")),
+        "read_file": bool(meta_dict(read_file).get("is_search_command")),
+        "web_fetch": bool(meta_dict(web_fetch).get("is_search_command")),
+        "web_search": bool(meta_dict(ws).get("is_search_command")),
     }
     expected = {name for name, flag in tool_flag.items() if flag}
     assert frozenset(expected) == _SEARCH_COMMAND_TOOLS
@@ -170,7 +171,7 @@ def test_search_command_set_matches_tool_metadata() -> None:
 def test_web_fetch_is_not_search_command() -> None:
     # Explicit: fetched documents are user-requested content; folding
     # would hide exactly what the user asked for.
-    assert bool((web_fetch.metadata or {}).get("is_search_command")) is False
+    assert bool(meta_dict(web_fetch).get("is_search_command")) is False
     assert "web_fetch" not in _SEARCH_COMMAND_TOOLS
 
 

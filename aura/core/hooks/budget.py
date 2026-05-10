@@ -15,6 +15,7 @@ from aura.core.hooks import HookChain, PostModelHook, PostToolHook, PreModelHook
 from aura.core.tokens import estimate_message_tokens, estimate_text_tokens
 from aura.schemas.state import LoopState, TokenStats
 from aura.schemas.tool import ToolResult
+from aura.schemas.tool_meta_access import meta_dict
 
 
 def make_size_budget_hook(
@@ -33,7 +34,7 @@ def make_size_budget_hook(
         if not result.ok or result.output is None:
             return result
 
-        effective_max = (tool.metadata or {}).get("max_result_size_chars") or max_chars
+        effective_max = meta_dict(tool).get("max_result_size_chars") or max_chars
 
         serialized = json.dumps(result.output, default=str, ensure_ascii=False)
         if len(serialized) <= effective_max:

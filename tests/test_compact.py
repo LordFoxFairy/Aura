@@ -19,10 +19,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.core.compact.compact import _is_prompt_too_long
+from aura.core.compact.constants import MICROCOMPACT_CLEAR_MARKER
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.skills.types import Skill
@@ -30,11 +34,16 @@ from aura.schemas.todos import TodoItem
 from tests.conftest import FakeChatModel, FakeTurn
 
 
-def _minimal_config(enabled: list[str] | None = None) -> AuraConfig:
+def _minimal_config(
+    enabled: list[str] | None = None,
+    *,
+    context_window: int | None = None,
+) -> AuraConfig:
     return AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": enabled if enabled is not None else []},
+        **({"context_window": context_window} if context_window is not None else {}),
     })
 
 
@@ -59,6 +68,44 @@ def _seed_history(agent: Agent, *, pairs: int) -> None:
         h.append(HumanMessage(content=f"user-{i}"))
         h.append(AIMessage(content=f"assistant-{i}"))
     agent._storage.save(agent.session_id, h)
+
+
+class SizeLimitedSummaryModel(FakeChatModel):
+    """Fake summary model that rejects prompts over a provider-sized limit."""
+
+    def __init__(self, *, max_prompt_chars: int) -> None:
+        super().__init__(turns=[])
+        self.__dict__["max_prompt_chars"] = max_prompt_chars
+        self.__dict__["prompt_sizes"] = []
+        self.__dict__["prompts"] = []
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **_: Any,
+    ) -> ChatResult:
+        self.__dict__["ainvoke_calls"] += 1
+        prompt_text = "\n".join(str(m.content) for m in messages)
+        self.__dict__["prompts"].append(prompt_text)
+        prompt_size = len(prompt_text)
+        self.__dict__["prompt_sizes"].append(prompt_size)
+        if prompt_size > self.__dict__["max_prompt_chars"]:
+            raise RuntimeError(
+                "Error code: 400 - {'error': {'code': '1261', "
+                "'message': 'Prompt exceeds max length'}}"
+            )
+        content = f"summary-call-{self.__dict__['ainvoke_calls']}"
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])
+
+    @property
+    def prompt_sizes(self) -> list[int]:
+        return self.__dict__["prompt_sizes"]  # type: ignore[no-any-return]
+
+    @property
+    def prompts(self) -> list[str]:
+        return self.__dict__["prompts"]  # type: ignore[no-any-return]
 
 
 @pytest.mark.asyncio
@@ -321,6 +368,105 @@ async def test_compact_result_dataclass_shape(tmp_path: Path) -> None:
     # after_tokens exists and is an integer (same or increased; summary turn
     # may add usage if a usage hook were wired — here it isn't, so equal).
     assert isinstance(result.after_tokens, int)
+    await agent.aclose()
+
+
+def test_compact_detects_dashscope_prompt_max_length_error() -> None:
+    exc = RuntimeError(
+        "Error code: 400 - {'error': {'code': '1261', "
+        "'message': 'Prompt exceeds max length'}}"
+    )
+
+    assert _is_prompt_too_long(exc) is True
+
+
+@pytest.mark.asyncio
+async def test_compact_splits_summary_when_provider_rejects_large_prompt(
+    tmp_path: Path,
+) -> None:
+    model = SizeLimitedSummaryModel(max_prompt_chars=9_000)
+    agent = Agent(
+        config=_minimal_config(context_window=15_000),
+        model=model,
+        storage=_storage(tmp_path),
+    )
+    history: list[Any] = []
+    for i in range(16):
+        history.append(HumanMessage(content=f"user-{i} " + ("u" * 500)))
+        history.append(AIMessage(content=f"assistant-{i} " + ("a" * 500)))
+    agent._storage.save(agent.session_id, history)
+
+    await agent.compact(source="manual")
+
+    compacted = agent._storage.load(agent.session_id)
+    assert "<session-summary>" in str(compacted[0].content)
+    assert model.ainvoke_calls > 1
+    assert max(model.prompt_sizes) <= model.__dict__["max_prompt_chars"]
+    await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_compact_truncates_oversized_raw_tool_outputs_before_summary(
+    tmp_path: Path,
+) -> None:
+    model = SizeLimitedSummaryModel(max_prompt_chars=9_000)
+    agent = Agent(
+        config=_minimal_config(context_window=15_000),
+        model=model,
+        storage=_storage(tmp_path),
+    )
+    history: list[Any] = []
+    for i in range(8):
+        history.append(HumanMessage(content=f"user-{i}"))
+        history.append(AIMessage(content="assistant"))
+        history.append(HumanMessage(content="TOOL-OUTPUT-" + ("x" * 50_000)))
+    agent._storage.save(agent.session_id, history)
+
+    await agent.compact(source="manual")
+
+    assert model.prompt_sizes
+    assert max(model.prompt_sizes) <= model.__dict__["max_prompt_chars"]
+    await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_compact_summarizes_microcompacted_dynamic_history_view(
+    tmp_path: Path,
+) -> None:
+    model = SizeLimitedSummaryModel(max_prompt_chars=12_000)
+    agent = Agent(
+        config=_minimal_config(context_window=20_000),
+        model=model,
+        storage=_storage(tmp_path),
+        microcompact_trigger_pairs=2,
+        microcompact_keep_recent=1,
+    )
+    history: list[Any] = []
+    for i in range(6):
+        call_id = f"tc-{i}"
+        history.append(HumanMessage(content=f"user-{i}"))
+        history.append(AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "read_file",
+                "args": {"path": f"file-{i}.py"},
+                "id": call_id,
+            }],
+        ))
+        history.append(ToolMessage(
+            content="RAW-OLD-TOOL-RESULT-" + ("x" * 20_000),
+            tool_call_id=call_id,
+            name="read_file",
+        ))
+    agent._storage.save(agent.session_id, history)
+
+    await agent.compact(source="manual")
+
+    compacted = agent._storage.load(agent.session_id)
+    assert "<session-summary>" in str(compacted[0].content)
+    sent_summary_prompt = "\n".join(model.prompts)
+    assert MICROCOMPACT_CLEAR_MARKER in sent_summary_prompt
+    assert "RAW-OLD-TOOL-RESULT-" not in sent_summary_prompt
     await agent.aclose()
 
 

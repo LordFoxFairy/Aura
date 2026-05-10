@@ -8,9 +8,10 @@
 /** Discriminated union of every event kind delivered over the ``aura-event`` Tauri stream. */
 export interface AuraReadyEvent        { event: "ready"; session_id?: string; model?: string; }
 export interface AuraAssistantDeltaEvent { event: "assistant_delta"; text: string; }
-export interface AuraToolCallStartedEvent { event: "tool_call_started"; name: string; input: unknown; }
-export interface AuraToolCallProgressEvent { event: "tool_call_progress"; name: string; stream: "stdout" | "stderr"; chunk: string; }
-export interface AuraToolCallCompletedEvent { event: "tool_call_completed"; name: string; output: unknown; error: string | null; }
+export interface AuraToolCallStartedEvent { event: "tool_call_started"; id?: string; name: string; input: unknown; }
+export interface AuraToolCallProgressEvent { event: "tool_call_progress"; id?: string; name: string; stream: "stdout" | "stderr"; chunk: string; }
+export interface AuraToolCallCompletedEvent { event: "tool_call_completed"; id?: string; name: string; output: unknown; error: string | null; }
+export interface AuraPermissionAuditEvent { event: "permission_audit"; tool: string; text: string; }
 export interface AuraPermissionRequestEvent {
   event: "permission_request";
   id: string;
@@ -33,6 +34,7 @@ export type AuraEvent =
   | AuraToolCallStartedEvent
   | AuraToolCallProgressEvent
   | AuraToolCallCompletedEvent
+  | AuraPermissionAuditEvent
   | AuraPermissionRequestEvent
   | AuraFinalEvent
   | AuraErrorEvent
@@ -47,7 +49,17 @@ export type AuraEvent =
 export type Message =
   | { kind: "user"; id: string; text: string }
   | { kind: "assistant"; id: string; text: string; streaming: boolean; reason?: string }
-  | { kind: "tool"; id: string; name: string; args: unknown; completed: boolean; error?: string | null }
+  | {
+      kind: "tool";
+      id: string;
+      name: string;
+      args: unknown;
+      completed: boolean;
+      output?: unknown;
+      error?: string | null;
+      progress: Array<{ stream: "stdout" | "stderr"; chunk: string }>;
+    }
+  | { kind: "audit"; id: string; tool: string; text: string }
   | { kind: "error"; id: string; message: string };
 
 /** A single in-flight permission request from the Python loop. */

@@ -37,6 +37,14 @@ export default function MessageBubble({ msg }: Props): React.ReactElement | null
         </div>
       );
 
+    case "audit":
+      return (
+        <div className="msg msg--audit">
+          <div className="msg__speaker">{msg.tool}</div>
+          <div className="msg__body">{msg.text}</div>
+        </div>
+      );
+
     case "tool":
       // Tool messages render inside ContextPanel, not in ConversationView.
       return null;

@@ -16,6 +16,8 @@ from langchain_core.messages import (
 from aura.core.memory.context import Context, NestedFragment
 from aura.core.memory.context import _render_todos_body as render_todos_body
 from aura.core.memory.rules import Rule, RulesBundle
+from aura.core.skills.types import Skill
+from aura.core.tasks.types import TaskNotification
 from aura.schemas.todos import TodoItem
 
 
@@ -25,6 +27,16 @@ def _rule(source: Path, base_dir: Path, globs: tuple[str, ...], body: str) -> Ru
         base_dir=base_dir,
         globs=globs,
         content=body,
+    )
+
+
+def _skill(name: str, desc: str = "desc", body: str = "body") -> Skill:
+    return Skill(
+        name=name,
+        description=desc,
+        body=body,
+        source_path=Path(f"/tmp/{name}.md"),
+        layer="user",
     )
 
 
@@ -513,6 +525,135 @@ def test_ac16_full_build_ordering_primary_nested_rules_todos_history(
     assert out[9] is history[1]
     assert out[10] is history[2]
     assert out[11] is history[3]
+
+
+def test_context_full_section_order_includes_skills_todos_notifications_before_history(
+    tmp_path: Path,
+) -> None:
+    cwd = tmp_path / "p"
+    src = cwd / "src"
+    src.mkdir(parents=True)
+    (src / "AURA.md").write_text("SRC-MEMO")
+    touched = src / "x.py"
+    touched.write_text("")
+
+    rule = _rule(
+        tmp_path / "rules" / "py.md",
+        cwd.resolve(),
+        ("**/*.py",),
+        "PY-RULE",
+    )
+    skill = _skill("helper", "helps", "HELPER-BODY")
+    todos = [
+        TodoItem(
+            content="Write draft",
+            status="in_progress",
+            active_form="Writing draft",
+        )
+    ]
+    notification = TaskNotification(
+        task_id="task-123456",
+        status="completed",
+        description="child task",
+        summary="child done",
+    )
+    ctx = Context(
+        cwd=cwd,
+        system_prompt="SYS",
+        primary_memory="PRIMARY",
+        rules=RulesBundle(conditional=[rule]),
+        skills=[skill],
+        todos_provider=lambda: todos,
+        notifications_drainer=lambda: [notification],
+    )
+    ctx.on_tool_touched_path(touched)
+    ctx.record_skill_invocation(skill)
+    history: list[BaseMessage] = [HumanMessage("user"), AIMessage("assistant")]
+
+    out = ctx.build(history)
+    contents = [str(m.content) for m in out]
+
+    assert contents[0] == "SYS"
+    assert "<project-memory>" in contents[1]
+    assert contents[2].startswith("<nested-memory ")
+    assert "SRC-MEMO" in contents[2]
+    assert contents[3].startswith("<rule ")
+    assert "PY-RULE" in contents[3]
+    assert contents[4].startswith("<skills-available>")
+    assert "- helper: helps" in contents[4]
+    assert contents[5].startswith('<skill-invoked name="helper">')
+    assert "HELPER-BODY" in contents[5]
+    assert contents[6].startswith("<todos>")
+    assert "Write draft" in contents[6]
+    assert contents[7].startswith("<task-notification>")
+    assert "task-123" in contents[7]
+    assert "child done" in contents[7]
+    assert out[8] is history[0]
+    assert out[9] is history[1]
+
+
+def test_context_task_notifications_cap_and_drain_once(tmp_path: Path) -> None:
+    queue = [
+        TaskNotification(
+            task_id=f"task{i:04d}-id",
+            status="completed",
+            description=f"task {i}",
+            summary=f"summary {i}",
+        )
+        for i in range(8)
+    ]
+
+    def drain() -> list[TaskNotification]:
+        drained = list(queue)
+        queue.clear()
+        return drained
+
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        notifications_drainer=drain,
+    )
+
+    first = ctx.build([])
+    notification = next(
+        str(m.content)
+        for m in first
+        if str(m.content).startswith("<task-notification>")
+    )
+    assert "task0000" not in notification
+    assert "task0003" in notification
+    assert "task0007" in notification
+    assert "(3 more earlier)" in notification
+
+    second = ctx.build([])
+    assert not any(
+        str(m.content).startswith("<task-notification>") for m in second
+    )
+
+
+def test_context_read_status_stale_after_size_change_and_delete(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "note.txt"
+    target.write_text("one")
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+
+    ctx.record_read(target)
+    assert ctx.read_status(target) == "fresh"
+    target.write_text("one two")
+    assert ctx.read_status(target) == "stale"
+
+    ctx.record_read(target)
+    assert ctx.read_status(target) == "fresh"
+    target.unlink()
+    assert ctx.read_status(target) == "stale"
 
 
 def test_ac17_auto_clear_roundtrip_provider_returning_empty_list(

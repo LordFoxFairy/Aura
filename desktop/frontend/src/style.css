@@ -613,6 +613,19 @@ body {
   color: var(--terracotta);
 }
 
+.msg--audit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  border-left: 2px solid var(--line);
+  padding-left: var(--s-3);
+}
+
+.msg--audit .msg__body {
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+
 /* Streaming caret */
 .streaming-caret {
   display: inline-block;
@@ -739,6 +752,16 @@ body {
 .composer__icon-btn:hover {
   background: var(--hover);
   color: var(--ink-1);
+}
+
+.composer__icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.composer__icon-btn:disabled:hover {
+  background: transparent;
+  color: var(--ink-3);
 }
 
 /* Circular send button — dark filled, evokes Manus / modern AI chat */
@@ -942,6 +965,34 @@ body {
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-all;
+  margin: 0;
+}
+
+.tool-card__progress {
+  border-top: var(--b-hair);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: var(--lh-snug);
+  color: var(--ink-2);
+  padding: var(--s-2) var(--s-3);
+  max-height: 140px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+.tool-card__output {
+  border-top: var(--b-hair);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: var(--lh-snug);
+  color: var(--ink-2);
+  padding: var(--s-2) var(--s-3);
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
   margin: 0;
 }
 

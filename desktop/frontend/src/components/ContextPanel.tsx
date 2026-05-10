@@ -16,20 +16,33 @@ function basename(p: string): string {
   return parts.length > 0 ? (parts[parts.length - 1] ?? "?") : "/";
 }
 
+export function findActiveTool(messages: Message[]): Extract<Message, { kind: "tool" }> | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.kind === "tool" && !m.completed) {
+      return m as Extract<Message, { kind: "tool" }>;
+    }
+  }
+  return null;
+}
+
+export function findLatestTool(messages: Message[]): Extract<Message, { kind: "tool" }> | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.kind === "tool") {
+      return m as Extract<Message, { kind: "tool" }>;
+    }
+  }
+  return null;
+}
+
 export default function ContextPanel(): React.ReactElement {
   const rightPanelOpen = useAuraStore((s) => s.rightPanelOpen);
   const auraState = useAuraStore((s) => s.auraState);
   const messages = useAuraStore((s) => s.messages);
 
-  // Find the most recent unfinished tool message for "Live tool" section.
-  let activeTool: Extract<Message, { kind: "tool" }> | null = null;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.kind === "tool") {
-      activeTool = m as Extract<Message, { kind: "tool" }>;
-      break;
-    }
-  }
+  const activeTool = findActiveTool(messages);
+  const visibleTool = activeTool ?? findLatestTool(messages);
 
   // Token gauge calc
   let live = 0;
@@ -45,9 +58,9 @@ export default function ContextPanel(): React.ReactElement {
     <aside className="context" data-open={String(rightPanelOpen)}>
       {/* Live tool section */}
       <div className="context__section">
-        <h4 className="context__label">Live tool</h4>
-        {activeTool
-          ? <ToolCard msg={activeTool} />
+        <h4 className="context__label">{activeTool ? "Live tool" : "Last tool"}</h4>
+        {visibleTool
+          ? <ToolCard msg={visibleTool} />
           : <div className="empty-hint">No tool running</div>
         }
       </div>

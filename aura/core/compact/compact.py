@@ -42,10 +42,12 @@ from aura.core.compact.constants import (
     MAX_FILES_TO_RESTORE,
     MAX_TOKENS_PER_FILE,
 )
+from aura.core.compact.microcompact import MicrocompactPolicy, apply_microcompact
 from aura.core.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
 from aura.core.memory import project_memory, rules
 from aura.core.memory.context import Context, _ReadRecord
 from aura.core.persistence import journal
+from aura.core.tokens import estimate_text_tokens
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
@@ -178,6 +180,27 @@ def _build_active_task_messages(agent: Agent) -> list[HumanMessage]:
     return out
 
 
+_MAX_SUMMARY_MESSAGE_CHARS = 6_000
+_MAX_SUMMARY_TOOL_ARGS_CHARS = 2_000
+
+
+def _cap_summary_text(text: str, *, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    return f"{text[:max_chars]}\n... (truncated; {omitted} chars omitted)"
+
+
+def _serialize_tool_args(args: object) -> str:
+    try:
+        import json
+
+        rendered = json.dumps(args, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        rendered = str(args)
+    return _cap_summary_text(rendered, max_chars=_MAX_SUMMARY_TOOL_ARGS_CHARS)
+
+
 def _serialize_history(messages: list[BaseMessage]) -> str:
     """Flatten messages into a role-tagged text block for the summary prompt.
 
@@ -189,14 +212,65 @@ def _serialize_history(messages: list[BaseMessage]) -> str:
     for m in messages:
         role = m.__class__.__name__.replace("Message", "").lower()
         content = str(m.content) if m.content else ""
+        content = _cap_summary_text(content, max_chars=_MAX_SUMMARY_MESSAGE_CHARS)
         lines.append(f"[{role}] {content}")
         # Tool calls live on AIMessage; serialize inline for legibility.
         tool_calls = getattr(m, "tool_calls", None) or []
         for tc in tool_calls:
             lines.append(
-                f"    -> tool_call {tc.get('name')!r} args={tc.get('args')!r}"
+                "    -> tool_call "
+                f"{tc.get('name')!r} args={_serialize_tool_args(tc.get('args'))}"
             )
     return "\n".join(lines)
+
+
+def _summary_turn_estimated_tokens(messages: list[BaseMessage]) -> int:
+    return estimate_text_tokens(
+        SUMMARY_SYSTEM + "\n" + SUMMARY_USER_PREFIX + _serialize_history(messages)
+    )
+
+
+def estimate_compact_summary_tokens(messages: list[BaseMessage]) -> int:
+    """Public-for-command estimate of the manual compact summary prompt."""
+    return _summary_turn_estimated_tokens(messages)
+
+
+def compact_summary_messages(agent: Agent, history: list[BaseMessage]) -> list[BaseMessage]:
+    """Return the history view that manual/reactive compact should summarize.
+
+    Stored history remains raw. The summary model should see the same dynamic
+    conversation surface the main loop would send to the provider, including
+    microcompact's view-only clearing of old tool results.
+    """
+    policy = _microcompact_policy_for_agent(agent)
+    if policy is None:
+        return list(history)
+    return apply_microcompact(list(history), policy).messages
+
+
+def _microcompact_policy_for_agent(agent: Agent) -> MicrocompactPolicy | None:
+    loop = getattr(agent, "_loop", None)
+    policy = getattr(loop, "_microcompact_policy", None)
+    return policy if isinstance(policy, MicrocompactPolicy) else None
+
+
+def _split_for_summary_budget(
+    messages: list[BaseMessage],
+    *,
+    max_prompt_tokens: int,
+) -> list[list[BaseMessage]]:
+    chunks: list[list[BaseMessage]] = []
+    current: list[BaseMessage] = []
+    for message in messages:
+        candidate = [*current, message]
+        if current and _summary_turn_estimated_tokens(candidate) > max_prompt_tokens:
+            chunks.append(current)
+            current = [message]
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> CompactResult:
@@ -232,14 +306,19 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
 
     tail_count = KEEP_LAST_N_TURNS * 2
     preserved_tail = history[-tail_count:]
-    to_summarize = history[:-tail_count]
+    summary_history = compact_summary_messages(agent, history)
+    to_summarize = summary_history[:-tail_count]
 
     # Run the summary turn in isolation — no hooks, no tools. Using
     # ``ainvoke`` on the raw model sidesteps the bound tools so the model
     # CAN'T call one even if tempted. F-0910-003: on PromptTooLong /
     # context-overflow during the summary call itself, drop the oldest
     # 20% of ``to_summarize`` and retry up to 3 times before raising.
-    summary_text = await _run_summary_turn_with_retry(agent._model, to_summarize)
+    summary_text = await _run_summary_turn_with_retry(
+        agent._model,
+        to_summarize,
+        max_prompt_tokens=_compact_summary_prompt_budget(agent),
+    )
 
     # --- Pre-cleanup state capture (lifted BEFORE we build new_history so
     # the re-injection step below can consult the outgoing read_records). ---
@@ -346,8 +425,15 @@ _PTL_PHRASES: tuple[str, ...] = (
     "context_length_exceeded",
     "maximum context",
     "prompt is too long",
+    "prompt exceeds max length",
+    "exceeds max length",
+    "input too long",
     "too many tokens",
     "prompttoolong",
+)
+
+_PTL_CODES: tuple[str, ...] = (
+    "1261",  # DashScope: "Prompt exceeds max length"
 )
 
 
@@ -358,41 +444,135 @@ def _is_prompt_too_long(exc: BaseException) -> bool:
     avoid an import cycle (compact already gets reached by Agent).
     """
     msg = str(exc).lower()
-    return any(phrase in msg for phrase in _PTL_PHRASES) or (
-        type(exc).__name__.lower() in {"prompttoolongerror", "prompttoolong"}
+    if any(phrase in msg for phrase in _PTL_PHRASES):
+        return True
+    if type(exc).__name__.lower() in {"prompttoolongerror", "prompttoolong"}:
+        return True
+    return any(
+        f"'code': '{code}'" in msg or f'"code": "{code}"' in msg
+        for code in _PTL_CODES
     )
 
 
-async def _run_summary_turn_with_retry(
-    model: BaseChatModel, to_summarize: list[BaseMessage],
-) -> str:
-    """F-0910-003: 3-attempt summary call; drop oldest 20% on PTL retry.
+_MAX_SUMMARY_SPLIT_DEPTH = 12
+_FALLBACK_SUMMARY_CHAR_LIMIT = 12_000
+_MAX_COMPACT_SUMMARY_PROMPT_TOKENS = 16_000
 
-    Last-resort: if all 3 attempts hit a PTL signature, re-raise with a
-    hint pointing the operator at ``/clear`` (the only escape hatch when
-    the prompt is irreducibly too long for the chosen model).
+
+def _compact_summary_prompt_budget(agent: Agent) -> int:
+    """Keep manual summary calls well below the live model window."""
+    window = getattr(agent, "context_window", 0) or 0
+    if window <= 0:
+        return _MAX_COMPACT_SUMMARY_PROMPT_TOKENS
+    # Leave the same 13k scratch headroom used by auto-compact, then cap
+    # summary prompts to a conservative ceiling. Compact is a maintenance
+    # operation; multiple small calls are better than one provider 400.
+    return max(2_000, min(window - 13_000, _MAX_COMPACT_SUMMARY_PROMPT_TOKENS))
+
+
+async def _run_summary_turn_with_retry(
+    model: BaseChatModel,
+    to_summarize: list[BaseMessage],
+    *,
+    max_prompt_tokens: int = _MAX_COMPACT_SUMMARY_PROMPT_TOKENS,
+) -> str:
+    """Summarize history, splitting recursively if the provider rejects size.
+
+    The old retry strategy dropped the oldest 20% three times. That avoided
+    one class of context errors but could still lose useful state and still
+    fail on providers with smaller windows. The resilient path below mirrors
+    code-agent compaction behavior more closely: summarize chunks, then
+    summarize the chunk summaries.
     """
-    current = list(to_summarize)
-    last_exc: BaseException | None = None
-    for _attempt in range(3):
-        try:
-            return await _run_summary_turn(model, current)
-        except Exception as exc:  # noqa: BLE001 — providers vary widely
-            if not _is_prompt_too_long(exc):
-                raise
-            last_exc = exc
-            # Drop oldest 20% (at least 1 message) and retry.
-            drop = max(1, len(current) // 5)
-            current = current[drop:]
-            if not current:
-                # Nothing left to summarize — bail out of the retry loop;
-                # the final raise below carries the operator hint.
-                break
-    raise RuntimeError(
-        "compact summary failed after 3 PromptTooLong retries; "
-        "history may be irreducibly too long for the current model — "
-        "use /clear to start a fresh session."
-    ) from last_exc
+    chunks = _split_for_summary_budget(
+        list(to_summarize),
+        max_prompt_tokens=max_prompt_tokens,
+    )
+    if not chunks:
+        return ""
+    if len(chunks) == 1:
+        return await _run_summary_turn_resilient(model, chunks[0], depth=0)
+
+    partials: list[BaseMessage] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        text = await _run_summary_turn_resilient(model, chunk, depth=0)
+        partials.append(
+            HumanMessage(
+                content=(
+                    f'<partial-summary index="{idx}" total="{len(chunks)}">\n'
+                    f"{text}\n"
+                    "</partial-summary>"
+                ),
+            ),
+        )
+    return await _run_summary_turn_with_retry(
+        model,
+        partials,
+        max_prompt_tokens=max_prompt_tokens,
+    )
+
+
+async def _run_summary_turn_resilient(
+    model: BaseChatModel,
+    messages: list[BaseMessage],
+    *,
+    depth: int,
+) -> str:
+    if not messages:
+        return ""
+    try:
+        return await _run_summary_turn(model, messages)
+    except Exception as exc:  # noqa: BLE001 — providers vary widely
+        if not _is_prompt_too_long(exc):
+            raise
+        if len(messages) == 1 or depth >= _MAX_SUMMARY_SPLIT_DEPTH:
+            return _fallback_summary(messages)
+
+    midpoint = max(1, len(messages) // 2)
+    left = await _run_summary_turn_resilient(
+        model, messages[:midpoint], depth=depth + 1,
+    )
+    right = await _run_summary_turn_resilient(
+        model, messages[midpoint:], depth=depth + 1,
+    )
+    merged: list[BaseMessage] = [
+        HumanMessage(
+            content=(
+                '<partial-summary index="1">\n'
+                f"{left}\n"
+                "</partial-summary>"
+            ),
+        ),
+        HumanMessage(
+            content=(
+                '<partial-summary index="2">\n'
+                f"{right}\n"
+                "</partial-summary>"
+            ),
+        ),
+    ]
+    return await _run_summary_turn_resilient(model, merged, depth=depth + 1)
+
+
+def _fallback_summary(messages: list[BaseMessage]) -> str:
+    """Deterministic last resort when even a single message is too large."""
+    serialized = _serialize_history(messages)
+    if len(serialized) > _FALLBACK_SUMMARY_CHAR_LIMIT:
+        serialized = serialized[:_FALLBACK_SUMMARY_CHAR_LIMIT] + "\n... (truncated)"
+    return (
+        "<goal>Conversation history was compacted without a model summary "
+        "because the provider rejected the compact prompt size.</goal>\n"
+        "<decisions>Preserved a deterministic excerpt of the oldest "
+        "history instead of crashing the session.</decisions>\n"
+        "<files-touched>See excerpt if file paths were present.</files-touched>\n"
+        "<tools-used>See excerpt if tool calls were present.</tools-used>\n"
+        "<open-threads>Some older detail may be truncated; preserved tail "
+        "messages remain raw.</open-threads>\n"
+        "<next-steps>Continue from the preserved recent turns.</next-steps>\n"
+        "<history-excerpt>\n"
+        f"{serialized}\n"
+        "</history-excerpt>"
+    )
 
 
 async def _run_summary_turn(

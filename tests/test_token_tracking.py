@@ -87,17 +87,19 @@ async def test_usage_hook_falls_back_to_char_estimator_when_usage_missing() -> N
     hook = make_usage_tracking_hook()
     state = LoopState()
 
-    ai = AIMessage(content="no usage here")  # 13 chars → 3 tokens
+    from aura.core.tokens import estimate_text_tokens
+
+    ai = AIMessage(content="no usage here")
     await hook(ai_message=ai, history=[], state=state)
 
     stats = state.custom.get("_token_stats", {})
     # Estimator kicked in — output picks up the AI body.
-    assert stats.get("last_output_tokens", 0) == 13 // 4
+    assert stats.get("last_output_tokens", 0) == estimate_text_tokens("no usage here")
     assert stats.get("last_input_tokens", 0) == 0  # empty history
     assert stats.get("last_cache_read_tokens", 0) == 0
     # total_tokens_used now accumulates estimated tokens too so auto-
     # compact thresholds arm at the right time on these providers.
-    assert state.total_tokens_used == 13 // 4
+    assert state.total_tokens_used == estimate_text_tokens("no usage here")
 
 
 async def test_usage_hook_accumulates_totals_across_turns() -> None:

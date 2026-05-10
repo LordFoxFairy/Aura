@@ -1,0 +1,119 @@
+"""Aura's transport-neutral JSON event contract.
+
+This module is the single place where internal ``AgentEvent`` dataclasses are
+converted to JSON-friendly dictionaries. Desktop/headless, future SSE, and
+AG-UI adapters should depend on this layer instead of re-serializing
+``AgentEvent`` independently.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from aura.schemas.events import (
+    AssistantDelta,
+    Final,
+    PermissionAudit,
+    ToolCallCompleted,
+    ToolCallProgress,
+    ToolCallStarted,
+)
+
+
+def event_to_wire(event: Any) -> dict[str, Any]:
+    """Convert one internal event into Aura's stable external shape."""
+    if isinstance(event, AssistantDelta):
+        return {"event": "assistant_delta", "text": event.text}
+    if isinstance(event, ToolCallStarted):
+        started_payload: dict[str, Any] = {
+            "event": "tool_call_started",
+            "name": event.name,
+            "input": event.input,
+        }
+        if event.id:
+            started_payload["id"] = event.id
+        return started_payload
+    if isinstance(event, ToolCallProgress):
+        progress_payload: dict[str, Any] = {
+            "event": "tool_call_progress",
+            "name": event.name,
+            "stream": event.stream,
+            "chunk": event.chunk,
+        }
+        if event.id:
+            progress_payload["id"] = event.id
+        return progress_payload
+    if isinstance(event, ToolCallCompleted):
+        completed_payload: dict[str, Any] = {
+            "event": "tool_call_completed",
+            "name": event.name,
+            "output": event.output,
+            "error": event.error,
+        }
+        if event.id:
+            completed_payload["id"] = event.id
+        return completed_payload
+    if isinstance(event, PermissionAudit):
+        return {
+            "event": "permission_audit",
+            "tool": event.tool,
+            "text": event.text,
+        }
+    if isinstance(event, Final):
+        return {
+            "event": "final",
+            "message": event.message,
+            "reason": getattr(event, "reason", "natural"),
+        }
+    return {"event": "unknown", "type": type(event).__name__}
+
+
+def permission_request_to_wire(
+    *,
+    request_id: str,
+    tool: str,
+    args: Any,
+    rule_hint: str,
+    is_destructive: bool,
+) -> dict[str, Any]:
+    """Build the external permission prompt event used by interactive UIs."""
+    return {
+        "event": "permission_request",
+        "id": request_id,
+        "tool": tool,
+        "args": _json_safe(args),
+        "rule_hint": rule_hint,
+        "is_destructive": bool(is_destructive),
+    }
+
+
+def agent_state_to_wire(agent: Any, last_turn_seconds: float) -> dict[str, Any]:
+    """Snapshot agent state into the external ``aura_state`` event."""
+    stats = agent.state.custom.get("_token_stats", {})
+    return {
+        "event": "aura_state",
+        "model": agent.current_model or "",
+        "mode": agent.mode,
+        "cwd": str(Path.cwd()),
+        "tokens": {
+            "last_input": int(stats.get("last_input_tokens", 0)),
+            "last_output": int(stats.get("last_output_tokens", 0)),
+            "last_cache_read": int(stats.get("last_cache_read_tokens", 0)),
+            "total_input": int(stats.get("total_input_tokens", 0)),
+            "total_output": int(stats.get("total_output_tokens", 0)),
+            "total_cache_read": int(stats.get("total_cache_read_tokens", 0)),
+            "turn_count": int(stats.get("turn_count", 0)),
+        },
+        "pinned": int(agent.pinned_tokens_estimate or 0),
+        "window": int(agent.context_window or 0),
+        "last_turn_seconds": float(last_turn_seconds),
+    }
+
+
+def _json_safe(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except (TypeError, ValueError):
+        return {"_repr": repr(value)}

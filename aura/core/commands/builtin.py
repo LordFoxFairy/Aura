@@ -129,13 +129,12 @@ class CompactCommand:
 
 
 class ContextCommand:
-    """``/context`` — print per-section token estimates for the live prompt.
+    """``/context`` — print per-section token estimates for prompt surfaces.
 
-    F-0910-016: introspection on what's filling the context window. Walks
-    the live ``Context.build([])`` output, classifies each rendered
-    HumanMessage into one of (system / memory / skills / files / history /
-    other), and reports a 4-chars-per-token estimate per section plus a
-    history estimate from the persisted session.
+    F-0910-016: introspection on what's filling the context window. Counts
+    pinned context, stored history, hidden tool-call args, and the manual
+    compact summary prompt so CLI-visible numbers match provider-facing
+    request surfaces.
     """
 
     name = "/context"
@@ -146,6 +145,12 @@ class ContextCommand:
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         from langchain_core.messages import SystemMessage
+
+        from aura.core.compact.compact import (
+            compact_summary_messages,
+            estimate_compact_summary_tokens,
+        )
+        from aura.core.tokens import estimate_message_tokens
 
         # Pinned prompt (system + memory + skills + ...): comes from
         # Context.build([]) — same path the live turn uses, so the numbers
@@ -161,7 +166,7 @@ class ContextCommand:
             content = getattr(msg, "content", "")
             if not isinstance(content, str):
                 content = str(content)
-            tokens = len(content) // 4
+            tokens = estimate_message_tokens(msg)
             if isinstance(msg, SystemMessage):
                 sections["system"] += tokens
             elif "<project-memory>" in content or "<nested-memory" in content:
@@ -177,27 +182,37 @@ class ContextCommand:
             else:
                 sections["other"] += tokens
 
-        # History: persisted messages — counted separately from "other" so
-        # the operator can tell pinned-prefix bloat from conversation drift.
+        # History: report the live provider-facing view separately from the
+        # raw transcript stored on disk. Stored history intentionally keeps
+        # full tool outputs for resume/export, while the model request uses
+        # microcompact's view transform.
         history = agent._storage.load(agent.session_id)
-        history_tokens = 0
-        for msg in history:
-            content = getattr(msg, "content", "")
-            if not isinstance(content, str):
-                content = str(content)
-            history_tokens += len(content) // 4
+        raw_history_tokens = sum(estimate_message_tokens(msg) for msg in history)
+        summary_history = compact_summary_messages(agent, history)
+        history_tokens = sum(estimate_message_tokens(msg) for msg in summary_history)
+
+        tail_count = 6
+        compact_candidates = (
+            summary_history[:-tail_count] if len(summary_history) > tail_count else []
+        )
+        compact_tokens = (
+            estimate_compact_summary_tokens(compact_candidates)
+            if compact_candidates else 0
+        )
 
         total = sum(sections.values()) + history_tokens
         window = agent.context_window
         pct = (total * 100 // window) if window > 0 else 0
 
-        lines = ["Context token estimates (~4 chars/token):"]
+        lines = ["Context token estimates (conservative local estimate):"]
         lines.append(f"  system   : {sections['system']:>8}")
         lines.append(f"  memory   : {sections['memory']:>8}")
         lines.append(f"  skills   : {sections['skills']:>8}")
         lines.append(f"  files    : {sections['files']:>8}")
         lines.append(f"  other    : {sections['other']:>8}")
         lines.append(f"  history  : {history_tokens:>8}")
+        lines.append(f"  raw-store: {raw_history_tokens:>8}  (not sent as-is)")
+        lines.append(f"  compact  : {compact_tokens:>8}  (manual /compact summary prompt)")
         lines.append("  ─────────  ────────")
         lines.append(f"  total    : {total:>8}  ({pct}% of {window})")
         return CommandResult(

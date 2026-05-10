@@ -20,8 +20,20 @@ export interface AuraStore {
   appendUserMessage(text: string): void;
   appendAssistantDelta(text: string): void;
   finalizeAssistant(reason: string): void;
-  appendToolCall(name: string, args: unknown): void;
-  completeToolCall(name: string, error: string | null): void;
+  appendToolCall(id: string | undefined, name: string, args: unknown): void;
+  appendToolProgress(
+    id: string | undefined,
+    name: string,
+    stream: "stdout" | "stderr",
+    chunk: string,
+  ): void;
+  completeToolCall(
+    id: string | undefined,
+    name: string,
+    output: unknown,
+    error: string | null,
+  ): void;
+  appendPermissionAudit(tool: string, text: string): void;
   showPermission(req: PendingPermission): void;
   hidePermission(): void;
   setStatus(text: string, kind: Status["kind"]): void;
@@ -101,7 +113,7 @@ export const useAuraStore = create<AuraStore>((set) => ({
     });
   },
 
-  appendToolCall(name: string, args: unknown): void {
+  appendToolCall(id: string | undefined, name: string, args: unknown): void {
     set((state) => {
       // Inline-finalize any open streaming assistant bubble, then push the
       // tool row — all in one dispatch so Tauri event callbacks never see an
@@ -121,28 +133,73 @@ export const useAuraStore = create<AuraStore>((set) => ({
       return {
         messages: [
           ...msgs,
-          { kind: "tool", id: crypto.randomUUID(), name, args, completed: false },
+          {
+            kind: "tool",
+            id: id && id.length > 0 ? id : crypto.randomUUID(),
+            name,
+            args,
+            completed: false,
+            progress: [],
+          },
         ],
       };
     });
   },
 
-  // NOTE: match is by tool name because the Python wire (headless.py
-  // _event_to_dict) doesn't include an `id` on tool_call_* events. This is
-  // safe today because the agent loop is serial (one tool at a time). If
-  // parallel tool calls land in v0.15+, headless.py must add an `id` field
-  // and this reducer should match by id instead (Python schema change, out of
-  // scope here).
-  completeToolCall(name: string, error: string | null): void {
+  appendToolProgress(
+    id: string | undefined,
+    name: string,
+    stream: "stdout" | "stderr",
+    chunk: string,
+  ): void {
     set((state) => {
       const msgs = state.messages;
-      // Scan from end to find the last incomplete tool call with this name.
       for (let i = msgs.length - 1; i >= 0; i--) {
         const m = msgs[i];
-        if (m.kind === "tool" && m.name === name && !m.completed) {
+        if (m.kind !== "tool" || m.completed) {
+          continue;
+        }
+        const hasWireId = id !== undefined && id.length > 0;
+        const matches = hasWireId ? m.id === id && m.name === name : m.name === name;
+        if (matches) {
+          const updated: Extract<Message, { kind: "tool" }> = {
+            ...m,
+            progress: [...m.progress, { stream, chunk }].slice(-20),
+          };
+          return {
+            messages: [
+              ...msgs.slice(0, i),
+              updated,
+              ...msgs.slice(i + 1),
+            ],
+          };
+        }
+      }
+      return {};
+    });
+  },
+
+  completeToolCall(
+    id: string | undefined,
+    name: string,
+    output: unknown,
+    error: string | null,
+  ): void {
+    set((state) => {
+      const msgs = state.messages;
+      // Scan from end to find the matching incomplete tool call.
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        if (m.kind !== "tool" || m.completed) {
+          continue;
+        }
+        const hasWireId = id !== undefined && id.length > 0;
+        const matches = hasWireId ? m.id === id && m.name === name : m.name === name;
+        if (matches) {
           const updated: Extract<Message, { kind: "tool" }> = {
             ...(m as Extract<Message, { kind: "tool" }>),
             completed: true,
+            output,
             error,
           };
           return {
@@ -156,6 +213,15 @@ export const useAuraStore = create<AuraStore>((set) => ({
       }
       return {}; // no-op — no matching incomplete tool call
     });
+  },
+
+  appendPermissionAudit(tool: string, text: string): void {
+    set((state) => ({
+      messages: [
+        ...state.messages,
+        { kind: "audit", id: crypto.randomUUID(), tool, text },
+      ],
+    }));
   },
 
   showPermission(req: PendingPermission): void {

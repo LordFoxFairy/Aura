@@ -16,7 +16,9 @@ function dispatch(ev: AuraEvent): void {
     setReady,
     appendAssistantDelta,
     appendToolCall,
+    appendToolProgress,
     completeToolCall,
+    appendPermissionAudit,
     showPermission,
     finalizeAssistant,
     appendError,
@@ -35,16 +37,19 @@ function dispatch(ev: AuraEvent): void {
       break;
 
     case "tool_call_started":
-      appendToolCall(ev.name, ev.input);
+      appendToolCall(ev.id, ev.name, ev.input);
       break;
 
     case "tool_call_progress":
-      // No-op for Phase 2-1. Phase 2-4 will use live bash chunks here.
-      console.debug("[aura tool_call_progress]", ev);
+      appendToolProgress(ev.id, ev.name, ev.stream, ev.chunk);
       break;
 
     case "tool_call_completed":
-      completeToolCall(ev.name, ev.error);
+      completeToolCall(ev.id, ev.name, ev.output, ev.error);
+      break;
+
+    case "permission_audit":
+      appendPermissionAudit(ev.tool, ev.text);
       break;
 
     case "permission_request":

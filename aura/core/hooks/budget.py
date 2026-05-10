@@ -11,6 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
 from aura.core.hooks import HookChain, PostModelHook, PostToolHook, PreModelHook
+from aura.core.tokens import estimate_message_tokens, estimate_text_tokens
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 
@@ -115,18 +116,12 @@ def make_usage_tracking_hook() -> PostModelHook:
         # 4-chars-per-token is the same approximation Agent uses for the
         # auto-compact estimator; consistent across surfaces.
         if per_turn["input_tokens"] == 0 and per_turn["output_tokens"] == 0:
-            char_count = 0
-            for msg in history:
-                content = getattr(msg, "content", "")
-                char_count += (
-                    len(content) if isinstance(content, str) else len(str(content))
-                )
-            per_turn["input_tokens"] = char_count // 4
+            per_turn["input_tokens"] = sum(estimate_message_tokens(msg) for msg in history)
             ai_content = getattr(ai_message, "content", "")
             per_turn["output_tokens"] = (
-                len(ai_content) // 4
+                estimate_text_tokens(ai_content)
                 if isinstance(ai_content, str)
-                else len(str(ai_content)) // 4
+                else estimate_text_tokens(str(ai_content))
             )
             # Mirror the legacy total-tokens accumulator path so auto-compact
             # threshold checks see a realistic running total too.

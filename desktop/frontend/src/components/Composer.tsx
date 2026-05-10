@@ -72,9 +72,9 @@ export default function Composer({
             <button
               className="composer__icon-btn"
               type="button"
-              aria-label="Attach context (coming soon)"
+              aria-label="Attach context unavailable"
               title="Attach context"
-              onClick={() => { console.debug("[aura] attach — Phase 2-4"); }}
+              disabled
             >
               {/* plus icon */}
               <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">

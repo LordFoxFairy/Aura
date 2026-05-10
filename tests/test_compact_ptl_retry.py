@@ -1,8 +1,9 @@
-"""F-0910-003 — PromptTooLong retry path in compact.
+"""F-0910-003 — PromptTooLong resilience path in compact.
 
-The summary turn must retry up to 3 times on PTL signatures, dropping the
-oldest 20% of ``to_summarize`` between attempts. Last-resort raise carries a
-``/clear`` hint.
+The summary turn detects context-overflow signatures and recursively splits
+the input in half until each chunk fits, then summarizes the partial summaries.
+When even a single message is rejected (or the recursion cap is hit) it falls
+back to a deterministic excerpt rather than crashing the session.
 """
 
 from __future__ import annotations
@@ -74,28 +75,35 @@ def test_is_prompt_too_long_phrases() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_succeeds_after_two_failures() -> None:
+async def test_resilient_split_succeeds_after_initial_failure() -> None:
+    """Splitting the input in half produces chunks the provider accepts."""
     model = _FailingModel(fail_count=2)
     msgs: list[BaseMessage] = [
         HumanMessage(content="x" * 1000) for _ in range(10)
     ]
     out = await _run_summary_turn_with_retry(model, msgs)
-    assert out == "OK"
-    assert model.calls == 3
-    # Each retry should have dropped 20% of the messages by content length.
+    # Final result is a non-empty summary; we don't pin the exact string
+    # because the recursive merge concatenates partial summaries.
+    assert out
+    # Retry must actually retry — first attempt fails, recursion follows.
+    assert model.calls > 1
+    # First attempt sees the full input; subsequent halves see strictly less.
     assert model.seen_lengths[1] < model.seen_lengths[0]
-    assert model.seen_lengths[2] < model.seen_lengths[1]
 
 
 @pytest.mark.asyncio
-async def test_retry_raises_after_three_failures_with_clear_hint() -> None:
-    model = _FailingModel(fail_count=99)  # always fails
+async def test_resilient_falls_back_when_provider_always_rejects() -> None:
+    """When even a 1-message chunk is rejected, return a deterministic excerpt."""
+    model = _FailingModel(fail_count=10**9)  # always fails
     msgs: list[BaseMessage] = [
         HumanMessage(content="x" * 1000) for _ in range(10)
     ]
-    with pytest.raises(RuntimeError, match="/clear"):
-        await _run_summary_turn_with_retry(model, msgs)
-    assert model.calls == 3
+    out = await _run_summary_turn_with_retry(model, msgs)
+    # Never crashes — always produces something the loop can carry forward.
+    assert "<goal>" in out
+    assert "<history-excerpt>" in out
+    # Model was attempted before the fallback fired.
+    assert model.calls > 0
 
 
 @pytest.mark.asyncio

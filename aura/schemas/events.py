@@ -19,6 +19,7 @@ class ToolCallStarted:
 
     name: str
     input: dict[str, Any]
+    id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class ToolCallProgress:
     name: str
     stream: Literal["stdout", "stderr"]
     chunk: str
+    id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,7 @@ class ToolCallCompleted:
     name: str
     output: Any
     error: str | None = None
+    id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -1,9 +1,10 @@
 """Headless NDJSON entry point for desktop / external-frontend integrations.
 
 Reads line-delimited JSON requests from stdin, emits one JSON event per line
-to stdout. Each request is a ``{"kind": "prompt", "text": "..."}`` envelope;
-each response is the JSON-serialized event from :mod:`aura.schemas.events`
-plus a small ``{"event": "<name>"}`` discriminator.
+to stdout. Requests are ``{"kind": "prompt", "text": "..."}`` prompt
+envelopes or ``{"kind": "permission_response", ...}`` replies to desktop
+permission prompts; each response is the JSON-serialized event from
+:mod:`aura.schemas.events` plus a small ``{"event": "<name>"}`` discriminator.
 
 Designed for the Tauri desktop frontend that spawns ``python -m
 aura.desktop.headless`` as a subprocess and pipes user prompts down stdin while
@@ -16,9 +17,13 @@ Event shapes (all NDJSON, one per line):
 
 - ``{"event": "ready", "session_id": "...", "model": "..."}`` — emitted once at startup
 - ``{"event": "assistant_delta", "text": "..."}`` — streaming model text
-- ``{"event": "tool_call_started", "name": "...", "input": {...}}``
-- ``{"event": "tool_call_progress", "name": "...", "stream": "stdout|stderr", "chunk": "..."}``
-- ``{"event": "tool_call_completed", "name": "...", "output": ..., "error": str|null}``
+- ``{"event": "tool_call_started", "id": "...", "name": "...", "input": {...}}``
+- ``{"event": "tool_call_progress", "id": "...", "name": "...",
+  "stream": "stdout|stderr", "chunk": "..."}``
+- ``{"event": "tool_call_completed", "id": "...", "name": "...",
+  "output": ..., "error": str|null}``
+- ``{"event": "permission_request", "id": "...", "tool": "...", "args": {...},
+  "rule_hint": "...", "is_destructive": bool}`` — desktop permission prompt
 - ``{"event": "final", "message": "...", "reason": "..."}`` — turn ended
 - ``{"event": "error", "message": "..."}`` — fatal turn error
 - ``{"event": "aura_state", "model": "...", "mode": "...", "cwd": "...",
@@ -26,10 +31,9 @@ Event shapes (all NDJSON, one per line):
   — emitted once at startup + after every Final event
 - ``{"event": "exited"}`` — emitted right before the process closes stdin
 
-Note: tool_call_* events do NOT carry an ``id`` field — they correlate by
-``name`` (the agent loop is serial today, so same-name collisions don't
-occur). Adding ``id`` would require extending :class:`aura.schemas.events`
-and is out of scope for the desktop frontend.
+Note: tool_call_* events carry the provider tool-call ``id``. The desktop UI
+must correlate by ``id`` because the agent loop can run concurrency-safe tools
+in parallel, including multiple calls to the same tool name in one batch.
 
 The CLI is single-tenant (one Agent per process, one prompt at a time).
 For multi-session use, the desktop spawns multiple subprocesses.
@@ -40,7 +44,6 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -62,13 +65,8 @@ from aura.core.permissions.safety import (
 )
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.persistence.storage import SessionStorage
-from aura.schemas.events import (
-    AssistantDelta,
-    Final,
-    ToolCallCompleted,
-    ToolCallProgress,
-    ToolCallStarted,
-)
+from aura.transport.stream import stream_agent_wire
+from aura.transport.wire import agent_state_to_wire, event_to_wire, permission_request_to_wire
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -125,27 +123,16 @@ class IpcAsker:
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._pending[req_id] = fut
 
-        # Render args so the frontend can show a preview. JSON-friendly:
-        # convert non-serializable objects to their str form rather than
-        # exploding the whole event.
-        try:
-            safe_args = json.loads(json.dumps(args, default=str))
-        except (TypeError, ValueError):
-            safe_args = {"_repr": repr(args)}
-
-        _emit({
-            "event": "permission_request",
-            "id": req_id,
-            "tool": tool.name,
-            "args": safe_args,
-            "rule_hint": rule_hint.to_string(),
+        _emit(permission_request_to_wire(
+            request_id=req_id,
+            tool=tool.name,
+            args=args,
+            rule_hint=rule_hint.to_string(),
             # ``is_destructive`` lets the modal pick a louder visual treatment
             # for destructive tools (red outline vs yellow). Falls back to
             # True (conservative) when the tool didn't declare its capability.
-            "is_destructive": bool(
-                (tool.metadata or {}).get("is_destructive", True),
-            ),
-        })
+            is_destructive=bool((tool.metadata or {}).get("is_destructive", True)),
+        ))
 
         try:
             response = await fut
@@ -189,68 +176,16 @@ class IpcAsker:
 
 
 def _event_to_dict(event: Any) -> dict[str, Any]:
-    """Map an :mod:`aura.schemas.events` dataclass to its NDJSON shape.
-
-    Field names mirror the dataclass attributes verbatim so the frontend
-    type definitions stay aligned with the Python source of truth.
-    """
-    if isinstance(event, AssistantDelta):
-        return {"event": "assistant_delta", "text": event.text}
-    if isinstance(event, ToolCallStarted):
-        return {
-            "event": "tool_call_started",
-            "name": event.name,
-            "input": event.input,
-        }
-    if isinstance(event, ToolCallProgress):
-        return {
-            "event": "tool_call_progress",
-            "name": event.name,
-            "stream": event.stream,
-            "chunk": event.chunk,
-        }
-    if isinstance(event, ToolCallCompleted):
-        return {
-            "event": "tool_call_completed",
-            "name": event.name,
-            "output": event.output,
-            "error": event.error,
-        }
-    if isinstance(event, Final):
-        return {
-            "event": "final",
-            "message": event.message,
-            "reason": getattr(event, "reason", "natural"),
-        }
-    # Unknown event types — surface the class name so the frontend can
-    # fall back to a generic "info" line instead of swallowing.
-    return {"event": "unknown", "type": type(event).__name__}
+    """Compatibility wrapper for the shared Aura wire serializer."""
+    return event_to_wire(event)
 
 
 def _build_aura_state(
     agent: Agent,
     last_turn_seconds: float,
 ) -> dict[str, Any]:
-    """Snapshot agent state into the aura_state event payload."""
-    stats = agent.state.custom.get("_token_stats", {})
-    return {
-        "event": "aura_state",
-        "model": agent.current_model or "",
-        "mode": agent.mode,
-        "cwd": str(Path.cwd()),
-        "tokens": {
-            "last_input": int(stats.get("last_input_tokens", 0)),
-            "last_output": int(stats.get("last_output_tokens", 0)),
-            "last_cache_read": int(stats.get("last_cache_read_tokens", 0)),
-            "total_input": int(stats.get("total_input_tokens", 0)),
-            "total_output": int(stats.get("total_output_tokens", 0)),
-            "total_cache_read": int(stats.get("total_cache_read_tokens", 0)),
-            "turn_count": int(stats.get("turn_count", 0)),
-        },
-        "pinned": int(agent.pinned_tokens_estimate or 0),
-        "window": int(agent.context_window or 0),
-        "last_turn_seconds": float(last_turn_seconds),
-    }
+    """Compatibility wrapper for the shared Aura state serializer."""
+    return agent_state_to_wire(agent, last_turn_seconds)
 
 
 async def _run() -> int:
@@ -276,6 +211,8 @@ async def _run() -> int:
         disk_rules = perm_store.load_ruleset(
             project_root, known_tool_names=known_tools,
         )
+        deny_rules = perm_store.load_deny_ruleset(project_root)
+        ask_rules = perm_store.load_ask_ruleset(project_root)
     except Exception as exc:  # noqa: BLE001
         _emit({
             "event": "error",
@@ -293,11 +230,20 @@ async def _run() -> int:
     from typing import Literal
     Mode = Literal["default", "bypass", "plan", "accept_edits"]
     mode: Mode = perm_cfg.mode
+    if mode == "bypass" and perm_cfg.disable_bypass:
+        storage.close()
+        _emit({
+            "event": "error",
+            "message": (
+                "bypass mode is disabled by config "
+                "(permissions.disable_bypass=true)"
+            ),
+        })
+        return 1
 
     def _live_mode() -> Mode:
-        # The desktop has no /mode slash command yet; mode stays whatever
-        # the config said at startup. Phase 2 will surface a mode toggle
-        # in the status bar and route changes back through here.
+        # Desktop currently has no mode toggle; keep the startup config mode
+        # as the live permission mode for this headless agent process.
         return mode
 
     permission_hook = make_permission_hook(
@@ -307,6 +253,8 @@ async def _run() -> int:
         project_root=project_root,
         mode=_live_mode,
         safety=safety_policy,
+        deny_rules=deny_rules,
+        ask_rules=ask_rules,
     )
     hooks = HookChain(pre_tool=[permission_hook])
 
@@ -317,6 +265,7 @@ async def _run() -> int:
         hooks=hooks,
         session_rules=session,
         mode=mode,
+        disable_bypass=perm_cfg.disable_bypass,
     )
     _emit({"event": "ready", "session_id": agent.session_id, "model": spec})
     _emit(_build_aura_state(agent, 0.0))
@@ -326,14 +275,9 @@ async def _run() -> int:
     turn_task: asyncio.Task[None] | None = None
 
     async def _drive_turn(text: str) -> None:
-        turn_start = time.monotonic()
         try:
-            async for event in agent.astream(text):
-                d = _event_to_dict(event)
-                _emit(d)
-                if isinstance(event, Final):
-                    turn_secs = time.monotonic() - turn_start
-                    _emit(_build_aura_state(agent, turn_secs))
+            async for event in stream_agent_wire(agent, text):
+                _emit(event)
         except Exception as exc:  # noqa: BLE001
             _emit({
                 "event": "error",

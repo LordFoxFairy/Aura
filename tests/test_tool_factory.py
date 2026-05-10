@@ -1,29 +1,55 @@
-"""Phase 2 Task 5 — :class:`StatefulToolFactory` Protocol + pilot.
+"""Phase 2 Tasks 5+6 — :class:`StatefulToolFactory` Protocol + 7 factories.
 
-These tests pin down the contract before Task 6 migrates the rest of
-the stateful tools off the if/elif chain in ``Agent.__init__``:
+These tests pin down the contract for all 7 stateful-tool factories
+landed by Phase 2: TodoWrite (pilot, Task 5), and the 6 added in Task 6
+(AskUserQuestion, TaskCreate, TaskGet, TaskList, TaskStop,
+SendMessage). They verify:
 
 - the Protocol is ``runtime_checkable`` so ``isinstance`` works at
   registration time and in tests;
-- the pilot :class:`TodoWriteFactory` satisfies the Protocol;
-- ``TodoWriteFactory.build(runtime)`` produces a :class:`TodoWrite`
-  whose ``state`` is the same instance handed in via
-  :class:`ToolRuntime` — i.e. the factory wires the dependency rather
-  than constructing a fresh state.
+- each factory satisfies the Protocol shape (``name`` + ``build``);
+- each factory wires the right dependencies through from
+  :class:`ToolRuntime` (identity check, not equality, so we catch any
+  accidental fresh-construct bugs);
+- the registry constant ``STATEFUL_TOOL_FACTORIES`` lists every factory
+  in a stable order so ``Agent.__init__``'s loop is deterministic.
 
 Tests deliberately avoid building an :class:`Agent` — the whole point
 of the factory pattern is that wiring is exercisable in isolation.
 """
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
+
+import pytest
+
+from aura.config.schema import AuraConfig
+from aura.core.persistence.storage import SessionStorage
 from aura.core.runtime import (
+    STATEFUL_TOOL_FACTORIES,
+    AskUserQuestionFactory,
+    SendMessageFactory,
     StatefulToolFactory,
+    TaskCreateFactory,
+    TaskGetFactory,
+    TaskListFactory,
+    TaskStopFactory,
     TodoWriteFactory,
     ToolRuntime,
 )
+from aura.core.tasks.factory import SubagentFactory
+from aura.core.tasks.store import TasksStore
 from aura.schemas.state import LoopState
 from aura.schemas.todos import TodoItem
+from aura.tools.ask_user import AskUserQuestion
+from aura.tools.send_message import SendMessage
+from aura.tools.task_create import TaskCreate
+from aura.tools.task_get import TaskGet
+from aura.tools.task_list import TaskList
+from aura.tools.task_stop import TaskStop
 from aura.tools.todo_write import TodoWrite
+from tests.conftest import FakeChatModel
 
 
 def test_stateful_tool_factory_is_runtime_checkable() -> None:
@@ -112,3 +138,231 @@ def test_tool_runtime_optional_fields_default_to_none() -> None:
     assert runtime.transcript_storage is None
     assert runtime.agent is None
     assert runtime.team_manager is None
+
+
+# --- Task 6 factories ---------------------------------------------------
+
+
+def _cfg() -> AuraConfig:
+    return AuraConfig.model_validate(
+        {
+            "providers": [{"name": "openai", "protocol": "openai"}],
+            "router": {"default": "openai:gpt-4o-mini"},
+            "tools": {"enabled": []},
+        }
+    )
+
+
+def _stub_subagent_factory() -> SubagentFactory:
+    """Minimal SubagentFactory just for identity checks on the wiring.
+
+    The factory is not actually invoked in these tests; we only need a
+    real instance so :meth:`TaskCreateFactory.build` can hand it to
+    :class:`TaskCreate`.
+    """
+    return SubagentFactory(
+        parent_config=_cfg(),
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    )
+
+
+async def _stub_asker(
+    question: str, options: list[str] | None, default: str | None
+) -> str:
+    return default or ""
+
+
+def test_ask_user_question_factory_wires_runtime_asker() -> None:
+    """AskUserQuestionFactory hands runtime.asker straight to the tool.
+
+    Mirrors the historical
+    ``AskUserQuestion(asker=question_asker or _unavailable_question_asker)``.
+    Identity check confirms no copy/wrap layer was inserted.
+    """
+    runtime = ToolRuntime(state=LoopState(), asker=_stub_asker)
+    factory = AskUserQuestionFactory()
+
+    tool = factory.build(runtime)
+
+    assert isinstance(tool, AskUserQuestion)
+    assert factory.name == "ask_user_question"
+    assert tool.asker is _stub_asker
+
+
+def test_ask_user_question_factory_rejects_missing_asker() -> None:
+    """Factory raises if Agent.__init__ forgot the fallback asker.
+
+    Defensive guard — ``_unavailable_question_asker`` is meant to be
+    threaded in even when no CLI was injected, so a None asker is a
+    misconfiguration not a runtime condition.
+    """
+    runtime = ToolRuntime(state=LoopState())
+    with pytest.raises(RuntimeError, match="asker"):
+        AskUserQuestionFactory().build(runtime)
+
+
+def test_task_create_factory_wires_store_factory_running_storage() -> None:
+    """TaskCreateFactory threads tasks_store, subagent_factory,
+    running_tasks, transcript_storage straight through.
+
+    Mirrors the historical
+    ``TaskCreate(store=..., factory=..., running=..., transcript_storage=...)``.
+    """
+    store = TasksStore()
+    sub_factory = _stub_subagent_factory()
+    running: dict[str, asyncio.Task[None]] = {}
+    storage = SessionStorage(Path(":memory:"))
+    runtime = ToolRuntime(
+        state=LoopState(),
+        tasks_store=store,
+        subagent_factory=sub_factory,
+        running_tasks=running,
+        transcript_storage=storage,
+    )
+
+    tool = TaskCreateFactory().build(runtime)
+
+    assert isinstance(tool, TaskCreate)
+    assert TaskCreateFactory().name == "task_create"
+    assert tool.store is store
+    assert tool.factory is sub_factory
+    # ``running`` is a PrivateAttr forwarded via the .running property.
+    assert tool.running is running
+
+
+def test_task_create_factory_rejects_missing_deps() -> None:
+    """Factory rejects construction when any required dep is absent."""
+    runtime = ToolRuntime(state=LoopState())  # nothing wired
+    with pytest.raises(RuntimeError, match="tasks_store"):
+        TaskCreateFactory().build(runtime)
+
+
+def test_task_get_factory_wires_store() -> None:
+    """TaskGetFactory hands runtime.tasks_store to TaskGet.
+
+    Identity check — TaskGet must read from the SAME store the Agent
+    writes to, otherwise task lookups silently miss.
+    """
+    store = TasksStore()
+    runtime = ToolRuntime(state=LoopState(), tasks_store=store)
+    factory = TaskGetFactory()
+
+    tool = factory.build(runtime)
+
+    assert isinstance(tool, TaskGet)
+    assert factory.name == "task_get"
+    assert tool.store is store
+
+
+def test_task_list_factory_wires_store() -> None:
+    """TaskListFactory hands runtime.tasks_store to TaskList."""
+    store = TasksStore()
+    runtime = ToolRuntime(state=LoopState(), tasks_store=store)
+    factory = TaskListFactory()
+
+    tool = factory.build(runtime)
+
+    assert isinstance(tool, TaskList)
+    assert factory.name == "task_list"
+    assert tool.store is store
+
+
+def test_task_stop_factory_wires_store_running_running_shells() -> None:
+    """TaskStopFactory threads tasks_store + running_tasks + running_shells.
+
+    Mirrors the historical
+    ``TaskStop(store=..., running=..., running_shells=...)``.
+    """
+    store = TasksStore()
+    running: dict[str, asyncio.Task[None]] = {}
+    running_shells: dict[str, asyncio.subprocess.Process] = {}
+    runtime = ToolRuntime(
+        state=LoopState(),
+        tasks_store=store,
+        running_tasks=running,
+        running_shells=running_shells,
+    )
+
+    tool = TaskStopFactory().build(runtime)
+
+    assert isinstance(tool, TaskStop)
+    assert TaskStopFactory().name == "task_stop"
+    assert tool.store is store
+    assert tool.running is running
+    assert tool.running_shells is running_shells
+
+
+def test_task_stop_factory_rejects_missing_running_shells() -> None:
+    """Factory rejects when ``running_shells`` is absent — Agent always
+    constructs an empty dict, so None signals a misconfig not "no
+    shells running"."""
+    store = TasksStore()
+    runtime = ToolRuntime(
+        state=LoopState(),
+        tasks_store=store,
+        running_tasks={},
+    )  # running_shells missing
+    with pytest.raises(RuntimeError, match="running_shells"):
+        TaskStopFactory().build(runtime)
+
+
+def test_send_message_factory_wires_runtime_agent() -> None:
+    """SendMessageFactory hands runtime.agent to SendMessage.
+
+    The tool walks ``agent.team`` / ``agent._team_member_name`` at
+    invoke time, so the back-reference must be the SAME object the
+    Agent uses to track team membership.
+    """
+
+    class _AgentStub:
+        """Minimal stand-in — SendMessage.__init__ only needs an
+        attribute carrier (it reads ``.team`` lazily on each invoke,
+        not at construction)."""
+
+        team: object = None
+        _team_member_name: str | None = None
+
+    agent = _AgentStub()
+    runtime = ToolRuntime(state=LoopState(), agent=agent)
+
+    tool = SendMessageFactory().build(runtime)
+
+    assert isinstance(tool, SendMessage)
+    assert SendMessageFactory().name == "send_message"
+    # ``_agent`` is the PrivateAttr SendMessage stores the back-reference on.
+    assert tool._agent is agent
+
+
+def test_send_message_factory_rejects_missing_agent() -> None:
+    """Factory rejects when no Agent back-reference is wired."""
+    runtime = ToolRuntime(state=LoopState())
+    with pytest.raises(RuntimeError, match="agent"):
+        SendMessageFactory().build(runtime)
+
+
+def test_stateful_tool_factories_registry_lists_all_seven_in_order() -> None:
+    """``STATEFUL_TOOL_FACTORIES`` exports all 7 factories in the order
+    Agent.__init__ depends on (matches the historical if/elif sequence).
+
+    Order matters because tool registration order can be observed via
+    ``ToolRegistry.tools()`` iteration; pinning it here catches any
+    accidental reorder that would change downstream logging / tool
+    schemas the LLM sees.
+    """
+    names = [factory.name for factory in STATEFUL_TOOL_FACTORIES]
+
+    assert names == [
+        "todo_write",
+        "ask_user_question",
+        "task_create",
+        "task_get",
+        "task_list",
+        "task_stop",
+        "send_message",
+    ]
+    # All entries satisfy the Protocol — the @runtime_checkable Protocol
+    # check guards the registration loop in Agent.__init__.
+    for factory in STATEFUL_TOOL_FACTORIES:
+        assert isinstance(factory, StatefulToolFactory)

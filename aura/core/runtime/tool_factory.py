@@ -39,6 +39,12 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from langchain_core.tools import BaseTool
 
 from aura.schemas.state import LoopState
+from aura.tools.ask_user import AskUserQuestion
+from aura.tools.send_message import SendMessage
+from aura.tools.task_create import TaskCreate
+from aura.tools.task_get import TaskGet
+from aura.tools.task_list import TaskList
+from aura.tools.task_stop import TaskStop
 from aura.tools.todo_write import TodoWrite
 
 if TYPE_CHECKING:
@@ -130,16 +136,163 @@ class StatefulToolFactory(Protocol):
 
 
 class TodoWriteFactory:
-    """Pilot factory for the ``todo_write`` tool.
+    """Factory for the ``todo_write`` tool.
 
-    Mirrors the current wiring (``TodoWrite(state=self._state)`` at
-    ``agent.py:429``) so behaviour is byte-identical to the if/elif
-    branch this factory will eventually replace. Task 6 ships the
-    remaining six factories and the registration loop in
-    :meth:`Agent.__init__`.
+    Mirrors the historical wiring ``TodoWrite(state=self._state)``.
     """
 
     name: str = "todo_write"
 
     def build(self, runtime: ToolRuntime) -> BaseTool:
         return TodoWrite(state=runtime.state)
+
+
+class AskUserQuestionFactory:
+    """Factory for the ``ask_user_question`` tool.
+
+    Mirrors the historical wiring
+    ``AskUserQuestion(asker=question_asker or _unavailable_question_asker)``.
+    The ``_unavailable_question_asker`` fallback lives in
+    :mod:`aura.core.agent` so the Agent constructor still owns the
+    "no CLI was injected" sentinel; the factory consumes whatever
+    ``runtime.asker`` was wired with (the Agent fills in the fallback
+    before constructing the runtime).
+    """
+
+    name: str = "ask_user_question"
+
+    def build(self, runtime: ToolRuntime) -> BaseTool:
+        if runtime.asker is None:  # pragma: no cover — Agent always wires a fallback
+            raise RuntimeError(
+                "AskUserQuestionFactory.build requires runtime.asker; "
+                "Agent.__init__ must inject either a CLI asker or the "
+                "_unavailable_question_asker fallback."
+            )
+        return AskUserQuestion(asker=runtime.asker)
+
+
+class TaskCreateFactory:
+    """Factory for the ``task_create`` tool.
+
+    Mirrors the historical wiring
+    ``TaskCreate(store=..., factory=..., running=..., transcript_storage=...)``.
+    All four dependencies are required; raise if a caller forgot to
+    populate one (catches misconfiguration at construction time rather
+    than at first invocation).
+    """
+
+    name: str = "task_create"
+
+    def build(self, runtime: ToolRuntime) -> BaseTool:
+        if (
+            runtime.tasks_store is None
+            or runtime.subagent_factory is None
+            or runtime.running_tasks is None
+        ):
+            raise RuntimeError(
+                "TaskCreateFactory.build requires tasks_store, "
+                "subagent_factory, and running_tasks on the runtime."
+            )
+        return TaskCreate(
+            store=runtime.tasks_store,
+            factory=runtime.subagent_factory,
+            running=runtime.running_tasks,
+            transcript_storage=runtime.transcript_storage,
+        )
+
+
+class TaskGetFactory:
+    """Factory for the ``task_get`` tool.
+
+    Mirrors the historical wiring ``TaskGet(store=self._tasks_store)``.
+    """
+
+    name: str = "task_get"
+
+    def build(self, runtime: ToolRuntime) -> BaseTool:
+        if runtime.tasks_store is None:
+            raise RuntimeError(
+                "TaskGetFactory.build requires runtime.tasks_store."
+            )
+        return TaskGet(store=runtime.tasks_store)
+
+
+class TaskListFactory:
+    """Factory for the ``task_list`` tool.
+
+    Mirrors the historical wiring ``TaskList(store=self._tasks_store)``.
+    """
+
+    name: str = "task_list"
+
+    def build(self, runtime: ToolRuntime) -> BaseTool:
+        if runtime.tasks_store is None:
+            raise RuntimeError(
+                "TaskListFactory.build requires runtime.tasks_store."
+            )
+        return TaskList(store=runtime.tasks_store)
+
+
+class TaskStopFactory:
+    """Factory for the ``task_stop`` tool.
+
+    Mirrors the historical wiring
+    ``TaskStop(store=..., running=..., running_shells=...)``.
+    """
+
+    name: str = "task_stop"
+
+    def build(self, runtime: ToolRuntime) -> BaseTool:
+        if (
+            runtime.tasks_store is None
+            or runtime.running_tasks is None
+            or runtime.running_shells is None
+        ):
+            raise RuntimeError(
+                "TaskStopFactory.build requires tasks_store, running_tasks, "
+                "and running_shells on the runtime."
+            )
+        return TaskStop(
+            store=runtime.tasks_store,
+            running=runtime.running_tasks,
+            running_shells=runtime.running_shells,
+        )
+
+
+class SendMessageFactory:
+    """Factory for the ``send_message`` tool (Phase A teams).
+
+    Mirrors the historical wiring ``SendMessage(agent=self)``. The tool
+    walks ``agent.team`` / ``agent._team_member_name`` at invoke time;
+    outside a team the tool surfaces a clean ToolError. Teams feature
+    gating (``cfg.teams.enabled``) is enforced by
+    :meth:`Agent._auto_enable_send_message_for_team` /
+    :meth:`Agent.join_team` — the factory itself just preserves the
+    historical "always build" behaviour so user-pinned
+    ``tools.enabled=["send_message"]`` configs keep working.
+    """
+
+    name: str = "send_message"
+
+    def build(self, runtime: ToolRuntime) -> BaseTool:
+        if runtime.agent is None:
+            raise RuntimeError(
+                "SendMessageFactory.build requires runtime.agent "
+                "(the leader Agent back-reference)."
+            )
+        return SendMessage(agent=runtime.agent)
+
+
+# Ordered list consumed by :meth:`Agent.__init__`. Order matches the
+# historical if/elif chain so the registration sequence (and any
+# downstream effects of registration order, e.g. tool-list logging)
+# stay byte-identical to the pre-Task-6 code path.
+STATEFUL_TOOL_FACTORIES: list[StatefulToolFactory] = [
+    TodoWriteFactory(),
+    AskUserQuestionFactory(),
+    TaskCreateFactory(),
+    TaskGetFactory(),
+    TaskListFactory(),
+    TaskStopFactory(),
+    SendMessageFactory(),
+]

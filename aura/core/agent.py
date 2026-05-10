@@ -49,6 +49,10 @@ from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
 from aura.core.runtime.session import SessionRuntime
+from aura.core.runtime.tool_factory import (
+    STATEFUL_TOOL_FACTORIES,
+    ToolRuntime,
+)
 from aura.core.skills import Skill, SkillRegistry, load_skills
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
@@ -421,116 +425,61 @@ class Agent:
         self._available_tools = (
             dict(available_tools) if available_tools is not None else dict(BUILTIN_TOOLS)
         )
-        for name, cls in BUILTIN_STATEFUL_TOOLS.items():
-            # Explicit per-tool wiring. Ugly if/elif, but readable: each
-            # stateful tool gets the dependency it asked for. Revisit if a
-            # third stateful tool lands with a different dep shape.
-            if name == "todo_write":
-                self._available_tools[name] = cls(state=self._state)
-            elif name == "ask_user_question":
-                self._available_tools[name] = cls(
-                    asker=question_asker or _unavailable_question_asker,
-                )
-            elif name == "task_create":
-                self._available_tools[name] = cls(
-                    store=self._tasks_store,
-                    factory=self._subagent_factory,
-                    running=self._running_tasks,
-                    transcript_storage=self._storage,
-                )
-            elif name == "task_output" or name == "task_get" or name == "task_list":
-                self._available_tools[name] = cls(store=self._tasks_store)
-            elif name == "task_stop":
-                self._available_tools[name] = cls(
-                    store=self._tasks_store,
-                    running=self._running_tasks,
-                    running_shells=self._running_shells,
-                )
-            elif name == "bash_background":
-                self._available_tools[name] = cls(
-                    store=self._tasks_store,
-                    running_shells=self._running_shells,
-                    running_tasks=self._running_tasks,
-                )
-            elif name == "web_search":
-                # web_search takes an optional WebSearchConfig; when the user
-                # did not declare ``web_search:`` in config, the tool falls
-                # back to its own defaults (DuckDuckGo, max_results=5).
-                self._available_tools[name] = cls(config=self._config.web_search)
-            elif name == "enter_plan_mode":
-                # Plan-mode control tools. Close over ``set_mode`` and the
-                # ``_mode`` read rather than injecting ``self`` so the
-                # tool's reach into the Agent is exactly one arrow: flip
-                # the permission mode. Same "closure-over-method" pattern
-                # as QuestionAsker.
-                # ``save_prior_mode`` remembers the pre-plan mode so the
-                # companion exit_plan_mode can restore it on approval
-                # (claude-code prePlanMode parity).
-                self._available_tools[name] = cls(
-                    mode_setter=self.set_mode,
-                    mode_getter=lambda: self._mode,
-                    save_prior_mode=self._capture_prior_mode,
-                )
-            elif name == "exit_plan_mode":
-                # Same mode_setter/mode_getter pattern as enter_plan_mode,
-                # PLUS an ``asker`` because exit_plan_mode requires user
-                # approval BEFORE mutating mode (matches claude-code's
-                # ExitPlanModeV2Tool.checkPermissions ask-behavior). The
-                # same QuestionAsker that ask_user_question uses is wired
-                # through here — reusing the CLI's prompt_toolkit Yes/No
-                # picker for free. ``get_prior_mode`` lets the tool
-                # restore to whatever mode was active before plan.
-                self._available_tools[name] = cls(
-                    mode_setter=self.set_mode,
-                    mode_getter=lambda: self._mode,
-                    asker=question_asker or _unavailable_question_asker,
-                    get_prior_mode=lambda: self._prior_mode,
-                )
-            elif name == "skill":
-                # LLM-invocable skill trigger. ``recorder`` closes over
-                # Agent.record_skill_invocation so the tool never holds
-                # a reference to Agent itself — same "one arrow" pattern
-                # as enter_plan_mode. Registry is handed in directly
-                # because name-lookup is pure read. ``session_id_provider``
-                # feeds ``${AURA_SESSION_ID}`` substitution; closure over
-                # self so a late session_id change (should never happen
-                # today) still resolves to the live value.
-                self._available_tools[name] = cls(
-                    recorder=self.record_skill_invocation,
-                    registry=self._skill_registry,
-                    # ``_session_id`` is assigned later in __init__ (line ~249);
-                    # the lambda closes over ``self`` and reads the live
-                    # attribute at invocation time, so the ordering is safe.
-                    # ``getattr`` + default keeps mypy happy (the attribute
-                    # isn't visible to it at this point in the method).
-                    session_id_provider=(
-                        lambda: getattr(self, "_session_id", _DEFAULT_SESSION)
-                    ),
-                    # v0.13 ``allowed-tools`` enforcement: hand the tool a
-                    # live view into this Agent's SessionRuleSet so skill
-                    # invocation can install permissive auto-allow rules
-                    # for its declared tools (matches
-                    # ``SkillCommand.handle`` on the slash path). Closure
-                    # over ``self._session_rules`` — ``/clear`` calls
-                    # ``.clear()`` on the same instance, so the tool
-                    # automatically sees the fresh (empty) ruleset on the
-                    # next invocation without re-wiring.
-                    session_rules_provider=lambda: self._session_rules,
-                    # V14 ``restrict-tools`` lease — closure over
-                    # ``self._state`` so install can read the live
-                    # turn_count and stamp the expiry sentinel. /clear
-                    # mutates ``_state`` in place, so the lambda always
-                    # returns the live instance.
-                    loop_state_provider=lambda: self._state,
-                )
-            elif name == "send_message":
-                # Phase A teams. The tool walks ``self._team`` /
-                # ``self._team_member_name`` at invocation time, so
-                # it only needs an Agent back-reference. ``join_team``
-                # auto-registers; outside a team the tool errors clean.
-                self._available_tools[name] = cls(agent=self)
-            else:  # pragma: no cover — guardrail for future additions
-                raise RuntimeError(f"unwired stateful tool: {name}")
+        # Phase 2 Task 6: factory-driven wiring for the 7 stateful tools
+        # whose deps live on :class:`ToolRuntime`. The 6 remaining
+        # tools (task_output, web_search, enter_plan_mode, exit_plan_mode,
+        # bash_background, skill) close over ``self``-bound methods and
+        # stay wired inline below.
+        tool_runtime = ToolRuntime(
+            state=self._state,
+            asker=question_asker or _unavailable_question_asker,
+            tasks_store=self._tasks_store,
+            subagent_factory=self._subagent_factory,
+            running_tasks=self._running_tasks,
+            running_shells=self._running_shells,
+            transcript_storage=self._storage,
+            agent=self,
+        )
+        for factory in STATEFUL_TOOL_FACTORIES:
+            self._available_tools[factory.name] = factory.build(tool_runtime)
+        # Residual stateful tools — Agent-method closures only.
+        self._available_tools["task_output"] = BUILTIN_STATEFUL_TOOLS[
+            "task_output"
+        ](store=self._tasks_store)
+        self._available_tools["bash_background"] = BUILTIN_STATEFUL_TOOLS[
+            "bash_background"
+        ](
+            store=self._tasks_store,
+            running_shells=self._running_shells,
+            running_tasks=self._running_tasks,
+        )
+        self._available_tools["web_search"] = BUILTIN_STATEFUL_TOOLS[
+            "web_search"
+        ](config=self._config.web_search)
+        self._available_tools["enter_plan_mode"] = BUILTIN_STATEFUL_TOOLS[
+            "enter_plan_mode"
+        ](
+            mode_setter=self.set_mode,
+            mode_getter=lambda: self._mode,
+            save_prior_mode=self._capture_prior_mode,
+        )
+        self._available_tools["exit_plan_mode"] = BUILTIN_STATEFUL_TOOLS[
+            "exit_plan_mode"
+        ](
+            mode_setter=self.set_mode,
+            mode_getter=lambda: self._mode,
+            asker=question_asker or _unavailable_question_asker,
+            get_prior_mode=lambda: self._prior_mode,
+        )
+        self._available_tools["skill"] = BUILTIN_STATEFUL_TOOLS["skill"](
+            recorder=self.record_skill_invocation,
+            registry=self._skill_registry,
+            session_id_provider=(
+                lambda: getattr(self, "_session_id", _DEFAULT_SESSION)
+            ),
+            session_rules_provider=lambda: self._session_rules,
+            loop_state_provider=lambda: self._state,
+        )
         # ``session_id``, ``session_log_path`` (per-session JSONL routing
         # for ``journal.session_scope``), and ``session_rules`` all live
         # on :class:`SessionRuntime`. Property forwards below preserve

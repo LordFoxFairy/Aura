@@ -29,8 +29,6 @@ from aura.core.compact.compact import CompactResult, CompactSource, run_compact
 from aura.core.compact.constants import (
     AUTO_COMPACT_THRESHOLD,
     KEEP_LAST_N_TURNS,
-    MAX_FILES_TO_RESTORE,
-    MAX_TOKENS_PER_FILE,
     MICROCOMPACT_CLEAR_MARKER,
     MICROCOMPACT_COMPACTABLE_TOOLS,
     MICROCOMPACT_KEEP_RECENT,
@@ -121,8 +119,6 @@ __all__ = [
     "CompactionTrigger",
     "Compactor",
     "KEEP_LAST_N_TURNS",
-    "MAX_FILES_TO_RESTORE",
-    "MAX_TOKENS_PER_FILE",
     "MICROCOMPACT_CLEAR_MARKER",
     "MICROCOMPACT_COMPACTABLE_TOOLS",
     "MICROCOMPACT_KEEP_RECENT",

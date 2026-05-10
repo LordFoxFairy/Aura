@@ -181,7 +181,11 @@ class CompactConfig(BaseModel):
 
     auto_threshold_buffer_tokens: int = Field(default=13_000, ge=0)
     max_files_to_restore: int = Field(default=5, ge=0)
-    max_tokens_per_file: int = Field(default=6_000, ge=0)
+    # Defaults to 5_000 to match the legacy ``MAX_TOKENS_PER_FILE`` constant
+    # in ``aura/core/compact/constants.py`` (Phase 1-3 behavior). The Phase 4
+    # spec drafted 6_000 but the actual code value was 5_000 — keeping
+    # behavior unchanged across the constant→config migration takes priority.
+    max_tokens_per_file: int = Field(default=5_000, ge=0)
     max_summary_message_chars: int = Field(default=6_000, ge=0)
     max_summary_tool_args_chars: int = Field(default=2_000, ge=0)
     fallback_summary_char_limit: int = Field(default=12_000, ge=0)

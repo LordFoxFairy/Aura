@@ -37,11 +37,7 @@ from typing import TYPE_CHECKING, Literal
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from aura.core.compact.constants import (
-    KEEP_LAST_N_TURNS,
-    MAX_FILES_TO_RESTORE,
-    MAX_TOKENS_PER_FILE,
-)
+from aura.core.compact.constants import KEEP_LAST_N_TURNS
 from aura.core.compact.microcompact import MicrocompactPolicy, apply_microcompact
 from aura.core.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
 from aura.core.memory import project_memory, rules
@@ -73,26 +69,33 @@ class CompactResult:
 
 def _build_recent_file_messages(
     read_records: dict[Path, _ReadRecord],
+    *,
+    max_files_to_restore: int,
+    max_tokens_per_file: int,
 ) -> list[HumanMessage]:
-    """Render up to MAX_FILES_TO_RESTORE <recent-file> HumanMessages.
+    """Render up to ``max_files_to_restore`` <recent-file> HumanMessages.
 
     Selection rule: sort by mtime DESC, drop entries whose recorded read was
-    partial, take top ``MAX_FILES_TO_RESTORE``. Files that can no longer be
+    partial, take top ``max_files_to_restore``. Files that can no longer be
     read from disk (deleted / permission-changed post-read) are silently
     skipped — this path runs AFTER the summary turn already captured them by
     text, so losing their body is not catastrophic.
 
-    Each file's body is capped at ``MAX_TOKENS_PER_FILE * 4`` characters
+    Each file's body is capped at ``max_tokens_per_file * 4`` characters
     (4 chars/token ballpark for English/code mix); oversize bodies get a
     trailing ``… (truncated)`` marker so the model knows content is missing.
+
+    Caps are passed as kwargs (sourced by the caller from
+    ``agent._config.compact``) so operators can override via JSON config
+    without re-importing module constants.
     """
     ranked = sorted(
         read_records.items(), key=lambda kv: kv[1].mtime, reverse=True,
     )
-    max_chars = MAX_TOKENS_PER_FILE * 4
+    max_chars = max_tokens_per_file * 4
     messages: list[HumanMessage] = []
     for path, record in ranked:
-        if len(messages) >= MAX_FILES_TO_RESTORE:
+        if len(messages) >= max_files_to_restore:
             break
         if record.partial:
             continue
@@ -180,8 +183,37 @@ def _build_active_task_messages(agent: Agent) -> list[HumanMessage]:
     return out
 
 
-_MAX_SUMMARY_MESSAGE_CHARS = 6_000
-_MAX_SUMMARY_TOOL_ARGS_CHARS = 2_000
+@dataclass(frozen=True)
+class SummaryCaps:
+    """Char-level caps applied while serializing history into the summary prompt.
+
+    Phase 4 Task 2: lifted from module-level constants
+    (``_MAX_SUMMARY_MESSAGE_CHARS`` / ``_MAX_SUMMARY_TOOL_ARGS_CHARS`` /
+    ``_FALLBACK_SUMMARY_CHAR_LIMIT`` / ``_MAX_SUMMARY_SPLIT_DEPTH``) so
+    operators can override via :class:`aura.config.schema.CompactConfig`
+    without re-importing module internals. ``DEFAULT`` mirrors the legacy
+    constant values; tests that don't construct a full Agent (e.g.
+    ``test_compact_ptl_retry``) fall back to it implicitly.
+    """
+
+    max_summary_message_chars: int = 6_000
+    max_summary_tool_args_chars: int = 2_000
+    fallback_summary_char_limit: int = 12_000
+    max_summary_split_depth: int = 12
+
+
+_DEFAULT_SUMMARY_CAPS = SummaryCaps()
+
+
+def _summary_caps_from_agent(agent: Agent) -> SummaryCaps:
+    """Project ``agent._config.compact`` onto the four summary char caps."""
+    cfg = agent._config.compact
+    return SummaryCaps(
+        max_summary_message_chars=cfg.max_summary_message_chars,
+        max_summary_tool_args_chars=cfg.max_summary_tool_args_chars,
+        fallback_summary_char_limit=cfg.fallback_summary_char_limit,
+        max_summary_split_depth=cfg.max_summary_split_depth,
+    )
 
 
 def _cap_summary_text(text: str, *, max_chars: int) -> str:
@@ -191,47 +223,70 @@ def _cap_summary_text(text: str, *, max_chars: int) -> str:
     return f"{text[:max_chars]}\n... (truncated; {omitted} chars omitted)"
 
 
-def _serialize_tool_args(args: object) -> str:
+def _serialize_tool_args(args: object, *, caps: SummaryCaps) -> str:
     try:
         import json
 
         rendered = json.dumps(args, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         rendered = str(args)
-    return _cap_summary_text(rendered, max_chars=_MAX_SUMMARY_TOOL_ARGS_CHARS)
+    return _cap_summary_text(rendered, max_chars=caps.max_summary_tool_args_chars)
 
 
-def _serialize_history(messages: list[BaseMessage]) -> str:
+def _serialize_history(
+    messages: list[BaseMessage],
+    *,
+    caps: SummaryCaps = _DEFAULT_SUMMARY_CAPS,
+) -> str:
     """Flatten messages into a role-tagged text block for the summary prompt.
 
     The summary model doesn't need round-trip-perfect message schema — it
     just needs to read what happened. Tool calls are shown as their raw
     args (JSON-ish via str) to keep the encoding cheap.
+
+    ``caps`` defaults to :data:`_DEFAULT_SUMMARY_CAPS` for callers that
+    don't have an Agent in scope (estimate helpers, the public command
+    surface, the PTL retry test fixtures). Production ``run_compact``
+    threads the agent's :class:`SummaryCaps` through so JSON config
+    overrides take effect.
     """
     lines: list[str] = []
     for m in messages:
         role = m.__class__.__name__.replace("Message", "").lower()
         content = str(m.content) if m.content else ""
-        content = _cap_summary_text(content, max_chars=_MAX_SUMMARY_MESSAGE_CHARS)
+        content = _cap_summary_text(content, max_chars=caps.max_summary_message_chars)
         lines.append(f"[{role}] {content}")
         # Tool calls live on AIMessage; serialize inline for legibility.
         tool_calls = getattr(m, "tool_calls", None) or []
         for tc in tool_calls:
             lines.append(
                 "    -> tool_call "
-                f"{tc.get('name')!r} args={_serialize_tool_args(tc.get('args'))}"
+                f"{tc.get('name')!r} args={_serialize_tool_args(tc.get('args'), caps=caps)}"
             )
     return "\n".join(lines)
 
 
-def _summary_turn_estimated_tokens(messages: list[BaseMessage]) -> int:
+def _summary_turn_estimated_tokens(
+    messages: list[BaseMessage],
+    *,
+    caps: SummaryCaps = _DEFAULT_SUMMARY_CAPS,
+) -> int:
     return estimate_text_tokens(
-        SUMMARY_SYSTEM + "\n" + SUMMARY_USER_PREFIX + _serialize_history(messages)
+        SUMMARY_SYSTEM
+        + "\n"
+        + SUMMARY_USER_PREFIX
+        + _serialize_history(messages, caps=caps)
     )
 
 
 def estimate_compact_summary_tokens(messages: list[BaseMessage]) -> int:
-    """Public-for-command estimate of the manual compact summary prompt."""
+    """Public-for-command estimate of the manual compact summary prompt.
+
+    Uses :data:`_DEFAULT_SUMMARY_CAPS` because the ``/context`` command
+    just wants a ballpark token count for display — perfect cap fidelity
+    isn't required, and threading an Agent reference into the command
+    surface for a one-line estimate would be heavier than the value.
+    """
     return _summary_turn_estimated_tokens(messages)
 
 
@@ -258,12 +313,16 @@ def _split_for_summary_budget(
     messages: list[BaseMessage],
     *,
     max_prompt_tokens: int,
+    caps: SummaryCaps = _DEFAULT_SUMMARY_CAPS,
 ) -> list[list[BaseMessage]]:
     chunks: list[list[BaseMessage]] = []
     current: list[BaseMessage] = []
     for message in messages:
         candidate = [*current, message]
-        if current and _summary_turn_estimated_tokens(candidate) > max_prompt_tokens:
+        if (
+            current
+            and _summary_turn_estimated_tokens(candidate, caps=caps) > max_prompt_tokens
+        ):
             chunks.append(current)
             current = [message]
         else:
@@ -314,10 +373,12 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
     # CAN'T call one even if tempted. F-0910-003: on PromptTooLong /
     # context-overflow during the summary call itself, drop the oldest
     # 20% of ``to_summarize`` and retry up to 3 times before raising.
+    summary_caps = _summary_caps_from_agent(agent)
     summary_text = await _run_summary_turn_with_retry(
         agent._model,
         to_summarize,
         max_prompt_tokens=_compact_summary_prompt_budget(agent),
+        caps=summary_caps,
     )
 
     # --- Pre-cleanup state capture (lifted BEFORE we build new_history so
@@ -330,7 +391,12 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
     # work on a specific file. Re-inject the most-recently-touched FULL
     # reads' bodies as <recent-file> HumanMessages. Partial reads are skipped
     # (an incomplete view confuses the model more than omitting the body).
-    recent_file_msgs = _build_recent_file_messages(preserved_read_records)
+    compact_cfg = agent._config.compact
+    recent_file_msgs = _build_recent_file_messages(
+        preserved_read_records,
+        max_files_to_restore=compact_cfg.max_files_to_restore,
+        max_tokens_per_file=compact_cfg.max_tokens_per_file,
+    )
 
     # F-0910-008 / Phase 1 Task 6: stash the pre-compact invoked-skill
     # list on the typed ``state.slots.preserved_invoked_skills`` slot
@@ -453,8 +519,6 @@ def _is_prompt_too_long(exc: BaseException) -> bool:
     )
 
 
-_MAX_SUMMARY_SPLIT_DEPTH = 12
-_FALLBACK_SUMMARY_CHAR_LIMIT = 12_000
 _MAX_COMPACT_SUMMARY_PROMPT_TOKENS = 16_000
 
 
@@ -474,6 +538,7 @@ async def _run_summary_turn_with_retry(
     to_summarize: list[BaseMessage],
     *,
     max_prompt_tokens: int = _MAX_COMPACT_SUMMARY_PROMPT_TOKENS,
+    caps: SummaryCaps = _DEFAULT_SUMMARY_CAPS,
 ) -> str:
     """Summarize history, splitting recursively if the provider rejects size.
 
@@ -482,19 +547,24 @@ async def _run_summary_turn_with_retry(
     fail on providers with smaller windows. The resilient path below mirrors
     code-agent compaction behavior more closely: summarize chunks, then
     summarize the chunk summaries.
+
+    ``caps`` defaults to :data:`_DEFAULT_SUMMARY_CAPS`; ``run_compact``
+    threads the agent's :class:`SummaryCaps` (sourced from
+    :class:`CompactConfig`) so JSON config overrides fire end-to-end.
     """
     chunks = _split_for_summary_budget(
         list(to_summarize),
         max_prompt_tokens=max_prompt_tokens,
+        caps=caps,
     )
     if not chunks:
         return ""
     if len(chunks) == 1:
-        return await _run_summary_turn_resilient(model, chunks[0], depth=0)
+        return await _run_summary_turn_resilient(model, chunks[0], depth=0, caps=caps)
 
     partials: list[BaseMessage] = []
     for idx, chunk in enumerate(chunks, start=1):
-        text = await _run_summary_turn_resilient(model, chunk, depth=0)
+        text = await _run_summary_turn_resilient(model, chunk, depth=0, caps=caps)
         partials.append(
             HumanMessage(
                 content=(
@@ -508,6 +578,7 @@ async def _run_summary_turn_with_retry(
         model,
         partials,
         max_prompt_tokens=max_prompt_tokens,
+        caps=caps,
     )
 
 
@@ -516,23 +587,24 @@ async def _run_summary_turn_resilient(
     messages: list[BaseMessage],
     *,
     depth: int,
+    caps: SummaryCaps = _DEFAULT_SUMMARY_CAPS,
 ) -> str:
     if not messages:
         return ""
     try:
-        return await _run_summary_turn(model, messages)
+        return await _run_summary_turn(model, messages, caps=caps)
     except Exception as exc:  # noqa: BLE001 — providers vary widely
         if not _is_prompt_too_long(exc):
             raise
-        if len(messages) == 1 or depth >= _MAX_SUMMARY_SPLIT_DEPTH:
-            return _fallback_summary(messages)
+        if len(messages) == 1 or depth >= caps.max_summary_split_depth:
+            return _fallback_summary(messages, caps=caps)
 
     midpoint = max(1, len(messages) // 2)
     left = await _run_summary_turn_resilient(
-        model, messages[:midpoint], depth=depth + 1,
+        model, messages[:midpoint], depth=depth + 1, caps=caps,
     )
     right = await _run_summary_turn_resilient(
-        model, messages[midpoint:], depth=depth + 1,
+        model, messages[midpoint:], depth=depth + 1, caps=caps,
     )
     merged: list[BaseMessage] = [
         HumanMessage(
@@ -550,14 +622,20 @@ async def _run_summary_turn_resilient(
             ),
         ),
     ]
-    return await _run_summary_turn_resilient(model, merged, depth=depth + 1)
+    return await _run_summary_turn_resilient(model, merged, depth=depth + 1, caps=caps)
 
 
-def _fallback_summary(messages: list[BaseMessage]) -> str:
+def _fallback_summary(
+    messages: list[BaseMessage],
+    *,
+    caps: SummaryCaps = _DEFAULT_SUMMARY_CAPS,
+) -> str:
     """Deterministic last resort when even a single message is too large."""
-    serialized = _serialize_history(messages)
-    if len(serialized) > _FALLBACK_SUMMARY_CHAR_LIMIT:
-        serialized = serialized[:_FALLBACK_SUMMARY_CHAR_LIMIT] + "\n... (truncated)"
+    serialized = _serialize_history(messages, caps=caps)
+    if len(serialized) > caps.fallback_summary_char_limit:
+        serialized = (
+            serialized[: caps.fallback_summary_char_limit] + "\n... (truncated)"
+        )
     return (
         "<goal>Conversation history was compacted without a model summary "
         "because the provider rejected the compact prompt size.</goal>\n"
@@ -575,7 +653,10 @@ def _fallback_summary(messages: list[BaseMessage]) -> str:
 
 
 async def _run_summary_turn(
-    model: BaseChatModel, to_summarize: list[BaseMessage],
+    model: BaseChatModel,
+    to_summarize: list[BaseMessage],
+    *,
+    caps: SummaryCaps = _DEFAULT_SUMMARY_CAPS,
 ) -> str:
     """Invoke ``model`` once with SUMMARY_SYSTEM + serialized history.
 
@@ -583,7 +664,7 @@ async def _run_summary_turn(
     the model to attempt. Returns the text content of the assistant reply
     (best-effort — tool calls that somehow appear are ignored by design).
     """
-    serialized = _serialize_history(to_summarize)
+    serialized = _serialize_history(to_summarize, caps=caps)
     messages: list[BaseMessage] = [
         SystemMessage(content=SUMMARY_SYSTEM),
         HumanMessage(content=SUMMARY_USER_PREFIX + serialized),

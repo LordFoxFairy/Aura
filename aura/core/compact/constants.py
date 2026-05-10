@@ -13,11 +13,13 @@ from __future__ import annotations
 # tail of history. Anything older becomes part of the summary block.
 KEEP_LAST_N_TURNS = 3
 
-# Per-run caps on the post-compact re-injection of recently touched files.
-# Live — read by ``compact.py::_build_recent_files`` to cap the volume of
-# file bodies re-added after the summary block replaces middle history.
-MAX_FILES_TO_RESTORE = 5
-MAX_TOKENS_PER_FILE = 5_000
+# Per-run caps on the post-compact re-injection of recently touched files
+# moved to ``aura.config.schema.CompactConfig`` (Phase 4 Task 2). Read at
+# call time via ``agent._config.compact.max_files_to_restore`` and
+# ``...max_tokens_per_file`` so JSON-config overrides take effect without
+# importing module constants. ``MAX_FILES_TO_RESTORE`` /
+# ``MAX_TOKENS_PER_FILE`` no longer live here; remove the import wherever
+# they're referenced and switch to the ``CompactConfig`` field instead.
 
 # Auto-compact trigger: when LoopState.total_tokens_used exceeds this value,
 # a post_model observer would mark a pending compact. Wired via the

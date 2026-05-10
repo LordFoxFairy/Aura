@@ -70,8 +70,10 @@ def test_compact_config_defaults_match_legacy_constants() -> None:
     assert cfg.auto_threshold_buffer_tokens == 13_000
 
     # File re-injection caps after summary block replaces middle history.
+    # ``max_tokens_per_file`` matches the legacy ``MAX_TOKENS_PER_FILE``
+    # constant (5_000) — preserves Phase 1-3 behavior across the migration.
     assert cfg.max_files_to_restore == 5
-    assert cfg.max_tokens_per_file == 6_000
+    assert cfg.max_tokens_per_file == 5_000
 
     # Summary serialization caps.
     assert cfg.max_summary_message_chars == 6_000

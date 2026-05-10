@@ -509,10 +509,9 @@ def _touch_with_mtime(path: Path, body: str, mtime: float) -> None:
 async def test_compact_reinjects_top_n_recent_files_by_mtime(
     tmp_path: Path,
 ) -> None:
-    """Top MAX_FILES_TO_RESTORE read files (by mtime DESC) re-injected after compact."""
-    from aura.core.compact.constants import MAX_FILES_TO_RESTORE
-
+    """Top ``compact.max_files_to_restore`` reads (by mtime DESC) re-injected after compact."""
     agent = _make_agent(tmp_path)
+    max_files_to_restore = agent._config.compact.max_files_to_restore
     _seed_history(agent, pairs=10)
 
     # Create 7 files, staggered mtimes — file_6 is newest, file_0 oldest.
@@ -531,7 +530,7 @@ async def test_compact_reinjects_top_n_recent_files_by_mtime(
         m for m in history
         if isinstance(m, HumanMessage) and "<recent-file" in str(m.content)
     ]
-    assert len(recent_file_messages) == MAX_FILES_TO_RESTORE
+    assert len(recent_file_messages) == max_files_to_restore
 
     # Top 5 by mtime DESC = files 6, 5, 4, 3, 2.
     joined = "\n".join(str(m.content) for m in recent_file_messages)
@@ -539,6 +538,52 @@ async def test_compact_reinjects_top_n_recent_files_by_mtime(
         assert f"BODY-{i}" in joined, f"expected BODY-{i} in re-injected blob"
     # Older files skipped.
     for i in (1, 0):
+        assert f"BODY-{i}" not in joined
+    await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_compact_honors_max_files_to_restore_config_override(
+    tmp_path: Path,
+) -> None:
+    """Phase 4 Task 2 — JSON config override on ``compact.max_files_to_restore``
+    propagates end-to-end through ``run_compact`` instead of using the legacy
+    constant default (5). Pinning ``2`` and recording 5 reads must yield
+    exactly 2 ``<recent-file>`` HumanMessages — proves the constant→config
+    migration is wired all the way to the call site.
+    """
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+        "compact": {"max_files_to_restore": 2},
+    })
+    model = FakeChatModel(turns=[FakeTurn(AIMessage(content="SUMMARY-TEXT"))])
+    agent = Agent(config=cfg, model=model, storage=_storage(tmp_path))
+    _seed_history(agent, pairs=10)
+
+    # 5 files, distinct mtimes — newest first (file_4) should win every slot.
+    for i in range(5):
+        p = tmp_path / f"file_{i}.txt"
+        _touch_with_mtime(p, f"BODY-{i}", mtime=1_000_000 + i)
+        agent._context.record_read(p)
+
+    await agent.compact(source="manual")
+
+    history = agent._storage.load(agent.session_id)
+    recent_file_messages = [
+        m for m in history
+        if isinstance(m, HumanMessage) and "<recent-file" in str(m.content)
+    ]
+    # Override pinned 2 — exactly 2 files re-injected, not the legacy default 5.
+    assert len(recent_file_messages) == 2
+    joined = "\n".join(str(m.content) for m in recent_file_messages)
+    # Top 2 by mtime DESC = file_4, file_3.
+    assert "BODY-4" in joined
+    assert "BODY-3" in joined
+    # Older entries (would have been re-injected at the legacy default of 5)
+    # are dropped under the override.
+    for i in (2, 1, 0):
         assert f"BODY-{i}" not in joined
     await agent.aclose()
 
@@ -596,13 +641,12 @@ async def test_compact_caps_file_body_at_max_tokens_per_file(
     tmp_path: Path,
 ) -> None:
     """Oversize file bodies are truncated with a ``(truncated)`` marker."""
-    from aura.core.compact.constants import MAX_TOKENS_PER_FILE
-
     agent = _make_agent(tmp_path)
+    max_tokens_per_file = agent._config.compact.max_tokens_per_file
     _seed_history(agent, pairs=10)
 
-    # 4 chars/token approx → cap is MAX_TOKENS_PER_FILE * 4 chars.
-    max_chars = MAX_TOKENS_PER_FILE * 4
+    # 4 chars/token approx → cap is ``max_tokens_per_file * 4`` chars.
+    max_chars = max_tokens_per_file * 4
     huge_body = "X" * (max_chars + 500)
     big = tmp_path / "big.txt"
     _touch_with_mtime(big, huge_body, mtime=1_000_000)

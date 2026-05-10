@@ -16,7 +16,11 @@ construction).
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from aura.schemas.todos import TodoItem
@@ -130,6 +134,101 @@ class BuddyState:
     mood: str = "idle"
     last_event_ts: float = 0.0
     had_recent_error: bool = False
+
+
+@dataclass(frozen=True)
+class ReadRecord:
+    """Snapshot of a successful file read — the audit identity for the
+    must-read-first invariant.
+
+    Phase 3 §3 promotes the previously-private ``_ReadRecord`` (in
+    :mod:`aura.core.memory.context`) to a public schema type so the
+    subagent factory can hand parent records to the child via
+    :class:`ReadCarryover` without leaking the core type. The four
+    fields capture *what was read* (``path``), *the on-disk identity at
+    read time* (``mtime_at_read`` + ``size_at_read``), and *when in the
+    parent's lifecycle* (``read_at_turn``) — enough to re-validate
+    freshness later without needing the original file content.
+
+    Frozen — once recorded, the (path, mtime, size, turn) tuple IS the
+    audit fact; rebinding any field would silently rewrite history.
+    Task 4 migrates the core's progressive ``_read_records`` map onto
+    this same type; until then the two coexist (the core's record stays
+    private while consumers go through ``ReadCarryover``).
+    """
+
+    path: Path
+    mtime_at_read: float
+    size_at_read: int
+    read_at_turn: int
+
+
+@dataclass(frozen=True)
+class ReadCarryover:
+    """Immutable bag of parent-agent read records handed to a subagent.
+
+    Phase 3 §3 — replaces the ad-hoc ``inherited_reads: dict[Path,
+    _ReadRecord]`` parameter on :class:`Context` with a typed,
+    self-validating contract. The stale-record risk in the legacy dict
+    (parent reads ``f.py`` at turn 1, child edits ``f.py`` at turn 10
+    after the parent's record went stale) is closed by
+    :meth:`is_fresh`, which re-stats the file at access time.
+
+    Frozen — the carryover IS the parent's read snapshot at spawn time;
+    any change of mind requires constructing a new value (Task 4 wires
+    this through the factory).
+
+    Fields:
+
+    - ``records`` — read-only :class:`~collections.abc.Mapping` of
+      resolved ``Path`` → :class:`ReadRecord`. The constructor wraps
+      whatever mapping is passed in a :class:`MappingProxyType` so a
+      subagent that naively does ``carry.records[p] = ...`` fails with
+      :class:`TypeError` instead of silently polluting the parent's
+      view. (The wrapper is stored on a frozen dataclass via
+      ``object.__setattr__`` in ``__post_init__``.)
+    - ``source_session_id`` — parent's session id (``None`` for tests
+      and the empty-default carryover). Surfaced in audit / debug
+      output so a stale-read prompt can name *which* parent's read is
+      no longer trustworthy.
+    - ``generated_at_turn`` — parent turn at which the carryover was
+      taken. The subagent may use this to phrase a re-read message
+      ("parent read this 4 turns ago, file changed since").
+    """
+
+    records: Mapping[Path, ReadRecord]
+    source_session_id: str | None
+    generated_at_turn: int
+
+    def __post_init__(self) -> None:
+        # Wrap the records mapping in a read-only proxy so consumers
+        # cannot mutate it. ``object.__setattr__`` is the only way to
+        # rebind on a frozen dataclass; this happens once at
+        # construction, after which the value is permanent.
+        if not isinstance(self.records, MappingProxyType):
+            object.__setattr__(self, "records", MappingProxyType(dict(self.records)))
+
+    def is_fresh(self, path: Path) -> bool:
+        """Return True iff ``path`` is in ``records`` AND the on-disk
+        file still matches the recorded ``(mtime, size)``.
+
+        Re-stats the file on every call — the cost (one ``stat()``
+        syscall per inherited read at edit-prompt time) is acceptable
+        because subagent carryover sets are small (≤20 files typical,
+        per spec §9). False on missing-record, missing-file, or any
+        mismatch; the only path to True is "record present AND file
+        unchanged on disk".
+        """
+        record = self.records.get(path)
+        if record is None:
+            return False
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return False
+        if stat.st_mtime > record.mtime_at_read:
+            return False
+        return stat.st_size == record.size_at_read
 
 
 @dataclass(frozen=True)

@@ -33,6 +33,8 @@ from aura.schemas.state import (
     LoopSlots,
     LoopState,
     PermissionKey,
+    ReadCarryover,
+    ReadRecord,
     SkillRestrictLease,
     TokenStats,
 )
@@ -52,6 +54,8 @@ __all__ = [
     "PermissionAudit",
     "PermissionKey",
     "PermissionsConfig",
+    "ReadCarryover",
+    "ReadRecord",
     "Replace",
     "SkillRestrictLease",
     "StatusLineConfig",

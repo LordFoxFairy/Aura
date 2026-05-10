@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
 from aura.core.permissions.decision import Decision
+from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 
@@ -112,16 +113,28 @@ class PostModelHook(Protocol):
 
 
 class PreToolHook(Protocol):
-    """Pre-tool hook — gates / observes one tool call, returns PreToolOutcome.
+    """Pre-tool hook — gates / observes one tool call, returns
+    PreToolOutcome (legacy) OR an :class:`Outcome` variant (Phase 1).
 
-    The return value is strict (:class:`PreToolOutcome`, not
-    ``PreToolOutcome | None``): a hook that has nothing to do MUST
-    return :data:`PRE_TOOL_PASSTHROUGH` (or equivalently
-    ``PreToolOutcome()``). This catches "I forgot to return anything"
-    bugs at the type-checker, and keeps the
-    :meth:`HookChain.run_pre_tool` merge loop simple.
+    The Protocol's declared return type stays :class:`PreToolOutcome`
+    for the Task 8-10 migration window — this keeps every legacy call
+    site mypy-clean. New hook authors targeting the Phase-1 tagged
+    union (``Allow`` / ``Block`` / ``Ask`` / ``Replace`` from
+    :mod:`aura.schemas.permissions`) declare their own return type as
+    :class:`aura.schemas.permissions.Outcome` and pass the function
+    through ``cast(PreToolHook, fn)`` (or use ``Any``-typed module-
+    level lists) when registering. :meth:`HookChain.run_pre_tool`
+    accepts both shapes at runtime via :func:`isinstance` dispatch
+    on the four Outcome variants. Task 10 will flip the Protocol
+    return type to ``Outcome`` outright once every built-in hook
+    has migrated.
 
-    Channels:
+    Returning ``None`` from a PreToolHook is a type error by design —
+    a passthrough hook MUST return :data:`PRE_TOOL_PASSTHROUGH` (or
+    equivalently ``PreToolOutcome()``) so the merge contract stays
+    explicit.
+
+    Legacy channels (PreToolOutcome):
 
     - ``outcome.short_circuit`` non-None → tool is NOT invoked; this
       :class:`ToolResult` becomes the tool's result.
@@ -132,6 +145,13 @@ class PreToolHook(Protocol):
     Both channels are independent. A permission hook typically sets
     BOTH (allow-with-reason: ``decision=allow, short_circuit=None``;
     deny: ``decision=deny, short_circuit=ToolResult(ok=False,...)``).
+
+    Outcome merge precedence: when every hook in a single chain run
+    returns an :class:`Outcome` variant, :meth:`HookChain.run_pre_tool`
+    applies spec §3.2 — first ``Block`` wins → first ``Ask`` wins →
+    first ``Replace`` wins → last ``Allow`` wins. Mixed chains fall
+    back to legacy merge logic so existing built-in hooks keep
+    working unchanged.
     """
 
     async def __call__(
@@ -259,6 +279,113 @@ class StopHook(Protocol):
     ) -> None: ...
 
 
+def _outcome_to_pretooloutcome(outcome: Outcome) -> PreToolOutcome:
+    """Translate an :class:`Outcome` variant into the equivalent
+    legacy :class:`PreToolOutcome` shape.
+
+    Used during the Task 8-10 migration window so the existing legacy
+    merge inside :meth:`HookChain.run_pre_tool` (first-deny-wins on
+    decisions, first-wins on short-circuit, ask side-channel) can
+    absorb new-style hook returns alongside legacy ones — without
+    forcing a big-bang switchover. After Task 10 deletes
+    :class:`PreToolOutcome` this helper goes with it.
+
+    Mapping:
+
+    - :class:`Allow` → ``PreToolOutcome(decision=allow_decision)``
+    - :class:`Block` → ``PreToolOutcome(decision=deny_decision)`` —
+      Block carries a deny decision; the loop turns the deny into a
+      synthetic ToolMessage downstream, so we don't pre-fill
+      ``short_circuit`` here.
+    - :class:`Ask`   → ``PreToolOutcome(ask=True)`` — the asker
+      escalation runs on the ``ask`` side-channel exactly like today.
+    - :class:`Replace` → ``PreToolOutcome(short_circuit=result,
+      decision=deny_decision)`` — Replace IS the canonical short-
+      circuit shape (canned ToolResult + deny audit), straight 1:1.
+    """
+    match outcome:
+        case Allow(decision=d):
+            return PreToolOutcome(short_circuit=None, decision=d, ask=False)
+        case Block(decision=d):
+            return PreToolOutcome(short_circuit=None, decision=d, ask=False)
+        case Ask():
+            return PreToolOutcome(short_circuit=None, decision=None, ask=True)
+        case Replace(result=r, decision=d):
+            return PreToolOutcome(short_circuit=r, decision=d, ask=False)
+    # Defensive — should be unreachable since Outcome is a closed union.
+    raise TypeError(f"unknown Outcome variant: {type(outcome).__name__}")
+
+
+def _merge_outcomes_to_pretooloutcome(
+    outcomes: list[Outcome],
+    ask_requested: bool,
+) -> PreToolOutcome:
+    """Apply spec §3.2 precedence to a list of :class:`Outcome` returns.
+
+    Precedence (registration order matters):
+
+    1. **First Block wins.** Returned as ``PreToolOutcome(decision=
+       block.decision)`` — the loop turns the deny into a synthetic
+       ToolMessage; no short-circuit ToolResult is pre-baked.
+    2. **First Ask wins.** Returned as ``PreToolOutcome(ask=True)`` —
+       loop escalates to the asker, which produces the real Decision.
+    3. **First Replace wins.** Returned with ``short_circuit=result``
+       and ``decision=replace.decision`` — Replace is the canonical
+       short-circuit shape.
+    4. **Last Allow wins.** Lets a refining hook (e.g. permission)
+       overwrite an upstream allow's reason for the audit trail.
+
+    ``ask_requested`` is the merged ask side-channel (which is True
+    iff at least one :class:`Ask` was seen earlier in iteration —
+    threaded through so downstream consumers reading
+    ``PreToolOutcome.ask`` see the same flag whether or not Ask
+    happened to be the precedence winner).
+    """
+    # 1. First Block.
+    for o in outcomes:
+        if isinstance(o, Block):
+            return PreToolOutcome(
+                short_circuit=None,
+                decision=o.decision,
+                ask=ask_requested,
+            )
+    # 2. First Ask.
+    for o in outcomes:
+        if isinstance(o, Ask):
+            return PreToolOutcome(
+                short_circuit=None,
+                decision=None,
+                ask=True,
+            )
+    # 3. First Replace.
+    for o in outcomes:
+        if isinstance(o, Replace):
+            return PreToolOutcome(
+                short_circuit=o.result,
+                decision=o.decision,
+                ask=ask_requested,
+            )
+    # 4. Last Allow.
+    last_allow: Allow | None = None
+    for o in outcomes:
+        if isinstance(o, Allow):
+            last_allow = o
+    if last_allow is not None:
+        return PreToolOutcome(
+            short_circuit=None,
+            decision=last_allow.decision,
+            ask=ask_requested,
+        )
+    # Empty list — caller should have skipped this path; treat as
+    # passthrough rather than raise so a future refactor can't
+    # accidentally crash a live REPL.
+    return PreToolOutcome(
+        short_circuit=None,
+        decision=None,
+        ask=ask_requested,
+    )
+
+
 @dataclass
 class HookChain:
     pre_model: list[PreModelHook] = field(default_factory=list)
@@ -303,7 +430,19 @@ class HookChain:
     ) -> PreToolOutcome:
         """Merge pre_tool hook outcomes across the chain.
 
-        Merge semantics (three channels, three intents):
+        A hook MAY return either the legacy three-channel
+        :class:`PreToolOutcome` OR a Phase-1 :class:`Outcome` variant
+        (``Allow`` / ``Block`` / ``Ask`` / ``Replace`` from
+        :mod:`aura.schemas.permissions`). Both are accepted during the
+        Task 8-10 migration window. Once every hook in a single chain
+        run returns :class:`Outcome`, the new merge precedence applies
+        (spec §3.2): first ``Block`` wins → first ``Ask`` wins → first
+        ``Replace`` wins → last ``Allow`` wins. As soon as one hook
+        returns a legacy :class:`PreToolOutcome`, the chain falls back
+        to the legacy merge logic below so existing built-in hooks
+        (Task 9 will migrate them) keep working unchanged.
+
+        Legacy merge semantics (three channels, three intents):
 
         - ``short_circuit`` is **first-wins**. The first hook that emits
           a non-None ``short_circuit`` stops the chain immediately —
@@ -351,6 +490,14 @@ class HookChain:
         merged_decision: Decision | None = None
         merged_decision_locked = False  # set True once a deny is recorded
         ask_requested = False
+        # Collect every Outcome variant a hook returned this run so the
+        # spec-§3.2 precedence merge can fire at the end. ``None`` means
+        # the chain saw at least one legacy ``PreToolOutcome`` and the
+        # collected list is no longer authoritative — fall through to
+        # the legacy merge result instead. The list is kept in
+        # registration order so "first Block/Ask/Replace wins" is
+        # well-defined.
+        outcomes: list[Outcome] | None = []
         # Snapshot the prior value so we can restore it after this run
         # — state.slots is shared across turns and we must not leak
         # ``ask_pending`` into the next tool call. The signal lives on
@@ -358,7 +505,23 @@ class HookChain:
         prior_ask_pending = state.slots.ask_pending
         try:
             for hook in self.pre_tool:
-                outcome = await hook(tool=tool, args=args, state=state, **kwargs)
+                raw = await hook(tool=tool, args=args, state=state, **kwargs)
+                # Normalize: an Outcome variant is converted into the
+                # equivalent PreToolOutcome shape so the legacy merge
+                # below can absorb it uniformly. The pure-Outcome chain
+                # path (``outcomes is not None``) records the original
+                # variant separately so it can apply spec-§3.2
+                # precedence at the end.
+                if isinstance(raw, Allow | Block | Ask | Replace):
+                    if outcomes is not None:
+                        outcomes.append(raw)
+                    outcome = _outcome_to_pretooloutcome(raw)
+                else:
+                    # Legacy PreToolOutcome (or anything else that
+                    # quacks like one) — downgrade the chain to the
+                    # legacy merge path by clearing the Outcome bag.
+                    outcomes = None
+                    outcome = raw
                 if outcome.ask and not ask_requested:
                     ask_requested = True
                     # Make the ask flag visible to downstream hooks (the
@@ -394,13 +557,34 @@ class HookChain:
                         merged_decision = outcome.decision
                         if not outcome.decision.allow:
                             merged_decision_locked = True
-                # First-wins: stop immediately on the first short-circuit.
-                if outcome.short_circuit is not None:
+                # Pure-Outcome chains short-circuit only on the first
+                # :class:`Block` per spec §3.2: Block is the highest-
+                # precedence variant so once seen no later hook can
+                # override it. :class:`Replace` / :class:`Ask` /
+                # :class:`Allow` do NOT stop the chain — a downstream
+                # Block must still be allowed to win, so we keep
+                # iterating and let the precedence merge run at the
+                # end of the chain. (Legacy short-circuit semantics
+                # are restored below for non-Outcome chains.)
+                if outcomes is not None and isinstance(raw, Block):
+                    return _merge_outcomes_to_pretooloutcome(
+                        outcomes, ask_requested,
+                    )
+                # Legacy first-wins: stop immediately on the first
+                # short-circuit when the chain is in legacy mode.
+                if outcome.short_circuit is not None and outcomes is None:
                     return PreToolOutcome(
                         short_circuit=outcome.short_circuit,
                         decision=merged_decision,
                         ask=ask_requested,
                     )
+            if outcomes is not None and outcomes:
+                # Pure-Outcome chain — apply spec §3.2 precedence:
+                # first Block wins → first Ask wins → first Replace
+                # wins → last Allow wins.
+                return _merge_outcomes_to_pretooloutcome(
+                    outcomes, ask_requested,
+                )
             return PreToolOutcome(
                 short_circuit=None,
                 decision=merged_decision,

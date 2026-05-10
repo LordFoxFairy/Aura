@@ -886,3 +886,161 @@ async def test_write_file_unread_existing_returns_replace_outcome(tmp_path: Path
     assert outcome.result.ok is False
     assert outcome.decision.allow is False
     assert outcome.decision.reason == "safety_blocked"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 Task 5 — must_read_first honors carryover freshness for subagents.
+# Inherited reads pass through the SAME staleness gate that live reads do:
+# Context.read_status() re-stats on every call, so a parent's record that
+# went stale on disk between parent-read and subagent-edit is rejected.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_subagent_inherited_fresh_read_allows_edit(tmp_path: Path) -> None:
+    """Parent reads f.py → spawn subagent → file unchanged → subagent edit allowed.
+
+    Pins the happy-path baseline for Task 5: an inherited fresh record
+    behaves exactly like a live fresh record in the child's hook.
+    """
+    from aura.schemas.state import ReadCarryover, ReadRecord
+
+    target = tmp_path / "f.py"
+    target.write_text("hello\n")
+    st = target.stat()
+
+    parent_record = ReadRecord(
+        path=target.resolve(),
+        mtime_at_read=st.st_mtime,
+        size_at_read=st.st_size,
+        read_at_turn=1,
+    )
+    carryover = ReadCarryover(
+        records={target.resolve(): parent_record},
+        source_session_id="parent-1",
+        generated_at_turn=5,
+    )
+
+    sub_ctx = Context(
+        cwd=tmp_path,
+        system_prompt="",
+        primary_memory="",
+        rules=RulesBundle(),
+        carryover=carryover,
+    )
+    hook = make_must_read_first_hook(sub_ctx)
+
+    outcome = await hook(
+        tool=_edit_tool(),
+        args={"path": str(target), "old_str": "hello", "new_str": "bye"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_subagent_inherited_stale_read_is_blocked(tmp_path: Path) -> None:
+    """Parent reads f.py at turn 1 → subagent spawned at turn 5 → external
+    process modifies f.py mtime/size → subagent edit is BLOCKED.
+
+    Phase 3 Task 5 acceptance: inherited reads honour ``ReadCarryover``-style
+    staleness. Concretely, the subagent's seeded ``_ReadRecord`` carries the
+    parent's recorded ``(mtime, size)`` fingerprint; ``Context.read_status``
+    re-stats at hook-fire time and surfaces ``"stale"`` when the file
+    drifted on disk. Functionally equivalent to ``carryover.is_fresh(path)``
+    being False.
+    """
+    from aura.schemas.state import ReadCarryover, ReadRecord
+
+    target = tmp_path / "f.py"
+    target.write_text("hello\n")
+    st = target.stat()
+
+    parent_record = ReadRecord(
+        path=target.resolve(),
+        mtime_at_read=st.st_mtime,
+        size_at_read=st.st_size,
+        read_at_turn=1,
+    )
+    carryover = ReadCarryover(
+        records={target.resolve(): parent_record},
+        source_session_id="parent-1",
+        generated_at_turn=5,
+    )
+
+    # Build the subagent's Context from the carryover BEFORE the external
+    # mutation so the seeding happens against the parent's pristine view.
+    sub_ctx = Context(
+        cwd=tmp_path,
+        system_prompt="",
+        primary_memory="",
+        rules=RulesBundle(),
+        carryover=carryover,
+    )
+
+    # External process modifies the file AFTER spawn but BEFORE the
+    # subagent attempts an edit — this is the staleness scenario we
+    # need the hook to catch.
+    target.write_text("hello world! longer now\n")
+    st2 = target.stat()
+    os.utime(target, (st2.st_mtime + 10, st2.st_mtime + 10))
+
+    hook = make_must_read_first_hook(sub_ctx)
+    outcome = await hook(
+        tool=_edit_tool(),
+        args={"path": str(target), "old_str": "hello", "new_str": "bye"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Replace)
+    assert outcome.result.ok is False
+    # Staleness manifests as the "has changed since last read" branch
+    # (not the never_read branch) — same wording as a live stale read,
+    # which is the contract: inherited and live reads share one gate.
+    assert "has changed since last read" in (outcome.result.error or "")
+    assert outcome.decision.allow is False
+    assert outcome.decision.reason == "safety_blocked"
+
+
+@pytest.mark.asyncio
+async def test_subagent_inherited_read_blocked_when_file_deleted(
+    tmp_path: Path,
+) -> None:
+    """Parent read f.py → carryover seeds subagent → file deleted out-of-band
+    → subagent edit blocked. ``read_status`` returns ``"stale"`` on missing
+    file (matching ``ReadCarryover.is_fresh`` behavior on missing path).
+    """
+    from aura.schemas.state import ReadCarryover, ReadRecord
+
+    target = tmp_path / "f.py"
+    target.write_text("hello\n")
+    st = target.stat()
+    parent_record = ReadRecord(
+        path=target.resolve(),
+        mtime_at_read=st.st_mtime,
+        size_at_read=st.st_size,
+        read_at_turn=1,
+    )
+    carryover = ReadCarryover(
+        records={target.resolve(): parent_record},
+        source_session_id="parent-1",
+        generated_at_turn=5,
+    )
+    sub_ctx = Context(
+        cwd=tmp_path,
+        system_prompt="",
+        primary_memory="",
+        rules=RulesBundle(),
+        carryover=carryover,
+    )
+
+    target.unlink()
+
+    hook = make_must_read_first_hook(sub_ctx)
+    outcome = await hook(
+        tool=_edit_tool(),
+        args={"path": str(target), "old_str": "hello", "new_str": "bye"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Replace)
+    assert outcome.result.ok is False
+    assert outcome.decision.allow is False

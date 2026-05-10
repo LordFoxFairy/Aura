@@ -13,6 +13,18 @@ after each successful ``read_file`` invocation. Staleness is compared via
 mtime+size — lighter than claude-code's content-hash approach but
 equivalent in practice for real mutations (they change at least one).
 
+Subagent inheritance (Phase 3 Task 5): when a subagent is spawned, its
+``Context`` is seeded from the parent's :class:`~aura.schemas.state.ReadCarryover`
+— each parent ``ReadRecord`` becomes a private ``_ReadRecord`` with the
+parent's ``(mtime_at_read, size_at_read)`` fingerprint. The hook does NOT
+treat inherited records as unconditionally fresh: ``Context.read_status``
+re-stats every path on every call, so an inherited read whose file has
+drifted on disk between parent's read time and subagent's hook fire time
+collapses to ``"stale"`` and the hook blocks with the standard "has
+changed since last read" error. This is functionally equivalent to
+calling :meth:`ReadCarryover.is_fresh` at hook-firing time — the
+freshness gate happens at access, not at carryover construction.
+
 Scope (matches claude-code):
   - ``edit_file`` is always gated; ``old_str == ""`` + non-existent path
     is an explicit bypass for new-file creation via edit.

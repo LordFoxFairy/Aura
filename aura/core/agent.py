@@ -49,6 +49,7 @@ from aura.core.registry import ToolRegistry
 from aura.core.skills import Skill, SkillRegistry, load_skills
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
+from aura.core.tokens import estimate_message_tokens, estimate_text_tokens
 from aura.schemas.events import AgentEvent, AssistantDelta, Final
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError
@@ -146,6 +147,8 @@ class Agent:
         disable_bypass: bool = False,
         inherited_reads: Mapping[Path, _ReadRecord] | None = None,
         ruleset: RuleSet | None = None,
+        deny_ruleset: RuleSet | None = None,
+        ask_ruleset: RuleSet | None = None,
         safety: SafetyPolicy | None = None,
     ) -> None:
         # ``session_rules``: CLI hands in the same SessionRuleSet that was used
@@ -284,6 +287,8 @@ class Agent:
             parent_safety=safety,
             parent_mode_provider=lambda: self._mode,
             parent_session=self._session_rules,
+            parent_deny_rules=deny_ruleset,
+            parent_ask_rules=ask_ruleset,
         )
         # F-07-005 abort cascade — wrap ``spawn`` so every child Agent
         # gets a registered :class:`AbortController` in this Agent's
@@ -564,11 +569,13 @@ class Agent:
         # fingerprints, so we do NOT store this on self. Subagent spawn
         # re-snapshots the parent at each ``SubagentFactory.spawn`` call.
         self._context = self._build_context(inherited_reads=inherited_reads)
-        # Hard-floor bash safety — Tier A shell attacks (zsh builtins, CR
+        # Bash safety — Tier A shell attacks (zsh builtins, CR
         # parser differential, malformed+separator, cd+git compound). Inserted
         # at pre_tool[0] so it precedes any caller-supplied permission hook —
-        # safety is a separate axis from permission and CANNOT be overridden
-        # by rules or ``--bypass-permissions``. Stateless; tracked as a field
+        # safety is a separate axis from permission and cannot be overridden
+        # by allow/deny/ask rules. Bypass mode intentionally skips this hook,
+        # matching the product contract that bypass is an operator opt-in to
+        # run commands without policy prompts. Stateless; tracked as a field
         # so clear_session can re-insert it at position 0 idempotently.
         # Live mode provider: safety hook must honor ``mode == "bypass"``
         # (user opted in) and track mid-session ``set_mode`` changes, same
@@ -1387,14 +1394,7 @@ class Agent:
         ever armed. The 4-chars-per-token approximation is consistent
         in-aggregate and cheap to compute.
         """
-        char_count = 0
-        for msg in history:
-            content = getattr(msg, "content", "")
-            if isinstance(content, str):
-                char_count += len(content)
-            else:
-                char_count += len(str(content))
-        history_tokens = char_count // 4
+        history_tokens = sum(estimate_message_tokens(msg) for msg in history)
         return history_tokens + self._estimate_pinned_tokens()
 
     def _estimate_pinned_tokens(self) -> int:
@@ -1402,17 +1402,17 @@ class Agent:
         # from Context.build that doesn't depend on live turn state.
         import json
 
-        char_count = 0
+        tokens = 0
         for message in self._context.build([]):
             content = getattr(message, "content", "")
             if isinstance(content, str):
-                char_count += len(content)
+                tokens += estimate_text_tokens(content)
         # Tool schemas go into every request as a separate payload the
         # provider also bills against the cached prefix. Approximate via
         # name + description + JSON-serialized args schema.
         for tool in self._registry.tools():
-            char_count += len(tool.name or "")
-            char_count += len(tool.description or "")
+            tokens += estimate_text_tokens(tool.name or "")
+            tokens += estimate_text_tokens(tool.description or "")
             try:
                 schema = json.dumps(
                     getattr(tool, "args", {}) or {},
@@ -1421,11 +1421,8 @@ class Agent:
                 )
             except (TypeError, ValueError):
                 schema = ""
-            char_count += len(schema)
-        # Standard 4-chars-per-token approximation. Not exact (provider
-        # tokenizers vary) but consistently in the ballpark, which is
-        # all an at-a-glance status indicator needs.
-        return char_count // 4
+            tokens += estimate_text_tokens(schema)
+        return tokens
 
     @property
     def router_aliases(self) -> dict[str, str]:
@@ -1772,6 +1769,8 @@ def build_agent(
     mode: str = "default",
     disable_bypass: bool = False,
     ruleset: RuleSet | None = None,
+    deny_ruleset: RuleSet | None = None,
+    ask_ruleset: RuleSet | None = None,
     safety: SafetyPolicy | None = None,
 ) -> Agent:
     # 生产便利工厂：自动解析 model + storage；Agent 构造器保持 DI 注入以便测试替换。
@@ -1790,5 +1789,7 @@ def build_agent(
         mode=mode,
         disable_bypass=disable_bypass,
         ruleset=ruleset,
+        deny_ruleset=deny_ruleset,
+        ask_ruleset=ask_ruleset,
         safety=safety,
     )

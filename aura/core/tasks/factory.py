@@ -161,9 +161,7 @@ class SubagentFactory:
         # parent's deny + ask layered rulesets. Threaded into
         # :func:`make_permission_hook` so the child enforces the SAME
         # deny / ask matrix. ``None`` means "inherit no extra layered
-        # rules" — the make_permission_hook signature accepts only
-        # ``rules=`` today, so deny / ask flow through that same param
-        # (see _build_permission_hook).
+        # rules".
         self._parent_config = parent_config
         self._parent_model_spec = parent_model_spec
         self._parent_skills = parent_skills
@@ -367,6 +365,8 @@ class SubagentFactory:
                 asker=_SUBAGENT_AUTO_DENY_ASKER,
                 session=child_session,
                 rules=self._parent_ruleset,
+                deny_rules=self._parent_deny_rules or RuleSet(),
+                ask_rules=self._parent_ask_rules or RuleSet(),
                 project_root=self._parent_config.resolved_storage_path().parent,
                 mode=_resolved_mode,
                 safety=self._parent_safety or DEFAULT_SAFETY,
@@ -410,4 +410,11 @@ class SubagentFactory:
         # child knows its own depth and listens to OUR parent_abort_event.
         child_agent._subagent_factory._depth = child_depth
         child_agent._subagent_factory._parent_abort_event = self._parent_abort_event
+        child_agent._subagent_factory._parent_ruleset = self._parent_ruleset
+        child_agent._subagent_factory._parent_safety = self._parent_safety
+        child_agent._subagent_factory._parent_mode_provider = lambda: child_agent.mode
+        child_agent._subagent_factory._parent_deny_rules = self._parent_deny_rules
+        child_agent._subagent_factory._parent_ask_rules = self._parent_ask_rules
+        child_agent._subagent_factory._model_factory = self._model_factory
+        child_agent._subagent_factory._storage_factory = self._storage_factory
         return child_agent

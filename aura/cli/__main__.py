@@ -310,6 +310,8 @@ def main() -> int:
             disk_rules = store.load_ruleset(
                 project_root, known_tool_names=known_tools,
             )
+            deny_rules = store.load_deny_ruleset(project_root)
+            ask_rules = store.load_ask_ruleset(project_root)
         except AuraConfigError as exc:
             return _fail_startup(console, exc)
         # User rules first, built-in defaults last. Both are allow-only so
@@ -379,6 +381,8 @@ def main() -> int:
                     asker=asker,
                     session=session,
                     rules=ruleset,
+                    deny_rules=deny_rules,
+                    ask_rules=ask_rules,
                     project_root=project_root,
                     mode=_live_mode,
                     safety=safety_policy,
@@ -407,6 +411,8 @@ def main() -> int:
             # ``SubagentFactory`` can build a permission hook with the
             # same policy inputs for every subagent it spawns.
             ruleset=ruleset,
+            deny_ruleset=deny_rules,
+            ask_ruleset=ask_rules,
             safety=safety_policy,
         )
         _agent_cell[0] = agent

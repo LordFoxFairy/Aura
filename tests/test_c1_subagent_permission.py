@@ -37,6 +37,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.config.schema import AuraConfig
+from aura.core.agent import Agent
 from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.safety import DEFAULT_SAFETY
@@ -85,6 +86,8 @@ def _build_factory(
     parent_ruleset: RuleSet | None = None,
     parent_safety: Any = DEFAULT_SAFETY,
     parent_mode: str = "default",
+    parent_deny_rules: RuleSet | None = None,
+    parent_ask_rules: RuleSet | None = None,
 ) -> SubagentFactory:
     return SubagentFactory(
         parent_config=_cfg(),
@@ -92,6 +95,8 @@ def _build_factory(
         parent_ruleset=parent_ruleset,
         parent_safety=parent_safety,
         parent_mode_provider=lambda: parent_mode,
+        parent_deny_rules=parent_deny_rules,
+        parent_ask_rules=parent_ask_rules,
         model_factory=lambda: FakeChatModel(
             turns=[FakeTurn(AIMessage(content="done"))]
         ),
@@ -158,6 +163,127 @@ async def test_subagent_honors_parent_allow_rule() -> None:
         assert outcome.decision.allow is True
         assert outcome.decision.reason == "rule_allow"
     finally:
+        await child.aclose()
+
+
+@pytest.mark.asyncio
+async def test_subagent_honors_parent_deny_rule_over_allow_rule() -> None:
+    parent_ruleset = RuleSet(rules=(Rule(tool="echo_tool", content=None),))
+    parent_deny_rules = RuleSet(rules=(Rule(tool="echo_tool", content=None),))
+    factory = _build_factory(
+        parent_ruleset=parent_ruleset,
+        parent_deny_rules=parent_deny_rules,
+    )
+    child = factory.spawn("prompt")
+    try:
+        outcome = await child._hooks.run_pre_tool(
+            tool=_EchoTool(),
+            args={"value": "x"},
+            state=LoopState(),
+        )
+        assert outcome.short_circuit is not None
+        assert outcome.decision is not None
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "rule_deny"
+    finally:
+        await child.aclose()
+
+
+@pytest.mark.asyncio
+async def test_subagent_honors_parent_ask_rule_by_auto_denying_prompt() -> None:
+    parent_ruleset = RuleSet(rules=(Rule(tool="echo_tool", content=None),))
+    parent_ask_rules = RuleSet(rules=(Rule(tool="echo_tool", content=None),))
+    factory = _build_factory(
+        parent_ruleset=parent_ruleset,
+        parent_ask_rules=parent_ask_rules,
+    )
+    child = factory.spawn("prompt")
+    try:
+        outcome = await child._hooks.run_pre_tool(
+            tool=_EchoTool(),
+            args={"value": "x"},
+            state=LoopState(),
+        )
+        assert outcome.short_circuit is not None
+        assert outcome.decision is not None
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "user_deny"
+        assert "subagent_auto_deny" in (outcome.short_circuit.error or "")
+    finally:
+        await child.aclose()
+
+
+@pytest.mark.asyncio
+async def test_agent_wiring_passes_deny_and_ask_rules_to_subagent_factory(
+    tmp_path: Path,
+) -> None:
+    cfg = AuraConfig.model_validate(
+        {
+            "providers": [{"name": "openai", "protocol": "openai"}],
+            "router": {"default": "openai:gpt-4o-mini"},
+            "tools": {"enabled": ["write_file"]},
+        }
+    )
+    ruleset = RuleSet(rules=(Rule(tool="write_file", content=None),))
+    deny_ruleset = RuleSet(rules=(Rule(tool="write_file", content=None),))
+    agent = Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[FakeTurn(AIMessage(content="done"))]),
+        storage=SessionStorage(tmp_path / "parent.db"),
+        ruleset=ruleset,
+        deny_ruleset=deny_ruleset,
+        ask_ruleset=RuleSet(),
+        safety=DEFAULT_SAFETY,
+    )
+    agent._subagent_factory._model_factory = lambda: FakeChatModel(
+        turns=[FakeTurn(AIMessage(content="done"))]
+    )
+    agent._subagent_factory._storage_factory = lambda: SessionStorage(
+        Path(":memory:")
+    )
+    child = agent._subagent_factory.spawn("prompt")
+    try:
+        write_tool = child._available_tools["write_file"]
+        outcome = await child._hooks.run_pre_tool(
+            tool=write_tool,
+            args={"path": str(tmp_path / "out.txt"), "content": "x"},
+            state=LoopState(),
+        )
+        assert outcome.short_circuit is not None
+        assert outcome.decision is not None
+        assert outcome.decision.reason == "rule_deny"
+    finally:
+        await child.aclose()
+        await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_nested_subagent_factory_inherits_permission_context() -> None:
+    parent_ruleset = RuleSet(rules=(Rule(tool="echo_tool", content=None),))
+    parent_deny_rules = RuleSet(rules=(Rule(tool="echo_tool", content=None),))
+    factory = _build_factory(
+        parent_ruleset=parent_ruleset,
+        parent_deny_rules=parent_deny_rules,
+    )
+
+    child = factory.spawn("prompt")
+    child._subagent_factory._model_factory = lambda: FakeChatModel(
+        turns=[FakeTurn(AIMessage(content="done"))]
+    )
+    child._subagent_factory._storage_factory = lambda: SessionStorage(Path(":memory:"))
+    grandchild = child._subagent_factory.spawn("nested prompt")
+    try:
+        outcome = await grandchild._hooks.run_pre_tool(
+            tool=_EchoTool(),
+            args={"value": "x"},
+            state=LoopState(),
+        )
+        assert outcome.short_circuit is not None
+        assert outcome.decision is not None
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "rule_deny"
+    finally:
+        await grandchild.aclose()
         await child.aclose()
 
 

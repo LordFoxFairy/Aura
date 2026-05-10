@@ -16,7 +16,7 @@ history.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
@@ -24,6 +24,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from aura.core.hooks import HookChain
 from aura.core.hooks.permission import AskerResponse, make_permission_hook
 from aura.core.permissions import store as perm_store
+from aura.core.permissions.mode import Mode
 from aura.core.permissions.session import SessionRuleSet
 from aura.schemas.events import ToolCallCompleted
 from tests.conftest import FakeChatModel, FakeTurn
@@ -196,17 +197,8 @@ async def test_plan_mode_exit_approval_flow_flips_mode_and_user_deny(
     tmp_path: Path,
 ) -> None:
     """Plan mode state machine — write blocked, exit_plan_mode Yes flips mode,
-    exit_plan_mode No stays in plan.
-
-    The test covers the FULL 3-turn state machine BUT stops BEFORE asserting
-    "a later write_file tool call now sees default-mode semantics". The
-    permission hook currently closes over ``mode`` at construction time
-    (see ``aura.core.hooks.permission.make_permission_hook``) — the CLI
-    ``/shift+tab`` keybinding and the ``exit_plan_mode`` approval path both
-    mutate ``Agent.mode`` via ``set_mode``, but the hook never re-reads it.
-    That divergence is reported in the integration-test findings; this
-    test exercises everything up to and including the tool's approval
-    gate so the gate itself can't silently regress.
+    exit_plan_mode No stays in plan, then the later write sees live default
+    mode semantics.
     """
     target = tmp_path / "draft.txt"
     # Turn 1: LLM tries write_file (blocked by plan mode).
@@ -250,12 +242,30 @@ async def test_plan_mode_exit_approval_flow_flips_mode_and_user_deny(
             ],
         )
     )
-    turn_4 = FakeTurn(message=AIMessage(content="done"))
+    # Turn 4: after approval, the permission hook must re-read Agent.mode.
+    # If it still enforces the construction-time "plan" value, this write
+    # is dry-run blocked and the target file is never created.
+    turn_4 = FakeTurn(
+        message=AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "tc_w2",
+                    "name": "write_file",
+                    "args": {"path": str(target), "content": "after approval"},
+                }
+            ],
+        )
+    )
+    turn_5 = FakeTurn(message=AIMessage(content="done"))
 
     perm_asker = ScriptedPermissionAsker()
-    # Permission hook is never consulted: turn 1 is plan-mode blocked, and
-    # exit_plan_mode is on the hook's _PLAN_MODE_EXEMPT_TOOLS list so it
-    # falls through to rule match (which we seed via a session rule).
+    # Turn 4 runs after plan approval and should use default-mode semantics,
+    # so the write asks once and this response lets it proceed.
+    perm_asker.queue(AskerResponse(choice="accept"))
+    # The exit_plan_mode tool falls through to rule match (which we seed
+    # via a session rule); write_file is dry-run blocked in plan mode and
+    # prompted in default mode.
     session = SessionRuleSet()
     from aura.core.permissions.rule import Rule
 
@@ -267,20 +277,25 @@ async def test_plan_mode_exit_approval_flow_flips_mode_and_user_deny(
     plan_asker.queue_response("No")
     plan_asker.queue_response("Yes")
 
-    hooks = _wire_permission_hook(
-        project_root=tmp_path,
-        asker=perm_asker,
-        session_rules=session,
-        mode="plan",
-    )
+    hooks = HookChain()
     agent, _ = build_integration_agent(
         tmp_path,
-        [turn_1, turn_2, turn_3, turn_4],
+        [turn_1, turn_2, turn_3, turn_4, turn_5],
         enabled_tools=["write_file", "enter_plan_mode", "exit_plan_mode"],
         hooks=hooks,
         mode="plan",
         question_asker=plan_asker,
     )
+    live_permission_hook = make_permission_hook(
+        asker=perm_asker,
+        session=session,
+        rules=perm_store.load_ruleset(tmp_path),
+        project_root=tmp_path,
+        mode=lambda: cast("Mode", agent.mode),
+    )
+    # Agent.__init__ inserts bash safety at 0 and must-read-first at the end.
+    # Put permission between them, matching the normal caller-owned hook slot.
+    hooks.pre_tool.insert(1, live_permission_hook)
     try:
         events = await drain(agent, "write a file")
     finally:
@@ -291,11 +306,12 @@ async def test_plan_mode_exit_approval_flow_flips_mode_and_user_deny(
         "write_file",
         "exit_plan_mode",
         "exit_plan_mode",
+        "write_file",
     ]
     # Turn 1: plan mode blocked the write (no asker consulted).
     assert completed[0].error is not None
     assert "plan mode" in completed[0].error.lower()
-    assert len(perm_asker.calls) == 0
+    assert len(perm_asker.calls) == 1
     # Turn 2: the exit_plan_mode user-approval gate rejected ("No").
     assert completed[1].error is not None
     assert "rejected" in completed[1].error.lower()
@@ -305,6 +321,11 @@ async def test_plan_mode_exit_approval_flow_flips_mode_and_user_deny(
     # Turn 3: second attempt was approved, mode flipped to default.
     assert completed[2].error is None
     assert agent.mode == "default"
+    # Turn 4: after approval, the follow-up write is governed by live
+    # default-mode permission rules rather than stale plan-mode dry-run.
+    assert completed[3].error is None
+    assert target.read_text() == "after approval"
+    assert perm_asker.calls[0]["tool"] == "write_file"
     # Approval asker was invoked for both attempts.
     assert len(plan_asker.calls) == 2
 

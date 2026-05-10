@@ -29,6 +29,7 @@ from aura.core.memory.rules import Rule, RulesBundle
 from aura.core.memory.rules import match as match_rules
 from aura.core.persistence import journal
 from aura.core.skills.types import Skill
+from aura.schemas.state import ReadCarryover
 from aura.schemas.todos import TodoItem
 
 _AURA_MD = "AURA.md"
@@ -118,6 +119,75 @@ class Context:
         # through it — the loop owns the live invocation site. ``None``
         # is the test-default and means "no Anthropic-shaped breakpoints".
         self._model = model
+
+    # ------------------------------------------------------------------
+    # Explicit reset factory (Phase 3 §4)
+    # ------------------------------------------------------------------
+
+    def fresh(
+        self,
+        *,
+        carryover: ReadCarryover | None = None,
+        clear_reads: bool = False,
+    ) -> Context:
+        """Return a NEW :class:`Context` with cleared progressive state.
+
+        Phase 3 §4 — promotes the previously-implicit "construct a new
+        ``Context`` to clear progressive fields" pattern into a single
+        named method. Constructor-injected config (``system_prompt``,
+        ``primary_memory``, ``rules``, ``skills``, providers, ``model``,
+        ``cwd``) is preserved on the returned instance; progressive
+        fields (``_loaded_nested_paths``, ``_nested_fragments``,
+        ``_matched_rule_paths``, ``_matched_rules``, ``_invoked_skills``
+        + their dedup index) start empty.
+
+        ``carryover`` — when provided, seeds the new instance's
+        ``_read_records`` from the parent's :class:`ReadCarryover`
+        snapshot. The public :class:`~aura.schemas.state.ReadRecord`
+        type is converted to the core's private ``_ReadRecord``
+        (``partial=False`` by default — the parent's full reads become
+        non-partial seeds; see Phase 3 spec §10 Q1).
+
+        ``clear_reads`` — when ``True``, drops ``_read_records``
+        entirely (used by ``/clear``). Mutually exclusive with
+        ``carryover``: passing both is a programmer error and raises
+        :class:`ValueError`. Default behavior preserves
+        ``_read_records`` (the file is still on disk after a compact,
+        so its prior read remains valid).
+        """
+        if carryover is not None and clear_reads:
+            raise ValueError(
+                "fresh(): pass either carryover or clear_reads=True, not both",
+            )
+
+        new_ctx = Context(
+            cwd=self._cwd,
+            system_prompt=self._system_prompt,
+            primary_memory=self._primary_memory,
+            rules=self._rules,
+            skills=self._skills_available,
+            todos_provider=self._todos_provider,
+            notifications_drainer=self._notifications_drainer,
+            model=self._model,
+        )
+        if clear_reads:
+            new_ctx._read_records = {}
+        elif carryover is not None:
+            seeded: dict[Path, _ReadRecord] = {}
+            for path, record in carryover.records.items():
+                seeded[path] = _ReadRecord(
+                    mtime=record.mtime_at_read,
+                    size=record.size_at_read,
+                    partial=False,
+                )
+            new_ctx._read_records = seeded
+        else:
+            # Default: preserve parent's read fingerprints. Shallow copy
+            # so post-fresh records on the new instance don't retroactively
+            # appear on the old one (which may still be alive in
+            # journal-replay paths).
+            new_ctx._read_records = dict(self._read_records)
+        return new_ctx
 
     # ------------------------------------------------------------------
     # Progressive state mutation (append-only within a session)

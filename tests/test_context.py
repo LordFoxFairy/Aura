@@ -13,11 +13,12 @@ from langchain_core.messages import (
     SystemMessage,
 )
 
-from aura.core.memory.context import Context, NestedFragment
+from aura.core.memory.context import Context, NestedFragment, _ReadRecord
 from aura.core.memory.context import _render_todos_body as render_todos_body
 from aura.core.memory.rules import Rule, RulesBundle
 from aura.core.skills.types import Skill
 from aura.core.tasks.types import TaskNotification
+from aura.schemas.state import ReadCarryover, ReadRecord
 from aura.schemas.todos import TodoItem
 
 
@@ -703,3 +704,177 @@ def test_render_todos_body_multi_line_no_trailing_newline() -> None:
     )
     assert body.count("\n") == 1
     assert not body.endswith("\n")
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 Task 2 — Context.fresh() explicit reset factory
+# ---------------------------------------------------------------------------
+
+
+def test_fresh_clears_progressive_state(tmp_path: Path) -> None:
+    """fresh() returns a NEW Context with progressive fields cleared."""
+    cwd = tmp_path / "p"
+    src = cwd / "src"
+    src.mkdir(parents=True)
+    (src / "AURA.md").write_text("SRC-MEMO")
+    py_file = src / "x.py"
+    py_file.write_text("")
+
+    rule = _rule(
+        tmp_path / "rules" / "py.md",
+        cwd.resolve(),
+        ("**/*.py",),
+        "PY-RULE",
+    )
+    skill = _skill("helper", "helps", "HELPER-BODY")
+    ctx = Context(
+        cwd=cwd,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(conditional=[rule]),
+        skills=[skill],
+    )
+    # Populate every progressive field.
+    ctx.on_tool_touched_path(py_file)
+    ctx.record_skill_invocation(skill)
+    assert ctx._loaded_nested_paths
+    assert ctx._nested_fragments
+    assert ctx._matched_rule_paths
+    assert ctx._matched_rules
+    assert ctx._invoked_skill_paths
+    assert ctx._invoked_skills
+
+    new_ctx = ctx.fresh()
+
+    # New instance, not the same object.
+    assert new_ctx is not ctx
+    # Every progressive field reset.
+    assert new_ctx._loaded_nested_paths == set()
+    assert new_ctx._nested_fragments == []
+    assert new_ctx._matched_rule_paths == set()
+    assert new_ctx._matched_rules == []
+    assert new_ctx._invoked_skill_paths == set()
+    assert new_ctx._invoked_skills == []
+    # The original instance is untouched.
+    assert ctx._loaded_nested_paths
+    assert ctx._invoked_skills
+
+
+def test_fresh_preserves_config(tmp_path: Path) -> None:
+    """fresh() carries constructor-injected config onto the new instance."""
+    skill = _skill("doc", "documents", "DOC-BODY")
+    todos_provider = lambda: [  # noqa: E731
+        TodoItem(content="t", status="pending", active_form="Doing t"),
+    ]
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS-PROMPT",
+        primary_memory="PRIMARY-MEM",
+        rules=RulesBundle(),
+        skills=[skill],
+        todos_provider=todos_provider,
+    )
+    new_ctx = ctx.fresh()
+
+    # Config preserved by value-equality on the message stream.
+    out = new_ctx.build([])
+    contents = [str(m.content) for m in out]
+    assert contents[0] == "SYS-PROMPT"
+    assert "PRIMARY-MEM" in contents[1]
+    # <skills-available> still rendered — skills list survived.
+    assert any(c.startswith("<skills-available>") for c in contents)
+    assert any("- doc: documents" in c for c in contents)
+    # todos_provider survived (renders the pending todo).
+    assert any(c.startswith("<todos>") for c in contents)
+
+
+def test_fresh_with_carryover_seeds_read_records(tmp_path: Path) -> None:
+    """fresh(carryover=...) seeds _read_records from a ReadCarryover."""
+    target = tmp_path / "note.txt"
+    target.write_text("hello")
+    stat = target.stat()
+
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    record = ReadRecord(
+        path=target,
+        mtime_at_read=stat.st_mtime,
+        size_at_read=stat.st_size,
+        read_at_turn=3,
+    )
+    carry = ReadCarryover(
+        records={target: record},
+        source_session_id="parent-1",
+        generated_at_turn=3,
+    )
+    new_ctx = ctx.fresh(carryover=carry)
+
+    assert target in new_ctx._read_records
+    seeded = new_ctx._read_records[target]
+    assert isinstance(seeded, _ReadRecord)
+    assert seeded.mtime == stat.st_mtime
+    assert seeded.size == stat.st_size
+    assert seeded.partial is False
+    # The seeded record satisfies read_status (file unchanged on disk).
+    assert new_ctx.read_status(target) == "fresh"
+
+
+def test_fresh_with_clear_reads_drops_read_records(tmp_path: Path) -> None:
+    """fresh(clear_reads=True) wipes the _read_records map."""
+    target = tmp_path / "note.txt"
+    target.write_text("hello")
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    ctx.record_read(target)
+    assert ctx.read_status(target) == "fresh"
+
+    new_ctx = ctx.fresh(clear_reads=True)
+    assert new_ctx._read_records == {}
+    assert new_ctx.read_status(target) == "never_read"
+    # Original instance untouched.
+    assert ctx.read_status(target) == "fresh"
+
+
+def test_fresh_default_preserves_read_records(tmp_path: Path) -> None:
+    """fresh() with no args preserves _read_records (file survives compact)."""
+    target = tmp_path / "note.txt"
+    target.write_text("hello")
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    ctx.record_read(target)
+    new_ctx = ctx.fresh()
+    assert new_ctx.read_status(target) == "fresh"
+    # Independent maps — recording on the new instance doesn't pollute old.
+    other = tmp_path / "other.txt"
+    other.write_text("x")
+    new_ctx.record_read(other)
+    assert ctx.read_status(other) == "never_read"
+
+
+def test_fresh_rejects_carryover_and_clear_reads_together(tmp_path: Path) -> None:
+    """Passing both carryover and clear_reads is a programmer error."""
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    carry = ReadCarryover(
+        records={},
+        source_session_id=None,
+        generated_at_turn=0,
+    )
+    with pytest.raises(ValueError, match="not both"):
+        ctx.fresh(carryover=carry, clear_reads=True)

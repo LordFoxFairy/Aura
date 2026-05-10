@@ -146,16 +146,14 @@ class LoopState:
     # here MUST land with a matching docstring update and a justified
     # owner, not silently):
     #
-    # - denials sink: :data:`aura.core.permissions.denials.DENIALS_SINK_KEY`
-    #   (G5). Shared list reference between the permission hook
-    #   (writer) and :class:`aura.core.agent.Agent` (owner + reader
-    #   via ``last_turn_denials()``).
     # - ``"todos"`` — populated by ``todo_write`` tool; read by
     #   compact / system prompt assembly.
     #
     # The token-usage scratchpad key was migrated out of this dict by
     # Phase 1 / Task 3; it now lives on the typed
-    # :class:`LoopSlots.token_stats` slot.
+    # :class:`LoopSlots.token_stats` slot. The G5 denials sink was
+    # migrated by Phase 1 / Task 4; it now lives on
+    # :class:`LoopSlots.turn_denials`.
     #
     # Do NOT add new transient slots for one-shot hook→loop signalling:
     # G4 removed the last per-call decision side-channel in favor of

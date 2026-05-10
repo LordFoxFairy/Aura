@@ -39,7 +39,7 @@ from aura.core.mcp import MCPManager
 from aura.core.memory import project_memory, rules
 from aura.core.memory.context import Context, _ReadRecord
 from aura.core.memory.system_prompt import build_system_prompt
-from aura.core.permissions.denials import DENIALS_SINK_KEY, PermissionDenial
+from aura.core.permissions.denials import PermissionDenial
 from aura.core.permissions.mode import Mode
 from aura.core.permissions.safety import SafetyPolicy
 from aura.core.permissions.session import RuleSet, SessionRuleSet
@@ -165,16 +165,14 @@ class Agent:
         self._storage = storage
         self._hooks = hooks or HookChain()
         self._state = LoopState()
-        # G5: per-turn deny records. The permission hook appends to this
-        # list (via ``state.custom[DENIALS_SINK_KEY]`` which aliases the
-        # same object), Loop clears it at the start of each run_turn, and
-        # ``last_turn_denials()`` exposes an immutable tuple view. The
-        # sink MUST be seeded into state.custom BEFORE the hook runs the
-        # first time, so we wire it eagerly here. Shared-by-reference:
-        # when Loop ``.clear()``s the list at turn start, state.custom's
-        # value (same object) is cleared too — no re-seeding needed.
-        self._turn_denials: list[PermissionDenial] = []
-        self._state.custom[DENIALS_SINK_KEY] = self._turn_denials
+        # G5 / Phase 1 Task 4: per-turn deny records live on the typed
+        # ``state.slots.turn_denials`` slot. The permission + bash safety
+        # hooks append to that list, ``Loop.run_turn`` clears it at the
+        # start of every astream call, and ``last_turn_denials()`` reads
+        # it back through ``self._state`` (Loop and Agent share the same
+        # ``LoopState``, so no Agent-side alias is needed — the prior
+        # ``_turn_denials`` attribute + ``state.custom`` shared-list
+        # trick was retired with the migration off the untyped scratchpad).
         # F-0910-002: auto-compact circuit breaker — three consecutive failed
         # auto-compact attempts disable subsequent auto-firings for this
         # session. Manual ``/compact`` bypasses this counter (different code
@@ -932,14 +930,13 @@ class Agent:
             asyncio.ensure_future(self.fire_stop(reason="clear"))
         self._storage.clear(self._session_id)
         self._state.reset()
-        # ``LoopState.reset`` wipes ``state.custom`` — the G5 denials sink
-        # lived there and just vanished. Re-seed the slot + drop any
-        # captured denials so the next turn opens clean. Pointing
-        # ``_turn_denials`` at the freshly-seeded list (rather than
-        # clearing in place) keeps the invariant "the list in state.custom
-        # is the SAME object Agent exposes" simple to reason about.
-        self._turn_denials = []
-        self._state.custom[DENIALS_SINK_KEY] = self._turn_denials
+        # Phase 1 Task 4: ``LoopState.reset`` wipes ``state.custom`` but
+        # does not touch ``state.slots`` (slots live across sessions for
+        # token-stats etc.). Clear the G5 denials list in place so
+        # ``Agent.last_turn_denials()`` returns ``()`` immediately after
+        # /clear — matches the pre-migration behaviour where the list
+        # was re-bound to a fresh empty list at this exact site.
+        self._state.slots.turn_denials.clear()
         # Drop any captured prior mode — /clear starts a fresh session so
         # a leftover "accept_edits" from a previous plan cycle shouldn't
         # bleed into the next one.
@@ -1237,8 +1234,10 @@ class Agent:
             )
         self._session_id = session_id
         self._state.reset()
-        self._turn_denials = []
-        self._state.custom[DENIALS_SINK_KEY] = self._turn_denials
+        # Phase 1 Task 4: drop any captured denials so the resumed
+        # session opens with an empty ``last_turn_denials()`` view
+        # (parity with the pre-migration re-seed).
+        self._state.slots.turn_denials.clear()
         self._partial_assistant_text = ""
         self._session_start_fired = False
         journal.write(
@@ -1445,14 +1444,15 @@ class Agent:
         parsing journal JSONL.
 
         Returns a tuple — mutation attempts raise ``TypeError`` /
-        ``AttributeError``. The underlying list (``_turn_denials``) is
-        owned by the Agent and updated in-place; we return a snapshot
-        tuple so the caller never gets a reference that could racily
-        grow under them between turns.
+        ``AttributeError``. The underlying list lives on
+        ``self._state.slots.turn_denials`` (Phase 1 Task 4 migration —
+        previously aliased through ``state.custom`` and an Agent-side
+        ``_turn_denials`` list); the snapshot tuple isolates the caller
+        from a racy in-place grow between turns.
 
         Workstream G5 — ``docs/specs/2026-04-23-aura-main-channel-parity.md``.
         """
-        return tuple(self._turn_denials)
+        return tuple(self._state.slots.turn_denials)
 
     def _build_loop(self) -> AgentLoop:
         policy: MicrocompactPolicy | None

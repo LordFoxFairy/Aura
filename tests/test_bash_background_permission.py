@@ -7,7 +7,7 @@ meant:
 1. No ``permission_decision`` journal event was emitted — only a
    ``bash_background_safety_blocked`` one — so audit scrapers that filter
    on ``permission_decision`` missed bash_background denials.
-2. The denials sink (``state.custom[DENIALS_SINK_KEY]``) stayed empty —
+2. The denials sink (``state.slots.turn_denials``) stayed empty —
    :meth:`Agent.last_turn_denials` returned ``()`` even though the call
    was denied.
 3. ``mode == "bypass"`` was ignored — a user-opted-in bypass still had
@@ -33,7 +33,6 @@ from pydantic import BaseModel
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.hooks.bash_safety import make_bash_safety_hook
-from aura.core.permissions.denials import DENIALS_SINK_KEY, PermissionDenial
 from aura.core.persistence import journal as journal_module
 from aura.core.persistence.storage import SessionStorage
 from aura.core.tasks.store import TasksStore
@@ -103,11 +102,10 @@ async def test_bash_safety_hook_emits_permission_decision_for_bash_background(
 
 @pytest.mark.asyncio
 async def test_bash_safety_hook_populates_denials_sink_for_bash_background() -> None:
-    """The denials sink (``state.custom[DENIALS_SINK_KEY]``) must carry a
+    """The denials sink (``state.slots.turn_denials``) must carry a
     :class:`PermissionDenial` entry for bash_background safety blocks, so
     :meth:`Agent.last_turn_denials` surfaces them to SDK consumers."""
-    sink: list[PermissionDenial] = []
-    state = LoopState(custom={DENIALS_SINK_KEY: sink})
+    state = LoopState()
     hook = make_bash_safety_hook()
     await hook(
         tool=_fake_bash_bg_tool(),
@@ -115,6 +113,7 @@ async def test_bash_safety_hook_populates_denials_sink_for_bash_background() -> 
         state=state,
         tool_call_id="tc_bg_safety_1",
     )
+    sink = state.slots.turn_denials
     assert len(sink) == 1
     entry = sink[0]
     assert entry.tool_name == "bash_background"

@@ -620,14 +620,13 @@ async def test_hook_returns_decision_on_outcome() -> None:
     assert outcome.decision.reason == "rule_allow"
     assert outcome.decision.allow is True
     # Post-G4 direct-return contract: the hook MUST NOT write any
-    # transient decision slot to state.custom. Only the G5 denials
-    # sink key is allowed on state.custom at this layer, and that
-    # only for deny paths — rule_allow should not touch custom at all.
-    from aura.core.permissions.denials import DENIALS_SINK_KEY
-
-    assert all(
-        k == DENIALS_SINK_KEY for k in state.custom
-    ), f"unexpected state.custom key: {list(state.custom)!r}"
+    # transient decision slot to state.custom. Phase 1 Task 4 also
+    # moved the G5 denials sink off ``state.custom`` onto
+    # ``state.slots.turn_denials``, so for an allow path the dict
+    # stays empty here.
+    assert dict(state.custom) == {}, (
+        f"unexpected state.custom key: {list(state.custom)!r}"
+    )
 
 
 async def test_hook_decision_refreshes_across_calls() -> None:

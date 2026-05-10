@@ -55,7 +55,7 @@ from aura.core.hooks import (
     PreToolOutcome,
 )
 from aura.core.permissions.decision import Decision
-from aura.core.permissions.denials import DENIALS_SINK_KEY, PermissionDenial
+from aura.core.permissions.denials import PermissionDenial
 from aura.core.permissions.mode import DEFAULT_MODE, Mode
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.safety import DEFAULT_SAFETY, SafetyPolicy, is_protected
@@ -405,27 +405,27 @@ def make_permission_hook(
             # auditor will emit a PermissionAudit between Started and
             # Completed.
             return PreToolOutcome(short_circuit=None, decision=decision)
-        # G5: append a structured record to the per-turn denials sink. The
-        # sink is a plain list owned by Agent and shared by reference
-        # through state.custom; absent key = hook invoked outside a full
-        # Loop (unit test path), in which case we silently skip rather
-        # than crash. ``_decide`` only reaches this branch for deny
-        # reasons, so every deny path is captured here (no need to
-        # sprinkle appends across _decide's branches).
-        sink_obj = state.custom.get(DENIALS_SINK_KEY)
-        if isinstance(sink_obj, list):
-            sink_obj.append(
-                PermissionDenial(
-                    tool_name=tool.name,
-                    tool_use_id=tool_call_id,
-                    # Shallow copy so a caller mutating ``args`` after
-                    # the hook returns cannot retroactively rewrite the
-                    # audit record (tests assert this snapshot semantics).
-                    tool_input=dict(args),
-                    reason=decision.reason,
-                    target=decision.target,
-                )
+        # G5 / Phase 1 Task 4: append a structured record to the per-turn
+        # denials sink, now living on the typed
+        # ``state.slots.turn_denials`` slot (was ``state.custom``).
+        # ``_decide`` only reaches this branch for deny reasons, so every
+        # deny path is captured here (no need to sprinkle appends across
+        # _decide's branches). ``LoopSlots`` is frozen but
+        # ``turn_denials`` is a list — in-place ``.append`` is allowed
+        # and is the writer contract (matches spec §3.1 "mutable
+        # container fields may still be mutated in place").
+        state.slots.turn_denials.append(
+            PermissionDenial(
+                tool_name=tool.name,
+                tool_use_id=tool_call_id,
+                # Shallow copy so a caller mutating ``args`` after
+                # the hook returns cannot retroactively rewrite the
+                # audit record (tests assert this snapshot semantics).
+                tool_input=dict(args),
+                reason=decision.reason,
+                target=decision.target,
             )
+        )
         if decision.reason == "plan_mode_blocked":
             # The plan-mode error needs tool name + args preview, which
             # aren't on Decision. Compose here where they're in scope.

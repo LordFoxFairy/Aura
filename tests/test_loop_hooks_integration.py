@@ -336,10 +336,11 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
     ``ToolStep.permission_decision`` without touching ``state.custom``.
 
     Direct-return contract: the Loop reads the decision off the outcome
-    dataclass, never from a transient slot on state.custom. Only the
-    G5 denials sink is permitted on state.custom at this layer.
+    dataclass, never from a transient slot on state.custom. Phase 1
+    Task 4 moved the G5 denials sink off ``state.custom`` onto the typed
+    ``state.slots.turn_denials`` slot, so ``state.custom`` is expected
+    to stay empty here.
     """
-    from aura.core.permissions.denials import DENIALS_SINK_KEY
     from aura.core.permissions.rule import Rule
 
     expected_decision = Decision(
@@ -387,12 +388,13 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
     assert captured_steps[0].permission_decision is expected_decision
 
     # AC-G4-2 (locally): no side-channel slot appeared on state.custom
-    # at any hook invocation, nor persisted after the Loop ran. The only
-    # key we tolerate here is the G5 denials sink (even that isn't set
-    # by the Loop in this test because there is no Agent wrapping it).
+    # at any hook invocation, nor persisted after the Loop ran. After
+    # Phase 1 Task 4 the G5 denials sink lives on
+    # ``state.slots.turn_denials`` (typed) — ``state.custom`` should
+    # stay empty here.
     for keys in saw_custom_keys:
-        assert keys.issubset({DENIALS_SINK_KEY})
-    assert set(loop._state.custom).issubset({DENIALS_SINK_KEY})
+        assert keys == set()
+    assert set(loop._state.custom) == set()
 
     # And the audit still emitted (auto-allow → PermissionAudit between
     # Started and Completed).
@@ -408,7 +410,6 @@ async def test_per_call_decisions_do_not_leak_across_tool_calls() -> None:
 
     Each call has a distinct Decision object; the loop must emit one
     PermissionAudit per call, matching the per-call decision."""
-    from aura.core.permissions.denials import DENIALS_SINK_KEY
     from aura.core.permissions.rule import Rule
 
     decisions = [
@@ -452,10 +453,11 @@ async def test_per_call_decisions_do_not_leak_across_tool_calls() -> None:
         events.append(ev)
 
     assert len(seen_customs) == 2
-    # Only the G5 denials sink is tolerated on state.custom at this
-    # layer; no transient per-call slot may appear.
+    # After Phase 1 Task 4 the G5 denials sink lives on the typed
+    # ``state.slots.turn_denials`` slot, so ``state.custom`` should be
+    # empty at every hook invocation here.
     for snap in seen_customs:
-        assert snap.issubset({DENIALS_SINK_KEY})
+        assert snap == set()
     # Both auto-allow decisions surfaced distinct PermissionAudit events.
     audits = [e for e in events if isinstance(e, PermissionAudit)]
     assert len(audits) == 2

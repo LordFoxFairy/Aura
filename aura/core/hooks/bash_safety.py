@@ -33,8 +33,9 @@ filter on ``permission_decision`` see a uniform denial record regardless
 of which safety axis fired; the ``tool`` field disambiguates.
 
 Additionally, the hook populates the per-turn denials sink
-(``state.custom[DENIALS_SINK_KEY]``) with a :class:`PermissionDenial`,
-so :meth:`aura.core.agent.Agent.last_turn_denials` surfaces
+(``state.slots.turn_denials`` — Phase 1 Task 4 moved it off the legacy
+``state.custom`` dict) with a :class:`PermissionDenial`, so
+:meth:`aura.core.agent.Agent.last_turn_denials` surfaces
 bash/bash_background blocks to SDK consumers without them having to
 re-parse ``events.jsonl``.
 """
@@ -49,7 +50,7 @@ from langchain_core.tools import BaseTool
 from aura.core.hooks import PRE_TOOL_PASSTHROUGH, PreToolHook, PreToolOutcome
 from aura.core.permissions.bash_safety import check_bash_safety
 from aura.core.permissions.decision import Decision
-from aura.core.permissions.denials import DENIALS_SINK_KEY, PermissionDenial
+from aura.core.permissions.denials import PermissionDenial
 from aura.core.permissions.mode import DEFAULT_MODE, Mode
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
@@ -136,25 +137,25 @@ def make_bash_safety_hook(
             detail=violation.detail,
         )
 
-        # G5: populate the per-turn denials sink so
+        # G5 / Phase 1 Task 4: populate the per-turn denials sink so
         # ``Agent.last_turn_denials`` picks up bash/bash_background
-        # safety blocks. Same shallow-copy defensive-snapshot semantics
-        # the permission hook uses — a caller mutating ``args`` after
-        # this hook returns cannot retroactively rewrite the audit.
-        sink_obj = state.custom.get(DENIALS_SINK_KEY)
-        if isinstance(sink_obj, list):
-            sink_obj.append(
-                PermissionDenial(
-                    tool_name=tool.name,
-                    tool_use_id=tool_call_id,
-                    tool_input=dict(args),
-                    reason="safety_blocked",
-                    # ``target`` is reserved for path-based safety
-                    # blocks; bash safety is command-shape, no single
-                    # filesystem target to record.
-                    target=None,
-                )
+        # safety blocks. The sink now lives on the typed
+        # ``state.slots.turn_denials`` slot. Same shallow-copy
+        # defensive-snapshot semantics the permission hook uses — a
+        # caller mutating ``args`` after this hook returns cannot
+        # retroactively rewrite the audit.
+        state.slots.turn_denials.append(
+            PermissionDenial(
+                tool_name=tool.name,
+                tool_use_id=tool_call_id,
+                tool_input=dict(args),
+                reason="safety_blocked",
+                # ``target`` is reserved for path-based safety
+                # blocks; bash safety is command-shape, no single
+                # filesystem target to record.
+                target=None,
             )
+        )
 
         return PreToolOutcome(
             short_circuit=ToolResult(

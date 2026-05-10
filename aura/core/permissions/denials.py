@@ -20,10 +20,12 @@ Contract invariants:
   a downstream mutation of ``args`` after the hook returns cannot
   retroactively rewrite the audit record.
 
-The ``_aura_denials_sink`` slot name in ``LoopState.custom`` is the
-public contract between the permission hook (writer) and
-:class:`aura.core.loop.AgentLoop` / :class:`aura.core.agent.Agent`
-(clear + expose). Tests / downstream hooks must not repurpose this key.
+Phase 1 Task 4 migrated the per-turn denials sink off the legacy
+``LoopState.custom["_aura_denials_sink"]`` scratchpad onto the typed
+``LoopState.slots.turn_denials`` slot. The permission hook (writer),
+:class:`aura.core.loop.AgentLoop` (turn-start clear), and
+:class:`aura.core.agent.Agent` (read view via ``last_turn_denials``)
+all coordinate through that single typed list.
 """
 
 from __future__ import annotations
@@ -31,11 +33,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
-
-# Slot name shared by permission hook (append) + Loop (ensure + don't
-# clear mid-turn) + Agent (own the underlying list + expose read-only
-# view). Exported so every site references the single source of truth.
-DENIALS_SINK_KEY = "_aura_denials_sink"
 
 
 @dataclass(frozen=True)

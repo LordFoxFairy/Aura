@@ -36,7 +36,7 @@ from aura.core.hooks.permission import (
     AskerResponse,
     make_permission_hook,
 )
-from aura.core.permissions.denials import DENIALS_SINK_KEY, PermissionDenial
+from aura.core.permissions.denials import PermissionDenial
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.persistence.storage import SessionStorage
@@ -129,8 +129,7 @@ def test_permission_denial_default_timestamp_is_tz_aware() -> None:
 
 async def test_hook_safety_blocked_appends_denial_to_sink() -> None:
     """AC-G5-1 (safety branch): _decide safety_blocked → sink has 1 entry."""
-    sink: list[PermissionDenial] = []
-    state = LoopState(custom={DENIALS_SINK_KEY: sink})
+    state = LoopState()
     hook = make_permission_hook(
         asker=_SpyAsker(),
         session=SessionRuleSet(),
@@ -144,6 +143,7 @@ async def test_hook_safety_blocked_appends_denial_to_sink() -> None:
         state=state,
         tool_call_id="tc_safety_1",
     )
+    sink = state.slots.turn_denials
     assert len(sink) == 1
     entry = sink[0]
     assert entry.tool_name == "read_file"
@@ -155,8 +155,7 @@ async def test_hook_safety_blocked_appends_denial_to_sink() -> None:
 
 async def test_hook_plan_mode_blocked_appends_denial_to_sink() -> None:
     """AC-G5-1 (plan-mode branch)."""
-    sink: list[PermissionDenial] = []
-    state = LoopState(custom={DENIALS_SINK_KEY: sink})
+    state = LoopState()
     hook = make_permission_hook(
         asker=_SpyAsker(),
         session=SessionRuleSet(),
@@ -170,6 +169,7 @@ async def test_hook_plan_mode_blocked_appends_denial_to_sink() -> None:
         state=state,
         tool_call_id="tc_plan_1",
     )
+    sink = state.slots.turn_denials
     assert len(sink) == 1
     entry = sink[0]
     assert entry.reason == "plan_mode_blocked"
@@ -180,8 +180,7 @@ async def test_hook_plan_mode_blocked_appends_denial_to_sink() -> None:
 
 async def test_hook_user_deny_appends_denial_to_sink() -> None:
     """AC-G5-1 (user-deny branch via asker)."""
-    sink: list[PermissionDenial] = []
-    state = LoopState(custom={DENIALS_SINK_KEY: sink})
+    state = LoopState()
     hook = make_permission_hook(
         asker=_SpyAsker(response=AskerResponse(choice="deny")),
         session=SessionRuleSet(),
@@ -194,6 +193,7 @@ async def test_hook_user_deny_appends_denial_to_sink() -> None:
         state=state,
         tool_call_id="tc_user_1",
     )
+    sink = state.slots.turn_denials
     assert len(sink) == 1
     entry = sink[0]
     assert entry.reason == "user_deny"
@@ -202,8 +202,7 @@ async def test_hook_user_deny_appends_denial_to_sink() -> None:
 
 async def test_hook_allow_does_not_append_denial_to_sink() -> None:
     """Allow paths leave the sink untouched (else G5 would double-count)."""
-    sink: list[PermissionDenial] = []
-    state = LoopState(custom={DENIALS_SINK_KEY: sink})
+    state = LoopState()
     hook = make_permission_hook(
         asker=_SpyAsker(response=AskerResponse(choice="accept")),
         session=SessionRuleSet(),
@@ -217,12 +216,13 @@ async def test_hook_allow_does_not_append_denial_to_sink() -> None:
         tool_call_id="tc_allow_1",
     )
     assert outcome.short_circuit is None
-    assert sink == []
+    assert state.slots.turn_denials == []
 
 
 async def test_hook_without_sink_key_is_safe_noop() -> None:
-    """Absence of ``_aura_denials_sink`` (e.g. unit test bypassing Loop
-    wiring) must not raise — the sink is a best-effort surface."""
+    """Default ``LoopSlots.turn_denials`` is always present — even unit
+    tests bypassing the Loop seed get a fresh empty list. The hook must
+    still append to it and surface a real deny."""
     state = LoopState()
     hook = make_permission_hook(
         asker=_SpyAsker(response=AskerResponse(choice="deny")),
@@ -230,17 +230,16 @@ async def test_hook_without_sink_key_is_safe_noop() -> None:
         rules=RuleSet(),
         project_root=Path("/tmp"),
     )
-    # No DENIALS_SINK_KEY in state.custom — must not crash.
     outcome = await hook(tool=_tool(), args={}, state=state)
     assert outcome.short_circuit is not None  # still a deny
-    assert DENIALS_SINK_KEY not in state.custom
+    # Slot is populated — no bypass / silent-skip path.
+    assert len(state.slots.turn_denials) == 1
 
 
 async def test_hook_copies_tool_input_defensively() -> None:
     """Post-decision mutation of the caller's ``args`` must not bleed
     into the already-captured denial record (snapshot semantics)."""
-    sink: list[PermissionDenial] = []
-    state = LoopState(custom={DENIALS_SINK_KEY: sink})
+    state = LoopState()
     hook = make_permission_hook(
         asker=_SpyAsker(response=AskerResponse(choice="deny")),
         session=SessionRuleSet(),
@@ -255,7 +254,7 @@ async def test_hook_copies_tool_input_defensively() -> None:
         tool_call_id="tc_copy",
     )
     args["k"] = "mutated"
-    assert sink[0].tool_input == {"k": "v"}
+    assert state.slots.turn_denials[0].tool_input == {"k": "v"}
 
 
 # -----------------------------------------------------------------------

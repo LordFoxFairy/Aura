@@ -28,7 +28,6 @@ from aura.core.compact import MicrocompactPolicy, apply_microcompact
 from aura.core.hooks import HookChain
 from aura.core.memory.context import Context
 from aura.core.permissions.decision import Decision
-from aura.core.permissions.denials import DENIALS_SINK_KEY
 from aura.core.persistence import journal
 from aura.core.registry import ToolRegistry
 from aura.core.retry import with_retry
@@ -312,16 +311,17 @@ class AgentLoop:
         # + tool dispatch; transcript ownership lives one layer up so a
         # crash mid-turn cannot erase the user's input.
         #
-        # G5: clear the per-turn denials sink at the turn boundary (once
-        # per astream call), NOT inside the while loop — multiple model
-        # rounds within the same user turn share one audit bucket. Using
-        # in-place ``.clear()`` keeps the object identity stable so the
-        # Agent's ``_turn_denials`` attribute (same reference) updates
-        # too. Absence / wrong type is defensively handled for unit
-        # tests that construct AgentLoop without an Agent-owned sink.
-        sink_obj = self._state.custom.get(DENIALS_SINK_KEY)
-        if isinstance(sink_obj, list):
-            sink_obj.clear()
+        # G5 / Phase 1 Task 4: clear the per-turn denials sink at the
+        # turn boundary (once per astream call), NOT inside the while
+        # loop — multiple model rounds within the same user turn share
+        # one audit bucket. The sink now lives on the typed
+        # ``state.slots.turn_denials`` slot; in-place ``.clear()`` is
+        # the documented mutation pattern (``LoopSlots`` is frozen at
+        # the *attribute* level, but its mutable container fields
+        # accept in-place mutation — see ``LoopSlots`` docstring + spec
+        # §4 step 1). The list identity is stable for the session so
+        # ``Agent.last_turn_denials`` always sees the same object.
+        self._state.slots.turn_denials.clear()
         # Reset the permission-hook per-turn ResolveOnce cache.
         self._state.custom.pop("_perm_turn_ask_cache", None)
         # F-01-001 abort plumbing — install the controller into the

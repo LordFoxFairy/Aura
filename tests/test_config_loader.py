@@ -40,6 +40,38 @@ def test_load_config_project_wholly_replaces_user_providers(tmp_path: Path) -> N
     assert cfg.router == {"default": "openrouter:anthropic/claude-opus-4"}
 
 
+def test_load_config_finds_project_config_in_parent_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_dir = tmp_path / "project"
+    nested_dir = project_dir / "src" / "pkg"
+    config_dir = project_dir / ".aura"
+    nested_dir.mkdir(parents=True)
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "providers": [
+                    {
+                        "name": "deepseek",
+                        "protocol": "openai",
+                        "base_url": "https://example.test/v1",
+                        "api_key": "test-key",
+                    }
+                ],
+                "router": {"default": "deepseek:glm-5"},
+            }
+        )
+    )
+    monkeypatch.chdir(nested_dir)
+
+    cfg = load_config(user_config=tmp_path / "missing-user.json")
+
+    assert cfg.router == {"default": "deepseek:glm-5"}
+    assert cfg.providers[0].name == "deepseek"
+
+
 def test_load_config_env_var_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env_config = tmp_path / "env_config.json"
     env_config.write_text(

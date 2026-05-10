@@ -240,3 +240,101 @@ def test_disable_bypass_false_allows_bypass_flag() -> None:
     args = _ns(bypass_permissions=True)
     assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
     assert perm_cfg.disable_bypass is False
+
+
+def test_main_wires_allow_deny_and_ask_rules_into_permission_layers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aura.cli.__main__ import main
+    from aura.core.hooks import HookChain
+
+    user_aura_dir = tmp_path / ".aura"
+    user_aura_dir.mkdir()
+    (user_aura_dir / "config.json").write_text(json.dumps({
+        "providers": [{
+            "name": "p1",
+            "protocol": "openai",
+            "api_key_env": "FAKE_API_KEY",
+        }],
+        "router": {"default": "p1:fake-model"},
+        "tools": {"enabled": ["web_fetch", "write_file", "bash"]},
+    }))
+    project_dir = tmp_path / "proj"
+    project_dir.mkdir()
+    (project_dir / ".aura").mkdir()
+    (project_dir / ".aura" / "settings.json").write_text(json.dumps({
+        "permissions": {
+            "allow": ["web_fetch"],
+            "deny": ["bash"],
+            "ask": ["write_file"],
+        },
+    }))
+
+    captured_hook_kwargs: dict[str, object] = {}
+    captured_build_kwargs: dict[str, object] = {}
+
+    def fake_permission_hook(**kwargs: object) -> object:
+        captured_hook_kwargs.update(kwargs)
+
+        async def _hook(**_kw: object) -> object:
+            raise AssertionError("permission hook should not run in this test")
+
+        return _hook
+
+    class FakeAgent:
+        mode = "default"
+        state = object()
+        _hooks = HookChain()
+
+        async def aconnect(self) -> None:
+            return None
+
+        async def aclose(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    def fake_build_agent(*_args: object, **kwargs: object) -> FakeAgent:
+        captured_build_kwargs.update(kwargs)
+        return FakeAgent()
+
+    class FakeWatcher:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            return None
+
+    async def fake_repl(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    import aura.cli.repl as repl_mod
+    import aura.core.agent as agent_mod
+    import aura.core.hooks.file_watcher as watcher_mod
+    import aura.core.hooks.permission as permission_mod
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FAKE_API_KEY", "dummy")
+    monkeypatch.setattr(sys, "argv", ["aura"])
+    monkeypatch.setattr(permission_mod, "make_permission_hook", fake_permission_hook)
+    monkeypatch.setattr(agent_mod, "build_agent", fake_build_agent)
+    monkeypatch.setattr(watcher_mod, "FileWatcher", FakeWatcher)
+    monkeypatch.setattr(repl_mod, "run_repl_async", fake_repl)
+
+    assert main() == 0
+
+    rules = captured_hook_kwargs["rules"]
+    deny_rules = captured_hook_kwargs["deny_rules"]
+    ask_rules = captured_hook_kwargs["ask_rules"]
+    assert [rule.tool for rule in rules.rules][:1] == ["web_fetch"]  # type: ignore[attr-defined]
+    assert [rule.tool for rule in deny_rules.rules] == ["bash"]  # type: ignore[attr-defined]
+    assert [rule.tool for rule in ask_rules.rules] == ["write_file"]  # type: ignore[attr-defined]
+    assert captured_build_kwargs["ruleset"] is rules
+    assert captured_build_kwargs["deny_ruleset"] is deny_rules
+    assert captured_build_kwargs["ask_ruleset"] is ask_rules

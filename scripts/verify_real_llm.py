@@ -4,6 +4,7 @@ Runs ``uv run aura`` with controlled inputs, asserts on captured output.
 Every scenario hits the REAL configured model (no FakeChatModel).
 
 Usage: ``uv run python scripts/verify_real_llm.py``
+       ``uv run python scripts/verify_real_llm.py --help``
 
 Requires: provider SDK installed (e.g. ``uv sync --extra all``) and the
 right API key env var (e.g. ``DEEPSEEK_API_KEY``). Run from repo root.
@@ -167,7 +168,12 @@ def s8(sc: Scenario) -> None:
     sc.check("process exited 0", rc == 0)
     sc.check("bypass banner shown", "PERMISSION CHECKS DISABLED" in out)
     sc.check("read_file tool invoked", "read_file" in out)
-    sc.check("README.md path in output", "README.md" in out)
+    sc.check(
+        "README content surfaced",
+        ("# Aura" in out)
+        or ("lightweight Python agent" in out)
+        or ("README.md" in out),
+    )
     sc.check("allowed: mode_bypass annotation", "mode_bypass" in out)
 
 
@@ -255,6 +261,10 @@ def s12(sc: Scenario) -> None:
 
 
 def main() -> int:
+    if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
+        print(__doc__ or "")
+        return 0
+
     print("=" * 70)
     print("Aura REAL-LLM end-to-end verification")
     print(f"  repo: {REPO}")

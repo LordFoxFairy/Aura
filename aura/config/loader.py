@@ -28,6 +28,15 @@ def _read_json(path: Path, source: str) -> dict[str, Any]:
     return data
 
 
+def _find_project_config(start: Path) -> Path:
+    """Return nearest ancestor ``.aura/config.json`` path, or cwd default."""
+    for directory in (start, *start.parents):
+        candidate = directory / ".aura" / "config.json"
+        if candidate.exists():
+            return candidate
+    return start / ".aura" / "config.json"
+
+
 def load_config(
     *,
     user_config: Path | None = None,
@@ -47,7 +56,7 @@ def load_config(
     if user_config is None:
         user_config = Path.home() / ".aura" / "config.json"
     if project_config is None:
-        project_config = Path.cwd() / ".aura" / "config.json"
+        project_config = _find_project_config(Path.cwd())
 
     env_path_str = os.environ.get("AURA_CONFIG", "")
 

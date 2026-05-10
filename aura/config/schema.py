@@ -138,6 +138,60 @@ class RetryConfig(BaseModel):
     max_delay_s: float = Field(default=30.0, gt=0)
 
 
+class CompactConfig(BaseModel):
+    """Phase 4 §4 — tunable knobs for the compaction subsystem.
+
+    Defaults match Phase 1-3's hardcoded constants so this config block
+    is a refactor surface, not a behavior change. Operators can override
+    any field via ``~/.aura/config.json`` or ``<project>/.aura/config.json``;
+    the :class:`Compactor` class reads these values directly instead of
+    importing module-level constants from ``aura/core/compact/constants.py``.
+
+    Field semantics:
+
+    - ``auto_threshold_buffer_tokens``: subtracted from the model's context
+      window to produce the auto-compact trigger threshold. Mirrors
+      claude-code's 13k headroom (next user turn + summary scratch).
+    - ``max_files_to_restore`` / ``max_tokens_per_file``: post-compact
+      file re-injection caps. After the summary block replaces middle
+      history, we hoist the most-recently-touched FULL reads back as
+      ``<recent-file>`` HumanMessages so the model can keep working on
+      them without re-reading.
+    - ``max_summary_message_chars`` / ``max_summary_tool_args_chars``:
+      caps applied while serializing history into the summary prompt.
+      Keeps a single oversize tool result from blowing the prompt budget.
+    - ``fallback_summary_char_limit``: cap for the deterministic excerpt
+      used when even a single message is too large for the provider.
+    - ``max_summary_split_depth``: recursion bound on the summarize-split
+      retry path; prevents infinite recursion on pathological inputs.
+    - ``max_consecutive_failures``: circuit-breaker count. Three failed
+      auto-compact attempts in a row disable subsequent auto firings on
+      this Agent (manual ``/compact`` bypasses).
+    - ``microcompact_trigger_pairs`` / ``microcompact_keep_recent``:
+      pair-count trigger + keep-recent-N policy for the per-turn view
+      transform. Invariant: ``keep_recent < trigger_pairs`` so the
+      trigger can actually fire clears once crossed.
+    - ``time_based_gap_threshold_minutes``: when set, microcompact also
+      fires if the wall-clock gap since the last assistant message
+      exceeds this many minutes (long idle gaps invalidate the model's
+      cached working set anyway). ``None`` disables the time trigger.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    auto_threshold_buffer_tokens: int = Field(default=13_000, ge=0)
+    max_files_to_restore: int = Field(default=5, ge=0)
+    max_tokens_per_file: int = Field(default=6_000, ge=0)
+    max_summary_message_chars: int = Field(default=6_000, ge=0)
+    max_summary_tool_args_chars: int = Field(default=2_000, ge=0)
+    fallback_summary_char_limit: int = Field(default=12_000, ge=0)
+    max_summary_split_depth: int = Field(default=12, ge=1)
+    max_consecutive_failures: int = Field(default=3, ge=1)
+    microcompact_trigger_pairs: int = Field(default=5, ge=0)
+    microcompact_keep_recent: int = Field(default=3, ge=0)
+    time_based_gap_threshold_minutes: int | None = Field(default=None, ge=1)
+
+
 class TeamsConfig(BaseModel):
     """Feature gate for the teams (multi-agent swarm) subsystem.
 
@@ -253,6 +307,13 @@ class AuraConfig(BaseModel):
     # join_team programmatic entry are all dormant unless this is set
     # to True. See :class:`TeamsConfig`.
     teams: TeamsConfig = Field(default_factory=TeamsConfig)
+    # Phase 4 §4 — compaction subsystem knobs (file caps, summary caps,
+    # circuit breaker, microcompact trigger, time-based gap). Defaults
+    # match the legacy hardcoded constants in
+    # ``aura/core/compact/constants.py`` and ``aura/core/compact/compact.py``
+    # so a fresh config preserves Phase 1-3 behavior. See
+    # :class:`CompactConfig` for per-field semantics.
+    compact: CompactConfig = Field(default_factory=CompactConfig)
     # Retry policy for transient LLM provider errors (HTTP 429 / 503 / 504,
     # connection drops, "overloaded"). ``None`` = use library defaults from
     # :func:`aura.core.retry.with_retry` (3 attempts, 1s base, 30s cap,

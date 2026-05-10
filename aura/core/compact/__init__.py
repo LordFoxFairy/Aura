@@ -20,6 +20,7 @@ implementation.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
 from langchain_core.messages import BaseMessage
@@ -46,6 +47,24 @@ from aura.core.compact.microcompact import (
 )
 from aura.core.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
 from aura.schemas.state import LoopSlots
+
+
+class CompactionTrigger(StrEnum):
+    """Phase 4 §3 — explicit trigger taxonomy for compact events.
+
+    Every :class:`Compactor` method takes one of these and tags its journal
+    event accordingly. Operators filter ``compact_event`` records by trigger
+    when debugging — e.g. "show me only the reactive (mid-turn PromptTooLong)
+    fires across the last week" vs "show me auto (post-turn threshold) fires".
+
+    StrEnum so the value round-trips through journal JSON as a plain string
+    without a custom encoder.
+    """
+
+    microcompact = "microcompact"  # per-turn view-only compression
+    reactive = "reactive"          # mid-turn PromptTooLong recovery
+    auto = "auto"                  # post-turn token-threshold check
+    manual = "manual"              # user-invoked /compact
 
 
 @runtime_checkable
@@ -99,6 +118,7 @@ __all__ = [
     "AUTO_COMPACT_THRESHOLD",
     "CompactResult",
     "CompactSource",
+    "CompactionTrigger",
     "Compactor",
     "KEEP_LAST_N_TURNS",
     "MAX_FILES_TO_RESTORE",

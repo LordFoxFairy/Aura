@@ -198,6 +198,9 @@ async def test_length_recovery_caps_at_max_retry(tmp_path: Path) -> None:
 async def test_length_recovery_exhaustion_does_not_dispatch_truncated_tool_calls(
     tmp_path: Path,
 ) -> None:
+    """Exhaustion must not dispatch the truncated turn's tool_calls AND must
+    surface ``Final.reason == "length_recovery_exhausted"`` carrying the
+    partial assistant text (Phase 1 Task 12)."""
     journal.configure(tmp_path / "j.jsonl")
     try:
         turns = [
@@ -228,8 +231,40 @@ async def test_length_recovery_exhaustion_does_not_dispatch_truncated_tool_calls
         assert not any(isinstance(msg, ToolMessage) for msg in history)
         finals = [ev for ev in events if isinstance(ev, Final)]
         assert finals
-        assert finals[-1].reason == "max_turns"
-        assert "length recovery exhausted" in finals[-1].message
+        assert finals[-1].reason == "length_recovery_exhausted"
+        # Partial content from the LAST truncated turn is surfaced verbatim
+        # — no synthetic "recovery exhausted" stub overwrites it.
+        assert finals[-1].message == f"truncated {_MAX_LENGTH_RETRY}"
+    finally:
+        journal.reset()
+
+
+@pytest.mark.asyncio
+async def test_length_recovery_exhaustion_surfaces_partial_content_no_tool_calls(
+    tmp_path: Path,
+) -> None:
+    """Pure-text exhaustion path: Final.message carries the partial body and
+    Final.reason is the new sentinel."""
+    journal.configure(tmp_path / "j.jsonl")
+    try:
+        turns = [
+            FakeTurn(message=_truncated(f"chunk {i} of partial answer ..."))
+            for i in range(_MAX_LENGTH_RETRY + 1)
+        ]
+        model = FakeChatModel(turns=turns)
+        history: list[BaseMessage] = [HumanMessage(content="really long")]
+        loop = AgentLoop(
+            model=model, registry=ToolRegistry(()),
+            context=make_minimal_context(), hooks=HookChain(),
+        )
+        events: list[AgentEvent] = []
+        async for ev in loop.run_turn(history=history):
+            events.append(ev)
+
+        finals = [ev for ev in events if isinstance(ev, Final)]
+        assert len(finals) == 1
+        assert finals[0].reason == "length_recovery_exhausted"
+        assert finals[0].message == f"chunk {_MAX_LENGTH_RETRY} of partial answer ..."
     finally:
         journal.reset()
 

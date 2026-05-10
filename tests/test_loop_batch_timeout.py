@@ -7,10 +7,12 @@ escapes its per-tool deadline can stall the whole turn indefinitely.
 
 This module pins the B4 contract:
 
-- Applies only when ``len(batch) > 1`` AND ``batch_timeout_sec > 0``.
-  Size-1 batches (bash / bash_background) always pass through untouched —
-  those tools own their own SIGTERM/SIGKILL ladder and the outer wait
-  would race the cleanup.
+- Applies whenever ``batch_timeout_sec > 0``, regardless of batch size.
+  Phase 1 Task 12 dropped the previous ``len(batch) > 1`` guard so a
+  single misbehaving tool that escapes its per-tool deadline cannot
+  stall the whole turn forever. Tools that own their own SIGTERM/SIGKILL
+  ladder (bash) still run that ladder INSIDE the task — the outer wait
+  is a backstop, not a replacement.
 - ``AURA_BATCH_TIMEOUT_SEC`` env (float, default 60.0). ``<= 0`` disables.
   ``AgentLoop(batch_timeout_sec=...)`` kwarg overrides the env.
 - Timed-out tasks are cancelled, then awaited for clean shutdown, and
@@ -358,21 +360,62 @@ async def test_batch_timeout_kwarg_overrides_env(
 
 
 @pytest.mark.asyncio
-async def test_batch_timeout_skipped_for_size_1_batch(
+async def test_batch_timeout_fires_for_size_1_batch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Size-1 batch (e.g. bash) must run its own course — no batch timeout."""
+    """Phase 1 Task 12 — size-1 batches now respect the batch wallclock too.
+
+    Previously the ``len(batch) > 1`` guard let a single misbehaving tool
+    that escaped its per-tool deadline (or had none) park the turn
+    forever. The bounded wait now fires regardless of batch size; the
+    cancelled task gets the same synthesised ``ToolResult`` and the
+    journal records a ``batch_timeout`` event with ``size=1``.
+    """
     monkeypatch.setenv("AURA_BATCH_TIMEOUT_SEC", "0.1")
     log_path = tmp_path / "audit.jsonl"
     journal.configure(log_path)
 
-    # is_concurrency_safe=False → partitioned into size-1 batch. A per-tool
-    # timeout_sec would be the *tool*'s ladder, not the batch's. We set no
-    # per-tool timeout_sec here so the tool runs to natural completion (0.3s)
-    # despite AURA_BATCH_TIMEOUT_SEC=0.1.
-    lone = _slow_tool("lone_unsafe", sleep_s=0.3)
-    # Flip concurrency safety off via metadata so partition_batches makes
-    # it a size-1 batch.
+    # is_concurrency_safe=False → partitioned into a size-1 batch. No
+    # per-tool ``timeout_sec`` so the tool would otherwise run to natural
+    # completion (2s) despite the 0.1s batch deadline.
+    lone = _slow_tool("lone_unsafe", sleep_s=2.0)
+    assert lone.metadata is not None
+    lone.metadata["is_concurrency_safe"] = False
+    tcs = [{"name": "lone_unsafe", "args": {}, "id": "tc_lone"}]
+
+    loop, history = _make_loop([lone], tcs)
+    history.append(HumanMessage(content="go"))
+    completed: list[ToolCallCompleted] = []
+    async for ev in loop.run_turn(history=history):
+        if isinstance(ev, ToolCallCompleted):
+            completed.append(ev)
+
+    assert len(completed) == 1
+    assert completed[0].error is not None
+    assert "batch timeout after 0.1s" in completed[0].error
+
+    events = _events(log_path)
+    timeouts = [e for e in events if e["event"] == "batch_timeout"]
+    assert len(timeouts) == 1
+    j = timeouts[0]
+    assert j["size"] == 1
+    assert j["timeout_sec"] == 0.1
+    assert j["cancelled_count"] == 1
+    assert j["cancelled_tool_call_ids"] == ["tc_lone"]
+    assert j["completed_tool_call_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_batch_timeout_size_1_disabled_when_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even with the size-1 guard removed, a 0/disabled deadline is still
+    a true escape hatch — the lone tool runs to completion."""
+    monkeypatch.setenv("AURA_BATCH_TIMEOUT_SEC", "0")
+    log_path = tmp_path / "audit.jsonl"
+    journal.configure(log_path)
+
+    lone = _slow_tool("lone_unsafe", sleep_s=0.05)
     assert lone.metadata is not None
     lone.metadata["is_concurrency_safe"] = False
     tcs = [{"name": "lone_unsafe", "args": {}, "id": "tc_lone"}]

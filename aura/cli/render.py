@@ -220,12 +220,22 @@ class Renderer:
             # Round 3A — surface non-natural stop reasons inline. ``natural``
             # stops stay quiet (the body was the answer); ``max_turns`` and
             # ``aborted`` get a dim one-liner so the operator sees WHY the
-            # turn ended without having to read the journal.
+            # turn ended without having to read the journal. Phase 1 Task 12
+            # adds ``length_recovery_exhausted``: the partial assistant text
+            # was already streamed via ``AssistantDelta`` above, so we just
+            # add a non-blocking truncation banner below it pointing at
+            # ``/retry``.
             reason = getattr(event, "reason", "natural")
             if reason == "aborted":
                 self._console.print(Text(" cancelled by user", style="dim"))
             elif reason == "max_turns":
                 self._console.print(Text(" max turns reached", style="dim"))
+            elif reason == "length_recovery_exhausted":
+                self._console.print(Text(
+                    " ⚠ output truncated by max_output_tokens after 3 retries"
+                    " — try /retry",
+                    style="yellow",
+                ))
             return
 
     def finish(self) -> None:

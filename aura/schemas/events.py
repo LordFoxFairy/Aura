@@ -57,14 +57,19 @@ class Final:
     """Final concatenated text response from the agent loop.
 
     ``reason`` marks WHY the loop stopped — ``"natural"`` (model emitted no
-    more tool_calls), ``"max_turns"`` (the loop hit its turn cap), or
+    more tool_calls), ``"max_turns"`` (the loop hit its turn cap),
     ``"aborted"`` (an :class:`AbortController` fired mid-turn — user
-    Ctrl+C, parent cascade). The CLI dims a "stopped: <reason>" line
-    when reason != natural.
+    Ctrl+C, parent cascade), or ``"length_recovery_exhausted"`` (the
+    F-01-005 partial-response recovery budget was exhausted; ``message``
+    carries the last partial assistant text). The CLI surfaces a dim
+    one-liner when reason != natural so the operator sees WHY the turn
+    ended without having to read the journal.
     """
 
     message: str
-    reason: Literal["natural", "max_turns", "aborted"] = "natural"
+    reason: Literal[
+        "natural", "max_turns", "aborted", "length_recovery_exhausted",
+    ] = "natural"
 
 
 @dataclass(frozen=True)

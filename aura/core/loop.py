@@ -271,8 +271,9 @@ class AgentLoop:
         self._bound = model.bind_tools(registry.tools()) if len(registry) > 0 else model
         # B4 — batch wall-clock deadline. Resolved ONCE per loop so an env
         # flip mid-session does not race against the outer wait. ``0.0``
-        # sentinel = feature disabled; ``_run_batch`` gates on
-        # ``len(batch) > 1 AND _batch_timeout_sec > 0``.
+        # sentinel = feature disabled; otherwise ``_run_batch`` enforces
+        # the deadline regardless of batch size (Phase 1 Task 12 dropped
+        # the previous ``len(batch) > 1`` gate).
         self._batch_timeout_sec = _resolve_batch_timeout(batch_timeout_sec)
         # F-01-012 — reactive compact callback. When set, ``_invoke_model``
         # catches context-overflow on ``ainvoke``, calls this back to mutate
@@ -363,12 +364,20 @@ class AgentLoop:
                         ai.response_metadata.get("finish_reason")
                         == "length_recovery_exhausted"
                     ):
+                        # Phase 1 Task 12 — surface exhaustion as its own
+                        # Final reason carrying the partial assistant text.
+                        # The CLI renderer shows a "⚠ output truncated"
+                        # banner; AG-UI propagates the reason in
+                        # ``RUN_FINISHED.result.reason``.
                         journal.write(
                             "turn_end",
                             turn=self._state.turn_count,
                             ended_with="length_recovery_exhausted",
                         )
-                        yield Final(message=str(ai.content), reason="max_turns")
+                        yield Final(
+                            message=str(ai.content),
+                            reason="length_recovery_exhausted",
+                        )
                         return
                     journal.write(
                         "turn_end",
@@ -628,12 +637,20 @@ class AgentLoop:
                 turn=self._state.turn_count,
                 attempts=length_retries,
             )
+            # Preserve the model's PARTIAL content (the user gets to see
+            # what we have) while flagging exhaustion via a sentinel
+            # finish_reason. The accompanying tool_calls — if any — were
+            # produced on a truncated response and MUST NOT be dispatched
+            # (they may reference half-built args). Rebuild the AIMessage
+            # with the same content but no tool_calls + the sentinel; the
+            # ``run_turn`` length-exhaustion branch then surfaces this as
+            # ``Final(message=ai.content, reason="length_recovery_exhausted")``.
             ai = AIMessage(
-                content=(
-                    "length recovery exhausted after "
-                    f"{length_retries} attempts; truncated response discarded"
-                ),
-                response_metadata={"finish_reason": "length_recovery_exhausted"},
+                content=ai.content,
+                response_metadata={
+                    **(getattr(ai, "response_metadata", None) or {}),
+                    "finish_reason": "length_recovery_exhausted",
+                },
             )
         history.append(ai)
         await self._hooks.run_post_model(
@@ -720,16 +737,17 @@ class AgentLoop:
             finally:
                 reset_progress_callback(token)
 
-        # B4 gate — batch wall-clock deadline applies ONLY to size > 1
-        # batches with a positive deadline resolved. Size-1 batches (bash,
-        # bash_background, short-circuited steps) always pass through:
-        # bash owns its own SIGTERM/SIGKILL ladder, short-circuited steps
-        # never awaited a coroutine, and a single-tool batch has no
-        # "slowest sibling" problem to fix.
+        # B4 gate — batch wall-clock deadline applies whenever a positive
+        # deadline is configured, regardless of batch size. Phase 1 Task 12
+        # dropped the previous ``len(batch) > 1`` guard: a single misbehaving
+        # tool that escapes its per-tool ``timeout_sec`` (or has none) used
+        # to stall the whole turn forever. The bounded wait below cancels
+        # the runaway and synthesises a balanced ToolMessage so the next
+        # turn's history is provider-valid. Tools that own their own
+        # SIGTERM/SIGKILL ladder (bash) still run that ladder INSIDE the
+        # task — the outer wait is a backstop, not a replacement.
         batch_deadline = (
-            self._batch_timeout_sec
-            if len(batch) > 1 and self._batch_timeout_sec > 0
-            else 0.0
+            self._batch_timeout_sec if self._batch_timeout_sec > 0 else 0.0
         )
 
         async def _gather_all() -> list[ToolResult]:
@@ -745,7 +763,25 @@ class AgentLoop:
             tasks: list[asyncio.Task[ToolResult]] = [
                 asyncio.create_task(_execute_with_progress(s)) for s in batch
             ]
-            done, pending = await asyncio.wait(tasks, timeout=batch_deadline)
+            try:
+                done, pending = await asyncio.wait(
+                    tasks, timeout=batch_deadline,
+                )
+            except asyncio.CancelledError:
+                # Outer cancellation (e.g. ``drive_task.cancel()`` upstream)
+                # — propagate the signal to every still-running tool task
+                # before re-raising so we don't leave coroutines (and any
+                # side-effect ``await asyncio.sleep`` they're parked on)
+                # running in the background. ``asyncio.wait`` does NOT
+                # cancel its waitees on cancellation; only ``gather`` does
+                # — that's the contract gap we cover here. Was previously
+                # masked by the ``len(batch) > 1`` guard which sent size-1
+                # batches through the bare-``gather`` fast path.
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                raise
             if pending:
                 # Cancel every pending task, then await them for clean
                 # shutdown so we don't leak "Task was destroyed but it

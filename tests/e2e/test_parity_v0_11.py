@@ -429,18 +429,21 @@ _SUBAGENT_READS_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.memory.context import _ReadRecord
     from aura.core.persistence.storage import SessionStorage
     from aura.core.tasks.factory import SubagentFactory
+    from aura.schemas.state import ReadCarryover, ReadRecord
     from tests.conftest import FakeChatModel, FakeTurn
 
     file_x = Path(sys.argv[1])
     out_path = Path(sys.argv[2])
 
     st = file_x.stat()
-    parent_reads = {{
-        file_x.resolve(): _ReadRecord(
-            mtime=st.st_mtime, size=st.st_size, partial=False,
+    parent_records = {{
+        file_x.resolve(): ReadRecord(
+            path=file_x.resolve(),
+            mtime_at_read=st.st_mtime,
+            size_at_read=st.st_size,
+            read_at_turn=1,
         ),
     }}
 
@@ -451,10 +454,17 @@ _SUBAGENT_READS_DRIVER = textwrap.dedent(
             "tools": {{"enabled": []}},
         }})
 
+    def _carryover_provider() -> ReadCarryover:
+        return ReadCarryover(
+            records=dict(parent_records),
+            source_session_id="parent-e2e",
+            generated_at_turn=1,
+        )
+
     factory = SubagentFactory(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
-        parent_read_records_provider=lambda: parent_reads,
+        parent_carryover_provider=_carryover_provider,
         model_factory=lambda: FakeChatModel(
             turns=[FakeTurn(AIMessage(content="subagent done"))]
         ),
@@ -465,11 +475,11 @@ _SUBAGENT_READS_DRIVER = textwrap.dedent(
         status_x = child._context.read_status(file_x)
         inherited_rules = list(child._context._matched_rules)
         inherited_skills = list(child._context._invoked_skills)
-        # Prove "shallow copy": mutate child, parent is untouched.
+        # Prove isolation: mutate child, parent records dict untouched.
         y = file_x.parent / "y.txt"
         y.write_text("y-content\\n")
         child._context.record_read(y)
-        parent_has_y = y.resolve() in parent_reads
+        parent_has_y = y.resolve() in parent_records
     finally:
         child.close()
 

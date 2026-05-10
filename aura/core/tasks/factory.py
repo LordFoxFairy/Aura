@@ -67,7 +67,7 @@ transcript doesn't pollute the parent's on-disk session DB. Tests inject a
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -78,7 +78,6 @@ from aura.config.schema import AuraConfig, ToolsConfig
 from aura.core import llm
 from aura.core.hooks import HookChain
 from aura.core.hooks.permission import make_permission_hook
-from aura.core.memory.context import _ReadRecord
 from aura.core.permissions.mode import Mode
 from aura.core.permissions.safety import DEFAULT_SAFETY, SafetyPolicy
 from aura.core.permissions.session import RuleSet, SessionRuleSet
@@ -86,6 +85,7 @@ from aura.core.permissions.subagent_asker import SubagentAutoDenyAsker
 from aura.core.persistence.storage import SessionStorage
 from aura.core.skills import SkillRegistry
 from aura.core.tasks.agent_types import get_agent_type
+from aura.schemas.state import ReadCarryover
 from aura.schemas.tool import ToolError
 
 if TYPE_CHECKING:
@@ -125,8 +125,8 @@ class SubagentFactory:
         parent_model_spec: str,
         *,
         parent_skills: SkillRegistry | None = None,
-        parent_read_records_provider: (
-            Callable[[], Mapping[Path, _ReadRecord]] | None
+        parent_carryover_provider: (
+            Callable[[], ReadCarryover] | None
         ) = None,
         parent_ruleset: RuleSet | None = None,
         parent_safety: SafetyPolicy | None = None,
@@ -139,14 +139,19 @@ class SubagentFactory:
         parent_abort_event: asyncio.Event | None = None,
         depth: int = 0,
     ) -> None:
-        # ``parent_read_records_provider`` — called at each ``spawn`` to
-        # snapshot the parent Agent's live ``Context._read_records`` map.
-        # Threaded through to the child's :class:`Context` as
-        # ``inherited_reads`` so files the parent already read show up as
-        # ``read_status == "fresh"`` in the child (Workstream G8). ``None``
-        # disables inheritance — child starts with an empty read map
-        # (legacy behavior, kept for the handful of tests that build a
-        # factory without a parent Agent reference).
+        # ``parent_carryover_provider`` — called at each ``spawn`` to
+        # build a typed :class:`ReadCarryover` snapshot of the parent
+        # Agent's reads. Phase 3 Task 4 replaced the previously-untyped
+        # ``parent_read_records_provider`` (which returned a raw
+        # ``dict[Path, _ReadRecord]``) with this typed channel; the
+        # carryover also carries parent ``source_session_id`` and
+        # ``generated_at_turn`` for audit / freshness messaging. Threaded
+        # through to the child's :class:`Context` as ``carryover`` so
+        # files the parent already read show up as
+        # ``read_status == "fresh"`` in the child (Workstream G8).
+        # ``None`` disables inheritance — child starts with an empty
+        # read map (legacy behavior, kept for the handful of tests that
+        # build a factory without a parent Agent reference).
         #
         # ``parent_ruleset`` / ``parent_safety`` / ``parent_mode_provider``
         # (C1) — the triplet that lets ``spawn`` assemble a permission
@@ -165,7 +170,7 @@ class SubagentFactory:
         self._parent_config = parent_config
         self._parent_model_spec = parent_model_spec
         self._parent_skills = parent_skills
-        self._parent_read_records_provider = parent_read_records_provider
+        self._parent_carryover_provider = parent_carryover_provider
         self._parent_ruleset = parent_ruleset
         self._parent_safety = parent_safety
         self._parent_mode_provider = parent_mode_provider
@@ -315,18 +320,19 @@ class SubagentFactory:
             )
             model = llm.create(provider, model_name)
         storage = self._storage_factory()
-        # Snapshot the parent's read records RIGHT NOW. ``dict(...)`` over
-        # whatever the provider returns pins a shallow copy at spawn time so
-        # subsequent parent reads don't retroactively enter the child's map
-        # (and child record_read calls don't write back into the parent's
-        # live dict). _ReadRecord is frozen, so value-level sharing is
+        # Snapshot the parent's reads RIGHT NOW as a typed
+        # :class:`ReadCarryover`. The carryover wraps an immutable
+        # MappingProxy over the records dict so subsequent parent reads
+        # don't retroactively enter the child's view (and child
+        # ``record_read`` calls can't write back into the parent's live
+        # state). ``ReadRecord`` is frozen, so value-level sharing is
         # harmless. None provider → None passed through → child starts
         # empty, matching prior behavior.
-        inherited_reads: dict[Path, _ReadRecord] | None
-        if self._parent_read_records_provider is not None:
-            inherited_reads = dict(self._parent_read_records_provider())
+        carryover: ReadCarryover | None
+        if self._parent_carryover_provider is not None:
+            carryover = self._parent_carryover_provider()
         else:
-            inherited_reads = None
+            carryover = None
 
         # C1 — assemble a permission hook for the child. The child needs
         # the parent's rules (so default-allows + user rules propagate)
@@ -401,7 +407,7 @@ class SubagentFactory:
             session_rules=child_session,
             pre_loaded_skills=self._parent_skills,
             system_prompt_suffix=type_def.system_prompt_suffix,
-            inherited_reads=inherited_reads,
+            carryover=carryover,
             mode=child_mode,
         )
         # Propagate depth + abort cascade to the child's own factory.

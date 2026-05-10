@@ -234,7 +234,7 @@ async def test_notification_with_summary_when_subagent_returns_one(
                 })
                 self._parent_model_spec = "openai:gpt-4o-mini"
                 self._parent_skills = None
-                self._parent_read_records_provider = None
+                self._parent_carryover_provider = None
                 self._parent_ruleset = None
                 self._parent_deny_rules = None
                 self._parent_ask_rules = None

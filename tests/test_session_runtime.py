@@ -22,6 +22,7 @@ from aura.core.permissions.session import SessionRuleSet
 from aura.core.persistence.storage import SessionStorage
 from aura.core.runtime.session import SessionRuntime
 from aura.core.tasks.types import TaskNotification
+from aura.schemas.state import ReadCarryover, ReadRecord
 
 # ----------------------------------------------------------------------
 # Fixtures
@@ -51,7 +52,7 @@ def test_init_minimal_args(storage: SessionStorage) -> None:
     assert rt.session_start_fired is False
     assert rt.partial_assistant_text == ""
     assert rt.pending_notifications == ()
-    assert rt.inherited_reads is None
+    assert rt.carryover is None
 
 
 def test_init_with_session_log_dir_creates_path(
@@ -204,7 +205,7 @@ def test_clear_drops_history_buffers_notifications_and_rules(
     assert rt.partial_assistant_text == ""
     assert rt.pending_notifications == ()
     assert rules.rules() == ()  # session rules were cleared in place
-    assert rt.inherited_reads is None
+    assert rt.carryover is None
 
 
 def test_clear_without_session_rules_is_no_op_on_rules(
@@ -273,35 +274,45 @@ def test_drain_task_notifications_returns_oldest_first(
 
 
 # ----------------------------------------------------------------------
-# Inherited reads carry-over (Workstream G8)
+# Read carryover (Workstream G8 + Phase 3 Task 4)
 # ----------------------------------------------------------------------
 
 
-def test_inherited_reads_held_for_first_context_build(
-    storage: SessionStorage, tmp_path: Path,
-) -> None:
-    """Subagent path: parent's read records flow in via constructor
-    so the FIRST Context build can pick them up."""
-    from aura.core.memory.context import _ReadRecord
-
-    record = _ReadRecord(mtime=0.0, size=0)
-    inherited = {tmp_path / "f.py": record}
-    rt = SessionRuntime(
-        storage=storage, session_id="s-inh", inherited_reads=inherited,
+def _carryover_with_one_record(path: Path) -> ReadCarryover:
+    return ReadCarryover(
+        records={
+            path: ReadRecord(
+                path=path,
+                mtime_at_read=0.0,
+                size_at_read=0,
+                read_at_turn=1,
+            ),
+        },
+        source_session_id="parent-1",
+        generated_at_turn=1,
     )
-    assert rt.inherited_reads is inherited
 
 
-def test_clear_drops_inherited_reads(
+def test_carryover_held_for_first_context_build(
     storage: SessionStorage, tmp_path: Path,
 ) -> None:
-    """:meth:`clear` drops inherited reads — fresh session must NOT
-    resurrect a long-gone parent's fingerprints."""
-    from aura.core.memory.context import _ReadRecord
-
-    inherited = {tmp_path / "f.py": _ReadRecord(mtime=0.0, size=0)}
+    """Subagent path: parent's :class:`ReadCarryover` flows in via
+    constructor so the FIRST Context build can pick it up."""
+    carry = _carryover_with_one_record(tmp_path / "f.py")
     rt = SessionRuntime(
-        storage=storage, session_id="s-cinh", inherited_reads=inherited,
+        storage=storage, session_id="s-inh", carryover=carry,
+    )
+    assert rt.carryover is carry
+
+
+def test_clear_drops_carryover(
+    storage: SessionStorage, tmp_path: Path,
+) -> None:
+    """:meth:`clear` drops the carryover — fresh session must NOT
+    resurrect a long-gone parent's fingerprints."""
+    carry = _carryover_with_one_record(tmp_path / "f.py")
+    rt = SessionRuntime(
+        storage=storage, session_id="s-cinh", carryover=carry,
     )
     rt.clear()
-    assert rt.inherited_reads is None
+    assert rt.carryover is None

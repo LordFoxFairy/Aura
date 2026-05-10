@@ -17,7 +17,7 @@ Provider 注入的 section（如 `<todos>`）不计入上述不变量 —— 它
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -71,7 +71,7 @@ class Context:
         skills: list[Skill] | None = None,
         todos_provider: Callable[[], list[TodoItem]] | None = None,
         notifications_drainer: Callable[[], list[Any]] | None = None,
-        inherited_reads: Mapping[Path, _ReadRecord] | None = None,
+        carryover: ReadCarryover | None = None,
         model: Any | None = None,
     ) -> None:
         self._cwd = cwd.resolve()
@@ -98,16 +98,26 @@ class Context:
         # (mtime, size) — lighter than claude-code's content hash but
         # equivalent in practice for real edits.
         #
-        # ``inherited_reads`` carries the parent Agent's ``_read_records``
-        # snapshot across the subagent boundary (Workstream G8). Shallow
-        # copy — _ReadRecord is a frozen dataclass so value-level sharing is
-        # safe, and dict-level isolation guarantees child ``record_read``
-        # calls DON'T retroactively pollute the parent's map. The snapshot
-        # is taken at spawn time (see ``SubagentFactory.spawn``) so later
-        # parent reads don't leak into an already-running child either.
-        self._read_records: dict[Path, _ReadRecord] = (
-            dict(inherited_reads) if inherited_reads else {}
-        )
+        # ``carryover`` carries the parent Agent's read snapshot across
+        # the subagent boundary (Workstream G8 + Phase 3 Task 4). The
+        # public :class:`~aura.schemas.state.ReadCarryover` is converted
+        # to the core's private ``_ReadRecord`` shape so the rest of
+        # ``Context`` keeps its existing internal type. ``partial=False``
+        # for inherited records — a parent's full read becomes a
+        # non-partial seed (spec §10 Q1). The dict is owned by this
+        # Context: child ``record_read`` calls don't retroactively
+        # pollute the parent (the carryover wraps a read-only proxy
+        # anyway). Snapshot is taken at spawn time (see
+        # ``SubagentFactory.spawn``) so later parent reads don't leak
+        # into an already-running child either.
+        self._read_records: dict[Path, _ReadRecord] = {}
+        if carryover is not None:
+            for path, record in carryover.records.items():
+                self._read_records[path] = _ReadRecord(
+                    mtime=record.mtime_at_read,
+                    size=record.size_at_read,
+                    partial=False,
+                )
         # Provider snapshot each build (mutability lives in LoopState, not here).
         self._todos_provider = todos_provider
         # Round 4F — notification drainer; returns + clears the parent's
@@ -168,24 +178,19 @@ class Context:
             skills=self._skills_available,
             todos_provider=self._todos_provider,
             notifications_drainer=self._notifications_drainer,
+            carryover=carryover,
             model=self._model,
         )
+        # Carryover already seeded ``_read_records`` via the constructor.
+        # Default branch preserves the current Context's read fingerprints
+        # (the file is still on disk after a compact, so its prior read
+        # remains valid). ``clear_reads`` wipes them outright.
         if clear_reads:
             new_ctx._read_records = {}
-        elif carryover is not None:
-            seeded: dict[Path, _ReadRecord] = {}
-            for path, record in carryover.records.items():
-                seeded[path] = _ReadRecord(
-                    mtime=record.mtime_at_read,
-                    size=record.size_at_read,
-                    partial=False,
-                )
-            new_ctx._read_records = seeded
-        else:
-            # Default: preserve parent's read fingerprints. Shallow copy
-            # so post-fresh records on the new instance don't retroactively
-            # appear on the old one (which may still be alive in
-            # journal-replay paths).
+        elif carryover is None:
+            # Shallow copy so post-fresh records on the new instance
+            # don't retroactively appear on the old one (which may
+            # still be alive in journal-replay paths).
             new_ctx._read_records = dict(self._read_records)
         return new_ctx
 

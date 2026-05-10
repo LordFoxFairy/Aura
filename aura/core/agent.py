@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -39,7 +39,7 @@ from aura.core.loop import DEFAULT_SESSION as _DEFAULT_SESSION
 from aura.core.loop import AgentLoop
 from aura.core.mcp import MCPManager
 from aura.core.memory import project_memory, rules
-from aura.core.memory.context import Context, _ReadRecord
+from aura.core.memory.context import Context
 from aura.core.memory.system_prompt import build_system_prompt
 from aura.core.permissions.denials import PermissionDenial
 from aura.core.permissions.mode import Mode
@@ -59,7 +59,7 @@ from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
 from aura.core.tokens import estimate_message_tokens, estimate_text_tokens
 from aura.schemas.events import AgentEvent, AssistantDelta, Final
-from aura.schemas.state import LoopState
+from aura.schemas.state import LoopState, ReadCarryover
 from aura.schemas.tool import ToolError
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 from aura.tools.ask_user import QuestionAsker
@@ -153,7 +153,7 @@ class Agent:
         mode: str = "default",
         system_prompt_suffix: str = "",
         disable_bypass: bool = False,
-        inherited_reads: Mapping[Path, _ReadRecord] | None = None,
+        carryover: ReadCarryover | None = None,
         ruleset: RuleSet | None = None,
         deny_ruleset: RuleSet | None = None,
         ask_ruleset: RuleSet | None = None,
@@ -175,7 +175,7 @@ class Agent:
         # / model / hooks wiring. The runtime owns: session_id, storage,
         # session_log_path, session_rules snapshot, partial-assistant
         # buffer, SessionStart re-arm flag, pending notifications queue,
-        # and the inherited_reads carry-over for subagents. ``Agent``
+        # and the parent-read carryover for subagents. ``Agent``
         # forwards user-facing methods (clear_session, aclose,
         # resume_session) so the public API is unchanged.
         self._session_runtime = SessionRuntime(
@@ -183,7 +183,7 @@ class Agent:
             session_id=session_id,
             session_log_dir=session_log_dir,
             session_rules=session_rules,
-            inherited_reads=inherited_reads,
+            carryover=carryover,
         )
         self._hooks = hooks or HookChain()
         self._state = LoopState()
@@ -285,12 +285,12 @@ class Agent:
         # child Agent it spawns — matches claude-code's "subagent inherits
         # parent tool set" semantics.
         self._tasks_store = TasksStore()
-        # ``parent_read_records_provider`` — a live view into this Agent's
-        # Context._read_records. Factory calls it at each ``spawn`` to
-        # snapshot the LATEST parent reads (not the startup state), so
-        # files the parent read mid-session before calling task_create
-        # still show as fresh in the child (Workstream G8). Closes over
-        # ``self`` so ``clear_session`` (which swaps _context) is tracked
+        # ``parent_carryover_provider`` — a live view that turns this
+        # Agent's Context._read_records into a typed
+        # :class:`ReadCarryover` at each ``spawn``, capturing both the
+        # parent's session id (for audit) and current turn count (for
+        # "parent read this N turns ago" messaging). Closes over ``self``
+        # so ``clear_session`` (which swaps _context) is tracked
         # automatically — the next spawn reads through the refreshed
         # attribute rather than a stale Context reference.
         # C1: plumb permission inputs into the factory so every spawned
@@ -306,7 +306,7 @@ class Agent:
             parent_config=self._config,
             parent_model_spec=self._config.router.get("default", ""),
             parent_skills=self._skill_registry,
-            parent_read_records_provider=lambda: self._context._read_records,
+            parent_carryover_provider=self._snapshot_read_carryover,
             parent_ruleset=ruleset,
             parent_safety=safety,
             parent_mode_provider=lambda: self._mode,
@@ -517,12 +517,13 @@ class Agent:
             auto_memory_dir=self._auto_memory_dir,
         )
         self._rules = rules.load_rules(self._cwd)
-        # ``inherited_reads`` (Workstream G8) only flows into the FIRST
-        # Context construction — /clear and /compact build their own fresh
-        # Contexts and must NOT resurrect a long-gone parent's read
-        # fingerprints, so we do NOT store this on self. Subagent spawn
-        # re-snapshots the parent at each ``SubagentFactory.spawn`` call.
-        self._context = self._build_context(inherited_reads=inherited_reads)
+        # ``carryover`` (Workstream G8 + Phase 3 Task 4) only flows
+        # into the FIRST Context construction — /clear and /compact
+        # build their own fresh Contexts and must NOT resurrect a
+        # long-gone parent's read fingerprints, so we do NOT store this
+        # on self. Subagent spawn re-snapshots the parent at each
+        # ``SubagentFactory.spawn`` call.
+        self._context = self._build_context(carryover=carryover)
         # Bash safety — Tier A shell attacks (zsh builtins, CR
         # parser differential, malformed+separator, cd+git compound). Inserted
         # at pre_tool[0] so it precedes any caller-supplied permission hook —
@@ -1511,7 +1512,7 @@ class Agent:
     def _build_context(
         self,
         *,
-        inherited_reads: Mapping[Path, _ReadRecord] | None = None,
+        carryover: ReadCarryover | None = None,
     ) -> Context:
         return Context(
             cwd=self._cwd,
@@ -1521,7 +1522,35 @@ class Agent:
             skills=self._skill_registry.list(),
             todos_provider=lambda: self._state.slots.todos,
             notifications_drainer=self._drain_task_notifications,
-            inherited_reads=inherited_reads,
+            carryover=carryover,
+        )
+
+    def _snapshot_read_carryover(self) -> ReadCarryover:
+        """Build a :class:`ReadCarryover` from the live Context.
+
+        Called by :class:`SubagentFactory` at each ``spawn`` to capture
+        the parent's read state for the spawned child. ``read_at_turn``
+        is filled with the parent's current turn count for every
+        record — the core's private ``_ReadRecord`` doesn't preserve
+        per-record turn, so the snapshot turn is the best-available
+        approximation (and matches ``generated_at_turn`` on the
+        carryover itself).
+        """
+        from aura.schemas.state import ReadRecord
+
+        turn = self._state.turn_count
+        records: dict[Path, ReadRecord] = {}
+        for path, rec in self._context._read_records.items():
+            records[path] = ReadRecord(
+                path=path,
+                mtime_at_read=rec.mtime,
+                size_at_read=rec.size,
+                read_at_turn=turn,
+            )
+        return ReadCarryover(
+            records=records,
+            source_session_id=self._session_id,
+            generated_at_turn=turn,
         )
 
     async def aconnect(self) -> None:

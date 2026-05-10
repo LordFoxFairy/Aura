@@ -24,22 +24,21 @@ It DOES own:
 - the partial-assistant streaming text buffer
 - the ``session_start_fired`` re-arm flag
 - the queued :class:`TaskNotification` list (subagent terminal events)
-- the ``inherited_reads`` carry-over map (snapshot for the FIRST Context
-  build only; :meth:`clear` and :meth:`resume` deliberately drop it so
-  long-gone parent reads never resurrect)
+- the parent-read :class:`ReadCarryover` (snapshot for the FIRST
+  Context build only; :meth:`clear` and :meth:`resume` deliberately
+  drop it so long-gone parent reads never resurrect)
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from langchain_core.messages import BaseMessage
 
-from aura.core.memory.context import _ReadRecord
 from aura.core.permissions.session import SessionRuleSet
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
+from aura.schemas.state import ReadCarryover
 
 if TYPE_CHECKING:
     from aura.core.tasks.types import TaskNotification
@@ -60,7 +59,7 @@ class SessionRuntime:
         session_id: str,
         session_log_dir: Path | None = None,
         session_rules: SessionRuleSet | None = None,
-        inherited_reads: Mapping[Path, _ReadRecord] | None = None,
+        carryover: ReadCarryover | None = None,
     ) -> None:
         self._storage = storage
         self._session_id = session_id
@@ -94,15 +93,14 @@ class SessionRuntime:
         # drained by ``Context.build`` at the start of each prompt
         # envelope. Owned here so /clear can wipe it.
         self._pending_notifications: list[TaskNotification] = []
-        # Workstream G8 — ``inherited_reads`` only flows into the FIRST
-        # Context construction. ``clear_session`` and the post-compact
-        # rebuild build their own fresh Contexts and must NOT resurrect
-        # a long-gone parent's read fingerprints. We hold the snapshot
-        # so :meth:`Agent` can read it once at construction; subagent
-        # spawn re-snapshots the parent at each ``SubagentFactory.spawn``.
-        self._inherited_reads: Mapping[Path, _ReadRecord] | None = (
-            inherited_reads
-        )
+        # Workstream G8 + Phase 3 Task 4 — ``carryover`` only flows
+        # into the FIRST Context construction. ``clear_session`` and
+        # the post-compact rebuild build their own fresh Contexts and
+        # must NOT resurrect a long-gone parent's read fingerprints.
+        # We hold the snapshot so :meth:`Agent` can read it once at
+        # construction; subagent spawn re-snapshots the parent at each
+        # ``SubagentFactory.spawn``.
+        self._carryover: ReadCarryover | None = carryover
 
     # ------------------------------------------------------------------
     # Read-only accessors
@@ -138,9 +136,9 @@ class SessionRuntime:
         return tuple(self._pending_notifications)
 
     @property
-    def inherited_reads(self) -> Mapping[Path, _ReadRecord] | None:
-        """One-shot snapshot — meant for the FIRST Context build only."""
-        return self._inherited_reads
+    def carryover(self) -> ReadCarryover | None:
+        """One-shot carryover — meant for the FIRST Context build only."""
+        return self._carryover
 
     # ------------------------------------------------------------------
     # History persistence — thin pass-through to :class:`SessionStorage`
@@ -226,7 +224,7 @@ class SessionRuntime:
         self._session_start_fired = False
         # /clear starts a fresh session — long-gone parent reads must
         # not resurrect into the new Context the Agent will rebuild.
-        self._inherited_reads = None
+        self._carryover = None
 
     def resume(self, session_id: str) -> int:
         """Swap the live session_id; return the loaded message count.
@@ -254,7 +252,7 @@ class SessionRuntime:
         self._partial_assistant_text = ""
         self._session_start_fired = False
         self._pending_notifications.clear()
-        self._inherited_reads = None
+        self._carryover = None
         journal.write(
             "session_resumed",
             session=session_id,

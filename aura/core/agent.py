@@ -48,6 +48,7 @@ from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
+from aura.core.runtime.session import SessionRuntime
 from aura.core.skills import Skill, SkillRegistry, load_skills
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
@@ -164,7 +165,21 @@ class Agent:
         # currently-in-use model, while a subsequent ``clear_session`` or a
         # fresh CLI run still starts from the configured default.
         self._current_model_spec = config.router.get("default", "")
-        self._storage = storage
+        # Phase 1 Task 13: lifecycle / persistence / streaming-buffer state
+        # lives on a peer SessionRuntime so Agent stays focused on the loop
+        # / model / hooks wiring. The runtime owns: session_id, storage,
+        # session_log_path, session_rules snapshot, partial-assistant
+        # buffer, SessionStart re-arm flag, pending notifications queue,
+        # and the inherited_reads carry-over for subagents. ``Agent``
+        # forwards user-facing methods (clear_session, aclose,
+        # resume_session) so the public API is unchanged.
+        self._session_runtime = SessionRuntime(
+            storage=storage,
+            session_id=session_id,
+            session_log_dir=session_log_dir,
+            session_rules=session_rules,
+            inherited_reads=inherited_reads,
+        )
         self._hooks = hooks or HookChain()
         self._state = LoopState()
         # G5 / Phase 1 Task 4: per-turn deny records live on the typed
@@ -185,7 +200,6 @@ class Agent:
         self._state.slots = dataclasses.replace(
             self._state.slots, consecutive_compact_failures=0,
         )
-        self._session_rules = session_rules
         # Permission mode — the CLI resolves the effective mode (config +
         # --bypass-permissions flag) and hands it in. Stored here so the
         # status bar can surface it without reaching back into the store
@@ -370,21 +384,12 @@ class Agent:
         # the member name by :meth:`join_team` for teammates so
         # :class:`SendMessage` can stamp the right ``sender``.
         self._team_member_name: str | None = None
-        # F-05-003 partial-text buffer. ``Agent.astream`` appends to
-        # this on every AssistantDelta event; if abort fires before the
-        # final AIMessage we yield this as one last AssistantDelta so
-        # the user doesn't lose half-streamed reasoning. Reset at the
-        # start of each astream call.
-        self._partial_assistant_text: str = ""
-        # F-04-014: SessionStart fires exactly once per session.
-        # Cleared by ``clear_session`` / ``resume_session`` (re-arm).
-        self._session_start_fired = False
-        # Round 4F notification queue. Populated by external producers
-        # (TasksStore terminal-listener), drained by Context.build at
-        # the start of each prompt envelope. Owned by Agent so /clear
-        # can wipe it.
-        from aura.core.tasks.types import TaskNotification as _TN
-        self._pending_notifications: list[_TN] = []
+        # F-05-003 partial-text buffer, F-04-014 SessionStart re-arm
+        # flag, and Round 4F notification queue all live on
+        # :class:`SessionRuntime` (Phase 1 Task 13). Agent property
+        # forwards keep the historical attribute names so external
+        # callers (tests, commands, streaming renderers) see no API
+        # break.
 
         # Round 4F — wire the TasksStore terminal listener so subagent
         # completions / failures flow into the parent's notification
@@ -526,18 +531,12 @@ class Agent:
                 self._available_tools[name] = cls(agent=self)
             else:  # pragma: no cover — guardrail for future additions
                 raise RuntimeError(f"unwired stateful tool: {name}")
-        self._session_id = session_id
-        # Session-scoped journal: when ``session_log_dir`` is passed, every
-        # journal.write made during astream routes to a per-session JSONL
-        # file. Enables two concurrent Agents in the same process (subagents,
-        # server workers) to keep their audit trails fully separate.
-        if session_log_dir is not None:
-            session_log_dir.mkdir(parents=True, exist_ok=True)
-            self._session_log_path: Path | None = (
-                session_log_dir / f"{self._session_id}.jsonl"
-            )
-        else:
-            self._session_log_path = None
+        # ``session_id``, ``session_log_path`` (per-session JSONL routing
+        # for ``journal.session_scope``), and ``session_rules`` all live
+        # on :class:`SessionRuntime`. Property forwards below preserve
+        # the historical ``self._session_id`` / ``self._session_log_path``
+        # / ``self._session_rules`` access patterns used by tests + the
+        # commands layer.
         # config.tools.enabled → lookup → ToolRegistry. Built once per Agent.
         tools: list[BaseTool] = []
         for name in self._config.tools.enabled:
@@ -879,6 +878,69 @@ class Agent:
         """
         self._prior_mode = mode
 
+    # ------------------------------------------------------------------
+    # Phase 1 Task 13 — SessionRuntime forwards
+    #
+    # The session lifecycle / persistence / streaming-buffer state lives
+    # on :class:`SessionRuntime` (see ``aura/core/runtime/session.py``).
+    # These property forwards preserve the historical attribute names
+    # (``self._storage`` / ``self._session_id`` / etc.) so the wide tail
+    # of internal call sites — tests, command handlers, compact, hooks,
+    # auto_reload — keeps working without a sweep.
+    # ------------------------------------------------------------------
+
+    @property
+    def _storage(self) -> SessionStorage:
+        return self._session_runtime.storage
+
+    @property
+    def _session_id(self) -> str:
+        return self._session_runtime.session_id
+
+    @_session_id.setter
+    def _session_id(self, value: str) -> None:
+        # ``resume_session`` is the only legitimate writer (the runtime's
+        # :meth:`resume` flips it as part of the resume contract).
+        # Direct re-assignment is preserved for parity with the pre-Phase-1
+        # surface in case a test fixture flips it manually.
+        self._session_runtime._session_id = value
+
+    @property
+    def _session_log_path(self) -> Path | None:
+        return self._session_runtime.session_log_path
+
+    @property
+    def _session_rules(self) -> SessionRuleSet | None:
+        return self._session_runtime.session_rules
+
+    @property
+    def _partial_assistant_text(self) -> str:
+        return self._session_runtime.partial_assistant_text
+
+    @_partial_assistant_text.setter
+    def _partial_assistant_text(self, value: str) -> None:
+        # Used by astream's reset (``= ""``) and the abort flush path.
+        # The runtime's :meth:`reset_partial_assistant_text` handles the
+        # empty-string case explicitly; for any other rebind we go through
+        # the underlying field so the ``+=`` accumulator path still works
+        # via the property descriptor.
+        self._session_runtime._partial_assistant_text = value
+
+    @property
+    def _session_start_fired(self) -> bool:
+        return self._session_runtime.session_start_fired
+
+    @_session_start_fired.setter
+    def _session_start_fired(self, value: bool) -> None:
+        self._session_runtime._session_start_fired = value
+
+    @property
+    def _pending_notifications(self) -> list[TaskNotification]:
+        # Returning the live list is intentional — call sites use
+        # ``.append`` and ``.clear`` directly, and the runtime IS the
+        # single source of truth for the queue.
+        return self._session_runtime._pending_notifications
+
     def clear_session(self) -> None:
         # F-04-014: fire Stop(reason="clear") via ensure_future so sync
         # call sites (the CLI's /clear command) don't have to thread an
@@ -889,7 +951,13 @@ class Agent:
             pass
         else:
             asyncio.ensure_future(self.fire_stop(reason="clear"))
-        self._storage.clear(self._session_id)
+        # Phase 1 Task 13: lifecycle (storage.clear, session_rules drop,
+        # buffers + queue + SessionStart re-arm) lives on the runtime.
+        # Agent retains ownership of LoopState slot resets, hook chain
+        # rewiring, memory/rules cache invalidation, and Context/Loop
+        # rebuild — those need model + hook + skill wiring outside the
+        # session lifecycle scope.
+        self._session_runtime.clear()
         self._state.reset()
         # ``LoopState.reset`` only zeros the counters; slots live across
         # sessions for legitimate carry-over (token-stats etc.) and are
@@ -920,8 +988,6 @@ class Agent:
         # a leftover "accept_edits" from a previous plan cycle shouldn't
         # bleed into the next one.
         self._prior_mode = None
-        if self._session_rules is not None:
-            self._session_rules.clear()
         # /clear 语义：同时 invalidate memory/rules caches + 重建 Context。
         # progressive 状态（nested fragments / matched rules）随新实例自然清空 ——
         # 不做原地 reset，避免遗漏字段。
@@ -946,11 +1012,6 @@ class Agent:
             mode_provider=lambda: cast("Mode", self._mode),
         )
         self._hooks.pre_tool.insert(0, self._bash_safety_hook)
-        # Re-arm SessionStart so /clear feels like a fresh session.
-        self._session_start_fired = False
-        # Drop pending notifications + partial buffer.
-        self._pending_notifications.clear()
-        self._partial_assistant_text = ""
         self._loop = self._build_loop()
         journal.write("session_cleared", session=self._session_id)
 
@@ -1024,7 +1085,7 @@ class Agent:
         Read-only tuple. :meth:`_drain_task_notifications` is the
         write/clear endpoint used by Context.build.
         """
-        return tuple(self._pending_notifications)
+        return self._session_runtime.pending_notifications
 
     def buffer_partial_assistant_text(self, text: str) -> None:
         """Append ``text`` to the partial-assistant buffer.
@@ -1033,7 +1094,7 @@ class Agent:
         before the final AIMessage still surfaces partial reasoning.
         Reset on every new astream call.
         """
-        self._partial_assistant_text += text
+        self._session_runtime.buffer_partial_assistant_text(text)
 
     def _enqueue_task_notification(self, notif: TaskNotification) -> None:
         """External producer hook — append ``notif`` to the queue.
@@ -1043,13 +1104,11 @@ class Agent:
         ``(N more earlier)`` line, so the parent's prompt envelope stays
         compact while the queue itself preserves order.
         """
-        self._pending_notifications.append(notif)
+        self._session_runtime.enqueue_task_notification(notif)
 
     def _drain_task_notifications(self) -> list[TaskNotification]:
         """Pop every queued notification and return them, oldest first."""
-        drained = list(self._pending_notifications)
-        self._pending_notifications.clear()
-        return drained
+        return self._session_runtime.drain_task_notifications()
 
     async def _cascade_abort_to_children(self, reason: str) -> None:
         """Fire every controller in :attr:`_running_aborts`.
@@ -1205,26 +1264,19 @@ class Agent:
         on the next astream. Raises ``KeyError`` if the requested
         session has no rows. Returns the message count of the
         resumed session.
+
+        Phase 1 Task 13 — the storage swap + buffer reset + log-path
+        retarget + ``session_resumed`` journal event live on the
+        :class:`SessionRuntime`. Agent retains LoopState reset (slot
+        bookkeeping for the new session).
         """
-        history = self._storage.load(session_id)
-        if not history:
-            raise KeyError(
-                f"session {session_id!r} has no persisted history"
-            )
-        self._session_id = session_id
+        count = self._session_runtime.resume(session_id)
         self._state.reset()
         # Phase 1 Task 4: drop any captured denials so the resumed
         # session opens with an empty ``last_turn_denials()`` view
         # (parity with the pre-migration re-seed).
         self._state.slots.turn_denials.clear()
-        self._partial_assistant_text = ""
-        self._session_start_fired = False
-        journal.write(
-            "session_resumed",
-            session=session_id,
-            message_count=len(history),
-        )
-        return len(history)
+        return count
 
     @property
     def state(self) -> LoopState:
@@ -1694,7 +1746,10 @@ class Agent:
             finally:
                 self._mcp_manager = None
 
-        self._storage.close()
+        # Phase 1 Task 13 — storage close lives on SessionRuntime so
+        # other lifecycle exit points (future graceful-shutdown hooks)
+        # can route through one named call.
+        self._session_runtime.close_storage()
 
     def close(self, *, mcp_timeout: float = 5.0) -> None:
         """Sync teardown — thin wrapper around :meth:`aclose`.
@@ -1735,7 +1790,7 @@ class Agent:
                 "in v0.11 (B3)."
             )
         self._teardown_local_tasks()
-        self._storage.close()
+        self._session_runtime.close_storage()
 
     async def __aenter__(self) -> Agent:
         return self

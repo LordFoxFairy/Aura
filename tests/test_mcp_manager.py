@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from aura.config.schema import MCPServerConfig
 from aura.core.mcp.manager import MCPManager, MCPServerStatus
+from aura.schemas.tool_meta_access import meta_dict
 
 
 class _P(BaseModel):
@@ -70,8 +71,8 @@ async def test_start_all_single_server_wraps_tools_with_aura_metadata(
     assert len(tools) == 1
     t = tools[0]
     assert t.name == "mcp__gh__search"
-    assert (t.metadata or {}).get("is_destructive") is True
-    assert (t.metadata or {}).get("max_result_size_chars") == 30_000
+    assert meta_dict(t).get("is_destructive") is True
+    assert meta_dict(t).get("max_result_size_chars") == 30_000
     fake_client.get_tools.assert_awaited_once_with(server_name="gh")
     # Resources catalogue is empty when the server exposes no resources.
     assert mgr.resources_catalogue() == []

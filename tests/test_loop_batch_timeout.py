@@ -76,7 +76,9 @@ class _RecordingFakeChatModel(FakeChatModel):
 # ---------------------------------------------------------------------------
 
 
-def _slow_tool(name: str, sleep_s: float) -> BaseTool:
+def _slow_tool(
+    name: str, sleep_s: float, *, is_concurrency_safe: bool = True,
+) -> BaseTool:
     async def _coro() -> dict[str, Any]:
         await asyncio.sleep(sleep_s)
         return {"done": name}
@@ -86,7 +88,7 @@ def _slow_tool(name: str, sleep_s: float) -> BaseTool:
         description=f"slow tool {name}",
         args_schema=_NoArgs,
         coroutine=_coro,
-        is_concurrency_safe=True,
+        is_concurrency_safe=is_concurrency_safe,
     )
 
 
@@ -378,9 +380,7 @@ async def test_batch_timeout_fires_for_size_1_batch(
     # is_concurrency_safe=False → partitioned into a size-1 batch. No
     # per-tool ``timeout_sec`` so the tool would otherwise run to natural
     # completion (2s) despite the 0.1s batch deadline.
-    lone = _slow_tool("lone_unsafe", sleep_s=2.0)
-    assert lone.metadata is not None
-    lone.metadata["is_concurrency_safe"] = False
+    lone = _slow_tool("lone_unsafe", sleep_s=2.0, is_concurrency_safe=False)
     tcs = [{"name": "lone_unsafe", "args": {}, "id": "tc_lone"}]
 
     loop, history = _make_loop([lone], tcs)
@@ -415,9 +415,7 @@ async def test_batch_timeout_size_1_disabled_when_zero(
     log_path = tmp_path / "audit.jsonl"
     journal.configure(log_path)
 
-    lone = _slow_tool("lone_unsafe", sleep_s=0.05)
-    assert lone.metadata is not None
-    lone.metadata["is_concurrency_safe"] = False
+    lone = _slow_tool("lone_unsafe", sleep_s=0.05, is_concurrency_safe=False)
     tcs = [{"name": "lone_unsafe", "args": {}, "id": "tc_lone"}]
 
     loop, history = _make_loop([lone], tcs)

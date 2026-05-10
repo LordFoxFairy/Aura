@@ -9,6 +9,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.schemas.tool import ToolError
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.base import build_tool
 
 
@@ -27,7 +28,7 @@ def test_build_tool_fail_closed_defaults() -> None:
         args_schema=_MinParams,
         func=_fixed_run,
     )
-    meta = tool.metadata or {}
+    meta = meta_dict(tool)
     assert meta.get("is_read_only") is False
     assert meta.get("is_destructive") is False
     assert meta.get("is_concurrency_safe") is False
@@ -62,7 +63,7 @@ def test_build_tool_max_result_size_chars_defaults_to_none() -> None:
         args_schema=_MinParams,
         func=_fixed_run,
     )
-    assert (tool.metadata or {}).get("max_result_size_chars") is None
+    assert meta_dict(tool).get("max_result_size_chars") is None
 
 
 def test_build_tool_max_result_size_chars_is_stored() -> None:
@@ -73,7 +74,7 @@ def test_build_tool_max_result_size_chars_is_stored() -> None:
         func=_fixed_run,
         max_result_size_chars=500,
     )
-    assert (tool.metadata or {}).get("max_result_size_chars") == 500
+    assert meta_dict(tool).get("max_result_size_chars") == 500
 
 
 class _DoublerParams(BaseModel):

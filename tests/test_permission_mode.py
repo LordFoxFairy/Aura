@@ -28,7 +28,6 @@ from aura.schemas.state import LoopState
 from aura.schemas.tool import (
     ToolMetadata,
     ToolResult,  # noqa: F401
-    tool_metadata,
 )
 from aura.tools.base import build_tool
 
@@ -478,7 +477,6 @@ def _tool_with_classifier(
         name=name,
         description=name,
         args_schema=args_schema,
-        metadata=tool_metadata(is_destructive=is_destructive_fn),
     )
     aura_meta = ToolMetadata(
         is_read_only=False,

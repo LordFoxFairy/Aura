@@ -14,7 +14,7 @@ from typing import Any, TypeVar
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from aura.schemas.tool import ToolArgsPreview, ToolMetadata, ToolRuleMatcher, tool_metadata
+from aura.schemas.tool import ToolArgsPreview, ToolMetadata, ToolRuleMatcher
 
 _TParams = TypeVar("_TParams", bound=BaseModel)
 
@@ -47,26 +47,17 @@ def build_tool(
     the ability to override lifecycle hooks. If you find yourself reaching
     for ``build_tool`` in ``aura/``, promote the tool to its own subclass.
     """
-    # Keep the legacy metadata dict on the StructuredTool so LangChain
-    # internals that reference ``tool.metadata`` continue to work.
+    # Aura's metadata contract is exclusively ``aura_metadata: ToolMetadata``;
+    # LangChain's ``BaseTool.metadata`` is left empty. ``StructuredTool`` is a
+    # pydantic model with ``extra="ignore"`` so we use ``object.__setattr__``
+    # to attach the field without tripping pydantic validation.
     tool = StructuredTool.from_function(
         func=func,
         coroutine=coroutine,
         name=name,
         description=description,
         args_schema=args_schema,
-        metadata=tool_metadata(
-            is_read_only=is_read_only,
-            is_destructive=is_destructive,
-            is_concurrency_safe=is_concurrency_safe,
-            max_result_size_chars=max_result_size_chars,
-            rule_matcher=rule_matcher,
-            args_preview=args_preview,
-        ),
     )
-    # Also set the typed aura_metadata so meta_dict() reads it correctly.
-    # StructuredTool has extra="ignore" so we use object.__setattr__ to
-    # attach the field without triggering pydantic validation.
     aura_meta = ToolMetadata(
         is_read_only=is_read_only,
         is_destructive=is_destructive,
@@ -74,6 +65,7 @@ def build_tool(
         rule_matcher=rule_matcher,
         args_preview=args_preview,
         timeout_sec=timeout_sec,
+        max_result_size_chars=max_result_size_chars,
     )
     object.__setattr__(tool, "aura_metadata", aura_meta)
     return tool

@@ -1184,7 +1184,7 @@ async def test_agent_aconnect_registers_tools_into_registry(
 
     from aura.config.schema import MCPServerConfig
     from aura.core.mcp import manager as manager_mod
-    from aura.schemas.tool import tool_metadata
+    from aura.schemas.tool import ToolMetadata
 
     class _McpArgs(BaseModel):
         q: str = ""
@@ -1197,7 +1197,20 @@ async def test_agent_aconnect_registers_tools_into_registry(
         description="gh search",
         args_schema=_McpArgs,
         coroutine=_coro,
-        metadata=tool_metadata(is_destructive=True),
+    )
+    # ToolRegistry.register requires aura_metadata: ToolMetadata; the real
+    # MCP adapter sets this via add_aura_metadata, the fake bypasses it.
+    object.__setattr__(
+        fake_tool,
+        "aura_metadata",
+        ToolMetadata(
+            is_read_only=False,
+            is_destructive=True,
+            is_concurrency_safe=False,
+            rule_matcher=None,
+            args_preview=None,
+            timeout_sec=None,
+        ),
     )
 
     class _FakeManager:

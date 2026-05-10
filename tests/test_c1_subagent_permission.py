@@ -47,8 +47,8 @@ from aura.core.persistence.storage import SessionStorage
 from aura.core.tasks.factory import SubagentFactory
 from aura.schemas.state import LoopState
 from aura.schemas.tool import (
+    ToolMetadata,
     ToolResult,  # noqa: F401
-    tool_metadata,
 )
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -77,7 +77,14 @@ class _EchoTool(BaseTool):
     name: str = "echo_tool"
     description: str = "test-only echo"
     args_schema: type[BaseModel] = _EchoParams
-    metadata: dict[str, Any] | None = tool_metadata(is_destructive=False)
+    aura_metadata: ToolMetadata = ToolMetadata(
+        is_read_only=False,
+        is_destructive=False,
+        is_concurrency_safe=False,
+        rule_matcher=None,
+        args_preview=None,
+        timeout_sec=None,
+    )
 
     def _run(self, value: str = "x") -> str:
         return value
@@ -467,7 +474,14 @@ async def test_subagent_still_denies_on_safety_violation(tmp_path: Path) -> None
         name: str = "write_file"
         description: str = "test write"
         args_schema: type[BaseModel] = _FakeWriteParams
-        metadata: dict[str, Any] | None = tool_metadata(is_destructive=True)
+        aura_metadata: ToolMetadata = ToolMetadata(
+            is_read_only=False,
+            is_destructive=True,
+            is_concurrency_safe=False,
+            rule_matcher=None,
+            args_preview=None,
+            timeout_sec=None,
+        )
 
         def _run(self, path: str, content: str = "") -> str:
             return path

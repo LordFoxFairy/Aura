@@ -301,7 +301,9 @@ async def test_ipc_asker_uses_safe_defaults_for_unserializable_args_and_metadata
     asker = headless.IpcAsker()
     rule = Rule("demo", None)
     tool = _make_tool()
-    tool.metadata = None
+    # Strip aura_metadata so meta_dict(tool) returns {} and the asker
+    # falls back to its conservative ``is_destructive=True`` default.
+    object.__setattr__(tool, "aura_metadata", None)
     args: dict[str, Any] = {}
     args["self"] = args
 

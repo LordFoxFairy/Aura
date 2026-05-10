@@ -7,11 +7,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
 from aura.core.loop import ToolStep, partition_batches
-from aura.core.registry import ToolRegistry, assemble_tool_pool
+from aura.core.registry import ToolRegistry, ToolRegistryError, assemble_tool_pool
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from aura.tools.read_file import read_file
@@ -293,3 +293,58 @@ async def test_partition_short_circuited_step_goes_solo() -> None:
     batches = partition_batches(steps)
     sizes = [len(b) for b in batches]
     assert sizes == [1, 1, 1]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 Task 4 — ``aura_metadata: ToolMetadata`` enforcement at registration.
+# Every Aura tool must declare its capability flags through ``ToolMetadata``;
+# the registry refuses anything else so loop / hook / CLI readers can trust
+# the typed surface.
+# ---------------------------------------------------------------------------
+
+
+def _bare_tool_without_aura_metadata(name: str = "bare") -> BaseTool:
+    """Synthetic tool that bypasses ``build_tool`` so ``aura_metadata`` is
+    never set. Stand-in for the failure mode the registry must reject."""
+
+    async def _coro(x: str = "") -> dict[str, Any]:
+        return {}
+
+    return StructuredTool(
+        name=name,
+        description="bare tool — no aura_metadata",
+        args_schema=_AParams,
+        coroutine=_coro,
+    )
+
+
+def test_registry_register_rejects_tool_without_aura_metadata() -> None:
+    bare = _bare_tool_without_aura_metadata("bare_tool")
+    reg = ToolRegistry()
+    with pytest.raises(ToolRegistryError, match="aura_metadata"):
+        reg.register(bare)
+    assert "bare_tool" not in reg
+
+
+def test_registry_init_rejects_tool_without_aura_metadata() -> None:
+    bare = _bare_tool_without_aura_metadata("bare_tool")
+    with pytest.raises(ToolRegistryError, match="aura_metadata"):
+        ToolRegistry([bare])
+
+
+def test_registry_register_error_names_offending_tool() -> None:
+    """Operators land on ``ToolRegistryError`` straight from a stack trace;
+    the message must point at the specific tool whose registration failed,
+    not a generic 'missing metadata' line."""
+    bare = _bare_tool_without_aura_metadata("offender")
+    reg = ToolRegistry()
+    with pytest.raises(ToolRegistryError, match="'offender'"):
+        reg.register(bare)
+
+
+def test_registry_error_inherits_aura_error() -> None:
+    """``ToolRegistryError`` is part of the AuraError hierarchy so callers
+    using ``except AuraError`` catch it uniformly with other expected errors."""
+    from aura.errors import AuraError
+
+    assert issubclass(ToolRegistryError, AuraError)

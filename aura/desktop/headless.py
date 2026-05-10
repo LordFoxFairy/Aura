@@ -65,6 +65,7 @@ from aura.core.permissions.safety import (
 )
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.persistence.storage import SessionStorage
+from aura.schemas.tool_meta_access import meta_dict
 from aura.transport.stream import stream_agent_wire
 from aura.transport.wire import agent_state_to_wire, event_to_wire, permission_request_to_wire
 
@@ -131,7 +132,7 @@ class IpcAsker:
             # ``is_destructive`` lets the modal pick a louder visual treatment
             # for destructive tools (red outline vs yellow). Falls back to
             # True (conservative) when the tool didn't declare its capability.
-            is_destructive=bool((tool.metadata or {}).get("is_destructive", True)),
+            is_destructive=bool(meta_dict(tool).get("is_destructive", True)),
         ))
 
         try:

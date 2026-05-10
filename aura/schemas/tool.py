@@ -1,14 +1,19 @@
-"""Tool execution protocol — ``ToolResult`` / ``ToolError`` / ``tool_metadata``.
+"""Tool execution protocol — ``ToolResult`` / ``ToolError`` / ``ToolMetadata``.
 
 Every Aura tool returns a ``ToolResult`` to the loop (either directly from a
 successful call or wrapped by the loop after catching an exception), and may
 raise ``ToolError`` from its body to report a user-facing failure.
 
-``tool_metadata(...)`` returns the dict every Aura tool carries on
-``BaseTool.metadata``. Flags live in ``metadata`` (not as dedicated fields)
-because LangChain's ``bind_tools`` only sends ``name``/``description``/
-``args_schema`` to the model; anything extra we stash in ``metadata`` stays
-local to the loop and hook layer — read via ``(tool.metadata or {}).get(...)``.
+Capability flags live on the typed :class:`ToolMetadata` dataclass attached
+to each tool as ``aura_metadata``. The dataclass replaces the legacy
+``tool.metadata`` dict entirely — ``ToolRegistry.register`` enforces the
+typed contract (Phase 2 Task 4). LangChain's ``BaseTool.metadata`` is no
+longer used by Aura; readers go through
+:func:`aura.schemas.tool_meta_access.meta_dict` for a backward-compatible
+dict view of the typed fields. The legacy ``tool_metadata(...)`` helper is
+kept for tests that still want to construct a plain dict (e.g. asserting on
+the exact key/value shape) but production code constructs ``ToolMetadata``
+instances directly.
 
 Keys:
 
@@ -76,25 +81,24 @@ class ToolResult:
 class ToolMetadata:
     """Typed replacement for the ``tool_metadata(...)`` dict.
 
-    Phase 2 Task 1 contract — defines the shape only. Tools are migrated
-    to construct ``ToolMetadata`` instances in Tasks 2-3, and
-    ``ToolRegistry.register`` enforces the type at registration in
-    Task 4. Until then, the legacy dict path (returned by
-    :func:`tool_metadata`) coexists.
+    Phase 2 Task 4 contract — every Aura-registered tool MUST set
+    ``aura_metadata: ToolMetadata`` and ``ToolRegistry.register``
+    enforces it. Field semantics mirror the original dict keys — see
+    this module's docstring for the per-key rationale.
 
-    Field semantics mirror the legacy dict keys (see this module's
-    docstring) — ``rule_matcher`` is the per-tool permission-rule
-    matcher, ``args_preview`` renders one-line UI previews, and
+    ``rule_matcher`` is the per-tool permission-rule matcher,
+    ``args_preview`` renders one-line UI previews, and
     ``capability_flags`` is the open-ended ``frozenset[str]`` extension
     surface (per spec §11 open question 1: kept open rather than a
     closed enum because permissions and skills already discover tool
-    capabilities by string name).
+    capabilities by string name). ``is_search_command`` is projected
+    from ``capability_flags`` — set ``"search_command"`` on a tool to
+    flag it for the renderer's search-fold heuristic.
 
-    The narrow 7-field surface is intentional — Phase 2's spec §3 calls
-    out exactly these fields. Legacy keys (``max_result_size_chars``,
-    ``is_search_command``) stay on the dict path until consumers
-    migrate; new fields, if needed, land as additional named fields
-    here rather than dumped into ``capability_flags``.
+    ``max_result_size_chars`` is the per-tool override of the post-tool
+    budget hook's truncation threshold (Task 4 promoted it from the
+    legacy dict path into a typed field — ``None`` means "use the
+    global cap").
     """
 
     is_read_only: bool
@@ -103,6 +107,7 @@ class ToolMetadata:
     rule_matcher: ToolRuleMatcher | None
     args_preview: ToolArgsPreview | None
     timeout_sec: float | None
+    max_result_size_chars: int | None = None
     capability_flags: frozenset[str] = field(default_factory=frozenset)
 
 

@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.tools import BaseTool
 
 from aura.core.commands.types import CommandResult, CommandSource
-from aura.schemas.tool import tool_metadata
+from aura.schemas.tool import ToolMetadata
 
 if TYPE_CHECKING:
     from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -167,14 +167,22 @@ def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
     # external world can race); openWorldHint=False allows safe-concurrent
     # marking. Read-only also implies safe to run concurrently.
     is_concurrency_safe = is_read_only or hints["openWorldHint"] is False
-    tool.metadata = tool_metadata(
+    # Phase 2 Task 4 — Aura's tool metadata contract is the typed
+    # ``aura_metadata: ToolMetadata`` field. ``tool.metadata`` was the
+    # upstream library's annotation-hint dump (already consumed via
+    # ``_read_annotation_hints`` above); clear it so downstream readers
+    # only see Aura's typed surface.
+    aura_meta = ToolMetadata(
         is_read_only=is_read_only,
         is_destructive=is_destructive,
         is_concurrency_safe=is_concurrency_safe,
-        max_result_size_chars=_MAX_MCP_RESULT_CHARS,
         rule_matcher=None,
         args_preview=_args_preview,
+        timeout_sec=None,
+        max_result_size_chars=_MAX_MCP_RESULT_CHARS,
     )
+    object.__setattr__(tool, "aura_metadata", aura_meta)
+    tool.metadata = None
     return tool
 
 

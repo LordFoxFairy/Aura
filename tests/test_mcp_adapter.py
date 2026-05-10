@@ -11,6 +11,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
 from aura.core.mcp.adapter import add_aura_metadata, make_mcp_command
+from aura.schemas.tool_meta_access import meta_dict
 
 
 class _Params(BaseModel):
@@ -31,7 +32,7 @@ def _mk_tool(name: str) -> StructuredTool:
 def test_add_aura_metadata_attaches_conservative_flags() -> None:
     tool = _mk_tool("search")
     out = add_aura_metadata(tool, server_name="github")
-    md = out.metadata or {}
+    md = meta_dict(out)
     # MCP servers don't self-declare these; defaults are conservative.
     assert md.get("is_destructive") is True
     assert md.get("is_concurrency_safe") is False
@@ -73,7 +74,7 @@ def _mk_tool_with_metadata(
 def test_annotation_read_only_hint_flips_is_read_only() -> None:
     tool = _mk_tool_with_metadata("search", {"readOnlyHint": True})
     out = add_aura_metadata(tool, server_name="github")
-    md = out.metadata or {}
+    md = meta_dict(out)
     assert md.get("is_read_only") is True
     # Read-only implies non-destructive AND concurrency-safe — server can't
     # contradict itself.
@@ -84,7 +85,7 @@ def test_annotation_read_only_hint_flips_is_read_only() -> None:
 def test_annotation_destructive_hint_false_flips_is_destructive() -> None:
     tool = _mk_tool_with_metadata("create", {"destructiveHint": False})
     out = add_aura_metadata(tool, server_name="gh")
-    md = out.metadata or {}
+    md = meta_dict(out)
     assert md.get("is_destructive") is False
     # Not declared read-only, so it stays non-read-only.
     assert md.get("is_read_only") is False
@@ -93,14 +94,14 @@ def test_annotation_destructive_hint_false_flips_is_destructive() -> None:
 def test_annotation_open_world_hint_false_marks_concurrency_safe() -> None:
     tool = _mk_tool_with_metadata("query", {"openWorldHint": False})
     out = add_aura_metadata(tool, server_name="gh")
-    md = out.metadata or {}
+    md = meta_dict(out)
     assert md.get("is_concurrency_safe") is True
 
 
 def test_annotation_open_world_hint_true_keeps_concurrency_unsafe() -> None:
     tool = _mk_tool_with_metadata("search", {"openWorldHint": True})
     out = add_aura_metadata(tool, server_name="gh")
-    md = out.metadata or {}
+    md = meta_dict(out)
     assert md.get("is_concurrency_safe") is False
 
 
@@ -112,7 +113,7 @@ def test_annotation_destructive_and_read_only_combine() -> None:
         {"readOnlyHint": True, "destructiveHint": True},
     )
     out = add_aura_metadata(tool, server_name="gh")
-    md = out.metadata or {}
+    md = meta_dict(out)
     assert md.get("is_read_only") is True
     assert md.get("is_destructive") is False
 

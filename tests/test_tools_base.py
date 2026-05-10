@@ -9,6 +9,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.schemas.tool import ToolError, ToolResult
+from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.base import build_tool
 
 
@@ -47,7 +48,7 @@ async def test_build_tool_returns_base_tool_instance() -> None:
     )
     assert isinstance(tool, BaseTool)
     assert tool.name == "x"
-    assert (tool.metadata or {}).get("is_read_only") is True
+    assert meta_dict(tool).get("is_read_only") is True
 
 
 @pytest.mark.asyncio
@@ -118,7 +119,7 @@ def test_build_tool_stores_rule_matcher_in_metadata() -> None:
         name="x", description="x", args_schema=_Empty, func=_noop,
         rule_matcher=matcher,
     )
-    assert (tool.metadata or {}).get("rule_matcher") is matcher
+    assert meta_dict(tool).get("rule_matcher") is matcher
 
 
 def test_build_tool_stores_args_preview_in_metadata() -> None:
@@ -129,13 +130,13 @@ def test_build_tool_stores_args_preview_in_metadata() -> None:
         name="x", description="x", args_schema=_Empty, func=_noop,
         args_preview=preview,
     )
-    assert (tool.metadata or {}).get("args_preview") is preview
+    assert meta_dict(tool).get("args_preview") is preview
 
 
 def test_build_tool_without_new_kwargs_has_none_slots() -> None:
     tool = build_tool(
         name="x", description="x", args_schema=_Empty, func=_noop,
     )
-    meta = tool.metadata or {}
+    meta = meta_dict(tool)
     assert meta.get("rule_matcher") is None
     assert meta.get("args_preview") is None

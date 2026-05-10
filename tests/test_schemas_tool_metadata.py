@@ -59,10 +59,12 @@ def test_tool_metadata_constructible_with_seven_fields() -> None:
     assert meta.capability_flags == frozenset({"writes_files"})
 
 
-def test_tool_metadata_has_seven_fields_per_spec() -> None:
-    """Spec §3 lists exactly 7 named fields. Guards against accidental
-    extras (which would erode the typed surface) or missing fields
-    (which would silently break consumers in Tasks 2-3).
+def test_tool_metadata_has_eight_fields_post_task_4() -> None:
+    """Spec §3 originally listed 7 named fields; Task 4 promoted
+    ``max_result_size_chars`` from the legacy dict path into a typed
+    field (the budget hook reads it via ``meta_dict``). Guards against
+    accidental extras (which would erode the typed surface) or missing
+    fields (which would silently break consumers).
     """
     expected = {
         "is_read_only",
@@ -71,6 +73,7 @@ def test_tool_metadata_has_seven_fields_per_spec() -> None:
         "rule_matcher",
         "args_preview",
         "timeout_sec",
+        "max_result_size_chars",
         "capability_flags",
     }
     actual = {f.name for f in dataclasses.fields(ToolMetadata)}

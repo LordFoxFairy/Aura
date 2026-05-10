@@ -24,7 +24,7 @@ from aura.core.tasks.store import TasksStore
 from aura.core.teams.manager import TeamError, TeamManager
 from aura.core.teams.types import TEAM_LEADER_NAME, TeamRecord
 from aura.schemas.state import LoopState
-from aura.schemas.tool import tool_metadata
+from aura.schemas.tool import ToolMetadata
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -45,11 +45,21 @@ class _EchoParams(BaseModel):
     value: str = "x"
 
 
+_NON_DESTRUCTIVE_META = ToolMetadata(
+    is_read_only=False,
+    is_destructive=False,
+    is_concurrency_safe=False,
+    rule_matcher=None,
+    args_preview=None,
+    timeout_sec=None,
+)
+
+
 class _AllowedTool(BaseTool):
     name: str = "team_allowed_tool"
     description: str = "test-only allowed tool"
     args_schema: type[BaseModel] = _EchoParams
-    metadata: dict[str, Any] | None = tool_metadata(is_destructive=False)
+    aura_metadata: ToolMetadata = _NON_DESTRUCTIVE_META
 
     def _run(self, value: str = "x") -> str:
         return value
@@ -59,7 +69,7 @@ class _AskTool(BaseTool):
     name: str = "team_ask_tool"
     description: str = "test-only ask-path tool"
     args_schema: type[BaseModel] = _EchoParams
-    metadata: dict[str, Any] | None = tool_metadata(is_destructive=False)
+    aura_metadata: ToolMetadata = _NON_DESTRUCTIVE_META
 
     def _run(self, value: str = "x") -> str:
         return value

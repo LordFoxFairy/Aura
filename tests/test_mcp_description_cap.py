@@ -23,6 +23,7 @@ from aura.core.mcp.adapter import (
     add_aura_metadata,
 )
 from aura.core.persistence import journal
+from aura.schemas.tool_meta_access import meta_dict
 
 
 class _Params(BaseModel):
@@ -188,7 +189,7 @@ def test_cap_preserves_metadata_attachment_when_truncating() -> None:
     exists, and an early-return on truncation would be a regression."""
     tool = _mk_tool("dump", description="x" * 5_000)
     add_aura_metadata(tool, server_name="gh")
-    md = tool.metadata or {}
+    md = meta_dict(tool)
     assert md.get("is_destructive") is True
     assert md.get("max_result_size_chars") == 30_000
 

@@ -191,7 +191,19 @@ async def test_compact_preserves_read_records(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_compact_preserves_invoked_skills(tmp_path: Path) -> None:
+async def test_compact_resets_progressive_state_preserves_reads(
+    tmp_path: Path,
+) -> None:
+    """Phase 3 Task 3 — post-compact Context comes from ``fresh()``.
+
+    Progressive fields (``_invoked_skills``, ``_loaded_nested_paths``)
+    must be EMPTY on the new Context: invoked-skill bodies are surfaced
+    via ``<skill-active>`` re-injection HumanMessages in history (see
+    ``test_compact_skill_reinjection.py``), so keeping them on the new
+    Context's ``_invoked_skills`` would double-render. ``_read_records``
+    is preserved by ``fresh()`` defaults — the file is still on disk so
+    the must-read-first fingerprint remains valid.
+    """
     agent = _make_agent(tmp_path)
     _seed_history(agent, pairs=10)
 
@@ -208,12 +220,21 @@ async def test_compact_preserves_invoked_skills(tmp_path: Path) -> None:
     assert '<skill-invoked name="ping">' in blob_before
     assert "PING-BODY" in blob_before
 
+    # Seed a read record + a synthetic loaded-nested-path so we can prove the
+    # new Context preserves reads while emptying nested-load discovery state.
+    target = tmp_path / "f.txt"
+    target.write_text("hello\n")
+    agent._context.record_read(target)
+    agent._context._loaded_nested_paths.add((tmp_path / "AURA.md").resolve())
+
     await agent.compact(source="manual")
 
-    # After compact: new Context, but the invoked skill must still render.
-    blob_after = " ".join(str(m.content) for m in agent._context.build([]))
-    assert '<skill-invoked name="ping">' in blob_after
-    assert "PING-BODY" in blob_after
+    # After compact: NEW Context with cleared progressive fields.
+    assert agent._context._invoked_skills == []
+    assert agent._context._invoked_skill_paths == set()
+    assert agent._context._loaded_nested_paths == set()
+    # Read fingerprints survive — must-read-first invariant.
+    assert agent._context.read_status(target) == "fresh"
     await agent.aclose()
 
 

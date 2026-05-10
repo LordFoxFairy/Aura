@@ -45,7 +45,7 @@ from aura.core.compact.constants import (
 from aura.core.compact.microcompact import MicrocompactPolicy, apply_microcompact
 from aura.core.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
 from aura.core.memory import project_memory, rules
-from aura.core.memory.context import Context, _ReadRecord
+from aura.core.memory.context import _ReadRecord
 from aura.core.persistence import journal
 from aura.core.tokens import estimate_text_tokens
 
@@ -325,7 +325,6 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
     old_ctx = agent._context
     preserved_read_records = dict(old_ctx._read_records)
     preserved_invoked_skills = list(old_ctx._invoked_skills)
-    preserved_invoked_paths = set(old_ctx._invoked_skill_paths)
 
     # Selective file re-injection: the summary may be too lean to continue
     # work on a specific file. Re-inject the most-recently-touched FULL
@@ -376,21 +375,17 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
     agent._primary_memory = project_memory.load_project_memory(agent._cwd)
     agent._rules = rules.load_rules(agent._cwd)
 
-    # New Context — progressive fields (nested fragments, matched rules) are
-    # fresh-empty by construction; no in-place reset needed.
-    new_ctx = Context(
-        cwd=agent._cwd,
-        system_prompt=agent._system_prompt,
-        primary_memory=agent._primary_memory,
-        rules=agent._rules,
-        skills=agent._skill_registry.list(),
-        todos_provider=lambda: agent._state.slots.todos,
-    )
-
-    # Lift preserved state onto the new instance.
+    # Phase 3 §4 — explicit ``fresh()`` factory replaces the prior
+    # in-place ``Context(...)`` reconstruction. Progressive fields
+    # (nested fragments, matched rules, invoked skills) start empty by
+    # contract; ``_read_records`` is preserved by default (the file is
+    # still on disk, so the must-read-first fingerprint remains valid).
+    # Invoked-skill bodies are surfaced via the ``<skill-active>``
+    # re-injection HumanMessages above — keeping them on the new
+    # Context's ``_invoked_skills`` would double-render. ``/clear``
+    # owns ``clear_reads=True``; compact deliberately does not.
+    new_ctx = old_ctx.fresh()
     new_ctx._read_records = preserved_read_records
-    new_ctx._invoked_skills = preserved_invoked_skills
-    new_ctx._invoked_skill_paths = preserved_invoked_paths
 
     agent._context = new_ctx
 

@@ -51,7 +51,7 @@ Keys:
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 ToolRuleMatcher = Callable[[dict[str, Any], str], bool]
@@ -70,6 +70,40 @@ class ToolResult:
     output: Any = None
     error: str | None = None
     display: str | None = None
+
+
+@dataclass(frozen=True)
+class ToolMetadata:
+    """Typed replacement for the ``tool_metadata(...)`` dict.
+
+    Phase 2 Task 1 contract — defines the shape only. Tools are migrated
+    to construct ``ToolMetadata`` instances in Tasks 2-3, and
+    ``ToolRegistry.register`` enforces the type at registration in
+    Task 4. Until then, the legacy dict path (returned by
+    :func:`tool_metadata`) coexists.
+
+    Field semantics mirror the legacy dict keys (see this module's
+    docstring) — ``rule_matcher`` is the per-tool permission-rule
+    matcher, ``args_preview`` renders one-line UI previews, and
+    ``capability_flags`` is the open-ended ``frozenset[str]`` extension
+    surface (per spec §11 open question 1: kept open rather than a
+    closed enum because permissions and skills already discover tool
+    capabilities by string name).
+
+    The narrow 7-field surface is intentional — Phase 2's spec §3 calls
+    out exactly these fields. Legacy keys (``max_result_size_chars``,
+    ``is_search_command``) stay on the dict path until consumers
+    migrate; new fields, if needed, land as additional named fields
+    here rather than dumped into ``capability_flags``.
+    """
+
+    is_read_only: bool
+    is_destructive: bool
+    is_concurrency_safe: bool
+    rule_matcher: ToolRuleMatcher | None
+    args_preview: ToolArgsPreview | None
+    timeout_sec: float | None
+    capability_flags: frozenset[str] = field(default_factory=frozenset)
 
 
 class ToolError(Exception):

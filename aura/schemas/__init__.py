@@ -37,7 +37,7 @@ from aura.schemas.state import (
     TokenStats,
 )
 from aura.schemas.todos import TodoItem, TodoStatus
-from aura.schemas.tool import ToolError, ToolResult, tool_metadata
+from aura.schemas.tool import ToolError, ToolMetadata, ToolResult, tool_metadata
 
 __all__ = [
     "AgentEvent",
@@ -61,6 +61,7 @@ __all__ = [
     "ToolCallCompleted",
     "ToolCallStarted",
     "ToolError",
+    "ToolMetadata",
     "ToolResult",
     "tool_metadata",
 ]

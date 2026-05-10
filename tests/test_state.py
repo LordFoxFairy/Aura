@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage
 
 from aura.core.loop import AgentLoop
 from aura.core.registry import ToolRegistry
-from aura.schemas.state import LoopState
+from aura.schemas.state import LoopSlots, LoopState
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 
 
@@ -58,3 +58,17 @@ def test_loop_state_reset_preserves_instance_identity() -> None:
     state.reset()
     assert state is original
     assert state.turn_count == 0
+
+
+def test_loop_state_has_default_slots() -> None:
+    """LoopState() exposes a fresh LoopSlots instance on .slots."""
+    state = LoopState()
+    assert isinstance(state.slots, LoopSlots)
+    assert state.slots == LoopSlots()
+
+
+def test_loop_state_slots_isolated_per_instance() -> None:
+    """Each LoopState gets its own LoopSlots — no shared default."""
+    a = LoopState()
+    b = LoopState()
+    assert a.slots is not b.slots

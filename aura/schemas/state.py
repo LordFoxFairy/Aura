@@ -22,11 +22,22 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 from aura.schemas.todos import TodoItem
 
 if TYPE_CHECKING:
-    # Type-only references — kept out of runtime imports to preserve
-    # the ``aura.schemas`` leaf invariant. Tasks 3-6 wire the actual
-    # writers; until then these annotations only document intent.
+    # Real types — only seen by type checkers. Kept out of runtime
+    # imports to preserve the ``aura.schemas`` leaf invariant
+    # (``aura/schemas/__init__.py`` enforces that nothing under
+    # ``aura/schemas`` reaches into other ``aura`` modules at runtime).
     from aura.core.hooks.permission import AskerResponse
     from aura.core.permissions.denials import PermissionDenial as Denial
+else:
+    # Runtime fallbacks — needed because :class:`LoopState` (a stdlib
+    # dataclass) is used as a pydantic field type on stateful tools
+    # (see ``aura/tools/todo_write.py``); when pydantic introspects the
+    # chain ``LoopState → LoopSlots`` it must resolve every annotation
+    # name. Aliasing to :data:`Any` here gives pydantic a resolvable
+    # name without dragging the real modules into ``aura.schemas`` at
+    # runtime. The ``if TYPE_CHECKING`` branch above keeps mypy strict.
+    Denial = Any
+    AskerResponse = Any
 
 
 # A canonical signature string (`<tool_name>::<json-args>`) used by the
@@ -152,6 +163,12 @@ class LoopState:
     # New code MUST NOT add keys here; use a typed slot on
     # :class:`LoopSlots` instead.
     custom: dict[str, Any] = field(default_factory=dict)
+    # Typed slot bag — replaces ``custom`` as Tasks 3-6 migrate
+    # consumers key-by-key. Frozen (see :class:`LoopSlots`); writers
+    # use :func:`dataclasses.replace` to swap fields. The attribute
+    # itself is rebound (``state.slots = replace(state.slots, ...)``),
+    # so :class:`LoopState` stays a non-frozen dataclass.
+    slots: LoopSlots = field(default_factory=LoopSlots)
 
     def reset(self) -> None:
         # 必须原地 mutate：AgentLoop 持有同一个 LoopState 引用，新建对象不会被 loop 感知。

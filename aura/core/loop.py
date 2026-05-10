@@ -345,6 +345,17 @@ class AgentLoop:
                 if ai.content:
                     yield AssistantDelta(text=str(ai.content))
                 if not ai.tool_calls:
+                    if (
+                        ai.response_metadata.get("finish_reason")
+                        == "length_recovery_exhausted"
+                    ):
+                        journal.write(
+                            "turn_end",
+                            turn=self._state.turn_count,
+                            ended_with="length_recovery_exhausted",
+                        )
+                        yield Final(message=str(ai.content), reason="max_turns")
+                        return
                     journal.write(
                         "turn_end",
                         turn=self._state.turn_count, ended_with="final",
@@ -572,6 +583,20 @@ class AgentLoop:
             messages.append(ai)
             messages.append(HumanMessage(content=_LENGTH_RESUME_PROMPT))
             ai = await self._invoke_with_retry(messages)
+        if _length_truncated(ai):
+            journal.write(
+                "length_recovery_exhausted",
+                session=self._session_id,
+                turn=self._state.turn_count,
+                attempts=length_retries,
+            )
+            ai = AIMessage(
+                content=(
+                    "length recovery exhausted after "
+                    f"{length_retries} attempts; truncated response discarded"
+                ),
+                response_metadata={"finish_reason": "length_recovery_exhausted"},
+            )
         history.append(ai)
         await self._hooks.run_post_model(
             ai_message=ai, history=history, state=self._state,
@@ -615,7 +640,12 @@ class AgentLoop:
         )
         for step in batch:
             tc = step.tool_call
-            yield ToolCallStarted(name=tc["name"], input=dict(tc["args"]))
+            tc_id = str(tc.get("id") or "")
+            yield ToolCallStarted(
+                name=tc["name"],
+                input=dict(tc["args"]),
+                id=tc_id,
+            )
             # Auto-allow audit line (spec §8.4): dim "auto-allowed: <reason>"
             # after Started for the three reasons where no prompt was shown.
             pd = step.permission_decision
@@ -630,18 +660,23 @@ class AgentLoop:
         # queue WHILE gather is still awaiting — that's the whole reason a
         # long ``npm test`` no longer sits silently. A ``None`` sentinel
         # placed by the callback installer signals "all tools done".
-        progress_queue: asyncio.Queue[tuple[str, str, str] | None] = asyncio.Queue()
+        progress_queue: asyncio.Queue[
+            tuple[str, str, str, str] | None
+        ] = asyncio.Queue()
 
-        def _on_progress(tool_name: str) -> ProgressCallback:
+        def _on_progress(tool_call_id: str, tool_name: str) -> ProgressCallback:
             def _cb(stream: Literal["stdout", "stderr"], chunk: str) -> None:
-                progress_queue.put_nowait((tool_name, stream, chunk))
+                progress_queue.put_nowait((tool_call_id, tool_name, stream, chunk))
             return _cb
 
         async def _execute_with_progress(step: ToolStep) -> ToolResult:
             # Install the per-step callback only for THIS task's async
             # context (contextvars are task-local), then reset so nothing
             # leaks to the next batch.
-            token = set_progress_callback(_on_progress(step.tool_call["name"]))
+            tool_call_id = str(step.tool_call.get("id") or "")
+            token = set_progress_callback(
+                _on_progress(tool_call_id, step.tool_call["name"]),
+            )
             try:
                 return await self._execute_step(step)
             finally:
@@ -754,28 +789,32 @@ class AgentLoop:
                     gather_task.cancel()
             watchdog_task = asyncio.ensure_future(_abort_watchdog())
 
-        while True:
-            item = await progress_queue.get()
-            if item is None:
-                break
-            tool_name, stream_name, chunk = item
-            # Literal narrowing — the callback only ever pushes valid labels,
-            # but the queue is typed loosely to keep the cast site local.
-            assert stream_name in ("stdout", "stderr")
-            yield ToolCallProgress(
-                name=tool_name,
-                stream=stream_name,  # type: ignore[arg-type]
-                chunk=chunk,
-            )
-
         try:
+            while True:
+                item = await progress_queue.get()
+                if item is None:
+                    break
+                tool_call_id, tool_name, stream_name, chunk = item
+                # Literal narrowing — the callback only ever pushes valid labels,
+                # but the queue is typed loosely to keep the cast site local.
+                assert stream_name in ("stdout", "stderr")
+                yield ToolCallProgress(
+                    name=tool_name,
+                    stream=stream_name,  # type: ignore[arg-type]
+                    chunk=chunk,
+                    id=tool_call_id,
+                )
             results: list[ToolResult] = await gather_task
         finally:
+            if not gather_task.done():
+                gather_task.cancel()
+                await asyncio.gather(gather_task, return_exceptions=True)
             if watchdog_task is not None and not watchdog_task.done():
                 watchdog_task.cancel()
 
         for step, result in zip(batch, results, strict=True):
             tc = step.tool_call
+            tc_id = str(tc.get("id") or "")
             journal.write(
                 "tool_execute_end",
                 tool=tc["name"], tool_call_id=tc["id"],
@@ -793,7 +832,10 @@ class AgentLoop:
                 )
             )
             yield ToolCallCompleted(
-                name=tc["name"], output=result.output, error=result.error,
+                name=tc["name"],
+                output=result.output,
+                error=result.error,
+                id=tc_id,
             )
 
         journal.write("tool_batch_end", turn=self._state.turn_count, size=len(batch))

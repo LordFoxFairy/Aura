@@ -10,16 +10,38 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel
 
 from aura.core.hooks import HookChain
 from aura.core.loop import _MAX_LENGTH_RETRY, AgentLoop
 from aura.core.persistence import journal
 from aura.core.registry import ToolRegistry
-from aura.schemas.events import AgentEvent
+from aura.schemas.events import AgentEvent, Final, ToolCallStarted
+from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
+
+
+class _EchoParams(BaseModel):
+    msg: str
+
+
+def _echo(msg: str) -> dict[str, Any]:
+    return {"echoed": msg}
+
+
+_echo_tool: BaseTool = build_tool(
+    name="echo",
+    description="echoes input",
+    args_schema=_EchoParams,
+    func=_echo,
+    is_read_only=True,
+    is_concurrency_safe=True,
+)
 
 
 def _truncated(content: str) -> AIMessage:
@@ -40,6 +62,36 @@ def _truncated_anthropic(content: str) -> AIMessage:
 
 def _final(content: str) -> AIMessage:
     return AIMessage(content=content, response_metadata={"finish_reason": "stop"})
+
+
+@pytest.mark.asyncio
+async def test_length_truncated_tool_calls_are_not_dispatched() -> None:
+    """Tool calls on a length-truncated response are discarded before dispatch."""
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(
+            content="partial tool decision",
+            response_metadata={"finish_reason": "length"},
+            tool_calls=[{"name": "echo", "args": {"msg": "hi"}, "id": "tc_1"}],
+        )),
+        FakeTurn(message=_final("recovered final")),
+    ])
+    history: list[BaseMessage] = [HumanMessage(content="long task")]
+    loop = AgentLoop(
+        model=model, registry=ToolRegistry([_echo_tool]),
+        context=make_minimal_context(), hooks=HookChain(),
+    )
+
+    events: list[AgentEvent] = []
+    async for ev in loop.run_turn(history=history):
+        events.append(ev)
+
+    assert model.ainvoke_calls == 2
+    assert not any(isinstance(ev, ToolCallStarted) for ev in events)
+    assert not any(isinstance(msg, ToolMessage) for msg in history)
+
+    ai_messages = [m for m in history if isinstance(m, AIMessage)]
+    assert len(ai_messages) == 1
+    assert ai_messages[0].content == "recovered final"
 
 
 @pytest.mark.asyncio
@@ -138,6 +190,46 @@ async def test_length_recovery_caps_at_max_retry(tmp_path: Path) -> None:
         assert [r["attempt"] for r in recoveries] == list(
             range(1, _MAX_LENGTH_RETRY + 1),
         )
+    finally:
+        journal.reset()
+
+
+@pytest.mark.asyncio
+async def test_length_recovery_exhaustion_does_not_dispatch_truncated_tool_calls(
+    tmp_path: Path,
+) -> None:
+    journal.configure(tmp_path / "j.jsonl")
+    try:
+        turns = [
+            FakeTurn(message=AIMessage(
+                content=f"truncated {i}",
+                response_metadata={"finish_reason": "length"},
+                tool_calls=[{
+                    "name": "echo",
+                    "args": {"msg": f"unsafe-{i}"},
+                    "id": f"tc_{i}",
+                }],
+            ))
+            for i in range(_MAX_LENGTH_RETRY + 1)
+        ]
+        model = FakeChatModel(turns=turns)
+        history: list[BaseMessage] = [HumanMessage(content="never ends")]
+        loop = AgentLoop(
+            model=model, registry=ToolRegistry([_echo_tool]),
+            context=make_minimal_context(), hooks=HookChain(),
+        )
+
+        events: list[AgentEvent] = []
+        async for ev in loop.run_turn(history=history):
+            events.append(ev)
+
+        assert model.ainvoke_calls == _MAX_LENGTH_RETRY + 1
+        assert not any(isinstance(ev, ToolCallStarted) for ev in events)
+        assert not any(isinstance(msg, ToolMessage) for msg in history)
+        finals = [ev for ev in events if isinstance(ev, Final)]
+        assert finals
+        assert finals[-1].reason == "max_turns"
+        assert "length recovery exhausted" in finals[-1].message
     finally:
         journal.reset()
 

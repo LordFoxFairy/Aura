@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
@@ -20,8 +20,17 @@ from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
 from aura.core.persistence.storage import SessionStorage
 from aura.core.registry import ToolRegistry
-from aura.schemas.events import AgentEvent, Final, ToolCallCompleted, ToolCallStarted
+from aura.schemas.events import (
+    AgentEvent,
+    Final,
+    ToolCallCompleted,
+    ToolCallProgress,
+    ToolCallStarted,
+)
+from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
+from aura.tools.progress import get_progress_callback
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 
 
@@ -118,9 +127,11 @@ async def test_run_turn_tool_call_event_contents() -> None:
     completed = next(e for e in events if isinstance(e, ToolCallCompleted))
 
     assert started.name == "echo"
+    assert started.id == "tc_1"
     assert started.input == {"msg": "hi"}
 
     assert completed.name == "echo"
+    assert completed.id == "tc_1"
     assert completed.output == {"echoed": "hi"}
     assert completed.error is None
 
@@ -142,6 +153,146 @@ async def test_run_turn_tool_call_output_serialized_as_json() -> None:
     assert isinstance(tool_msg_content, str)
     parsed = json.loads(tool_msg_content)
     assert parsed == {"echoed": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_post_tool_rewrite_updates_event_and_tool_message() -> None:
+    async def rewrite_success(
+        *,
+        tool: BaseTool,
+        args: dict[str, Any],
+        result: ToolResult,
+        state: LoopState,
+        **_: object,
+    ) -> ToolResult:
+        assert result.ok is True
+        return ToolResult(
+            ok=True,
+            output={"rewritten": True, "tool": tool.name, "msg": args["msg"]},
+        )
+
+    model, registry = _make_model_and_registry()
+    loop = AgentLoop(
+        model=model,
+        registry=registry,
+        context=make_minimal_context(),
+        hooks=HookChain(post_tool=[rewrite_success]),
+    )
+
+    events: list[AgentEvent] = []
+    history: list[BaseMessage] = [HumanMessage(content="call echo")]
+    async for ev in loop.run_turn(history=history):
+        events.append(ev)
+
+    completed = next(e for e in events if isinstance(e, ToolCallCompleted))
+    expected = {"rewritten": True, "tool": "echo", "msg": "hi"}
+    assert completed.output == expected
+    assert completed.error is None
+
+    tool_msg = next(msg for msg in history if isinstance(msg, ToolMessage))
+    assert tool_msg.tool_call_id == "tc_1"
+    assert tool_msg.status == "success"
+    assert json.loads(str(tool_msg.content)) == expected
+
+
+@pytest.mark.asyncio
+async def test_parallel_progress_callbacks_are_task_local() -> None:
+    class _NoParams(BaseModel):
+        pass
+
+    alpha_emitted = asyncio.Event()
+    beta_emitted = asyncio.Event()
+    beta_finished = asyncio.Event()
+
+    async def alpha_progress() -> dict[str, str]:
+        cb = get_progress_callback()
+        assert cb is not None
+        cb("stdout", "alpha-stdout-1\n")
+        alpha_emitted.set()
+        await beta_finished.wait()
+        cb("stderr", "alpha-stderr-2\n")
+        return {"tool": "alpha"}
+
+    async def beta_progress() -> dict[str, str]:
+        await alpha_emitted.wait()
+        cb = get_progress_callback()
+        assert cb is not None
+        cb("stdout", "beta-stdout-1\n")
+        beta_emitted.set()
+        await asyncio.sleep(0)
+        cb("stderr", "beta-stderr-2\n")
+        beta_finished.set()
+        return {"tool": "beta"}
+
+    alpha_tool = build_tool(
+        name="alpha_progress",
+        description="emits alpha progress",
+        args_schema=_NoParams,
+        coroutine=alpha_progress,
+        is_read_only=True,
+        is_concurrency_safe=True,
+    )
+    beta_tool = build_tool(
+        name="beta_progress",
+        description="emits beta progress",
+        args_schema=_NoParams,
+        coroutine=beta_progress,
+        is_read_only=True,
+        is_concurrency_safe=True,
+    )
+    tool_calls = [
+        {"name": "alpha_progress", "args": {}, "id": "tc_alpha"},
+        {"name": "beta_progress", "args": {}, "id": "tc_beta"},
+    ]
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(content="", tool_calls=tool_calls)),
+        FakeTurn(message=AIMessage(content="done")),
+    ])
+    loop = AgentLoop(
+        model=model,
+        registry=ToolRegistry([alpha_tool, beta_tool]),
+        context=make_minimal_context(),
+        hooks=HookChain(),
+    )
+
+    events: list[AgentEvent] = []
+    history: list[BaseMessage] = [HumanMessage(content="go")]
+    async for ev in loop.run_turn(history=history):
+        events.append(ev)
+
+    progress = [e for e in events if isinstance(e, ToolCallProgress)]
+    completed = [e for e in events if isinstance(e, ToolCallCompleted)]
+
+    assert [e.name for e in completed] == ["alpha_progress", "beta_progress"]
+    assert [e.id for e in completed] == ["tc_alpha", "tc_beta"]
+    assert len(progress) == 4
+    assert [e.name for e in progress] == [
+        "alpha_progress",
+        "beta_progress",
+        "beta_progress",
+        "alpha_progress",
+    ]
+    assert [e.id for e in progress] == [
+        "tc_alpha",
+        "tc_beta",
+        "tc_beta",
+        "tc_alpha",
+    ]
+    chunks_by_name = {(e.name, e.stream, e.chunk) for e in progress}
+    assert chunks_by_name == {
+        ("alpha_progress", "stdout", "alpha-stdout-1\n"),
+        ("alpha_progress", "stderr", "alpha-stderr-2\n"),
+        ("beta_progress", "stdout", "beta-stdout-1\n"),
+        ("beta_progress", "stderr", "beta-stderr-2\n"),
+    }
+
+    first_progress_index = next(
+        i for i, e in enumerate(events) if isinstance(e, ToolCallProgress)
+    )
+    first_completed_index = next(
+        i for i, e in enumerate(events) if isinstance(e, ToolCallCompleted)
+    )
+    assert first_progress_index < first_completed_index
 
 
 @pytest.mark.asyncio

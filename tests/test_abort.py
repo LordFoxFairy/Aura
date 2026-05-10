@@ -114,6 +114,58 @@ async def test_abort_mid_batch_synthesizes_tool_messages() -> None:
 
 
 @pytest.mark.asyncio
+async def test_external_cancel_stops_in_flight_tool_coroutines() -> None:
+    class _P(BaseModel):
+        pass
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    side_effects: list[str] = []
+
+    async def _slow_side_effect() -> dict[str, Any]:
+        started.set()
+        try:
+            await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        side_effects.append("ran")
+        return {"ok": True}
+
+    slow_tool = build_tool(
+        name="slow_side_effect",
+        description="slow side effect",
+        args_schema=_P,
+        coroutine=_slow_side_effect,
+        is_read_only=True,
+        is_concurrency_safe=True,
+    )
+    tool_calls = [{"name": "slow_side_effect", "args": {}, "id": "tc_slow"}]
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(content="", tool_calls=tool_calls)),
+    ])
+    loop_obj = AgentLoop(
+        model=model, registry=ToolRegistry([slow_tool]),
+        context=make_minimal_context(), hooks=HookChain(),
+    )
+    history: list[BaseMessage] = [HumanMessage(content="go")]
+
+    async def _drive() -> None:
+        async for _ in loop_obj.run_turn(history=history):
+            pass
+
+    drive_task = asyncio.create_task(_drive())
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    drive_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await drive_task
+
+    await asyncio.wait_for(cancelled.wait(), timeout=1.0)
+    await asyncio.sleep(0)
+    assert side_effects == []
+
+
+@pytest.mark.asyncio
 async def test_abort_before_any_ai_message_rolls_back_user_turn(
     tmp_path: Path,
 ) -> None:
@@ -159,6 +211,77 @@ async def test_abort_before_any_ai_message_rolls_back_user_turn(
     ), f"user turn should have been rolled back; persisted={persisted}"
 
     # And the cancel flow yielded a Final reason="aborted".
+    finals = [e for e in events if isinstance(e, Final)]
+    assert finals and finals[-1].reason == "aborted"
+    await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_abort_between_tool_batch_and_next_model_persists_balanced_history(
+    tmp_path: Path,
+) -> None:
+    class _P(BaseModel):
+        pass
+
+    async def _quick() -> dict[str, Any]:
+        return {"ok": True}
+
+    quick_tool = build_tool(
+        name="quick",
+        description="return immediately",
+        args_schema=_P,
+        coroutine=_quick,
+        is_read_only=True,
+        is_concurrency_safe=True,
+    )
+    cfg = _make_config()
+    cfg.tools.enabled = ["quick"]
+    tool_calls = [{"name": "quick", "args": {}, "id": "tc_quick"}]
+    model = FakeChatModel(turns=[
+        FakeTurn(message=AIMessage(content="", tool_calls=tool_calls)),
+    ])
+    second_model_started = asyncio.Event()
+    orig_agenerate = model._agenerate
+
+    async def _first_then_hang(messages: list[BaseMessage], **kw: Any) -> Any:
+        if model.ainvoke_calls == 0:
+            return await orig_agenerate(messages, **kw)
+        model.__dict__["ainvoke_calls"] += 1
+        second_model_started.set()
+        await asyncio.sleep(10.0)
+        raise RuntimeError("should have aborted")
+
+    object.__setattr__(model, "_agenerate", _first_then_hang)
+    agent = Agent(
+        config=cfg,
+        model=model,
+        storage=SessionStorage(tmp_path / "db"),
+        available_tools={"quick": quick_tool},
+    )
+
+    async def _drive() -> list[AgentEvent]:
+        events: list[AgentEvent] = []
+        async for ev in agent.astream("run quick"):
+            events.append(ev)
+        return events
+
+    drive_task = asyncio.create_task(_drive())
+    await asyncio.wait_for(second_model_started.wait(), timeout=2.0)
+    assert agent.current_abort is not None
+    agent.current_abort.abort("user_ctrl_c")
+    events = await asyncio.wait_for(drive_task, timeout=3.0)
+
+    persisted = agent._storage.load(agent.session_id)
+    ai_with_tools = [
+        m for m in persisted
+        if isinstance(m, AIMessage) and m.tool_calls
+    ]
+    assert len(ai_with_tools) == 1
+    tool_msgs = [m for m in persisted if isinstance(m, ToolMessage)]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0].tool_call_id == "tc_quick"
+    assert tool_msgs[0].status == "success"
+    assert tool_msgs[0].content == '{"ok": true}'
     finals = [e for e in events if isinstance(e, Final)]
     assert finals and finals[-1].reason == "aborted"
     await agent.aclose()

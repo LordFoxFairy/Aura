@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
@@ -44,7 +44,7 @@ from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
 from aura.core.persistence import journal
 from aura.core.registry import ToolRegistry
-from aura.schemas.events import ToolCallCompleted
+from aura.schemas.events import Final, ToolCallCompleted
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
@@ -52,6 +52,21 @@ from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 
 class _NoArgs(BaseModel):
     pass
+
+
+class _RecordingFakeChatModel(FakeChatModel):
+    def __init__(self, turns: list[FakeTurn] | None = None, **kwargs: Any) -> None:
+        super().__init__(turns=turns, **kwargs)
+
+    @property
+    def seen_messages(self) -> list[list[BaseMessage]]:
+        return self.__dict__.setdefault("seen_messages", [])  # type: ignore[no-any-return]
+
+    async def _agenerate(
+        self, messages: list[BaseMessage], *args: Any, **kwargs: Any,
+    ) -> Any:
+        self.seen_messages.append(list(messages))
+        return await super()._agenerate(messages, *args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +225,67 @@ async def test_batch_timeout_preserves_completed_results(
     assert j["cancelled_count"] == 1
     assert j["cancelled_tool_call_ids"] == ["tc_slow"]
     assert j["completed_tool_call_ids"] == ["tc_fast"]
+
+
+@pytest.mark.asyncio
+async def test_batch_timeout_appends_balanced_tool_messages_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mixed fast/slow tools append one ToolMessage per call before Final."""
+    monkeypatch.setenv("AURA_BATCH_TIMEOUT_SEC", "60")
+    log_path = tmp_path / "audit.jsonl"
+    journal.configure(log_path)
+
+    fast = _fast_tool("fast_a")
+    slow = _slow_tool("slow_b", sleep_s=2.0)
+    tcs = [
+        {"name": "fast_a", "args": {}, "id": "tc_fast"},
+        {"name": "slow_b", "args": {}, "id": "tc_slow"},
+    ]
+    model = _RecordingFakeChatModel(turns=[
+        FakeTurn(message=AIMessage(content="", tool_calls=tcs)),
+        FakeTurn(message=AIMessage(content="done")),
+    ])
+    loop = AgentLoop(
+        model=model,
+        registry=ToolRegistry([fast, slow]),
+        context=make_minimal_context(),
+        hooks=HookChain(),
+        session_id="batch-timeout-balanced-history",
+        batch_timeout_sec=0.1,
+    )
+    history: list[BaseMessage] = [HumanMessage(content="go")]
+
+    completed: list[ToolCallCompleted] = []
+    finals: list[Final] = []
+    async for ev in loop.run_turn(history=history):
+        if isinstance(ev, ToolCallCompleted):
+            completed.append(ev)
+        if isinstance(ev, Final):
+            finals.append(ev)
+
+    assert [ev.name for ev in completed] == ["fast_a", "slow_b"]
+    assert completed[0].error is None
+    assert completed[1].error is not None
+    assert "batch timeout" in completed[1].error
+    assert [ev.message for ev in finals] == ["done"]
+
+    assert model.ainvoke_calls == 2
+    assert len(model.seen_messages) == 2
+    second_turn_messages = model.seen_messages[1]
+    tool_messages = [
+        msg for msg in second_turn_messages if isinstance(msg, ToolMessage)
+    ]
+    assert [msg.tool_call_id for msg in tool_messages] == ["tc_fast", "tc_slow"]
+    assert [msg.status for msg in tool_messages] == ["success", "error"]
+    assert "batch timeout" in str(tool_messages[1].content)
+
+    persisted_tool_messages = [
+        msg for msg in history if isinstance(msg, ToolMessage)
+    ]
+    assert [msg.tool_call_id for msg in persisted_tool_messages] == [
+        "tc_fast", "tc_slow",
+    ]
 
 
 @pytest.mark.asyncio

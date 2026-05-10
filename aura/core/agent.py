@@ -30,6 +30,7 @@ from aura.core.compact.constants import (
     AUTO_COMPACT_THRESHOLD,
     auto_compact_threshold_for,
 )
+from aura.core.compact.legacy_adapter import LegacyCompactor
 from aura.core.hooks import HookChain
 from aura.core.hooks.bash_safety import make_bash_safety_hook
 from aura.core.hooks.budget import default_hooks
@@ -831,59 +832,15 @@ class Agent:
             # Auto-compact post-turn. Deliberately AFTER save + astream_end
             # so the summary turn sees a stable, already-persisted history
             # and we don't interleave compact I/O with the caller's yield
-            # stream. Zero threshold disables; any positive value arms it.
-            # Char-based estimator fallback (Bug 2 fix #2) so providers that
-            # don't populate ``usage_metadata`` (DashScope 1261, some Ollama)
-            # still arm the trigger.
-            effective_threshold = self._effective_auto_compact_threshold()
-            if effective_threshold > 0:
-                used = self._state.total_tokens_used
-                used_estimator = used == 0
-                if used_estimator:
-                    used = self._estimate_history_tokens(history)
-                if used > effective_threshold:
-                    # F-0910-002 circuit breaker: skip auto-compact after 3
-                    # consecutive failures so a permanently-broken summary
-                    # turn can't burn provider quota every turn. Manual
-                    # /compact bypasses this — see Agent.compact().
-                    failures = self._state.slots.consecutive_compact_failures
-                    if failures >= 3:
-                        journal.write(
-                            "auto_compact_skipped_circuit_breaker",
-                            session=self._session_id,
-                            tokens=used,
-                            threshold=effective_threshold,
-                            consecutive_failures=failures,
-                            used_estimator=used_estimator,
-                        )
-                    else:
-                        journal.write(
-                            "auto_compact_triggered",
-                            session=self._session_id,
-                            tokens=used,
-                            threshold=effective_threshold,
-                            used_estimator=used_estimator,
-                        )
-                        try:
-                            await self.compact(source="auto")
-                        except Exception as exc:  # noqa: BLE001
-                            new_failures = failures + 1
-                            self._state.slots = dataclasses.replace(
-                                self._state.slots,
-                                consecutive_compact_failures=new_failures,
-                            )
-                            journal.write(
-                                "auto_compact_failed",
-                                session=self._session_id,
-                                error=str(exc),
-                                consecutive_failures=new_failures,
-                            )
-                            raise
-                        else:
-                            self._state.slots = dataclasses.replace(
-                                self._state.slots,
-                                consecutive_compact_failures=0,
-                            )
+            # stream. Phase 1 §3.3: routed through the Compactor Protocol
+            # so threshold check, circuit breaker, and run_compact all live
+            # on one named call site. The adapter mirrors the pre-Phase-1
+            # journal events exactly; behavior is unchanged.
+            await self._compactor.auto(
+                history,
+                self._state.slots,
+                model=self._current_model_spec,
+            )
 
     def switch_model(self, spec: str) -> None:
         """Swap the live model. Raises ``AuraConfigError`` on failure.
@@ -1487,6 +1444,18 @@ class Agent:
             )
         else:
             policy = None
+        # Phase 1 §3.3: build a fresh LegacyCompactor every time so a
+        # ``switch_model`` (which rebuilds the loop) gets a compactor
+        # whose microcompact policy reflects the current Agent config.
+        # Stored on ``self._compactor`` so the post-turn auto-compact
+        # site in :meth:`astream` can reach it without going through
+        # the loop.
+        self._compactor = LegacyCompactor(
+            self,
+            microcompact_policy=policy,
+            session_id=self._session_id,
+            turn_provider=lambda: self._state.turn_count,
+        )
         return AgentLoop(
             model=self._model,
             registry=self._registry,
@@ -1497,6 +1466,7 @@ class Agent:
             session_id=self._session_id,
             microcompact_policy=policy,
             compact_callback=self._reactive_compact_callback,
+            compactor=self._compactor,
         )
 
     async def _reactive_compact_callback(

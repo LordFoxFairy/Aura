@@ -24,7 +24,7 @@ from pydantic import BaseModel, ValidationError
 
 from aura.config.schema import RetryConfig
 from aura.core.abort import AbortController, AbortException, current_abort_signal
-from aura.core.compact import MicrocompactPolicy, apply_microcompact
+from aura.core.compact import Compactor, MicrocompactPolicy, apply_microcompact
 from aura.core.hooks import HookChain
 from aura.core.memory.context import Context
 from aura.core.permissions.decision import Decision
@@ -237,6 +237,7 @@ class AgentLoop:
         compact_callback: Callable[
             [list[BaseMessage]], Awaitable[None]
         ] | None = None,
+        compactor: Compactor | None = None,
     ) -> None:
         self._registry = registry
         self._hooks = hooks or HookChain()
@@ -280,6 +281,14 @@ class AgentLoop:
         # ``None`` keeps the legacy "raise to caller" behaviour for tests
         # that drive AgentLoop directly without an Agent.
         self._compact_callback = compact_callback
+        # Phase 1 §3.3 — Compactor Protocol entry point. When supplied
+        # (Agent always supplies a :class:`LegacyCompactor`), the loop
+        # routes microcompact + reactive compaction through this
+        # interface instead of the legacy direct paths. Tests that drive
+        # AgentLoop without an Agent leave this ``None`` and the legacy
+        # ``microcompact_policy`` + ``compact_callback`` paths still
+        # work as before.
+        self._compactor = compactor
 
     def _rebind_tools(self, tools: list[BaseTool]) -> None:
         """Rebind the loop's model with an updated tool set.
@@ -522,8 +531,16 @@ class AgentLoop:
             # the outgoing prompt is trimmed. Matches claude-code's
             # ``messagesForQuery`` semantic (query.ts:412-468). We rebind
             # the LOCAL ``messages`` only — ``history`` (Agent-owned,
-            # persisted in storage) is never touched here.
-            if self._microcompact_policy is not None:
+            # persisted in storage) is never touched here. Phase 1 §3.3:
+            # when a :class:`Compactor` is wired (production path via
+            # Agent), route through ``compactor.microcompact``; tests
+            # that drive AgentLoop without an Agent fall back to the
+            # legacy direct ``apply_microcompact`` call.
+            if self._compactor is not None:
+                messages = await self._compactor.microcompact(
+                    messages, self._state.slots,
+                )
+            elif self._microcompact_policy is not None:
                 mc_result = apply_microcompact(
                     messages, self._microcompact_policy,
                 )
@@ -551,8 +568,18 @@ class AgentLoop:
                 ai = await self._invoke_with_retry(messages)
                 break
             except Exception as exc:
+                # Phase 1 §3.3: prefer the Compactor's reactive path
+                # when wired (production via Agent); fall back to the
+                # legacy ``compact_callback`` for AgentLoop-direct
+                # tests. Both branches gate on ``_is_context_overflow``
+                # + the recompact attempt cap so a permanently-
+                # overflowing prompt cannot loop forever.
+                has_reactive_path = (
+                    self._compactor is not None
+                    or self._compact_callback is not None
+                )
                 if (
-                    self._compact_callback is None
+                    not has_reactive_path
                     or not _is_context_overflow(exc)
                     or recompact_attempts >= self._MAX_REACTIVE_COMPACT
                 ):
@@ -565,7 +592,13 @@ class AgentLoop:
                     attempt=recompact_attempts,
                     error=str(exc),
                 )
-                await self._compact_callback(history)
+                if self._compactor is not None:
+                    await self._compactor.reactive(
+                        history, self._state.slots,
+                    )
+                else:
+                    assert self._compact_callback is not None
+                    await self._compact_callback(history)
                 # Loop continues: rebuild messages from the new
                 # (compacted) history and retry ainvoke.
         # F-01-005 — partial-response recovery. If the response was cut off

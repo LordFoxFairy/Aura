@@ -20,21 +20,44 @@ from aura.schemas.events import (
     ToolCallCompleted,
     ToolCallStarted,
 )
-from aura.schemas.permissions import PermissionsConfig, StatusLineConfig
-from aura.schemas.state import LoopState
+from aura.schemas.permissions import (
+    Allow,
+    Ask,
+    Block,
+    Outcome,
+    PermissionsConfig,
+    Replace,
+    StatusLineConfig,
+)
+from aura.schemas.state import (
+    LoopSlots,
+    LoopState,
+    PermissionKey,
+    SkillRestrictLease,
+    TokenStats,
+)
 from aura.schemas.todos import TodoItem, TodoStatus
 from aura.schemas.tool import ToolError, ToolResult, tool_metadata
 
 __all__ = [
     "AgentEvent",
+    "Allow",
+    "Ask",
     "AssistantDelta",
+    "Block",
     "Final",
+    "LoopSlots",
     "LoopState",
+    "Outcome",
     "PermissionAudit",
+    "PermissionKey",
     "PermissionsConfig",
+    "Replace",
+    "SkillRestrictLease",
     "StatusLineConfig",
     "TodoItem",
     "TodoStatus",
+    "TokenStats",
     "ToolCallCompleted",
     "ToolCallStarted",
     "ToolError",

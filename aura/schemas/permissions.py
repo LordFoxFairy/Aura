@@ -1,16 +1,32 @@
-"""On-disk permissions schema — neutral leaf type.
+"""On-disk permissions schema + the Phase-1 :class:`Outcome` tagged union.
 
 Lives in ``aura.schemas`` (the dependency-free leaf layer) so both
 ``aura.config.schema`` and ``aura.core.permissions.store`` can depend on
 it without creating a cycle. See ``aura/schemas/__init__.py`` for the
-invariant: nothing under this package imports any other ``aura`` module.
+invariant: nothing under this package imports any other ``aura`` module
+**at runtime**. The Phase 1 :class:`Outcome` variants reference
+``Decision`` and ``ToolResult`` only via :data:`typing.TYPE_CHECKING`
+imports + ``from __future__ import annotations`` so the runtime import
+graph stays acyclic.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from aura.schemas.tool import ToolResult
+
+if TYPE_CHECKING:
+    # ``Decision`` lives under ``aura.core.permissions.decision``;
+    # importing it at runtime would break the ``aura.schemas`` leaf
+    # invariant. The annotations below resolve via PEP 563 (string
+    # form) — ``__post_init__`` only does attribute access
+    # (``decision.allow``), never an ``isinstance`` check, so the
+    # actual class is never needed at module import time.
+    from aura.core.permissions.decision import Decision
 
 
 class StatusLineConfig(BaseModel):
@@ -79,3 +95,108 @@ class PermissionsConfig(BaseModel):
             "loud error at startup. Use in shared / CI / compliance environments."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 — :class:`Outcome` tagged union (spec §3.2).
+#
+# Replaces the ``PreToolOutcome(short_circuit, decision, ask)`` triple
+# with one of four variants. The loop pattern-matches on the variant;
+# audit consumers read one channel. Hook authors migrate in Tasks 8-10.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Allow:
+    """Permission hook chose to let the tool run.
+
+    Carries the :class:`Decision` so audit consumers can see *why* (rule
+    match, mode bypass, user accept, etc.). Invariant —
+    ``decision.allow`` MUST be ``True``; constructing :class:`Allow`
+    with a deny decision is a category error and raises immediately.
+    """
+
+    decision: Decision
+
+    def __post_init__(self) -> None:
+        if not self.decision.allow:
+            raise ValueError(
+                "Allow requires a Decision with allow=True; "
+                f"got reason={self.decision.reason!r}, allow=False"
+            )
+
+
+@dataclass(frozen=True)
+class Block:
+    """Permission hook chose to deny the tool call outright.
+
+    The loop appends a synthetic ``ToolMessage`` carrying
+    ``decision.audit_line()`` so the model sees the deny reason on the
+    next turn. Invariant — ``decision.allow`` MUST be ``False``.
+    """
+
+    decision: Decision
+
+    def __post_init__(self) -> None:
+        if self.decision.allow:
+            raise ValueError(
+                "Block requires a Decision with allow=False; "
+                f"got reason={self.decision.reason!r}, allow=True"
+            )
+
+
+@dataclass(frozen=True)
+class Ask:
+    """Permission hook escalated the decision to the user via the asker.
+
+    ``reason`` is a human-readable label rendered above the prompt
+    (e.g. ``"destructive bash command"``). Empty / whitespace reasons
+    are rejected at construction so the asker widget never has to
+    handle an unrenderable label.
+
+    The loop translates the user's :class:`AskerResponse` into a fresh
+    :class:`Decision` and recurses into :class:`Allow` or :class:`Block`.
+    """
+
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.reason or not self.reason.strip():
+            raise ValueError("Ask requires a non-empty reason")
+
+
+@dataclass(frozen=True)
+class Replace:
+    """Permission hook substituted a synthetic result; the tool is NOT invoked.
+
+    Used today by the bash-safety + restrict-tools paths to inject a
+    canned error payload back to the model without ever touching the
+    underlying tool. Invariants — ``result is not None`` AND
+    ``decision.allow`` MUST be ``False`` (the tool was prevented, even
+    though we're substituting output rather than raising).
+    """
+
+    result: ToolResult
+    decision: Decision
+
+    def __post_init__(self) -> None:
+        if self.result is None:
+            raise ValueError("Replace requires a non-None ToolResult")
+        if self.decision.allow:
+            raise ValueError(
+                "Replace requires a Decision with allow=False "
+                "(tool was not invoked); "
+                f"got reason={self.decision.reason!r}, allow=True"
+            )
+
+
+# Tagged union — the four variants above are the only legal returns of
+# a Phase-1 ``pre_tool`` hook. Pattern-match on the variant in the loop:
+#
+#     match outcome:
+#         case Allow(decision=d):  ...
+#         case Block(decision=d):  ...
+#         case Ask(reason=r):      ...
+#         case Replace(result=r, decision=d): ...
+#
+Outcome = Allow | Block | Ask | Replace

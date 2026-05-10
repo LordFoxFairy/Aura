@@ -1,9 +1,123 @@
-"""对话生命周期的累计状态 — 随 AgentLoop 共享引用，跨 turn 存活。"""
+"""对话生命周期的累计状态 — 随 AgentLoop 共享引用，跨 turn 存活。
+
+Phase 1 — Loop redesign — introduces :class:`LoopSlots` plus the
+supporting frozen data types (:class:`TokenStats`,
+:class:`SkillRestrictLease`). These replace the untyped
+``state.custom: dict[str, Any]`` scratchpad. The ``custom`` field
+stays in :class:`LoopState` for now; Tasks 3-7 migrate consumers
+key-by-key, then Task 7 deletes it.
+
+Type-only references (``Denial``, ``AskerResponse``) are
+``TYPE_CHECKING`` imports so the leaf invariant — *nothing under
+``aura/schemas`` imports any other ``aura`` module at runtime* —
+remains intact (`aura/schemas/__init__.py` enforces this by
+construction).
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeAlias
+
+from aura.schemas.todos import TodoItem
+
+if TYPE_CHECKING:
+    # Type-only references — kept out of runtime imports to preserve
+    # the ``aura.schemas`` leaf invariant. Tasks 3-6 wire the actual
+    # writers; until then these annotations only document intent.
+    from aura.core.hooks.permission import AskerResponse
+    from aura.core.permissions.denials import PermissionDenial as Denial
+
+
+# A canonical signature string (`<tool_name>::<json-args>`) used by the
+# permission hook's per-turn ResolveOnce dedup cache. Today it's a
+# ``str`` produced by ``aura.core.hooks.permission._dedup_key``;
+# promoting to a TypeAlias documents the contract without forcing
+# every consumer through a wrapper.
+PermissionKey: TypeAlias = str
+
+
+@dataclass(frozen=True)
+class TokenStats:
+    """Per-session cumulative + last-turn token usage.
+
+    Mirrors the dict shape today's :func:`aura.core.hooks.budget.make_usage_tracking_hook`
+    writes into ``state.custom["_token_stats"]`` (Task 3 migrates the
+    writer + the four readers to this typed slot). All fields default
+    to zero so the empty :class:`TokenStats` is a valid starting state.
+
+    Frozen so a stale snapshot held by the renderer cannot retroactively
+    re-attribute tokens to a different turn — the writer ``replace``-s
+    on every update.
+    """
+
+    last_input_tokens: int = 0
+    last_output_tokens: int = 0
+    last_cache_read_tokens: int = 0
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    turn_count: int = 0
+
+
+@dataclass(frozen=True)
+class SkillRestrictLease:
+    """Public counterpart of the runtime ``_RestrictEntry`` in
+    :mod:`aura.core.skills.restrict`.
+
+    Phase 1 introduces the public type so :class:`LoopSlots` can name
+    it; Task 6 migrates the skill loader (writer) and the permission
+    hook (reader) onto this type and retires ``_RestrictEntry``.
+
+    Frozen — once a lease is recorded, its install turn and whitelist
+    must not mutate (audit consumers must see the value at install
+    time, not a later overwrite).
+    """
+
+    install_turn: int
+    tools: frozenset[str]
+
+
+@dataclass(frozen=True)
+class LoopSlots:
+    """Typed replacement for ``LoopState.custom: dict[str, Any]``.
+
+    Spec §3.1 — exactly 11 named slots, one writer per slot. Frozen so
+    the slot identity is stable across the turn (the loop refers to
+    ``state.slots`` once at turn-start and trusts the value); mutations
+    flow through :func:`dataclasses.replace`. Mutable container fields
+    (lists, dicts) may still be mutated in place — ``frozen=True`` only
+    blocks rebinding the attribute, not in-place ``list.append`` or
+    ``list.clear`` on the contained collection. This is intentional and
+    matches spec §4 step 1 (``slots.turn_denials.clear()`` at turn
+    start).
+
+    Field ownership (one writer per slot — see spec §3.1 migration map):
+
+    - ``token_stats``                  — :func:`make_usage_tracking_hook`
+    - ``turn_denials``                 — :func:`make_permission_hook`
+    - ``todos``                        — ``todo_write`` tool
+    - ``ask_pending``                  — :class:`HookChain`
+    - ``perm_dedup_cache``             — :func:`make_permission_hook`
+    - ``preserved_invoked_skills``     — :class:`Compactor`
+    - ``invoked_skills``               — :meth:`Context.record_skill_invocation`
+    - ``consecutive_compact_failures`` — :class:`Compactor`
+    - ``active_team``                  — ``/team`` slash commands
+    - ``mood``                         — buddy ``pre_model`` hook
+    - ``skill_restrict_lease``         — skill loader (`install_restrict_lease`)
+    """
+
+    token_stats: TokenStats = field(default_factory=TokenStats)
+    turn_denials: list[Denial] = field(default_factory=list)
+    todos: list[TodoItem] = field(default_factory=list)
+    ask_pending: bool = False
+    perm_dedup_cache: dict[PermissionKey, AskerResponse] = field(default_factory=dict)
+    preserved_invoked_skills: list[str] = field(default_factory=list)
+    invoked_skills: list[str] = field(default_factory=list)
+    consecutive_compact_failures: int = 0
+    active_team: str | None = None
+    mood: str = "neutral"
+    skill_restrict_lease: SkillRestrictLease | None = None
 
 
 @dataclass
@@ -32,6 +146,11 @@ class LoopState:
     # :class:`aura.core.hooks.PreToolOutcome` direct-return. New
     # lifecycle data should ride typed return values, not a dict slot
     # here.
+    #
+    # Phase 1 deprecation note: ``custom`` is being migrated to
+    # :class:`LoopSlots` key-by-key (Tasks 3-6) and removed in Task 7.
+    # New code MUST NOT add keys here; use a typed slot on
+    # :class:`LoopSlots` instead.
     custom: dict[str, Any] = field(default_factory=dict)
 
     def reset(self) -> None:

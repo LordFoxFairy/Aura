@@ -1,0 +1,172 @@
+"""Tests for ``LoopSlots`` and its supporting frozen dataclasses.
+
+Phase 1 Task 1 — schema contracts only. Migration of existing
+``state.custom`` consumers happens in Tasks 3-6; these tests assert the
+type shape, defaults, frozenness, and the ``replace`` ergonomic.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+
+import pytest
+
+from aura.schemas.state import (
+    LoopSlots,
+    SkillRestrictLease,
+    TokenStats,
+)
+from aura.schemas.todos import TodoItem
+
+
+def test_loop_slots_constructible_with_defaults() -> None:
+    """``LoopSlots()`` returns a usable, fully-defaulted instance.
+
+    Spec §3.1 — every field has a default that yields an empty/zero
+    starting state, so the loop can construct fresh ``LoopSlots``
+    without arguments at session start.
+    """
+    slots = LoopSlots()
+
+    assert slots.token_stats == TokenStats()
+    assert slots.turn_denials == []
+    assert slots.todos == []
+    assert slots.ask_pending is False
+    assert slots.perm_dedup_cache == {}
+    assert slots.preserved_invoked_skills == []
+    assert slots.invoked_skills == []
+    assert slots.consecutive_compact_failures == 0
+    assert slots.active_team is None
+    assert slots.mood == "neutral"
+    assert slots.skill_restrict_lease is None
+
+
+def test_loop_slots_has_eleven_fields_per_spec() -> None:
+    """Spec §3.1 lists exactly 11 named fields. No extras, no missing."""
+    expected = {
+        "token_stats",
+        "turn_denials",
+        "todos",
+        "ask_pending",
+        "perm_dedup_cache",
+        "preserved_invoked_skills",
+        "invoked_skills",
+        "consecutive_compact_failures",
+        "active_team",
+        "mood",
+        "skill_restrict_lease",
+    }
+    actual = {f.name for f in dataclasses.fields(LoopSlots)}
+    assert actual == expected
+
+
+def test_loop_slots_is_frozen() -> None:
+    """``LoopSlots`` is a frozen dataclass — direct field assignment
+    raises ``FrozenInstanceError``. Mutation flows through
+    ``dataclasses.replace`` (or in-place mutation of contained
+    mutable collections, which is intentional)."""
+    slots = LoopSlots()
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        slots.ask_pending = True  # type: ignore[misc]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        slots.mood = "happy"  # type: ignore[misc]
+
+
+def test_loop_slots_replace_returns_new_instance() -> None:
+    """``dataclasses.replace`` is the supported way to override a field
+    while keeping the frozen invariant. Returns a NEW instance; old
+    instance is untouched."""
+    original = LoopSlots()
+    updated = dataclasses.replace(original, ask_pending=True, mood="busy")
+
+    assert updated.ask_pending is True
+    assert updated.mood == "busy"
+    # Original untouched.
+    assert original.ask_pending is False
+    assert original.mood == "neutral"
+    # Different instances.
+    assert updated is not original
+
+
+def test_loop_slots_default_factories_isolate_per_instance() -> None:
+    """Mutable defaults (lists, dicts) must use ``field(default_factory=...)``;
+    if they used a shared default, two ``LoopSlots()`` instances would
+    alias their containers and mutating one would leak into the other."""
+    a = LoopSlots()
+    b = LoopSlots()
+
+    a.turn_denials.append("sentinel")  # type: ignore[arg-type]
+    a.todos.append(TodoItem(content="x", status="pending", active_form="x"))
+    a.perm_dedup_cache["k"] = "v"  # type: ignore[assignment]
+    a.invoked_skills.append("skill_a")
+    a.preserved_invoked_skills.append("preserved_a")
+
+    assert b.turn_denials == []
+    assert b.todos == []
+    assert b.perm_dedup_cache == {}
+    assert b.invoked_skills == []
+    assert b.preserved_invoked_skills == []
+
+
+def test_loop_slots_collections_mutable_in_place_under_frozen() -> None:
+    """``frozen=True`` blocks rebinding the slot itself but does NOT
+    block mutating the contained list/dict. The loop relies on this:
+    ``slots.turn_denials.clear()`` (§4 step 1) must work even though
+    ``LoopSlots`` is frozen.
+    """
+    slots = LoopSlots()
+    slots.turn_denials.append("d1")  # type: ignore[arg-type]
+    slots.turn_denials.clear()
+    assert slots.turn_denials == []
+
+
+def test_token_stats_is_frozen_and_zero_default() -> None:
+    """``TokenStats`` is a frozen dataclass; default instance is all zeros.
+
+    Field shape mirrors the dict produced by today's
+    ``make_usage_tracking_hook`` so wire/status_bar consumers see the
+    same numbers when Task 3 migrates them.
+    """
+    ts = TokenStats()
+    assert ts.last_input_tokens == 0
+    assert ts.last_output_tokens == 0
+    assert ts.last_cache_read_tokens == 0
+    assert ts.total_input_tokens == 0
+    assert ts.total_output_tokens == 0
+    assert ts.total_cache_read_tokens == 0
+    assert ts.turn_count == 0
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        ts.last_input_tokens = 5  # type: ignore[misc]
+
+
+def test_token_stats_replace_yields_new_instance() -> None:
+    ts = TokenStats()
+    bumped = dataclasses.replace(ts, last_input_tokens=42, turn_count=1)
+    assert bumped.last_input_tokens == 42
+    assert bumped.turn_count == 1
+    assert ts.last_input_tokens == 0
+    assert ts.turn_count == 0
+
+
+def test_skill_restrict_lease_is_frozen_with_required_fields() -> None:
+    """``SkillRestrictLease`` mirrors the runtime shape used today
+    (``install_turn: int, tools: frozenset[str]``). Frozen so once a
+    lease is recorded the audit shape can't be retroactively edited.
+    """
+    lease = SkillRestrictLease(install_turn=3, tools=frozenset({"read_file"}))
+    assert lease.install_turn == 3
+    assert lease.tools == frozenset({"read_file"})
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        lease.install_turn = 5  # type: ignore[misc]
+
+
+def test_loop_slots_exported_from_schemas_state_module() -> None:
+    """``LoopSlots`` must be importable from ``aura.schemas.state``
+    (its canonical home per spec §3.1)."""
+    from aura.schemas import state as state_mod
+
+    assert hasattr(state_mod, "LoopSlots")
+    assert hasattr(state_mod, "TokenStats")
+    assert hasattr(state_mod, "SkillRestrictLease")

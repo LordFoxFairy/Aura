@@ -325,6 +325,42 @@ def test_ipc_asker_feed_response_returns_false_for_missing_or_unknown_id() -> No
     assert asker.feed_response({"id": "missing", "choice": "accept"}) is False
 
 
+def test_feed_permission_response_emits_error_for_unknown_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(headless, "_emit", emitted.append)
+    asker = headless.IpcAsker()
+
+    assert headless._feed_permission_response(asker, {"id": "missing"}) is False
+    assert emitted == [{
+        "event": "error",
+        "message": "no pending permission request for id='missing'",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_ipc_asker_deny_all_pending_resolves_blocked_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(headless, "_emit", emitted.append)
+    asker = headless.IpcAsker()
+    rule = Rule("demo", None)
+
+    task = asyncio.create_task(
+        asker(tool=_make_tool(), args={"value": "x"}, rule_hint=rule),
+    )
+    await _wait_for_emitted(emitted)
+
+    assert asker.deny_all_pending(feedback="stdin_closed") == 1
+    response = await asyncio.wait_for(task, timeout=1)
+
+    assert response.choice == "deny"
+    assert response.feedback == "stdin_closed"
+    assert asker.feed_response({"id": emitted[0]["id"], "choice": "accept"}) is False
+
+
 @pytest.mark.asyncio
 async def test_run_wires_permission_deny_ask_and_disable_bypass(
     tmp_path: Path,

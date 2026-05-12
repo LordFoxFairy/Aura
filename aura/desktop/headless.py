@@ -21,7 +21,7 @@ Event shapes (all NDJSON, one per line):
 - ``{"event": "tool_call_progress", "id": "...", "name": "...",
   "stream": "stdout|stderr", "chunk": "..."}``
 - ``{"event": "tool_call_completed", "id": "...", "name": "...",
-  "output": ..., "error": str|null}``
+  "content": {"text": "...", "error": bool}}``
 - ``{"event": "permission_request", "id": "...", "tool": "...", "args": {...},
   "rule_hint": "...", "is_destructive": bool}`` — desktop permission prompt
 - ``{"event": "final", "message": "...", "reason": "..."}`` — turn ended
@@ -175,6 +175,41 @@ class IpcAsker:
         fut.set_result(payload)
         return True
 
+    def deny_all_pending(self, *, feedback: str = "permission_request_cancelled") -> int:
+        """Resolve all pending prompts as deny and return how many were closed.
+
+        Used when stdin closes while a turn is blocked in the permission
+        asker. Without this, the driver would break out of its read loop and
+        then await a turn task that can never complete because the future
+        has no remaining response channel.
+        """
+        pending = [
+            (req_id, fut)
+            for req_id, fut in self._pending.items()
+            if not fut.done()
+        ]
+        for req_id, fut in pending:
+            fut.set_result({
+                "id": req_id,
+                "choice": "deny",
+                "feedback": feedback,
+            })
+        return len(pending)
+
+
+def _feed_permission_response(asker: IpcAsker, payload: dict[str, Any]) -> bool:
+    """Feed a desktop permission response and emit an error on stale ids."""
+    if asker.feed_response(payload):
+        return True
+    _emit({
+        "event": "error",
+        "message": (
+            f"no pending permission request for id="
+            f"{payload.get('id')!r}"
+        ),
+    })
+    return False
+
 
 def _event_to_dict(event: Any) -> dict[str, Any]:
     """Compatibility wrapper for the shared Aura wire serializer."""
@@ -307,14 +342,7 @@ async def _run() -> int:
                 # while a turn is in flight (the asker is awaiting the
                 # response from inside agent.astream). Don't queue it
                 # behind the turn_task.
-                if not asker.feed_response(request):
-                    _emit({
-                        "event": "error",
-                        "message": (
-                            f"no pending permission request for id="
-                            f"{request.get('id')!r}"
-                        ),
-                    })
+                _feed_permission_response(asker, request)
                 continue
 
             if kind == "prompt":
@@ -339,7 +367,9 @@ async def _run() -> int:
                         continue
                     if not line:
                         # stdin closed mid-turn — let the turn finish
-                        # but stop reading.
+                        # but unblock any permission prompt first; otherwise
+                        # await turn_task below can hang forever.
+                        asker.deny_all_pending(feedback="stdin_closed")
                         break
                     try:
                         sub = json.loads(line.decode("utf-8").strip())
@@ -350,7 +380,7 @@ async def _run() -> int:
                         })
                         continue
                     if sub.get("kind") == "permission_response":
-                        asker.feed_response(sub)
+                        _feed_permission_response(asker, sub)
                     else:
                         _emit({
                             "event": "error",

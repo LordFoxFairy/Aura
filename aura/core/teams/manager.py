@@ -362,7 +362,6 @@ class TeamManager:
             self._member_task_ids.clear()
             self._member_agents.clear()
             self._stop_events.clear()
-            self._running_aborts.clear()
             self._teammate_terminal_intents.clear()
 
     # ------------------------------------------------------------------

@@ -96,8 +96,8 @@ async def test_team_enter_sets_active_team(tmp_path: Path) -> None:
     _install_no_runtime_manager(agent)
     cmd = TeamCommand()
     await cmd.handle("create demo", agent)
-    # /create has joined the leader; verify the entered slot was empty
-    assert agent.state.slots.active_team is None
+    # /create joins the leader and makes the new team active.
+    assert agent.state.slots.active_team == "demo"
     result = await cmd.handle("enter demo", agent)
     assert result.handled is True
     assert "entered team" in result.text
@@ -161,7 +161,7 @@ async def test_team_view_explicit_name_works_without_active(
     _install_no_runtime_manager(agent)
     cmd = TeamCommand()
     await cmd.handle("create alpha", agent)
-    # No /team enter — active_team_id stays None.
+    await cmd.handle("leave", agent)
     assert agent.state.slots.active_team is None
     result = await cmd.handle("view alpha", agent)
     assert result.kind == "view"

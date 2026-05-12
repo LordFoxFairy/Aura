@@ -396,6 +396,7 @@ class TeamCommand:
                 return "usage: /team create <name>", "print"
             record = mgr.create_team(rest)
             agent.join_team(manager=mgr)
+            _set_active_team(agent, record.team_id)
             return (
                 f"team {record.team_id!r} created (leader={agent.session_id[:8]})",
                 "print",

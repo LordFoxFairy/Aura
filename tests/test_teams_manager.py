@@ -110,6 +110,7 @@ def _mgr(
     *,
     runtime_runner: Any = _no_runtime,
     factory: SubagentFactory | None = None,
+    running_aborts: dict[str, AbortController] | None = None,
 ) -> tuple[TeamManager, SessionStorage]:
     storage = SessionStorage(tmp_path / "sessions.db")
     leader = _leader_stub(storage)
@@ -117,7 +118,7 @@ def _mgr(
         leader=leader,
         storage=storage,
         factory=factory or _factory(),
-        running_aborts={},
+        running_aborts=running_aborts if running_aborts is not None else {},
         tasks_store=TasksStore(),
         runtime_runner=runtime_runner,
     ), storage
@@ -598,6 +599,33 @@ async def test_session_cleanup_marks_teammate_task_cancelled(
 
     record = mgr._tasks_store.list(kind="teammate")[0]
     assert record.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_session_cleanup_preserves_unrelated_abort_controllers(
+    tmp_path: Path,
+) -> None:
+    running_aborts = {"unrelated-task": AbortController()}
+
+    async def parked_runtime(**kwargs: Any) -> None:
+        await kwargs["abort"].signal.wait()
+
+    mgr, _ = _mgr(
+        tmp_path,
+        runtime_runner=parked_runtime,
+        running_aborts=running_aborts,
+    )
+    mgr.create_team("alpha")
+    mgr.add_member("alice")
+    await asyncio.sleep(0)
+
+    teammate_task_ids = set(mgr._member_task_ids.values())
+    assert teammate_task_ids
+    assert teammate_task_ids.issubset(running_aborts)
+
+    await mgr.cleanup_session_teams()
+
+    assert set(running_aborts) == {"unrelated-task"}
 
 
 def test_load_round_trip(tmp_path: Path) -> None:

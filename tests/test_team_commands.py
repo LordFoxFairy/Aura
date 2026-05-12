@@ -61,6 +61,7 @@ async def test_team_create_sets_active_team(tmp_path: Path) -> None:
     result = await cmd.handle("create demo", agent)
     assert "team 'demo' created" in result.text
     assert agent.team is not None
+    assert agent.state.slots.active_team == "demo"
 
 
 @pytest.mark.asyncio

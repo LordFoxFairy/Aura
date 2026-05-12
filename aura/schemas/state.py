@@ -206,7 +206,11 @@ class ReadCarryover:
         # rebind on a frozen dataclass; this happens once at
         # construction, after which the value is permanent.
         if not isinstance(self.records, MappingProxyType):
-            object.__setattr__(self, "records", MappingProxyType(dict(self.records)))
+            normalized = {
+                path.expanduser().resolve(strict=False): record
+                for path, record in self.records.items()
+            }
+            object.__setattr__(self, "records", MappingProxyType(normalized))
 
     def is_fresh(self, path: Path) -> bool:
         """Return True iff ``path`` is in ``records`` AND the on-disk
@@ -219,16 +223,18 @@ class ReadCarryover:
         mismatch; the only path to True is "record present AND file
         unchanged on disk".
         """
-        record = self.records.get(path)
+        resolved = path.expanduser().resolve(strict=False)
+        record = self.records.get(resolved)
         if record is None:
             return False
         try:
-            stat = os.stat(path)
+            stat = os.stat(resolved)
         except OSError:
             return False
-        if stat.st_mtime > record.mtime_at_read:
-            return False
-        return stat.st_size == record.size_at_read
+        return (
+            stat.st_mtime == record.mtime_at_read
+            and stat.st_size == record.size_at_read
+        )
 
 
 @dataclass(frozen=True)

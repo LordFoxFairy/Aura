@@ -75,6 +75,23 @@ def test_is_fresh_true_for_unchanged_file(tmp_path: Path) -> None:
     assert carry.is_fresh(f) is True
 
 
+def test_is_fresh_normalizes_lookup_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Records are keyed by resolved paths, but callers may ask with a
+    relative path. Normalize before lookup so inheritance matches
+    Context.read_status semantics."""
+    f = tmp_path / "a.txt"
+    f.write_text("hello")
+    monkeypatch.chdir(tmp_path)
+
+    carry = ReadCarryover(
+        records={f.resolve(): _make_record(f.resolve())},
+        source_session_id=None,
+        generated_at_turn=1,
+    )
+
+    assert carry.is_fresh(Path("a.txt")) is True
+
+
 def test_is_fresh_false_when_mtime_newer(tmp_path: Path) -> None:
     """Touching the file forwards mtime past the recorded value;
     freshness check must reject the record so the subagent re-reads."""
@@ -84,6 +101,24 @@ def test_is_fresh_false_when_mtime_newer(tmp_path: Path) -> None:
     # Bump mtime forward by 10s — well past any filesystem granularity.
     new_mtime = record.mtime_at_read + 10.0
     os.utime(f, (new_mtime, new_mtime))
+
+    carry = ReadCarryover(
+        records={f: record}, source_session_id=None, generated_at_turn=1
+    )
+
+    assert carry.is_fresh(f) is False
+
+
+def test_is_fresh_false_when_mtime_older_even_same_size(tmp_path: Path) -> None:
+    """Freshness is exact ``(mtime, size)`` equality. A changed/restored
+    file can have the same size and an older mtime; it still must be
+    rejected."""
+    f = tmp_path / "a.txt"
+    f.write_text("hello")
+    record = _make_record(f)
+    f.write_text("jello")
+    older_mtime = record.mtime_at_read - 10.0
+    os.utime(f, (older_mtime, older_mtime))
 
     carry = ReadCarryover(
         records={f: record}, source_session_id=None, generated_at_turn=1

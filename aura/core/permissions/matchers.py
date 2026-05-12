@@ -36,7 +36,7 @@ rule available, fall back to tool-wide".
 from __future__ import annotations
 
 from fnmatch import fnmatchcase
-from pathlib import PurePath
+from pathlib import Path, PurePath
 
 from aura.schemas.tool import ToolRuleMatcher
 
@@ -70,8 +70,8 @@ def path_prefix_on(key: str) -> ToolRuleMatcher:
         if not isinstance(value, str):
             return False
         try:
-            arg = PurePath(value)
-            rule_path = PurePath(content)
+            arg = _normalize_match_path(value)
+            rule_path = _normalize_match_path(content)
         except (TypeError, ValueError):
             return False
         if arg == rule_path:
@@ -83,3 +83,14 @@ def path_prefix_on(key: str) -> ToolRuleMatcher:
 
     _matches.key = key  # type: ignore[attr-defined]
     return _matches
+
+
+def _normalize_match_path(raw: str) -> PurePath:
+    """Normalize path-rule operands before prefix comparison.
+
+    ``PurePath.is_relative_to`` is lexical: ``/tmp/safe/../secret`` still
+    looks relative to ``/tmp/safe`` unless ``..`` is collapsed first. Use
+    ``Path.resolve(strict=False)`` so both existing and not-yet-created
+    paths are normalized without requiring filesystem existence.
+    """
+    return Path(raw).expanduser().resolve(strict=False)

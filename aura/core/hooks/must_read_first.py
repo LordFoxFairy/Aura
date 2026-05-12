@@ -126,9 +126,10 @@ def _extract_bash_mutation_targets(command: str) -> list[str]:
                     targets.append(last)
                 break
 
-        # 3. > path  /  >> path  — output redirect.
-        # ``shlex`` keeps ``>`` and ``>>`` as separate tokens. Skip
-        # /dev/* (always a sink) and process substitutions.
+        # 3. > path / >> path / >path / 2>path / 1>>path — output redirect.
+        # ``shlex`` keeps whitespace-separated redirects as separate tokens
+        # but compact forms stay in one token. Skip /dev/* (always a sink),
+        # process substitutions, and fd duplication like ``2>&1``.
         for i, tok in enumerate(tokens):
             if tok in (">", ">>"):
                 if i + 1 >= len(tokens):
@@ -136,18 +137,20 @@ def _extract_bash_mutation_targets(command: str) -> list[str]:
                 target = tokens[i + 1]
                 if target.startswith("/dev/") or target.startswith("("):
                     continue
-                # ``2>`` and friends arrive as ``2>`` from shlex too;
-                # explicit fd-prefixed forms like ``2>&1`` remain a
-                # single token so harmless.
                 targets.append(target)
-            elif re.fullmatch(r"\d*>{1,2}", tok) and not tok.endswith("&"):
-                # Combined fd-redirect like ``2>`` or ``1>>`` token.
-                if i + 1 >= len(tokens):
+            elif (match := re.fullmatch(r"(\d*)?(>{1,2})(.*)", tok)):
+                suffix = match.group(3)
+                if suffix.startswith("&"):
                     continue
-                target = tokens[i + 1]
+                if suffix:
+                    target = suffix
+                else:
+                    if i + 1 >= len(tokens):
+                        continue
+                    target = tokens[i + 1]
+                # Combined fd-redirect like ``2>`` or ``1>>`` token.
                 if target.startswith("/dev/") or target.startswith("("):
                     continue
-                # ``2>&1`` is a single token; ``2>file`` may also collapse.
                 targets.append(target)
 
     return targets

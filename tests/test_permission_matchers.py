@@ -56,6 +56,16 @@ def test_path_prefix_does_not_match_parent() -> None:
     assert m({"path": "/tmp"}, "/tmp/foo") is False
 
 
+def test_path_prefix_rejects_absolute_dotdot_escape() -> None:
+    m = path_prefix_on("path")
+    assert m({"path": "/tmp/safe/../secret.txt"}, "/tmp/safe") is False
+
+
+def test_path_prefix_rejects_relative_dotdot_escape() -> None:
+    m = path_prefix_on("path")
+    assert m({"path": "src/../secrets.txt"}, "src") is False
+
+
 def test_path_prefix_handles_relative_paths() -> None:
     m = path_prefix_on("path")
     assert m({"path": "src/app.py"}, "src") is True

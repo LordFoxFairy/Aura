@@ -748,6 +748,28 @@ async def test_bash_redirect_overwrite_blocked_when_target_unread(
     assert _sc(outcome).ok is False  # type: ignore[union-attr]
 
 
+@pytest.mark.parametrize(
+    "template",
+    ["echo new >{path}", "echo new 2>{path}", "echo new 1>>{path}"],
+)
+@pytest.mark.asyncio
+async def test_bash_compact_redirect_blocked_when_target_unread(
+    tmp_path: Path,
+    template: str,
+) -> None:
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    target = tmp_path / "compact.txt"
+    target.write_text("old\n")
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": template.format(path=target)},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is not None
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+
+
 @pytest.mark.asyncio
 async def test_bash_redirect_to_new_file_passes(tmp_path: Path) -> None:
     """``> path`` to a non-existent target is pure creation — no prior read needed."""

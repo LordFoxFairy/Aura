@@ -29,6 +29,7 @@ NOT emit domain events beyond the two I/O-boundary journal lines
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
@@ -38,6 +39,7 @@ from aura.cli.permission_bash import run_bash_permission
 from aura.cli.permission_generic import (
     _TOOL_VERB,
     _build_explanation,
+    _run_widget,
     _tool_title,
     _tool_verb,
     run_generic_permission,
@@ -47,6 +49,8 @@ from aura.core.hooks.permission import AskerResponse, PermissionAsker
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.rule_hint import derive_rule_hint
 from aura.core.persistence import journal
+from aura.schemas.permissions import AskerPrompt
+from aura.schemas.permissions import AskerResponse as AskerResponseV2
 from aura.schemas.tool_meta_access import meta_dict
 
 # Re-export the preview cap so external tests / callers that poked the
@@ -339,8 +343,272 @@ def print_bypass_banner(console: Console) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase 5 Task 4 — new ``AskerPrompt`` / ``AskerResponse`` shape.
+#
+# The v2 asker takes a fully-rendered :class:`AskerPrompt` (display strings
+# + ``request_id``) and returns the four-state
+# :class:`aura.schemas.permissions.AskerResponse` (yes / yes-always / no /
+# no-always). Same pt.Application driver as legacy — UI behavior matches
+# the legacy generic widget (3 visible buttons today; ``no-always`` is
+# reserved for the gate to emit programmatically once Stage 9 lands).
+#
+# Legacy callers (``make_permission_hook``) keep using ``make_cli_asker``
+# above; the two coexist until Phase 5 collapses the asker boundary.
+# ---------------------------------------------------------------------------
+
+
+# Map of internal picker int → new-shape choice string. ``None``
+# (Ctrl+C / Esc cancel) resolves to ``"no"`` so the loop never hangs on
+# an unresolved prompt — same fail-safe contract as the legacy asker's
+# ``deny`` path.
+_INT_TO_NEW_CHOICE: dict[int | None, Literal["yes", "yes-always", "no"]] = {
+    1: "yes",
+    2: "yes-always",
+    3: "no",
+    None: "no",
+}
+
+
+def _v2_header_frags(prompt: AskerPrompt) -> list[tuple[str, str]]:
+    """Build the widget header fragments from an :class:`AskerPrompt`.
+
+    The v2 asker has no :class:`BaseTool` to consult (the new Protocol
+    intentionally decouples the asker from the registry — IPC + subagent
+    askers have only the prompt strings). We render the same generic
+    layout as :func:`run_generic_permission` but sourced from the
+    prompt's strings: ``tool`` becomes the title, ``args_preview`` is
+    the body, and the per-tool verb falls back to a generic phrase.
+    """
+    title = prompt.tool.replace("_", " ")
+    if " " in title:
+        head, *rest = title.split(" ")
+        title = " ".join([head.capitalize(), *rest])
+    else:
+        title = f"{title.capitalize()} command"
+    verb = _TOOL_VERB.get(prompt.tool, "")
+    header: list[tuple[str, str]] = [
+        ("bold", f"  {title}\n"),
+        ("", "\n"),
+    ]
+    if prompt.args_preview:
+        header.append(("", f"    {prompt.args_preview}\n"))
+    if verb:
+        header.append(("class:dim", f"  {verb}\n"))
+    header.append(("", "\n"))
+    return header
+
+
+def _v2_explanation_frags(prompt: AskerPrompt) -> list[tuple[str, str]]:
+    """Ctrl+E panel for the v2 (string-only) widget.
+
+    The legacy explanation pulls from ``tool.description`` + arg dict;
+    the v2 prompt only carries display strings, so we emit a slimmed
+    panel that names the tool, surfaces the rule_hint, and flags
+    destructiveness — enough context for an operator deciding whether
+    to approve, without inventing fake docstring content.
+    """
+    risk = (
+        "⚠ This tool can modify or delete data."
+        if prompt.is_destructive
+        else "● Standard tool — see preview above for what will run."
+    )
+    frags: list[tuple[str, str]] = [
+        ("class:dim bold", "  ┌ Explanation\n"),
+        ("class:dim bold", "  │ Tool:\n"),
+        ("class:dim", f"  │     {prompt.tool}\n"),
+        ("class:dim bold", "  │ Preview:\n"),
+        ("class:dim", f"  │     {prompt.args_preview or '(no preview)'}\n"),
+        ("class:dim bold", "  │ Rule hint:\n"),
+        ("class:dim", f"  │     {prompt.rule_hint or '(none)'}\n"),
+        ("class:dim bold", "  │ Risk:\n"),
+        ("class:dim", f"  │     {risk}\n"),
+        ("class:dim bold", "  └\n"),
+    ]
+    return frags
+
+
+def _option_two_label_from_prompt(prompt: AskerPrompt) -> str:
+    """Compose the "yes, and don't ask again" label from a prompt.
+
+    Mirrors :func:`_compose_option_two`'s wording. The v2 prompt carries
+    a precomputed ``rule_hint`` string; we just embed it. Empty
+    ``rule_hint`` falls back to a tool-wide session label (matching the
+    legacy "no matcher" path).
+    """
+    if prompt.rule_hint:
+        return (
+            f"Yes, and don't ask again for `{prompt.rule_hint}` in this project"
+        )
+    return f"Yes, and don't ask again for `{prompt.tool}` this session"
+
+
+def make_cli_asker_v2(
+    console: Console | None = None,
+    *,
+    timeout: float | None = None,
+) -> Callable[[AskerPrompt], Awaitable[AskerResponseV2]]:
+    """Return a v2 CLI asker that consumes :class:`AskerPrompt`.
+
+    Spec: ``docs/superpowers/specs/2026-05-10-aura-phase-5-permissions.md``
+    §6. The returned callable is the new-shape asker the
+    :class:`PermissionGate` (Phase 5 Task 8) will wire up. Coexists with
+    the legacy :func:`make_cli_asker` until the gate fully replaces the
+    permission_hook factory; both share the same pt.Application driver,
+    so UI behavior is consistent.
+
+    Mapping from picker int → new choice:
+
+    - 1 (Yes)             → ``"yes"``
+    - 2 (Yes, always)     → ``"yes-always"``
+    - 3 (No)              → ``"no"``
+    - None (Esc / Ctrl+C) → ``"no"``    (fail-safe deny)
+
+    ``"no-always"`` is not yet emitted by this widget (CLI today shows 3
+    buttons matching claude-code's three-button dialog); the gate will
+    synthesize it programmatically when an operator chooses to install a
+    deny rule. The shape is reserved here so the union stays exhaustive.
+    """
+    _ = console or Console()  # parity with legacy factory; reserved for audit-line
+
+    async def _ask(prompt: AskerPrompt) -> AskerResponseV2:
+        default_choice = 3 if prompt.is_destructive else 1
+        option_two_label = _option_two_label_from_prompt(prompt)
+
+        journal.write(
+            "permission_asked",
+            tool=prompt.tool,
+            args_preview=prompt.args_preview,
+            rule_hint=prompt.rule_hint,
+            request_id=prompt.request_id,
+        )
+
+        try:
+            choice, _feedback = await _run_widget(
+                header_frags=_v2_header_frags(prompt),
+                option_two_label=option_two_label,
+                default_choice=default_choice,
+                explanation_frags=_v2_explanation_frags(prompt),
+                timeout=timeout,
+            )
+        except TimeoutError:
+            journal.write(
+                "permission_prompt_timeout",
+                tool=prompt.tool,
+                timeout_sec=timeout,
+                request_id=prompt.request_id,
+            )
+            journal.write(
+                "permission_answered",
+                tool=prompt.tool,
+                choice="no",
+                reason="timeout",
+                request_id=prompt.request_id,
+            )
+            return AskerResponseV2(choice="no", request_id=prompt.request_id)
+        except (KeyboardInterrupt, SystemExit):
+            journal.write(
+                "permission_answered",
+                tool=prompt.tool,
+                choice="no",
+                request_id=prompt.request_id,
+            )
+            return AskerResponseV2(choice="no", request_id=prompt.request_id)
+        except Exception as exc:  # noqa: BLE001 — no-TTY / pt failures
+            journal.write(
+                "permission_prompt_unavailable",
+                tool=prompt.tool,
+                detail=repr(exc),
+                request_id=prompt.request_id,
+            )
+            return AskerResponseV2(choice="no", request_id=prompt.request_id)
+
+        new_choice = _INT_TO_NEW_CHOICE[choice]
+        journal.write(
+            "permission_answered",
+            tool=prompt.tool,
+            choice=new_choice,
+            request_id=prompt.request_id,
+        )
+        return AskerResponseV2(choice=new_choice, request_id=prompt.request_id)
+
+    return _ask
+
+
+def legacy_asker_from_v2(
+    v2_asker: Callable[[AskerPrompt], Awaitable[AskerResponseV2]],
+) -> PermissionAsker:
+    """Adapter — expose a v2 asker as the legacy :class:`PermissionAsker`.
+
+    The legacy permission hook (``make_permission_hook``) calls askers
+    with ``(tool, args, rule_hint)`` kwargs and expects the legacy
+    :class:`AskerResponse` (``accept`` / ``always`` / ``deny`` + rule +
+    scope + feedback). Phase 5 transitions everything to v2 in one shot
+    (Task 8); this adapter is the bridge that lets the legacy hook keep
+    working when wired to a v2-shape asker mid-migration.
+
+    The adapter:
+
+    1. Composes an :class:`AskerPrompt` from the legacy kwargs (using
+       :func:`_compose_option_two` to derive ``rule_hint``).
+    2. Generates a fresh ``request_id`` per call (legacy callers don't
+       carry one — IPC correlation only matters for the desktop asker).
+    3. Calls the v2 asker.
+    4. Maps the four-state :class:`AskerResponseV2` back onto the
+       three-state legacy :class:`AskerResponse`:
+
+       - ``yes``        → ``accept``
+       - ``yes-always`` → ``always`` + rule from local derivation
+       - ``no``         → ``deny``
+       - ``no-always``  → ``deny`` (no legacy equivalent for "deny rule";
+         the gate will install the deny rule out-of-band when it owns
+         the flow — for now treat it as a one-shot deny so legacy
+         callers don't see an unrepresentable choice).
+
+    Feedback is dropped on the v2 boundary (the new shape doesn't carry
+    free-text); legacy callers that wired feedback through this adapter
+    therefore see ``feedback=""``. This is a known regression of the
+    transitional adapter, not a permanent loss — Task 8 retires both
+    the adapter and the legacy AskerResponse together.
+    """
+    import uuid
+
+    async def _legacy(
+        *,
+        tool: BaseTool,
+        args: dict[str, Any],
+        rule_hint: Rule,  # noqa: ARG001 — derived locally from tool/args
+    ) -> AskerResponse:
+        _option_two_label, option_two_rule, option_two_scope = (
+            _compose_option_two(tool, args)
+        )
+        prompt = AskerPrompt(
+            tool=tool.name,
+            args_preview=_preview(tool, args),
+            rule_hint=option_two_rule.to_string(),
+            is_destructive=_tag(tool) == "destructive",
+            request_id=str(uuid.uuid4()),
+        )
+        v2_resp = await v2_asker(prompt)
+        match v2_resp.choice:
+            case "yes":
+                return AskerResponse(choice="accept")
+            case "yes-always":
+                return AskerResponse(
+                    choice="always",
+                    scope=option_two_scope,
+                    rule=option_two_rule,
+                )
+            case "no" | "no-always":
+                return AskerResponse(choice="deny")
+
+    return _legacy
+
+
 __all__ = [
+    "AskerPrompt",
     "AskerResponse",
+    "AskerResponseV2",
     "PermissionAsker",
     "_TOOL_VERB",
     "_build_explanation",
@@ -351,6 +619,8 @@ __all__ = [
     "_tag",
     "_tool_title",
     "_tool_verb",
+    "legacy_asker_from_v2",
     "make_cli_asker",
+    "make_cli_asker_v2",
     "print_bypass_banner",
 ]

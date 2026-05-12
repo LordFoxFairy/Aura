@@ -1010,3 +1010,284 @@ async def test_real_timeout_via_wait_for() -> None:
             )
     # pt Application.exit() was called to unwind its render loop.
     assert fake_app.is_running is False
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 Task 4 — v2 asker (AskerPrompt → new AskerResponse).
+#
+# The v2 entry point consumes :class:`AskerPrompt` (display strings +
+# request_id) and returns the four-state new :class:`AskerResponse`.
+# Same widget driver as legacy; UI behavior matches.
+# ---------------------------------------------------------------------------
+from aura.cli.permission import (  # noqa: E402
+    legacy_asker_from_v2,
+    make_cli_asker_v2,
+)
+from aura.schemas.permissions import AskerPrompt  # noqa: E402
+from aura.schemas.permissions import AskerResponse as AskerResponseV2  # noqa: E402
+
+
+def _make_v2_prompt(
+    *,
+    tool: str = "bash",
+    args_preview: str = "ls",
+    rule_hint: str = "",
+    is_destructive: bool = False,
+    request_id: str = "req-1",
+) -> AskerPrompt:
+    return AskerPrompt(
+        tool=tool,
+        args_preview=args_preview,
+        rule_hint=rule_hint,
+        is_destructive=is_destructive,
+        request_id=request_id,
+    )
+
+
+async def test_v2_yes_returns_yes(
+    monkeypatch: pytest.MonkeyPatch, _journal_capture: Path,
+) -> None:
+    # User picks option 1 → new "yes". The v2 asker calls
+    # ``_run_widget`` directly (no per-tool dispatch) so we patch that.
+    async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
+        return 1, ""
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
+    asker = make_cli_asker_v2()
+    resp = await asker(_make_v2_prompt())
+    assert isinstance(resp, AskerResponseV2)
+    assert resp.choice == "yes"
+    assert resp.request_id == "req-1"
+    answered = [
+        e for e in _events(_journal_capture) if e["event"] == "permission_answered"
+    ]
+    assert answered and answered[0]["choice"] == "yes"
+    assert answered[0]["request_id"] == "req-1"
+
+
+async def test_v2_yes_always_returns_yes_always(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
+        return 2, ""
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
+    asker = make_cli_asker_v2()
+    resp = await asker(_make_v2_prompt(rule_hint="bash(npm test)"))
+    assert resp.choice == "yes-always"
+
+
+async def test_v2_no_returns_no(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
+        return 3, ""
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
+    asker = make_cli_asker_v2()
+    resp = await asker(_make_v2_prompt(is_destructive=True))
+    assert resp.choice == "no"
+
+
+async def test_v2_cancel_resolves_to_no(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Picker returns None (Esc / Ctrl+C) → fail-safe deny ("no").
+    async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
+        return None, ""
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
+    asker = make_cli_asker_v2()
+    resp = await asker(_make_v2_prompt())
+    assert resp.choice == "no"
+
+
+async def test_v2_timeout_resolves_to_no(
+    monkeypatch: pytest.MonkeyPatch, _journal_capture: Path,
+) -> None:
+    async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
+        raise TimeoutError
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
+    asker = make_cli_asker_v2(timeout=0.1)
+    resp = await asker(_make_v2_prompt())
+    assert resp.choice == "no"
+    events = {e["event"] for e in _events(_journal_capture)}
+    assert "permission_prompt_timeout" in events
+
+
+async def test_v2_default_choice_is_3_for_destructive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_run_widget(**kw: Any) -> tuple[int | None, str]:
+        captured.update(kw)
+        return 3, ""
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
+    asker = make_cli_asker_v2()
+    await asker(_make_v2_prompt(is_destructive=True))
+    assert captured["default_choice"] == 3
+
+
+async def test_v2_default_choice_is_1_for_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_run_widget(**kw: Any) -> tuple[int | None, str]:
+        captured.update(kw)
+        return 1, ""
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
+    asker = make_cli_asker_v2()
+    await asker(_make_v2_prompt(is_destructive=False))
+    assert captured["default_choice"] == 1
+
+
+async def test_v2_request_id_echoed(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
+        return 1, ""
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
+    asker = make_cli_asker_v2()
+    resp = await asker(_make_v2_prompt(request_id="abc-123"))
+    assert resp.request_id == "abc-123"
+
+
+async def test_v2_widget_failure_resolves_to_no(
+    monkeypatch: pytest.MonkeyPatch, _journal_capture: Path,
+) -> None:
+    async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
+        raise RuntimeError("no tty")
+
+    from aura.cli import permission as perm_mod
+
+    monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
+    asker = make_cli_asker_v2()
+    resp = await asker(_make_v2_prompt())
+    assert resp.choice == "no"
+    events = {e["event"] for e in _events(_journal_capture)}
+    assert "permission_prompt_unavailable" in events
+
+
+# ---------------------------------------------------------------------------
+# legacy_asker_from_v2 — adapter that exposes a v2 asker as the legacy
+# PermissionAsker Protocol so ``make_permission_hook`` keeps working.
+# ---------------------------------------------------------------------------
+async def test_legacy_adapter_yes_maps_to_accept() -> None:
+    async def fake_v2(_prompt: AskerPrompt) -> AskerResponseV2:
+        return AskerResponseV2(choice="yes", request_id=_prompt.request_id)
+
+    legacy = legacy_asker_from_v2(fake_v2)
+    resp = await legacy(
+        tool=_bash_like(), args={"command": "ls"}, rule_hint=_HINT,
+    )
+    assert isinstance(resp, AskerResponse)
+    assert resp.choice == "accept"
+    assert resp.rule is None
+
+
+async def test_legacy_adapter_yes_always_maps_to_always_with_rule() -> None:
+    async def fake_v2(prompt: AskerPrompt) -> AskerResponseV2:
+        return AskerResponseV2(choice="yes-always", request_id=prompt.request_id)
+
+    legacy = legacy_asker_from_v2(fake_v2)
+    resp = await legacy(
+        tool=_bash_like(with_matcher=True),
+        args={"command": "npm test"},
+        rule_hint=_HINT,
+    )
+    assert resp.choice == "always"
+    assert resp.scope == "project"
+    assert resp.rule == Rule(tool="bash", content="npm test")
+
+
+async def test_legacy_adapter_no_maps_to_deny() -> None:
+    async def fake_v2(prompt: AskerPrompt) -> AskerResponseV2:
+        return AskerResponseV2(choice="no", request_id=prompt.request_id)
+
+    legacy = legacy_asker_from_v2(fake_v2)
+    resp = await legacy(
+        tool=_bash_like(), args={"command": "rm"}, rule_hint=_HINT,
+    )
+    assert resp.choice == "deny"
+
+
+async def test_legacy_adapter_no_always_maps_to_deny() -> None:
+    # ``no-always`` has no legacy equivalent (legacy AskerResponse can't
+    # represent "deny rule"); the adapter degrades to a one-shot deny.
+    # Task 8's PermissionGate is responsible for installing the deny
+    # rule out-of-band when the new shape becomes the wire format.
+    async def fake_v2(prompt: AskerPrompt) -> AskerResponseV2:
+        return AskerResponseV2(choice="no-always", request_id=prompt.request_id)
+
+    legacy = legacy_asker_from_v2(fake_v2)
+    resp = await legacy(
+        tool=_bash_like(), args={"command": "rm"}, rule_hint=_HINT,
+    )
+    assert resp.choice == "deny"
+
+
+async def test_legacy_adapter_builds_prompt_with_unique_request_id() -> None:
+    # Each adapter invocation generates a fresh request_id (uuid4) since
+    # legacy callers don't carry one — IPC correlation only matters for
+    # the desktop asker.
+    seen_ids: list[str] = []
+
+    async def fake_v2(prompt: AskerPrompt) -> AskerResponseV2:
+        seen_ids.append(prompt.request_id)
+        return AskerResponseV2(choice="yes", request_id=prompt.request_id)
+
+    legacy = legacy_asker_from_v2(fake_v2)
+    await legacy(tool=_bash_like(), args={"command": "ls"}, rule_hint=_HINT)
+    await legacy(tool=_bash_like(), args={"command": "ls"}, rule_hint=_HINT)
+    assert len(seen_ids) == 2
+    assert seen_ids[0] != seen_ids[1]
+    assert all(s for s in seen_ids)  # non-empty
+
+
+async def test_legacy_adapter_passes_destructive_flag_through() -> None:
+    captured: list[AskerPrompt] = []
+
+    async def fake_v2(prompt: AskerPrompt) -> AskerResponseV2:
+        captured.append(prompt)
+        return AskerResponseV2(choice="no", request_id=prompt.request_id)
+
+    legacy = legacy_asker_from_v2(fake_v2)
+    await legacy(
+        tool=_bash_like(is_destructive=True),
+        args={"command": "rm"},
+        rule_hint=_HINT,
+    )
+    assert captured[0].is_destructive is True
+
+
+async def test_legacy_adapter_passes_rule_hint_string() -> None:
+    captured: list[AskerPrompt] = []
+
+    async def fake_v2(prompt: AskerPrompt) -> AskerResponseV2:
+        captured.append(prompt)
+        return AskerResponseV2(choice="yes", request_id=prompt.request_id)
+
+    legacy = legacy_asker_from_v2(fake_v2)
+    await legacy(
+        tool=_bash_like(with_matcher=True),
+        args={"command": "npm test"},
+        rule_hint=_HINT,
+    )
+    # Rule hint string mirrors the option-two rule's wire format.
+    assert captured[0].rule_hint == "bash(npm test)"

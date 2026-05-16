@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from aura.adapters.protocol.agui import AguiAdapter
+from aura.adapters.protocol.bridge import AguiEventBridge
+from aura.schemas.events import AssistantDelta, Final
+from aura.schemas.state import LoopSlots
 
 
 def test_agui_adapter_wraps_text_stream_in_run_and_message_events() -> None:
@@ -195,4 +199,29 @@ def test_agui_adapter_error_closes_open_text_and_run() -> None:
             "type": "RUN_ERROR",
             "message": "boom",
         },
+    ]
+
+
+def test_agui_event_bridge_owns_run_start_state_and_final_ordering() -> None:
+    bridge = AguiEventBridge(adapter=AguiAdapter(run_id="run-bridge"), clock=lambda: 11.5)
+    agent = SimpleNamespace(
+        current_model="fake:model",
+        mode="default",
+        pinned_tokens_estimate=0,
+        context_window=100,
+        state=SimpleNamespace(slots=LoopSlots()),
+    )
+
+    events = []
+    events.extend(bridge.start())
+    events.extend(bridge.emit(AssistantDelta("hi"), agent=agent))
+    events.extend(bridge.emit(Final("done"), agent=agent, turn_started_at=10.0))
+
+    assert [event["type"] for event in events] == [
+        "RUN_STARTED",
+        "TEXT_MESSAGE_START",
+        "TEXT_MESSAGE_CONTENT",
+        "STATE_SNAPSHOT",
+        "TEXT_MESSAGE_END",
+        "RUN_FINISHED",
     ]

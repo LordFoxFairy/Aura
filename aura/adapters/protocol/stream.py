@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from aura.adapters.protocol.agui import AguiAdapter
+from aura.adapters.protocol.bridge import AguiEventBridge
 from aura.adapters.protocol.wire import agent_state_to_wire, event_to_wire
 from aura.domain.protocol.events import WireEvent
 from aura.schemas.events import Final
@@ -73,22 +74,20 @@ async def stream_agent_agui(
     clock: Callable[[], float] = time.monotonic,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run ``agent.astream`` and yield AG-UI-style events."""
-    agui = adapter or AguiAdapter()
-    for event in agui.start_run():
+    bridge = AguiEventBridge(adapter=adapter, clock=clock)
+    for event in bridge.start():
         yield event
     turn_start = clock()
     try:
         async for agent_event in agent.astream(prompt):
-            wire_event = event_to_wire(agent_event)
-            if isinstance(agent_event, Final):
-                state_event = agent_state_to_wire(agent, clock() - turn_start)
-                for event in agui.convert(state_event):
-                    yield event
-            for event in agui.convert(wire_event):
+            for event in bridge.emit(
+                agent_event,
+                agent=agent,
+                turn_started_at=turn_start,
+            ):
                 yield event
     except Exception as exc:
-        message = f"{type(exc).__name__}: {exc}"
-        for event in agui.error(message):
+        for event in bridge.error(exc):
             yield event
 
 

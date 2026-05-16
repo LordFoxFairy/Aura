@@ -7,6 +7,7 @@ from typing import cast
 
 import pytest
 
+from aura.capabilities.commands.team import TeamCommand as CapabilityTeamCommand
 from aura.cli.commands import build_default_registry, dispatch
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
@@ -15,6 +16,11 @@ from aura.core.persistence.storage import SessionStorage
 from aura.core.teams.manager import TeamManager
 from aura.core.teams.types import TeammateMember
 from tests.conftest import FakeChatModel
+
+
+def test_team_command_core_facade_points_at_capabilities_module() -> None:
+    assert TeamCommand is CapabilityTeamCommand
+    assert TeamCommand.__module__ == "aura.capabilities.commands.team"
 
 
 def _members(agent: Agent) -> list[TeammateMember]:

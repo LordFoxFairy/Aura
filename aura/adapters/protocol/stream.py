@@ -55,7 +55,7 @@ async def stream_agent_wire(
     prompt: str,
     *,
     clock: Callable[[], float] = time.monotonic,
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[WireEvent]:
     """Run ``agent.astream`` and yield Aura wire events."""
     turn_start = clock()
     async for event in agent.astream(prompt):

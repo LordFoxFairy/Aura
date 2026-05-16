@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from aura.capabilities.commands.registry import CommandRegistry as CapabilityCommandRegistry
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.commands import (
@@ -76,6 +77,11 @@ class _StubCommand:
         self.last_arg = arg
         self.last_agent = agent
         return CommandResult(handled=True, kind="print", text=self._text)
+
+
+def test_core_command_registry_facade_points_at_capabilities_module() -> None:
+    assert CommandRegistry is CapabilityCommandRegistry
+    assert CommandRegistry.__module__ == "aura.capabilities.commands.registry"
 
 
 # ---------------------------------------------------------------------------

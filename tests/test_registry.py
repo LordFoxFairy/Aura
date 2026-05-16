@@ -10,6 +10,9 @@ import pytest
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
+from aura.capabilities.tools.catalog import assemble_tool_pool as assemble_capability_tool_pool
+from aura.capabilities.tools.registry import ToolRegistry as CapabilityToolRegistry
+from aura.capabilities.tools.registry import ToolRegistryError as CapabilityToolRegistryError
 from aura.core.loop import ToolStep, partition_batches
 from aura.core.registry import ToolRegistry, ToolRegistryError, assemble_tool_pool
 from aura.schemas.tool import ToolResult
@@ -47,6 +50,14 @@ _tool_b: BaseTool = build_tool(
     args_schema=_BParams,
     func=_noop_b,
 )
+
+
+def test_core_tool_registry_facade_points_at_capabilities_module() -> None:
+    assert ToolRegistry is CapabilityToolRegistry
+    assert ToolRegistryError is CapabilityToolRegistryError
+    assert assemble_tool_pool is assemble_capability_tool_pool
+    assert ToolRegistry.__module__ == "aura.capabilities.tools.registry"
+    assert assemble_tool_pool.__module__ == "aura.capabilities.tools.catalog"
 
 
 def test_registry_empty_is_empty() -> None:

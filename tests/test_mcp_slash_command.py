@@ -308,6 +308,10 @@ def test_mcp_command_registered_in_default_registry() -> None:
     assert "/mcp" in names
 
 
+def test_mcp_command_owned_by_capabilities_module() -> None:
+    assert MCPCommand.__module__ == "aura.capabilities.commands.mcp"
+
+
 def test_mcp_command_has_expected_surface() -> None:
     cmd = MCPCommand()
     assert cmd.name == "/mcp"

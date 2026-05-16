@@ -1,18 +1,13 @@
-"""Unified slash-command abstraction.
+"""Compatibility façade for Aura's slash-command abstraction.
 
-Exports:
-    Command       — structural Protocol for command objects.
-    CommandRegistry — holds commands, routes input lines.
-    CommandResult — dispatch outcome (handled/kind/text).
-    CommandKind   — Literal["print", "exit", "noop"].
-    CommandSource — Literal["builtin", "skill", "mcp"].
-
-Built-in commands live in :mod:`aura.core.commands.builtin`.
+Ownership now lives under :mod:`aura.capabilities.commands`; this package
+re-exports the public command protocol and registry surface so historical
+imports from ``aura.core.commands`` remain stable.
 """
 
 from __future__ import annotations
 
-from aura.core.commands.registry import CommandRegistry
+from aura.capabilities.commands.registry import CommandRegistry
 from aura.core.commands.types import (
     Command,
     CommandKind,

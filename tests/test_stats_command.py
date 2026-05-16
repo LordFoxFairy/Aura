@@ -37,6 +37,10 @@ class _StubAgent:
         self._config = config
 
 
+def test_stats_command_owned_by_capabilities_module() -> None:
+    assert StatsCommand.__module__ == "aura.capabilities.commands.stats"
+
+
 def _ai(
     *,
     input_tokens: int,

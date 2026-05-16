@@ -11,11 +11,17 @@ from pathlib import Path
 
 import pytest
 
+from aura.capabilities.commands.tasks import TasksCommand as CapabilityTasksCommand
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.commands.tasks import TasksCommand
 from aura.core.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
+
+
+def test_tasks_command_core_facade_points_at_capabilities_module() -> None:
+    assert TasksCommand is CapabilityTasksCommand
+    assert TasksCommand.__module__ == "aura.capabilities.commands.tasks"
 
 
 def _agent(tmp_path: Path) -> Agent:

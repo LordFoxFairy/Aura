@@ -128,7 +128,7 @@ class IpcAsker:
         fut: asyncio.Future[dict[str, Any]] = loop.create_future()
         self._pending[req_id] = fut
 
-        _emit(permission_request_to_wire(
+        _emit(dict(permission_request_to_wire(
             request_id=req_id,
             tool=tool.name,
             args=args,
@@ -137,7 +137,7 @@ class IpcAsker:
             # for destructive tools (red outline vs yellow). Falls back to
             # True (conservative) when the tool didn't declare its capability.
             is_destructive=bool(meta_dict(tool).get("is_destructive", True)),
-        ))
+        )))
 
         try:
             response = await fut
@@ -217,7 +217,7 @@ def _feed_permission_response(asker: IpcAsker, payload: dict[str, Any]) -> bool:
 
 def _event_to_dict(event: Any) -> dict[str, Any]:
     """Compatibility wrapper for the shared Aura wire serializer."""
-    return event_to_wire(event)
+    return dict(event_to_wire(event))
 
 
 def _build_aura_state(
@@ -225,7 +225,7 @@ def _build_aura_state(
     last_turn_seconds: float,
 ) -> dict[str, Any]:
     """Compatibility wrapper for the shared Aura state serializer."""
-    return agent_state_to_wire(agent, last_turn_seconds)
+    return dict(agent_state_to_wire(agent, last_turn_seconds))
 
 
 async def _run() -> int:
@@ -317,7 +317,7 @@ async def _run() -> int:
     async def _drive_turn(text: str) -> None:
         try:
             async for event in stream_agent_wire(agent, text):
-                _emit(event)
+                _emit(dict(event))
         except Exception as exc:  # noqa: BLE001
             _emit({
                 "event": "error",

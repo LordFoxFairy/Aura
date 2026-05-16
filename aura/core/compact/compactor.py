@@ -51,10 +51,9 @@ from aura.transport.wire import compact_event_to_wire
 if TYPE_CHECKING:
     from aura.core.agent import Agent
 
-# Type alias for the AG-UI custom-event sink. The Compactor calls this
+# Type alias for the external-event sink. The Compactor calls this
 # (when set) on every method exit with the wire-format ``compact_event``
-# dict. Default is ``None`` — Phase 4 Task 4 wires a real emitter from
-# ``Agent.astream``; callers / tests can pass any callable.
+# payload converted to a plain dict for compatibility with existing callers.
 EventEmitter = Callable[[dict[str, Any]], None]
 
 
@@ -401,7 +400,7 @@ class Compactor:
             # (the journal record is the system-of-record; the
             # emitter is a UI niceness).
             with contextlib.suppress(Exception):
-                self._event_emitter(payload)
+                self._event_emitter(dict(payload))
 
 
 def _elapsed_ms(started_monotonic: float) -> float:

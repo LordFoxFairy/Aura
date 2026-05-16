@@ -1,4 +1,4 @@
-"""Compatibility façade for the capabilities-owned builtin tool catalogue."""
+"""Capabilities-owned tool registries and builtin catalogues."""
 
 from aura.capabilities.tools.catalog import (
     BUILTIN_STATEFUL_TOOLS,
@@ -37,6 +37,7 @@ from aura.capabilities.tools.catalog import (
     web_fetch,
     write_file,
 )
+from aura.capabilities.tools.registry import ToolRegistry, ToolRegistryError
 
 __all__ = [
     "BUILTIN_STATEFUL_TOOLS",
@@ -60,6 +61,8 @@ __all__ = [
     "TaskStop",
     "TodoWrite",
     "ToolError",
+    "ToolRegistry",
+    "ToolRegistryError",
     "ToolResult",
     "WebFetch",
     "WebSearch",

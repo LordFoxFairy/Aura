@@ -9,11 +9,15 @@ or its wiring of the four default commands.
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
+from aura.capabilities.commands.registry import (
+    build_default_registry as build_capability_default_registry,
+)
 from aura.cli.commands import build_default_registry, dispatch
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
@@ -38,6 +42,12 @@ def _agent(tmp_path: Path) -> Agent:
     )
 
 
+def test_cli_build_default_registry_facade_points_at_capabilities_module() -> None:
+    assert build_default_registry is build_capability_default_registry
+    spec = importlib.util.find_spec("aura.capabilities.commands.registry")
+    assert spec is not None
+
+
 def test_default_registry_has_builtin_set() -> None:
     # ``/team`` is gated by ``teams.enabled`` (claude-code parity with
     # isAgentSwarmsEnabled(), v0.18+); a no-agent registry build cannot
@@ -53,6 +63,15 @@ def test_default_registry_has_builtin_set() -> None:
         "/buddy",
         "/resume",
     }
+
+
+def test_default_registry_remaining_commands_are_owned_by_capabilities() -> None:
+    r = build_default_registry()
+    commands = {cmd.name: cmd for cmd in r.list()}
+    assert commands["/buddy"].__class__.__module__ == "aura.capabilities.commands.buddy"
+    assert commands["/export"].__class__.__module__ == "aura.capabilities.commands.export"
+    assert commands["/mcp"].__class__.__module__ == "aura.capabilities.commands.mcp"
+    assert commands["/stats"].__class__.__module__ == "aura.capabilities.commands.stats"
 
 
 @pytest.mark.asyncio

@@ -1,37 +1,16 @@
 """Slash command façade for the REPL.
 
-This module used to contain a hardcoded if-else dispatcher. v0.1.1 moved
-the real implementation to :mod:`aura.core.commands` (registry + builtins)
-so Skills and MCP integrations can register commands dynamically. This
-file remains as a thin façade to keep the ``aura.cli.commands`` import
-path stable for existing callers.
+This import path remains stable for callers, but ownership of command
+implementations and default-registry assembly now lives under
+``aura.capabilities.commands``.
 """
 
-from __future__ import annotations
-
-from aura.capabilities.skills_runtime.command import SkillCommand
-from aura.core.agent import Agent
-from aura.core.commands import Command, CommandRegistry, CommandResult
-from aura.core.commands.buddy import BuddyCommand
-from aura.core.commands.builtin import (
-    ClearCommand,
-    CompactCommand,
-    ContextCommand,
-    ExitCommand,
-    HelpCommand,
-    ModelCommand,
-    ResumeCommand,
+from aura.capabilities.commands.registry import (
+    CommandRegistry,
+    build_default_registry,
+    dispatch,
 )
-from aura.core.commands.export import ExportCommand
-from aura.core.commands.git_commands import (
-    GitDiffCommand,
-    GitLogCommand,
-    GitStatusCommand,
-)
-from aura.core.commands.mcp_cmd import MCPCommand
-from aura.core.commands.stats import StatsCommand
-from aura.core.commands.tasks import TaskGetCommand, TasksCommand, TaskStopCommand
-from aura.core.commands.team import TeamCommand
+from aura.core.commands import Command, CommandResult
 
 __all__ = [
     "Command",
@@ -40,65 +19,3 @@ __all__ = [
     "build_default_registry",
     "dispatch",
 ]
-
-
-def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
-    """Return a registry pre-populated with Aura's built-in commands.
-
-    If ``agent`` is provided, also register one :class:`SkillCommand` per
-    skill loaded by the Agent (user + project layers). The optional kwarg
-    preserves the zero-arg call for callers that still build a registry
-    without an Agent (e.g. legacy tests).
-    """
-    r = CommandRegistry()
-    # HelpCommand needs the registry to enumerate commands at /help time.
-    r.register(HelpCommand(registry=r))
-    r.register(ExitCommand())
-    r.register(ClearCommand())
-    r.register(CompactCommand())
-    r.register(ContextCommand())
-    r.register(ModelCommand())
-    r.register(ExportCommand())
-    r.register(StatsCommand())
-    r.register(TasksCommand())
-    r.register(TaskGetCommand())
-    r.register(TaskStopCommand())
-    r.register(GitStatusCommand())
-    r.register(GitDiffCommand())
-    r.register(GitLogCommand())
-    r.register(MCPCommand())
-    r.register(BuddyCommand())
-    r.register(ResumeCommand())
-    # Teams feature-gate: mirrors claude-code's ``isAgentSwarmsEnabled()``.
-    # ``TeamCommand`` is registered only when the user has opted into the
-    # multi-agent swarm subsystem via ``teams.enabled=true`` in their
-    # AuraConfig (default False). When ``agent`` is not provided we have
-    # no config to consult and the safe, claude-code-aligned default is
-    # off — callers that want the gated command must construct the
-    # registry with an Agent.
-    if agent is not None and agent._config.teams.enabled:
-        r.register(TeamCommand())
-    if agent is not None:
-        # Only skills with ``user_invocable=True`` get a ``/<name>`` slash
-        # command — claude-code parity. Skills flagged ``user-invocable:
-        # false`` remain model-invocable via the ``skill`` tool but are
-        # hidden from the slash-command surface (picker, ``/help``,
-        # completion). ``SkillRegistry.user_invocable()`` applies that
-        # filter; the Context still sees ``registry.list()`` for the full
-        # ``<skills-available>`` catalogue (model visibility is governed
-        # separately by ``disable_model_invocation``).
-        for skill in agent._skill_registry.user_invocable():
-            r.register(SkillCommand(skill=skill, agent=agent))
-        # MCP commands were collected at aconnect() time; register them
-        # last so a name collision with a built-in / skill is flagged
-        # rather than silently shadowed.
-        for cmd in agent._mcp_commands:
-            r.register(cmd)  # type: ignore[arg-type]
-    return r
-
-
-async def dispatch(
-    line: str, agent: Agent, registry: CommandRegistry
-) -> CommandResult:
-    """Dispatch a REPL input line via the given registry."""
-    return await registry.dispatch(line, agent)

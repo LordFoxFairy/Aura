@@ -66,6 +66,10 @@ def test_export_command_registered_in_default_registry() -> None:
     assert "/export" in names
 
 
+def test_export_command_owned_by_capabilities_module() -> None:
+    assert ExportCommand.__module__ == "aura.capabilities.commands.export"
+
+
 # ---------------------------------------------------------------------------
 # Default path / format
 # ---------------------------------------------------------------------------

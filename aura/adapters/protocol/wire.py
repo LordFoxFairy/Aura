@@ -20,7 +20,7 @@ from aura.schemas.events import (
 def event_to_wire(event: Any) -> WireEvent:
     """Convert one internal event into Aura's stable external shape."""
     if isinstance(event, dict):
-        return event
+        return event  # type: ignore[return-value]
     if isinstance(event, AssistantDelta):
         return {"event": "assistant_delta", "text": event.text}
     if isinstance(event, ToolCallStarted):

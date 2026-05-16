@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from aura.core.skills.registry import SkillRegistry
-from aura.core.skills.types import Skill
+from aura.capabilities.skills_runtime.registry import SkillRegistry
+from aura.capabilities.skills_runtime.types import Skill
 
 
 def _skill(name: str, *, desc: str = "d", body: str = "b") -> Skill:

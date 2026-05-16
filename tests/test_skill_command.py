@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from aura.capabilities.skills_runtime.command import SkillCommand
+from aura.capabilities.skills_runtime.types import Skill
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.commands import CommandRegistry
 from aura.core.persistence.storage import SessionStorage
-from aura.core.skills.command import SkillCommand
-from aura.core.skills.types import Skill
 from tests.conftest import FakeChatModel
 
 

@@ -22,11 +22,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from aura.capabilities.skills_runtime.registry import SkillRegistry
+from aura.capabilities.skills_runtime.types import Skill
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.persistence.storage import SessionStorage
-from aura.core.skills.registry import SkillRegistry
-from aura.core.skills.types import Skill
 from aura.schemas.tool import ToolError
 from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.skill import SkillTool

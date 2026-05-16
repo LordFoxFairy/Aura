@@ -21,9 +21,9 @@ Context integration lives in :mod:`aura.core.memory.context` via two tags:
 invocation body injection, body pre-rendered with variable substitution).
 """
 
-from aura.core.skills.command import SkillCommand
-from aura.core.skills.errors import format_missing_args_error
-from aura.core.skills.loader import (
+from aura.capabilities.skills_runtime.command import SkillCommand
+from aura.capabilities.skills_runtime.errors import format_missing_args_error
+from aura.capabilities.skills_runtime.loader import (
     activate_conditional_skills_for_paths,
     activated_conditional_names,
     clear_conditional_state,
@@ -31,8 +31,8 @@ from aura.core.skills.loader import (
     load_skills,
     render_skill_body,
 )
-from aura.core.skills.registry import SkillRegistry
-from aura.core.skills.types import Skill, SkillLayer
+from aura.capabilities.skills_runtime.registry import SkillRegistry
+from aura.capabilities.skills_runtime.types import Skill, SkillLayer
 
 __all__ = [
     "Skill",

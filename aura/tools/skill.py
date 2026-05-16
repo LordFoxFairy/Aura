@@ -35,13 +35,13 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from aura.capabilities.skills_runtime.command import install_skill_allow_rules
+from aura.capabilities.skills_runtime.errors import format_missing_args_error
+from aura.capabilities.skills_runtime.loader import render_skill_body
+from aura.capabilities.skills_runtime.registry import SkillRegistry
+from aura.capabilities.skills_runtime.restrict import install_restrict_lease
+from aura.capabilities.skills_runtime.types import Skill
 from aura.core.permissions.session import SessionRuleSet
-from aura.core.skills.command import install_skill_allow_rules
-from aura.core.skills.errors import format_missing_args_error
-from aura.core.skills.loader import render_skill_body
-from aura.core.skills.registry import SkillRegistry
-from aura.core.skills.restrict import install_restrict_lease
-from aura.core.skills.types import Skill
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError, ToolMetadata
 

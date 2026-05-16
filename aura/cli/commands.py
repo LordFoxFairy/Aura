@@ -9,6 +9,7 @@ path stable for existing callers.
 
 from __future__ import annotations
 
+from aura.capabilities.skills_runtime.command import SkillCommand
 from aura.core.agent import Agent
 from aura.core.commands import Command, CommandRegistry, CommandResult
 from aura.core.commands.buddy import BuddyCommand
@@ -31,7 +32,6 @@ from aura.core.commands.mcp_cmd import MCPCommand
 from aura.core.commands.stats import StatsCommand
 from aura.core.commands.tasks import TaskGetCommand, TasksCommand, TaskStopCommand
 from aura.core.commands.team import TeamCommand
-from aura.core.skills.command import SkillCommand
 
 __all__ = [
     "Command",

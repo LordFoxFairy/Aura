@@ -21,14 +21,14 @@ from pathlib import Path
 
 import pytest
 
-from aura.core.persistence import journal as journal_module
-from aura.core.skills.loader import (
+from aura.capabilities.skills_runtime.loader import (
     activate_conditional_skills_for_paths,
     clear_conditional_state,
     get_conditional_skills,
     load_skills,
     render_skill_body,
 )
+from aura.core.persistence import journal as journal_module
 
 
 def _write(path: Path, text: str) -> None:
@@ -601,7 +601,7 @@ def test_render_skill_body_substitutes_claude_skill_dir_namespace(
         "aura: ${AURA_SKILL_DIR}/x\n"
         "claude: ${CLAUDE_SKILL_DIR}/y\n",
     )
-    from aura.core.skills.types import Skill
+    from aura.capabilities.skills_runtime.types import Skill
     skill = Skill(
         name="n",
         description="d",
@@ -620,7 +620,7 @@ def test_render_skill_body_substitutes_claude_skill_dir_namespace(
 def test_render_skill_body_substitutes_claude_session_id_namespace(
     tmp_path: Path,
 ) -> None:
-    from aura.core.skills.types import Skill
+    from aura.capabilities.skills_runtime.types import Skill
     skill = Skill(
         name="n",
         description="d",
@@ -671,7 +671,7 @@ def test_inline_cmd_in_body_emits_journal_warning(tmp_path: Path) -> None:
 
 def _make_skill_with_body(body: str, tmp_path: Path):  # type: ignore[no-untyped-def]
     """Construct a Skill dataclass directly so render tests don't have to round-trip yaml."""
-    from aura.core.skills.types import Skill
+    from aura.capabilities.skills_runtime.types import Skill
     return Skill(
         name="t",
         description="d",
@@ -750,7 +750,7 @@ def test_render_inline_cmd_inside_fenced_block_preserved(tmp_path: Path) -> None
 
 def test_render_skill_body_returns_helper_command_list(tmp_path: Path) -> None:
     """A1 helper: ``_sanitize_inline_cmds`` exposes the original commands for callers."""
-    from aura.core.skills.loader import _sanitize_inline_cmds
+    from aura.capabilities.skills_runtime.loader import _sanitize_inline_cmds
     sanitized, originals = _sanitize_inline_cmds("a !`x` b !`y` c")
     # Placeholders inserted; originals captured in order.
     assert "[Aura: inline shell not supported — original: !`x`]" in sanitized

@@ -7,6 +7,11 @@ from types import SimpleNamespace
 
 from rich.console import Console
 
+from aura.adapters.protocol.wire import (
+    agent_state_to_wire,
+    event_to_wire,
+    permission_request_to_wire,
+)
 from aura.cli.render import Renderer
 from aura.desktop import headless
 from aura.schemas.events import (
@@ -18,7 +23,6 @@ from aura.schemas.events import (
     ToolCallProgress,
     ToolCallStarted,
 )
-from aura.transport.wire import agent_state_to_wire, event_to_wire, permission_request_to_wire
 
 
 class _UnsafeArg:
@@ -27,6 +31,7 @@ class _UnsafeArg:
 
 
 def test_event_to_wire_preserves_desktop_event_shapes() -> None:
+    assert event_to_wire.__module__ == "aura.adapters.protocol.wire"
     assert event_to_wire(AssistantDelta("hi")) == {
         "event": "assistant_delta",
         "text": "hi",

@@ -1,0 +1,141 @@
+"""Canonical Aura wire serializer implementation."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from aura.domain.protocol.events import WireEvent
+from aura.schemas.events import (
+    AssistantDelta,
+    Final,
+    PermissionAudit,
+    ToolCallCompleted,
+    ToolCallProgress,
+    ToolCallStarted,
+)
+
+
+def event_to_wire(event: Any) -> WireEvent:
+    """Convert one internal event into Aura's stable external shape."""
+    if isinstance(event, dict):
+        return event
+    if isinstance(event, AssistantDelta):
+        return {"event": "assistant_delta", "text": event.text}
+    if isinstance(event, ToolCallStarted):
+        started_payload: WireEvent = {
+            "event": "tool_call_started",
+            "name": event.name,
+            "input": event.input,
+        }
+        if event.id:
+            started_payload["id"] = event.id
+        return started_payload
+    if isinstance(event, ToolCallProgress):
+        progress_payload: WireEvent = {
+            "event": "tool_call_progress",
+            "name": event.name,
+            "stream": event.stream,
+            "chunk": event.chunk,
+        }
+        if event.id:
+            progress_payload["id"] = event.id
+        return progress_payload
+    if isinstance(event, ToolCallCompleted):
+        is_error = event.error is not None
+        if is_error:
+            text = str(event.error)
+        else:
+            try:
+                text = json.dumps(event.output, default=str, ensure_ascii=False)
+            except (TypeError, ValueError):
+                text = repr(event.output)
+        completed_payload: WireEvent = {
+            "event": "tool_call_completed",
+            "name": event.name,
+            "content": {"text": text, "error": is_error},
+        }
+        if event.id:
+            completed_payload["id"] = event.id
+        return completed_payload
+    if isinstance(event, PermissionAudit):
+        return {
+            "event": "permission_audit",
+            "tool": event.tool,
+            "text": event.text,
+        }
+    if isinstance(event, Final):
+        return {
+            "event": "final",
+            "message": event.message,
+            "reason": getattr(event, "reason", "natural"),
+        }
+    return {"event": "unknown", "type": type(event).__name__}
+
+
+def permission_request_to_wire(
+    *,
+    request_id: str,
+    tool: str,
+    args: Any,
+    rule_hint: str,
+    is_destructive: bool,
+) -> WireEvent:
+    """Build the external permission prompt event used by interactive UIs."""
+    return {
+        "event": "permission_request",
+        "id": request_id,
+        "tool": tool,
+        "args": _json_safe(args),
+        "rule_hint": rule_hint,
+        "is_destructive": bool(is_destructive),
+    }
+
+
+def compact_event_to_wire(
+    *,
+    trigger: str,
+    tokens_before: int,
+    tokens_after: int,
+    outcome: str,
+    duration_ms: float,
+) -> WireEvent:
+    return {
+        "event": "compact_event",
+        "trigger": trigger,
+        "tokens_before": int(tokens_before),
+        "tokens_after": int(tokens_after),
+        "outcome": outcome,
+        "duration_ms": float(duration_ms),
+    }
+
+
+def agent_state_to_wire(agent: Any, last_turn_seconds: float) -> WireEvent:
+    """Snapshot agent state into the external ``aura_state`` event."""
+    stats = agent.state.slots.token_stats
+    return {
+        "event": "aura_state",
+        "model": agent.current_model or "",
+        "mode": agent.mode,
+        "cwd": str(Path.cwd()),
+        "tokens": {
+            "last_input": int(stats.last_input_tokens),
+            "last_output": int(stats.last_output_tokens),
+            "last_cache_read": int(stats.last_cache_read_tokens),
+            "total_input": int(stats.total_input_tokens),
+            "total_output": int(stats.total_output_tokens),
+            "total_cache_read": int(stats.total_cache_read_tokens),
+            "turn_count": int(stats.turn_count),
+        },
+        "pinned": int(agent.pinned_tokens_estimate or 0),
+        "window": int(agent.context_window or 0),
+        "last_turn_seconds": float(last_turn_seconds),
+    }
+
+
+def _json_safe(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, default=str))
+    except (TypeError, ValueError):
+        return {"_repr": repr(value)}

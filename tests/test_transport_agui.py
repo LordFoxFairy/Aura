@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from aura.transport.agui import AguiAdapter
+from aura.adapters.protocol.agui import AguiAdapter
 
 
 def test_agui_adapter_wraps_text_stream_in_run_and_message_events() -> None:

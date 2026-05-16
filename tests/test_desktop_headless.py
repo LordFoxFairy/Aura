@@ -35,7 +35,7 @@ async def _wait_for_emitted(
     await asyncio.wait_for(_wait(), timeout=1)
 
 
-def test_event_to_dict_matches_frontend_contract() -> None:
+def test_event_to_dict_matches_frontend_contract_via_canonical_adapter() -> None:
     assert headless._event_to_dict(AssistantDelta("hi")) == {
         "event": "assistant_delta",
         "text": "hi",

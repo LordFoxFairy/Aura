@@ -8,16 +8,16 @@ from typing import Any
 
 import pytest
 
-from aura.schemas.events import AssistantDelta, Final, ToolCallStarted
-from aura.schemas.state import LoopSlots
-from aura.transport.agui import AguiAdapter
-from aura.transport.sse import encode_json_sse
-from aura.transport.stream import (
+from aura.adapters.protocol.agui import AguiAdapter
+from aura.adapters.protocol.stream import (
     stream_agent_agui,
     stream_agent_agui_sse,
     stream_agent_wire,
     stream_agent_wire_sse,
 )
+from aura.schemas.events import AssistantDelta, Final, ToolCallStarted
+from aura.schemas.state import LoopSlots
+from aura.transport.sse import encode_json_sse
 
 
 class _FakeAgent:

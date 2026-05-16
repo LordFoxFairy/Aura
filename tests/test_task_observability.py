@@ -21,6 +21,7 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatResult
 
+from aura.adapters.protocol.wire import task_notification_to_wire
 from aura.config.schema import AuraConfig
 from aura.core.abort import AbortController, current_abort_signal
 from aura.core.agent import Agent
@@ -96,6 +97,36 @@ async def test_subagent_completion_pushes_notification_to_parent(
         assert n.status == "completed"
         assert n.description == "probe"
         assert n.summary == "child-final"
+    finally:
+        await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_subagent_notification_maps_to_coordination_wire_event(
+    tmp_path: Path,
+) -> None:
+    agent = _make_agent(tmp_path)
+    try:
+        store = agent._tasks_store
+        rec = store.create(description="probe", prompt="hi")
+        await run_task(store, _make_factory(), rec.id)
+
+        notification = agent.pending_notifications[0]
+        payload = task_notification_to_wire(notification)
+
+        assert payload == {
+            "event": "coordination",
+            "family": "subagent",
+            "action": "task_notification",
+            "subagent_id": rec.id,
+            "payload": {
+                "task_id": rec.id,
+                "status": "completed",
+                "summary": "child-final",
+                "description": "probe",
+                "terminal": True,
+            },
+        }
     finally:
         await agent.aclose()
 

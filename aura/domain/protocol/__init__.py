@@ -4,6 +4,8 @@ from aura.domain.protocol.events import (
     CommonProtocolEvent,
     CoordinationEvent,
     SubagentProtocolEvent,
+    SubagentTaskNotificationPayload,
+    TeamMessagePayload,
     TeamProtocolEvent,
     WireEvent,
 )
@@ -14,6 +16,8 @@ __all__ = [
     "CoordinationEvent",
     "HeadlessRequest",
     "SubagentProtocolEvent",
+    "SubagentTaskNotificationPayload",
+    "TeamMessagePayload",
     "TeamProtocolEvent",
     "WireEvent",
 ]

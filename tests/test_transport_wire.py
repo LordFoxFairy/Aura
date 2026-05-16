@@ -12,8 +12,10 @@ from aura.adapters.protocol.wire import (
     agent_state_to_wire,
     event_to_wire,
     permission_request_to_wire,
+    task_notification_to_wire,
 )
 from aura.cli.render import Renderer
+from aura.core.tasks.types import TaskNotification
 from aura.desktop import headless
 from aura.domain.protocol.events import (
     AssistantDeltaEvent,
@@ -153,6 +155,31 @@ def test_permission_request_to_wire_uses_frontend_contract_and_safe_args() -> No
         "args": {"cmd": "unsafe-value"},
         "rule_hint": 'bash:{"cmd":"echo hi"}',
         "is_destructive": True,
+    }
+
+
+def test_task_notification_to_wire_maps_terminal_subagent_notification() -> None:
+    payload = task_notification_to_wire(
+        TaskNotification(
+            task_id="task_12345678",
+            status="completed",
+            summary="child-final",
+            description="probe",
+        ),
+    )
+
+    assert payload == {
+        "event": "coordination",
+        "family": "subagent",
+        "action": "task_notification",
+        "subagent_id": "task_12345678",
+        "payload": {
+            "task_id": "task_12345678",
+            "status": "completed",
+            "summary": "child-final",
+            "description": "probe",
+            "terminal": True,
+        },
     }
 
 

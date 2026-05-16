@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
+from aura.core.tasks.types import TaskNotification
+from aura.core.teams.types import TeamMessage
 from aura.domain.protocol.events import (
     AssistantDeltaEvent,
     AuraStateEvent,
@@ -13,6 +15,9 @@ from aura.domain.protocol.events import (
     FinalEvent,
     PermissionAuditEvent,
     PermissionRequestEvent,
+    SubagentProtocolEvent,
+    TeamMessagePayload,
+    TeamProtocolEvent,
     ToolCallCompletedEvent,
     ToolCallProgressEvent,
     ToolCallStartedEvent,
@@ -153,6 +158,67 @@ def agent_state_to_wire(agent: Any, last_turn_seconds: float) -> AuraStateEvent:
         "pinned": int(agent.pinned_tokens_estimate or 0),
         "window": int(agent.context_window or 0),
         "last_turn_seconds": float(last_turn_seconds),
+    }
+
+
+def task_notification_to_wire(
+    notification: TaskNotification,
+    *,
+    parent_id: str | None = None,
+) -> SubagentProtocolEvent:
+    """Map a terminal subagent task notification to coordination wire shape."""
+    if notification.status == "running":
+        raise ValueError("task_notification_to_wire requires a terminal status")
+    if notification.status == "completed":
+        status: Literal["completed", "failed", "cancelled"] = "completed"
+    elif notification.status == "failed":
+        status = "failed"
+    else:
+        status = "cancelled"
+    payload: SubagentProtocolEvent = {
+        "event": "coordination",
+        "family": "subagent",
+        "action": "task_notification",
+        "subagent_id": notification.task_id,
+        "payload": {
+            "task_id": notification.task_id,
+            "status": status,
+            "summary": notification.summary,
+            "description": notification.description,
+            "terminal": True,
+        },
+    }
+    if parent_id:
+        payload["parent_id"] = parent_id
+    return payload
+
+
+def team_message_to_wire(
+    message: TeamMessage,
+    *,
+    team_id: str,
+    member_id: str | None = None,
+) -> TeamProtocolEvent:
+    """Map a team mailbox send payload to coordination wire shape."""
+    kind = message.kind
+    action: Literal["message_sent", "control_sent"] = (
+        "message_sent" if kind == "text" else "control_sent"
+    )
+    envelope_payload: TeamMessagePayload = {
+        "msg_id": message.msg_id,
+        "sender": message.sender,
+        "recipient": message.recipient,
+        "body": message.body,
+        "kind": kind,
+        "sent_at": float(message.sent_at),
+    }
+    return {
+        "event": "coordination",
+        "family": "team",
+        "action": action,
+        "team_id": team_id,
+        "member_id": member_id or message.recipient,
+        "payload": envelope_payload,
     }
 
 

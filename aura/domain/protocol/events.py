@@ -108,26 +108,43 @@ class UnknownEvent(TypedDict):
     type: str
 
 
+class SubagentTaskNotificationPayload(TypedDict):
+    task_id: str
+    status: Literal["completed", "failed", "cancelled"]
+    summary: str | None
+    description: str
+    terminal: Literal[True]
+
+
 class SubagentProtocolEvent(TypedDict):
-    """Placeholder coordination envelope for future subagent protocol traffic."""
+    """Coordination envelope for parent-observed subagent terminal signals."""
 
     event: Literal["coordination"]
     family: Literal["subagent"]
-    action: str
-    subagent_id: NotRequired[str]
+    action: Literal["task_notification"]
+    subagent_id: str
+    payload: SubagentTaskNotificationPayload
     parent_id: NotRequired[str]
-    payload: NotRequired[dict[str, Any]]
+
+
+class TeamMessagePayload(TypedDict):
+    msg_id: str
+    sender: str
+    recipient: str
+    body: str
+    kind: Literal["text", "shutdown_request", "shutdown_response"]
+    sent_at: float
 
 
 class TeamProtocolEvent(TypedDict):
-    """Placeholder coordination envelope for future team protocol traffic."""
+    """Coordination envelope for observable team mailbox send actions."""
 
     event: Literal["coordination"]
     family: Literal["team"]
-    action: str
-    team_id: NotRequired[str]
-    member_id: NotRequired[str]
-    payload: NotRequired[dict[str, Any]]
+    action: Literal["message_sent", "control_sent"]
+    team_id: str
+    member_id: str
+    payload: TeamMessagePayload
 
 
 CoordinationEvent: TypeAlias = SubagentProtocolEvent | TeamProtocolEvent
@@ -157,6 +174,8 @@ __all__ = [
     "PermissionEvent",
     "PermissionRequestEvent",
     "SubagentProtocolEvent",
+    "SubagentTaskNotificationPayload",
+    "TeamMessagePayload",
     "TeamProtocolEvent",
     "TokenUsageSnapshot",
     "ToolCallCompletedEvent",

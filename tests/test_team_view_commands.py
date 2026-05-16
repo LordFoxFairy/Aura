@@ -26,6 +26,7 @@ from typing import Any
 
 import pytest
 
+from aura.adapters.protocol.wire import team_message_to_wire
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.commands.team import TeamCommand
@@ -151,6 +152,73 @@ async def test_team_view_active_returns_snapshot_with_members_and_messages(
     assert "ping" in result.text
     # Footer hint guides the next step.
     assert "/team teammate" in result.text
+
+
+@pytest.mark.asyncio
+async def test_team_send_text_message_maps_to_coordination_wire_event(
+    tmp_path: Path,
+) -> None:
+    agent = _agent(tmp_path)
+    mgr = _install_no_runtime_manager(agent)
+    cmd = TeamCommand()
+    await cmd.handle("create demo", agent)
+    await cmd.handle("enter demo", agent)
+    await cmd.handle("add scout general-purpose", agent)
+
+    sent = mgr.send(sender="leader", recipient="scout", body="ping")
+    payload = team_message_to_wire(sent[0], team_id="demo")
+
+    assert payload == {
+        "event": "coordination",
+        "family": "team",
+        "action": "message_sent",
+        "team_id": "demo",
+        "member_id": "scout",
+        "payload": {
+            "msg_id": sent[0].msg_id,
+            "sender": "leader",
+            "recipient": "scout",
+            "body": "ping",
+            "kind": "text",
+            "sent_at": sent[0].sent_at,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_team_control_message_maps_to_control_coordination_wire_event(
+    tmp_path: Path,
+) -> None:
+    agent = _agent(tmp_path)
+    mgr = _install_no_runtime_manager(agent)
+    cmd = TeamCommand()
+    await cmd.handle("create demo", agent)
+    await cmd.handle("enter demo", agent)
+    await cmd.handle("add scout general-purpose", agent)
+
+    sent = mgr.send(
+        sender="leader",
+        recipient="scout",
+        body="shutdown",
+        kind="shutdown_request",
+    )
+    payload = team_message_to_wire(sent[0], team_id="demo")
+
+    assert payload == {
+        "event": "coordination",
+        "family": "team",
+        "action": "control_sent",
+        "team_id": "demo",
+        "member_id": "scout",
+        "payload": {
+            "msg_id": sent[0].msg_id,
+            "sender": "leader",
+            "recipient": "scout",
+            "body": "shutdown",
+            "kind": "shutdown_request",
+            "sent_at": sent[0].sent_at,
+        },
+    }
 
 
 @pytest.mark.asyncio

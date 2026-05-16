@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 
 from aura.adapters.protocol.agui import AguiAdapter
+from aura.adapters.protocol.bridge import AguiAdapter as BridgeAguiAdapter
 from aura.adapters.protocol.bridge import AguiEventBridge
 from aura.domain.protocol.events import (
     AuraStateEvent,
@@ -15,6 +16,11 @@ from aura.domain.protocol.events import (
 )
 from aura.schemas.events import AssistantDelta, Final
 from aura.schemas.state import LoopSlots
+
+
+def test_agui_adapter_is_bridge_owned_implementation() -> None:
+    assert AguiAdapter is BridgeAguiAdapter
+    assert AguiAdapter.__module__ == "aura.adapters.protocol.bridge"
 
 
 def test_agui_adapter_wraps_text_stream_in_run_and_message_events() -> None:
@@ -215,24 +221,40 @@ def test_agui_adapter_maps_coordination_placeholders_to_family_specific_custom_e
     subagent_event: SubagentProtocolEvent = {
         "event": "coordination",
         "family": "subagent",
-        "action": "started",
+        "action": "task_notification",
         "subagent_id": "sa_1",
+        "payload": {
+            "task_id": "sa_1",
+            "status": "completed",
+            "summary": None,
+            "description": "coordination probe",
+            "terminal": True,
+        },
     }
     team_event: TeamProtocolEvent = {
         "event": "coordination",
         "family": "team",
-        "action": "member_joined",
+        "action": "message_sent",
         "team_id": "team_1",
+        "member_id": "scout",
+        "payload": {
+            "msg_id": "msg_1",
+            "sender": "leader",
+            "recipient": "scout",
+            "body": "ping",
+            "kind": "text",
+            "sent_at": 123.0,
+        },
     }
 
     assert adapter.convert(subagent_event) == [{
         "type": "CUSTOM",
-        "name": "aura.subagent.event",
+        "name": "aura.subagent.task_notification",
         "value": subagent_event,
     }]
     assert adapter.convert(team_event) == [{
         "type": "CUSTOM",
-        "name": "aura.team.event",
+        "name": "aura.team.message_sent",
         "value": team_event,
     }]
 

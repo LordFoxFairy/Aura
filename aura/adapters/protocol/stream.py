@@ -7,8 +7,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
-from aura.adapters.protocol.agui import AguiAdapter
-from aura.adapters.protocol.bridge import AguiEventBridge
+from aura.adapters.protocol.bridge import AguiAdapter, AguiEventBridge
 from aura.adapters.protocol.wire import agent_state_to_wire, event_to_wire
 from aura.domain.protocol.events import ErrorEvent, WireEvent
 from aura.schemas.events import Final

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -58,6 +58,8 @@ async def test_stream_agent_wire_serializes_events_and_final_state() -> None:
         )
     ]
 
+    state_event = cast(dict[str, Any], events[-1])
+
     assert events == [
         {"event": "assistant_delta", "text": "hi"},
         {
@@ -71,7 +73,7 @@ async def test_stream_agent_wire_serializes_events_and_final_state() -> None:
             "event": "aura_state",
             "model": "fake:model",
             "mode": "default",
-            "cwd": events[-1]["cwd"],
+            "cwd": state_event["cwd"],
             "tokens": {
                 "last_input": 0,
                 "last_output": 0,

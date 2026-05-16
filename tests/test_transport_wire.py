@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 from types import SimpleNamespace
+from typing import get_args
 
 from rich.console import Console
 
@@ -14,6 +15,21 @@ from aura.adapters.protocol.wire import (
 )
 from aura.cli.render import Renderer
 from aura.desktop import headless
+from aura.domain.protocol.events import (
+    AssistantDeltaEvent,
+    CompactEvent,
+    ErrorEvent,
+    FinalEvent,
+    PermissionAuditEvent,
+    PermissionRequestEvent,
+    SubagentProtocolEvent,
+    TeamProtocolEvent,
+    ToolCallCompletedEvent,
+    ToolCallProgressEvent,
+    ToolCallStartedEvent,
+    UnknownEvent,
+    WireEvent,
+)
 from aura.schemas.events import (
     AgentEvent,
     AssistantDelta,
@@ -28,6 +44,23 @@ from aura.schemas.events import (
 class _UnsafeArg:
     def __str__(self) -> str:
         return "unsafe-value"
+
+
+def test_wire_event_is_explicit_union_of_protocol_families() -> None:
+    members = set(get_args(WireEvent))
+
+    assert AssistantDeltaEvent in members
+    assert ToolCallStartedEvent in members
+    assert ToolCallProgressEvent in members
+    assert ToolCallCompletedEvent in members
+    assert PermissionRequestEvent in members
+    assert PermissionAuditEvent in members
+    assert FinalEvent in members
+    assert CompactEvent in members
+    assert ErrorEvent in members
+    assert SubagentProtocolEvent in members
+    assert TeamProtocolEvent in members
+    assert UnknownEvent in members
 
 
 def test_event_to_wire_preserves_desktop_event_shapes() -> None:

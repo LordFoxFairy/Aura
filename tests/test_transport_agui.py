@@ -7,6 +7,12 @@ from types import SimpleNamespace
 
 from aura.adapters.protocol.agui import AguiAdapter
 from aura.adapters.protocol.bridge import AguiEventBridge
+from aura.domain.protocol.events import (
+    AuraStateEvent,
+    PermissionRequestEvent,
+    SubagentProtocolEvent,
+    TeamProtocolEvent,
+)
 from aura.schemas.events import AssistantDelta, Final
 from aura.schemas.state import LoopSlots
 
@@ -166,23 +172,68 @@ def test_agui_adapter_gives_idless_tool_calls_distinct_fallback_ids() -> None:
 
 def test_agui_adapter_maps_aura_specific_events_to_custom() -> None:
     adapter = AguiAdapter(run_id="run-3")
-
-    assert adapter.convert({
+    permission_request: PermissionRequestEvent = {
         "event": "permission_request",
         "id": "perm_1",
         "tool": "write_file",
-    }) == [{
+        "args": {},
+        "rule_hint": "write_file",
+        "is_destructive": False,
+    }
+    aura_state: AuraStateEvent = {
+        "event": "aura_state",
+        "model": "",
+        "mode": "default",
+        "cwd": "/tmp",
+        "tokens": {
+            "last_input": 0,
+            "last_output": 0,
+            "last_cache_read": 0,
+            "total_input": 0,
+            "total_output": 0,
+            "total_cache_read": 0,
+            "turn_count": 0,
+        },
+        "pinned": 0,
+        "window": 0,
+        "last_turn_seconds": 0.0,
+    }
+
+    assert adapter.convert(permission_request) == [{
         "type": "CUSTOM",
         "name": "aura.permission.request",
-        "value": {
-            "event": "permission_request",
-            "id": "perm_1",
-            "tool": "write_file",
-        },
+        "value": permission_request,
     }]
-    assert adapter.convert({"event": "aura_state", "mode": "default"}) == [{
+    assert adapter.convert(aura_state) == [{
         "type": "STATE_SNAPSHOT",
-        "snapshot": {"event": "aura_state", "mode": "default"},
+        "snapshot": aura_state,
+    }]
+
+
+def test_agui_adapter_maps_coordination_placeholders_to_family_specific_custom_events() -> None:
+    adapter = AguiAdapter(run_id="run-coord")
+    subagent_event: SubagentProtocolEvent = {
+        "event": "coordination",
+        "family": "subagent",
+        "action": "started",
+        "subagent_id": "sa_1",
+    }
+    team_event: TeamProtocolEvent = {
+        "event": "coordination",
+        "family": "team",
+        "action": "member_joined",
+        "team_id": "team_1",
+    }
+
+    assert adapter.convert(subagent_event) == [{
+        "type": "CUSTOM",
+        "name": "aura.subagent.event",
+        "value": subagent_event,
+    }]
+    assert adapter.convert(team_event) == [{
+        "type": "CUSTOM",
+        "name": "aura.team.event",
+        "value": team_event,
     }]
 
 

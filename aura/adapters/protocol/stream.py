@@ -10,7 +10,7 @@ from typing import Any
 from aura.adapters.protocol.agui import AguiAdapter
 from aura.adapters.protocol.bridge import AguiEventBridge
 from aura.adapters.protocol.wire import agent_state_to_wire, event_to_wire
-from aura.domain.protocol.events import WireEvent
+from aura.domain.protocol.events import ErrorEvent, WireEvent
 from aura.schemas.events import Final
 
 
@@ -103,13 +103,11 @@ async def stream_agent_wire_sse(
         async for payload in stream_agent_wire(agent, prompt, clock=clock):
             yield encode_json_sse(payload, event=event)
     except Exception as exc:
-        yield encode_json_sse(
-            {
-                "event": "error",
-                "message": f"{type(exc).__name__}: {exc}",
-            },
-            event=event,
-        )
+        error_payload: ErrorEvent = {
+            "event": "error",
+            "message": f"{type(exc).__name__}: {exc}",
+        }
+        yield encode_json_sse(error_payload, event=event)
 
 
 async def stream_agent_agui_sse(

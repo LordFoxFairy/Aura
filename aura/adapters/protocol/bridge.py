@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypeGuard
 
 from aura.adapters.protocol.agui import AguiAdapter
 from aura.adapters.protocol.wire import agent_state_to_wire, event_to_wire
-from aura.domain.protocol.events import WireEvent
+from aura.domain.protocol.events import FinalEvent, WireEvent
 
 
 class AguiEventBridge:
@@ -61,7 +61,7 @@ class AguiEventBridge:
     ) -> list[dict[str, Any]]:
         """Convert one Aura wire event into ordered AG-UI payloads."""
         out: list[dict[str, Any]] = []
-        if wire_event.get("event") == "final" and agent is not None and turn_started_at is not None:
+        if _is_final_event(wire_event) and agent is not None and turn_started_at is not None:
             out.extend(
                 self._adapter.convert(
                     agent_state_to_wire(agent, self._clock() - turn_started_at),
@@ -74,6 +74,10 @@ class AguiEventBridge:
         """Convert a terminal error into AG-UI payloads."""
         message = exc if isinstance(exc, str) else f"{type(exc).__name__}: {exc}"
         return self._adapter.error(message)
+
+
+def _is_final_event(wire_event: WireEvent) -> TypeGuard[FinalEvent]:
+    return wire_event.get("event") == "final"
 
 
 __all__ = ["AguiEventBridge"]

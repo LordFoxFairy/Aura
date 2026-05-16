@@ -112,6 +112,12 @@ class AguiAdapter:
                 "name": "aura.compact.event",
                 "value": event,
             }]
+        if kind == "coordination":
+            return [{
+                "type": "CUSTOM",
+                "name": _coordination_custom_event_name(event),
+                "value": event,
+            }]
         return [{"type": "CUSTOM", "name": "aura.event", "value": event}]
 
     def finish_run(self, *, reason: str = "natural") -> list[dict[str, Any]]:
@@ -178,3 +184,10 @@ def _explicit_tool_call_id(event: WireEvent) -> str | None:
     if isinstance(raw, str) and raw:
         return raw
     return None
+
+
+def _coordination_custom_event_name(event: WireEvent) -> str:
+    family = event.get("family")
+    if isinstance(family, str) and family:
+        return f"aura.{family}.event"
+    return "aura.coordination.event"

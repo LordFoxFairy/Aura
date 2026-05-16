@@ -4,9 +4,21 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from aura.domain.protocol.events import WireEvent
+from aura.domain.protocol.events import (
+    AssistantDeltaEvent,
+    AuraStateEvent,
+    CompactEvent,
+    FinalEvent,
+    PermissionAuditEvent,
+    PermissionRequestEvent,
+    ToolCallCompletedEvent,
+    ToolCallProgressEvent,
+    ToolCallStartedEvent,
+    UnknownEvent,
+    WireEvent,
+)
 from aura.schemas.events import (
     AssistantDelta,
     Final,
@@ -20,11 +32,15 @@ from aura.schemas.events import (
 def event_to_wire(event: Any) -> WireEvent:
     """Convert one internal event into Aura's stable external shape."""
     if isinstance(event, dict):
-        return event  # type: ignore[return-value]
+        return cast(WireEvent, event)
     if isinstance(event, AssistantDelta):
-        return {"event": "assistant_delta", "text": event.text}
+        assistant_payload: AssistantDeltaEvent = {
+            "event": "assistant_delta",
+            "text": event.text,
+        }
+        return assistant_payload
     if isinstance(event, ToolCallStarted):
-        started_payload: WireEvent = {
+        started_payload: ToolCallStartedEvent = {
             "event": "tool_call_started",
             "name": event.name,
             "input": event.input,
@@ -33,7 +49,7 @@ def event_to_wire(event: Any) -> WireEvent:
             started_payload["id"] = event.id
         return started_payload
     if isinstance(event, ToolCallProgress):
-        progress_payload: WireEvent = {
+        progress_payload: ToolCallProgressEvent = {
             "event": "tool_call_progress",
             "name": event.name,
             "stream": event.stream,
@@ -51,7 +67,7 @@ def event_to_wire(event: Any) -> WireEvent:
                 text = json.dumps(event.output, default=str, ensure_ascii=False)
             except (TypeError, ValueError):
                 text = repr(event.output)
-        completed_payload: WireEvent = {
+        completed_payload: ToolCallCompletedEvent = {
             "event": "tool_call_completed",
             "name": event.name,
             "content": {"text": text, "error": is_error},
@@ -60,18 +76,24 @@ def event_to_wire(event: Any) -> WireEvent:
             completed_payload["id"] = event.id
         return completed_payload
     if isinstance(event, PermissionAudit):
-        return {
+        audit_payload: PermissionAuditEvent = {
             "event": "permission_audit",
             "tool": event.tool,
             "text": event.text,
         }
+        return audit_payload
     if isinstance(event, Final):
-        return {
+        final_payload: FinalEvent = {
             "event": "final",
             "message": event.message,
             "reason": getattr(event, "reason", "natural"),
         }
-    return {"event": "unknown", "type": type(event).__name__}
+        return final_payload
+    unknown_payload: UnknownEvent = {
+        "event": "unknown",
+        "type": type(event).__name__,
+    }
+    return unknown_payload
 
 
 def permission_request_to_wire(
@@ -81,7 +103,7 @@ def permission_request_to_wire(
     args: Any,
     rule_hint: str,
     is_destructive: bool,
-) -> WireEvent:
+) -> PermissionRequestEvent:
     """Build the external permission prompt event used by interactive UIs."""
     return {
         "event": "permission_request",
@@ -100,7 +122,7 @@ def compact_event_to_wire(
     tokens_after: int,
     outcome: str,
     duration_ms: float,
-) -> WireEvent:
+) -> CompactEvent:
     return {
         "event": "compact_event",
         "trigger": trigger,
@@ -111,7 +133,7 @@ def compact_event_to_wire(
     }
 
 
-def agent_state_to_wire(agent: Any, last_turn_seconds: float) -> WireEvent:
+def agent_state_to_wire(agent: Any, last_turn_seconds: float) -> AuraStateEvent:
     """Snapshot agent state into the external ``aura_state`` event."""
     stats = agent.state.slots.token_stats
     return {

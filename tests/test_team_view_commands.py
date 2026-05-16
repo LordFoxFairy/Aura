@@ -222,6 +222,43 @@ async def test_team_control_message_maps_to_control_coordination_wire_event(
 
 
 @pytest.mark.asyncio
+async def test_team_send_enqueues_protocol_events_for_external_stream(
+    tmp_path: Path,
+) -> None:
+    agent = _agent(tmp_path)
+    mgr = _install_no_runtime_manager(agent)
+    cmd = TeamCommand()
+    await cmd.handle("create demo", agent)
+    await cmd.handle("enter demo", agent)
+    await cmd.handle("add scout general-purpose", agent)
+
+    sent = mgr.send(sender="leader", recipient="scout", body="ping")
+
+    assert mgr.pending_protocol_events == (
+        team_message_to_wire(sent[0], team_id="demo"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_drain_protocol_events_includes_team_send_events(
+    tmp_path: Path,
+) -> None:
+    agent = _agent(tmp_path)
+    mgr = _install_no_runtime_manager(agent)
+    cmd = TeamCommand()
+    await cmd.handle("create demo", agent)
+    await cmd.handle("enter demo", agent)
+    await cmd.handle("add scout general-purpose", agent)
+
+    sent = mgr.send(sender="leader", recipient="scout", body="ping")
+
+    assert agent.drain_protocol_events() == [
+        team_message_to_wire(sent[0], team_id="demo"),
+    ]
+    assert agent.drain_protocol_events() == []
+
+
+@pytest.mark.asyncio
 async def test_team_view_explicit_name_works_without_active(
     tmp_path: Path,
 ) -> None:

@@ -58,6 +58,7 @@ from aura.core.skills import Skill, SkillRegistry, load_skills
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
 from aura.core.tokens import estimate_message_tokens, estimate_text_tokens
+from aura.domain.protocol.events import WireEvent
 from aura.schemas.events import AgentEvent, AssistantDelta, Final
 from aura.schemas.state import LoopState, ReadCarryover
 from aura.schemas.tool import ToolError
@@ -410,12 +411,20 @@ class Agent:
                 or rec.final_result
                 or rec.error
             )
-            self._enqueue_task_notification(TaskNotification(
+            notification = TaskNotification(
                 task_id=rec.id,
                 status=rec.status,
                 summary=summary,
                 description=rec.description,
-            ))
+            )
+            self._enqueue_task_notification(notification)
+            from aura.adapters.protocol.wire import task_notification_to_wire
+            self._enqueue_protocol_event(
+                task_notification_to_wire(
+                    notification,
+                    parent_id=self.session_id,
+                ),
+            )
         self._tasks_store.add_terminal_listener(_on_terminal)
         # F-01-001: live abort controller for the running astream call.
         # Set at the top of :meth:`astream` and cleared on exit.
@@ -1073,6 +1082,16 @@ class Agent:
         """
         return self._session_runtime.pending_notifications
 
+    @property
+    def pending_protocol_events(self) -> tuple[WireEvent, ...]:
+        """Snapshot of queued coordination wire events for transports."""
+        events = list(self._session_runtime.pending_protocol_events)
+        team = self._team
+        if team is not None:
+            pending = getattr(team, "pending_protocol_events", ())
+            events.extend(cast("list[WireEvent]", list(pending)))
+        return tuple(events)
+
     def buffer_partial_assistant_text(self, text: str) -> None:
         """Append ``text`` to the partial-assistant buffer.
 
@@ -1095,6 +1114,20 @@ class Agent:
     def _drain_task_notifications(self) -> list[TaskNotification]:
         """Pop every queued notification and return them, oldest first."""
         return self._session_runtime.drain_task_notifications()
+
+    def _enqueue_protocol_event(self, event: WireEvent) -> None:
+        """Append one coordination wire event for external transport drains."""
+        self._session_runtime.enqueue_protocol_event(event)
+
+    def drain_protocol_events(self) -> list[WireEvent]:
+        """Pop every queued coordination wire event and return them, oldest first."""
+        drained = self._session_runtime.drain_protocol_events()
+        team = self._team
+        if team is not None:
+            drain_team_events = getattr(team, "drain_protocol_events", None)
+            if callable(drain_team_events):
+                drained.extend(cast("list[WireEvent]", list(drain_team_events())))
+        return drained
 
     async def _cascade_abort_to_children(self, reason: str) -> None:
         """Fire every controller in :attr:`_running_aborts`.

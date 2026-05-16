@@ -58,11 +58,17 @@ async def stream_agent_wire(
 ) -> AsyncIterator[WireEvent]:
     """Run ``agent.astream`` and yield Aura wire events."""
     turn_start = clock()
+    for payload in _drain_coordination_events(agent):
+        yield payload
     async for event in agent.astream(prompt):
+        for payload in _drain_coordination_events(agent):
+            yield payload
         payload = event_to_wire(event)
         yield payload
         if isinstance(event, Final):
             yield agent_state_to_wire(agent, clock() - turn_start)
+        for pending in _drain_coordination_events(agent):
+            yield pending
 
 
 async def stream_agent_agui(
@@ -76,15 +82,24 @@ async def stream_agent_agui(
     bridge = AguiEventBridge(adapter=adapter, clock=clock)
     for event in bridge.start():
         yield event
+    for wire_event in _drain_coordination_events(agent):
+        for event in bridge.emit_wire(wire_event):
+            yield event
     turn_start = clock()
     try:
         async for agent_event in agent.astream(prompt):
+            for wire_event in _drain_coordination_events(agent):
+                for event in bridge.emit_wire(wire_event):
+                    yield event
             for event in bridge.emit(
                 agent_event,
                 agent=agent,
                 turn_started_at=turn_start,
             ):
                 yield event
+            for wire_event in _drain_coordination_events(agent):
+                for event in bridge.emit_wire(wire_event):
+                    yield event
     except Exception as exc:
         for event in bridge.error(exc):
             yield event
@@ -125,3 +140,12 @@ async def stream_agent_agui_sse(
         clock=clock,
     ):
         yield encode_json_sse(payload, event=event)
+
+
+def _drain_coordination_events(agent: Any) -> list[WireEvent]:
+    """Drain any live coordination events surfaced by runtime seams."""
+    drain_protocol_events = getattr(agent, "drain_protocol_events", None)
+    if callable(drain_protocol_events):
+        return list(drain_protocol_events())
+    pending_protocol_events = getattr(agent, "pending_protocol_events", ())
+    return list(pending_protocol_events)

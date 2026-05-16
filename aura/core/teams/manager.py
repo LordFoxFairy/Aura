@@ -54,6 +54,7 @@ from aura.core.teams.types import (
     TeamMessageKind,
     TeamRecord,
 )
+from aura.domain.protocol.events import WireEvent
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
@@ -220,6 +221,10 @@ class TeamManager:
         # ``rm -rf``s every entry left behind so an unsupervised team
         # doesn't pile up on disk forever.
         self._session_created_teams: set[str] = set()
+        # External transport queue for live coordination sends. Mailbox
+        # append behavior stays unchanged; this queue is a parallel,
+        # reversible observation path for protocol adapters.
+        self._pending_protocol_events: list[WireEvent] = []
 
     # ------------------------------------------------------------------
     # Lifecycle: create / delete / lookup
@@ -232,6 +237,11 @@ class TeamManager:
     @property
     def is_active(self) -> bool:
         return self._team is not None
+
+    @property
+    def pending_protocol_events(self) -> tuple[WireEvent, ...]:
+        """Snapshot of queued team coordination wire events."""
+        return tuple(self._pending_protocol_events)
 
     def mailbox(self) -> Mailbox:
         """Return a Mailbox bound to the live team. Raises if no team."""
@@ -1237,11 +1247,26 @@ class TeamManager:
             )
             mailbox.append(msg)
             sent.append(msg)
+            from aura.adapters.protocol.wire import team_message_to_wire
+            self._pending_protocol_events.append(
+                team_message_to_wire(msg, team_id=self._team.team_id),
+            )
         return sent
 
     def _post(self, msg: TeamMessage) -> None:
         """Internal append (skips fan-out + length checks; for control msgs)."""
         self.mailbox().append(msg)
+        if self._team is not None:
+            from aura.adapters.protocol.wire import team_message_to_wire
+            self._pending_protocol_events.append(
+                team_message_to_wire(msg, team_id=self._team.team_id),
+            )
+
+    def drain_protocol_events(self) -> list[WireEvent]:
+        """Pop every queued team coordination wire event, oldest first."""
+        drained = list(self._pending_protocol_events)
+        self._pending_protocol_events.clear()
+        return drained
 
     # ------------------------------------------------------------------
     # Persistence

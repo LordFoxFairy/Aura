@@ -38,6 +38,7 @@ from langchain_core.messages import BaseMessage
 from aura.core.permissions.session import SessionRuleSet
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
+from aura.domain.protocol.events import WireEvent
 from aura.schemas.state import ReadCarryover
 
 if TYPE_CHECKING:
@@ -93,6 +94,11 @@ class SessionRuntime:
         # drained by ``Context.build`` at the start of each prompt
         # envelope. Owned here so /clear can wipe it.
         self._pending_notifications: list[TaskNotification] = []
+        # Unified coordination pipeline: external transports can drain
+        # live coordination wire events from here without changing the
+        # parent-facing prompt/context path. Producers append in parallel
+        # with existing behavior; transports decide when to flush.
+        self._pending_protocol_events: list[WireEvent] = []
         # Workstream G8 + Phase 3 Task 4 — ``carryover`` only flows
         # into the FIRST Context construction. ``clear_session`` and
         # the post-compact rebuild build their own fresh Contexts and
@@ -134,6 +140,11 @@ class SessionRuntime:
     def pending_notifications(self) -> tuple[TaskNotification, ...]:
         """Snapshot of queued :class:`TaskNotification` records."""
         return tuple(self._pending_notifications)
+
+    @property
+    def pending_protocol_events(self) -> tuple[WireEvent, ...]:
+        """Snapshot of queued external coordination wire events."""
+        return tuple(self._pending_protocol_events)
 
     @property
     def carryover(self) -> ReadCarryover | None:
@@ -192,6 +203,16 @@ class SessionRuntime:
         self._pending_notifications.clear()
         return drained
 
+    def enqueue_protocol_event(self, event: WireEvent) -> None:
+        """Append one external coordination wire event for transport drains."""
+        self._pending_protocol_events.append(event)
+
+    def drain_protocol_events(self) -> list[WireEvent]:
+        """Pop every queued protocol event and return them, oldest first."""
+        drained = list(self._pending_protocol_events)
+        self._pending_protocol_events.clear()
+        return drained
+
     # ------------------------------------------------------------------
     # SessionStart re-arm flag
     # ------------------------------------------------------------------
@@ -220,6 +241,7 @@ class SessionRuntime:
         if self._session_rules is not None:
             self._session_rules.clear()
         self._pending_notifications.clear()
+        self._pending_protocol_events.clear()
         self._partial_assistant_text = ""
         self._session_start_fired = False
         # /clear starts a fresh session — long-gone parent reads must
@@ -252,6 +274,7 @@ class SessionRuntime:
         self._partial_assistant_text = ""
         self._session_start_fired = False
         self._pending_notifications.clear()
+        self._pending_protocol_events.clear()
         self._carryover = None
         journal.write(
             "session_resumed",

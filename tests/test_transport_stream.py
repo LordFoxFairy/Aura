@@ -41,6 +41,57 @@ class _FailingAgent(_FakeAgent):
         raise RuntimeError("provider went away")
 
 
+class _CoordinationAgent(_FakeAgent):
+    session_id = "parent-1"
+
+    def __init__(self) -> None:
+        self._pending_protocol_events = [
+            {
+                "event": "coordination",
+                "family": "subagent",
+                "action": "task_notification",
+                "subagent_id": "task-1",
+                "parent_id": "parent-1",
+                "payload": {
+                    "task_id": "task-1",
+                    "status": "completed",
+                    "summary": "child-final",
+                    "description": "probe",
+                    "terminal": True,
+                },
+            },
+            {
+                "event": "coordination",
+                "family": "team",
+                "action": "message_sent",
+                "team_id": "demo",
+                "member_id": "scout",
+                "payload": {
+                    "msg_id": "msg-1",
+                    "sender": "leader",
+                    "recipient": "scout",
+                    "body": "ping",
+                    "kind": "text",
+                    "sent_at": 123.0,
+                },
+            },
+        ]
+
+    @property
+    def pending_protocol_events(self) -> tuple[dict[str, Any], ...]:
+        return tuple(self._pending_protocol_events)
+
+    def drain_protocol_events(self) -> list[dict[str, Any]]:
+        drained = list(self._pending_protocol_events)
+        self._pending_protocol_events.clear()
+        return drained
+
+    async def astream(self, prompt: str) -> Any:
+        assert prompt == "hello"
+        yield AssistantDelta("hi")
+        yield Final("done")
+
+
 def _clock(values: list[float]) -> Iterator[float]:
     yield from values
 
@@ -91,6 +142,72 @@ async def test_stream_agent_wire_serializes_events_and_final_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_agent_wire_drains_coordination_events_from_runtime_paths() -> None:
+    ticks = _clock([10.0, 12.5])
+
+    events = [
+        event
+        async for event in stream_agent_wire(
+            _CoordinationAgent(),
+            "hello",
+            clock=lambda: next(ticks),
+        )
+    ]
+
+    assert events == [
+        {
+            "event": "coordination",
+            "family": "subagent",
+            "action": "task_notification",
+            "subagent_id": "task-1",
+            "parent_id": "parent-1",
+            "payload": {
+                "task_id": "task-1",
+                "status": "completed",
+                "summary": "child-final",
+                "description": "probe",
+                "terminal": True,
+            },
+        },
+        {
+            "event": "coordination",
+            "family": "team",
+            "action": "message_sent",
+            "team_id": "demo",
+            "member_id": "scout",
+            "payload": {
+                "msg_id": "msg-1",
+                "sender": "leader",
+                "recipient": "scout",
+                "body": "ping",
+                "kind": "text",
+                "sent_at": 123.0,
+            },
+        },
+        {"event": "assistant_delta", "text": "hi"},
+        {"event": "final", "message": "done", "reason": "natural"},
+        {
+            "event": "aura_state",
+            "model": "fake:model",
+            "mode": "default",
+            "cwd": cast(dict[str, Any], events[-1])["cwd"],
+            "tokens": {
+                "last_input": 0,
+                "last_output": 0,
+                "last_cache_read": 0,
+                "total_input": 0,
+                "total_output": 0,
+                "total_cache_read": 0,
+                "turn_count": 0,
+            },
+            "pinned": 0,
+            "window": 100,
+            "last_turn_seconds": 2.5,
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_stream_agent_agui_wraps_wire_stream() -> None:
     ticks = _clock([1.0, 1.25])
     adapter = AguiAdapter(run_id="run-1")
@@ -116,6 +233,65 @@ async def test_stream_agent_agui_wraps_wire_stream() -> None:
     finished_index = next(i for i, event in enumerate(events) if event["type"] == "RUN_FINISHED")
     assert state_index < finished_index
     assert events[-1]["type"] == "RUN_FINISHED"
+
+
+@pytest.mark.asyncio
+async def test_stream_agent_agui_drains_coordination_events_from_runtime_paths() -> None:
+    ticks = _clock([1.0, 1.25])
+    adapter = AguiAdapter(run_id="run-coord")
+
+    events = [
+        event
+        async for event in stream_agent_agui(
+            _CoordinationAgent(),
+            "hello",
+            adapter=adapter,
+            clock=lambda: next(ticks),
+        )
+    ]
+
+    assert events[0] == {
+        "type": "RUN_STARTED",
+        "runId": "run-coord",
+        "threadId": "run-coord-thread",
+    }
+    assert {
+        "type": "CUSTOM",
+        "name": "aura.subagent.task_notification",
+        "value": {
+            "event": "coordination",
+            "family": "subagent",
+            "action": "task_notification",
+            "subagent_id": "task-1",
+            "parent_id": "parent-1",
+            "payload": {
+                "task_id": "task-1",
+                "status": "completed",
+                "summary": "child-final",
+                "description": "probe",
+                "terminal": True,
+            },
+        },
+    } in events
+    assert {
+        "type": "CUSTOM",
+        "name": "aura.team.message_sent",
+        "value": {
+            "event": "coordination",
+            "family": "team",
+            "action": "message_sent",
+            "team_id": "demo",
+            "member_id": "scout",
+            "payload": {
+                "msg_id": "msg-1",
+                "sender": "leader",
+                "recipient": "scout",
+                "body": "ping",
+                "kind": "text",
+                "sent_at": 123.0,
+            },
+        },
+    } in events
 
 
 @pytest.mark.asyncio

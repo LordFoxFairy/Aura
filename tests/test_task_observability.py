@@ -132,6 +132,28 @@ async def test_subagent_notification_maps_to_coordination_wire_event(
 
 
 @pytest.mark.asyncio
+async def test_subagent_completion_enqueues_protocol_event_for_external_stream(
+    tmp_path: Path,
+) -> None:
+    agent = _make_agent(tmp_path)
+    try:
+        store = agent._tasks_store
+        rec = store.create(description="probe", prompt="hi")
+        await run_task(store, _make_factory(), rec.id)
+
+        notification = agent.pending_notifications[0]
+
+        assert agent.pending_protocol_events == (
+            task_notification_to_wire(
+                notification,
+                parent_id=agent.session_id,
+            ),
+        )
+    finally:
+        await agent.aclose()
+
+
+@pytest.mark.asyncio
 async def test_notification_appears_in_next_prompt_envelope(
     tmp_path: Path,
 ) -> None:

@@ -500,8 +500,8 @@ def test_agui_adapter_maps_compact_event() -> None:
     """AG-UI adapter wraps ``compact_event`` as
     ``{"type": "CUSTOM", "name": "aura.compact.event", ...}``.
     """
-    from aura.transport.agui import AguiAdapter
-    from aura.transport.wire import compact_event_to_wire
+    from aura.adapters.protocol.bridge import AguiAdapter
+    from aura.adapters.protocol.wire import compact_event_to_wire
 
     adapter = AguiAdapter(run_id="rid", thread_id="tid")
     payload = compact_event_to_wire(

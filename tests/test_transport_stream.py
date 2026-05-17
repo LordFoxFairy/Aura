@@ -8,8 +8,9 @@ from typing import Any, cast
 
 import pytest
 
-from aura.adapters.protocol.agui import AguiAdapter
+from aura.adapters.protocol.bridge import AguiAdapter
 from aura.adapters.protocol.stream import (
+    encode_json_sse,
     stream_agent_agui,
     stream_agent_agui_sse,
     stream_agent_wire,
@@ -17,7 +18,6 @@ from aura.adapters.protocol.stream import (
 )
 from aura.schemas.events import AssistantDelta, Final, ToolCallStarted
 from aura.schemas.state import LoopSlots
-from aura.transport.sse import encode_json_sse
 
 
 class _FakeAgent:

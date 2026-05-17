@@ -1,7 +1,6 @@
 """Canonical protocol adapters for Aura external surfaces."""
 
-from aura.adapters.protocol.agui import AguiAdapter
-from aura.adapters.protocol.bridge import AguiEventBridge
+from aura.adapters.protocol.bridge import AguiAdapter, AguiEventBridge
 from aura.adapters.protocol.stream import (
     stream_agent_agui,
     stream_agent_agui_sse,

@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
+from aura.adapters.protocol.wire import compact_event_to_wire
 from aura.config.schema import CompactConfig
 from aura.core.compact.compact import CompactResult
 from aura.core.compact.constants import CompactionTrigger
@@ -46,7 +47,6 @@ from aura.core.compact.microcompact import (
 )
 from aura.core.persistence import journal
 from aura.schemas.state import LoopSlots
-from aura.transport.wire import compact_event_to_wire
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
@@ -88,7 +88,7 @@ class Compactor:
       event so observability matches pre-Phase-1.
     - ``event_emitter``: optional callable invoked on every method
       exit with the wire-format ``compact_event`` dict (see
-      :func:`aura.transport.wire.compact_event_to_wire`). The CLI / SSE
+      :func:`aura.adapters.protocol.wire.compact_event_to_wire`). The CLI / SSE
       adapter wires a real emitter; tests can pass a list-appender.
 
     State (``consecutive_compact_failures``) lives on the typed

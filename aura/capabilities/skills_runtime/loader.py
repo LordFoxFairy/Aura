@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import importlib.resources as pkg_resources
 import re
+import shutil
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -54,13 +55,14 @@ _CLAUDE_DIR = ".claude"
 _SKILLS_DIR = "skills"
 _SKILL_FILE = "SKILL.md"
 
-# F-0910-011: bundled skills shipped inside the Aura distribution via
-# package resources (``aura.resources.skills``), not source-tree path
-# guessing. We bridge resource access through ``as_file(...)`` so loading
-# remains correct for installed wheels/zipapps while reusing the existing
-# path-based parser.
-_BUNDLED_SKILLS_PACKAGE = "aura.resources"
-_BUNDLED_SKILLS_SUBDIR = "skills"
+# F-0910-011: bundled skills are a first-class internal plugin surface,
+# packaged under ``aura.plugins.skills``. At runtime we materialize that
+# packaged tree into a dedicated hidden skills root under ``~/.aura/plugins``
+# so the active skill catalogue is skill-centric rather than package-layout-
+# centric while still supporting installed wheels / zip imports.
+_BUNDLED_SKILLS_PACKAGE = "aura.plugins.skills"
+_BUNDLED_SKILLS_EXTRACTED_ROOT_NAME = "skills"
+_bundled_skills_extraction: tuple[str, Path] | None = None
 
 # Claude-code-compat namespace: skills written for claude-code reference
 # ``${CLAUDE_SKILL_DIR}`` / ``${CLAUDE_SESSION_ID}`` in their body. We accept
@@ -116,38 +118,107 @@ _activated_conditional_names: set[str] = set()
 
 
 @contextmanager
-def _bundled_skills_root() -> Iterator[Path | None]:
-    """Resolve bundled skills directory from package resources.
+def _bundled_skills_root(*, home_dir: Path | None = None) -> Iterator[Path | None]:
+    """Resolve bundled skills to a dedicated extracted ``.../skills`` root.
 
-    Yields a real filesystem path for ``aura.resources/skills`` when present,
-    else ``None`` (e.g. stripped distributions or import/runtime issues).
+    The packaged source of truth lives under ``aura.plugins.skills`` (or a test
+    override package). The loader never treats that package path as the final
+    runtime root; instead it copies/materializes the packaged tree into a real
+    filesystem directory named ``skills`` and yields that extracted root.
 
-    ``importlib.resources.as_file(...)`` only handles file traversables for
-    some non-filesystem backends (notably zip imports); directory traversables
-    can raise ``IsADirectoryError``. For those backends we copy the traversable
-    tree into a temporary real directory and yield it.
+    For filesystem installs we keep one cached extraction per packaged location
+    so repeated ``load_skills(..., include_bundled=True)`` calls see stable
+    ``source_path`` identities. For non-filesystem backends (zip imports, etc.)
+    we materialize the traversable tree first, then copy from there into the
+    same dedicated extracted-root shape.
+
+    The extracted root is session-scoped and intentionally outlives the inner
+    packaged-resource context. That keeps ``source_path`` stable even when the
+    packaged source came from a short-lived zip traversable materialization.
     """
+    with _packaged_bundled_skills_root() as packaged_root:
+        if packaged_root is None:
+            yield None
+            return
+        yield _ensure_bundled_skills_extraction(
+            packaged_root,
+            home_dir=(home_dir.resolve() if home_dir is not None else Path.home().resolve()),
+        )
+
+
+@contextmanager
+def _packaged_bundled_skills_root() -> Iterator[Path | None]:
+    """Yield a real filesystem path for the packaged bundled-skills tree."""
     try:
-        traversable = pkg_resources.files(_BUNDLED_SKILLS_PACKAGE).joinpath(_BUNDLED_SKILLS_SUBDIR)
+        traversable = pkg_resources.files(_BUNDLED_SKILLS_PACKAGE)
     except (ModuleNotFoundError, AttributeError):
         yield None
         return
 
     try:
-        with pkg_resources.as_file(traversable) as bundled_root:
-            yield bundled_root if bundled_root.is_dir() else None
+        with pkg_resources.as_file(traversable) as packaged_root:
+            yield packaged_root if packaged_root.is_dir() else None
             return
-    except IsADirectoryError:
+    except (IsADirectoryError, FileNotFoundError):
         pass
 
     if not traversable.is_dir():
         yield None
         return
 
-    with tempfile.TemporaryDirectory(prefix="aura-bundled-skills-") as tmp:
-        materialized_root = Path(tmp) / _BUNDLED_SKILLS_SUBDIR
+    with tempfile.TemporaryDirectory(prefix="aura-packaged-skills-") as tmp:
+        materialized_root = Path(tmp) / _BUNDLED_SKILLS_EXTRACTED_ROOT_NAME
         _materialize_traversable_dir(traversable, materialized_root)
         yield materialized_root
+
+
+def _ensure_bundled_skills_extraction(
+    packaged_root: Path,
+    *,
+    home_dir: Path,
+) -> Path:
+    """Copy packaged bundled skills into a stable hidden runtime root."""
+    global _bundled_skills_extraction
+
+    packaged_key = _bundled_skills_cache_key(packaged_root)
+    if _bundled_skills_extraction is not None:
+        cached_key, cached_root = _bundled_skills_extraction
+        if cached_key == packaged_key and cached_root.is_dir():
+            return cached_root
+        _reset_bundled_skills_extraction()
+
+    extracted_root = (
+        home_dir
+        / ".aura"
+        / "plugins"
+        / "bundled-skills"
+        / packaged_key
+        / _BUNDLED_SKILLS_EXTRACTED_ROOT_NAME
+    )
+    if extracted_root.exists():
+        shutil.rmtree(extracted_root)
+    extracted_root.parent.mkdir(parents=True, exist_ok=True)
+    _copy_directory(packaged_root, extracted_root)
+    _bundled_skills_extraction = (packaged_key, extracted_root)
+    return extracted_root
+
+
+def _bundled_skills_cache_key(packaged_root: Path) -> str:
+    """Build a session-stable cache key for the packaged bundled-skills source."""
+    del packaged_root  # Package name, not temp extraction path, defines the source.
+    return _BUNDLED_SKILLS_PACKAGE
+
+
+def _reset_bundled_skills_extraction() -> None:
+    """Dispose of the cached extracted bundled-skills root, if any."""
+    global _bundled_skills_extraction
+
+    if _bundled_skills_extraction is None:
+        return
+    _, extracted_root = _bundled_skills_extraction
+    if extracted_root.exists():
+        shutil.rmtree(extracted_root)
+    _bundled_skills_extraction = None
 
 
 def _materialize_traversable_dir(traversable: Any, destination: Path) -> None:
@@ -157,6 +228,18 @@ def _materialize_traversable_dir(traversable: Any, destination: Path) -> None:
         child_dst = destination / child.name
         if child.is_dir():
             _materialize_traversable_dir(child, child_dst)
+            continue
+        child_dst.parent.mkdir(parents=True, exist_ok=True)
+        child_dst.write_bytes(child.read_bytes())
+
+
+def _copy_directory(source: Path, destination: Path) -> None:
+    """Recursively copy ``source`` into ``destination`` without metadata needs."""
+    destination.mkdir(parents=True, exist_ok=True)
+    for child in source.iterdir():
+        child_dst = destination / child.name
+        if child.is_dir():
+            _copy_directory(child, child_dst)
             continue
         child_dst.parent.mkdir(parents=True, exist_ok=True)
         child_dst.write_bytes(child.read_bytes())
@@ -179,6 +262,9 @@ def load_skills(
     ``include_bundled`` defaults to False so the existing layer-precedence
     tests stay hermetic; production callers (Agent.__init__) pass True to
     opt into the verify / simplify / code-review bundles.
+
+    Bundled skills are loaded from an extracted runtime root produced from the
+    packaged ``aura.plugins.skills`` tree, not directly from the packaged path.
     """
     home_dir = (home if home is not None else Path.home()).resolve()
     cwd_resolved = cwd.resolve()
@@ -187,14 +273,16 @@ def load_skills(
     seen_source_paths: set[Path] = set()
 
     # --- Layer 0: managed (bundled with the Aura distribution) ---
-    # F-0910-011: ships verify / simplify / code-review out of the box. These
-    # load FIRST, so bundled/managed skills win on same-name collisions against
-    # user/project skills under the existing first-writer-wins policy. The
+    # F-0910-011: ships verify / simplify / code-review out of the box. Their
+    # packaged source lives under ``aura.plugins.skills`` but they are always
+    # scanned from an extracted runtime ``.../skills`` root. They load FIRST,
+    # so bundled/managed skills win on same-name collisions against user/
+    # project skills under the existing first-writer-wins policy. The
     # ``managed`` layer tag was previously half-wired (declared in SkillLayer
     # Literal, never populated); shipping these three bundles flips it to a
     # real layer.
     if include_bundled:
-        with _bundled_skills_root() as bundled_skills_root:
+        with _bundled_skills_root(home_dir=home_dir) as bundled_skills_root:
             if bundled_skills_root is not None:
                 for skill in _load_layer(bundled_skills_root, layer="managed"):
                     _install_or_drop(skill, registry, seen_source_paths)

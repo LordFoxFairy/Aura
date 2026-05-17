@@ -42,9 +42,12 @@ from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.safety import DEFAULT_SAFETY
 from aura.core.permissions.session import RuleSet, SessionRuleSet
-from aura.core.permissions.subagent_asker import SubagentAutoDenyAsker
 from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import SubagentFactory
+from aura.core.tasks.factory import (
+    SUBAGENT_AUTO_DENY_FEEDBACK,
+    SubagentFactory,
+    _SubagentPermissionAsker,
+)
 from aura.schemas.state import LoopState
 from aura.schemas.tool import (
     ToolMetadata,
@@ -440,9 +443,9 @@ async def test_subagent_collapses_interactive_parent_modes_to_default(
 
 
 @pytest.mark.asyncio
-async def test_subagent_auto_deny_asker_returns_deny_immediately() -> None:
-    """``SubagentAutoDenyAsker`` returns ``deny`` / ``session`` with zero I/O."""
-    asker = SubagentAutoDenyAsker()
+async def test_subagent_permission_asker_returns_deny_immediately() -> None:
+    """Inlined subagent asker returns ``deny`` / ``session`` with zero I/O."""
+    asker = _SubagentPermissionAsker()
     response = await asker(
         tool=_EchoTool(),
         args={"value": "x"},
@@ -453,7 +456,7 @@ async def test_subagent_auto_deny_asker_returns_deny_immediately() -> None:
     assert response.rule is None
     # ``feedback`` carries a machine-readable marker the hook uses to
     # stamp "subagent_auto_deny" onto the model-facing error message.
-    assert response.feedback == "subagent_auto_deny"
+    assert response.feedback == SUBAGENT_AUTO_DENY_FEEDBACK
 
 
 # ---------------------------------------------------------------------------

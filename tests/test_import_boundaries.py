@@ -117,7 +117,7 @@ def test_new_package_roots_exist_and_import_cleanly() -> None:
         "aura.capabilities",
         "aura.adapters",
         "aura.infrastructure",
-        "aura.resources",
+        "aura.plugins",
     )
     for pkg in packages:
         module = importlib.import_module(pkg)
@@ -192,14 +192,14 @@ def test_layer_boundaries_for_new_roots() -> None:
                 "aura.capabilities",
                 "aura.adapters",
                 "aura.infrastructure",
-                "aura.resources",
+                "aura.plugins",
             ),
         ),
         ("runtime", ("aura.adapters",)),
         ("capabilities", ("aura.adapters",)),
         ("infrastructure", ("aura.runtime", "aura.capabilities", "aura.adapters")),
         (
-            "resources",
+            "plugins",
             (
                 "aura.domain",
                 "aura.runtime",

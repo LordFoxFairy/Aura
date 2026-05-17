@@ -52,7 +52,7 @@ Inheritance rules (matches claude-code's Task tool):
 - Permission IS inherited — via a freshly-built hook that reuses the
   parent's :class:`RuleSet` + :class:`SafetyPolicy` + live mode +
   optional deny_rules / ask_rules, but hands the child a private
-  :class:`SessionRuleSet` and a :class:`SubagentAutoDenyAsker` (C1,
+  :class:`SessionRuleSet` and a :class:`SubagentPermissionAsker` (C1,
   parity with claude-code's ``shouldAvoidPermissionPrompts: true`` —
   subagents have no UI so any would-be ask path silently denies).
   Plan / accept_edits modes don't make sense on a non-interactive
@@ -69,20 +69,21 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import BaseTool
 
 from aura.capabilities.skills_runtime import SkillRegistry
 from aura.config.schema import AuraConfig, ToolsConfig
 from aura.core import llm
 from aura.core.hooks import HookChain
-from aura.core.hooks.permission import make_permission_hook
+from aura.core.hooks.permission import AskerResponse, make_permission_hook
 from aura.core.permissions.mode import Mode
+from aura.core.permissions.rule import Rule
 from aura.core.permissions.safety import DEFAULT_SAFETY, SafetyPolicy
 from aura.core.permissions.session import RuleSet, SessionRuleSet
-from aura.core.permissions.subagent_asker import SubagentAutoDenyAsker
 from aura.core.persistence.storage import SessionStorage
 from aura.core.tasks.agent_types import get_agent_type
 from aura.schemas.state import ReadCarryover
@@ -91,9 +92,30 @@ from aura.schemas.tool import ToolError
 if TYPE_CHECKING:
     from aura.core.agent import Agent
 
+SUBAGENT_AUTO_DENY_FEEDBACK = "subagent_auto_deny"
+
+
+class _SubagentPermissionAsker:
+    """Hook-native asker for subagents: every would-be ask becomes deny."""
+
+    async def __call__(
+        self,
+        *,
+        tool: BaseTool,  # noqa: ARG002 - protocol compliance
+        args: dict[str, Any],  # noqa: ARG002 - protocol compliance
+        rule_hint: Rule,  # noqa: ARG002 - protocol compliance
+    ) -> AskerResponse:
+        return AskerResponse(
+            choice="deny",
+            scope="session",
+            rule=None,
+            feedback=SUBAGENT_AUTO_DENY_FEEDBACK,
+        )
+
+
 # Singleton — stateless; sharing one instance across every subagent +
 # every tool call is cheap and matches the "no I/O" contract.
-_SUBAGENT_AUTO_DENY_ASKER = SubagentAutoDenyAsker()
+_SUBAGENT_AUTO_DENY_ASKER = _SubagentPermissionAsker()
 
 # Maximum subagent recursion depth. Root agent = 0; the first subagent it
 # spawns = 1; that subagent spawning a grandchild = 2. At the cap, the

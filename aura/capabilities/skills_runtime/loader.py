@@ -35,10 +35,8 @@ rest of Aura's loader code — one bad skill must not break the catalogue).
 
 from __future__ import annotations
 
-import importlib.resources as pkg_resources
 import re
 import shutil
-import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -55,14 +53,91 @@ _CLAUDE_DIR = ".claude"
 _SKILLS_DIR = "skills"
 _SKILL_FILE = "SKILL.md"
 
-# F-0910-011: bundled skills are a first-class internal plugin surface,
-# packaged under ``aura.plugins.skills``. At runtime we materialize that
-# packaged tree into a dedicated hidden skills root under ``~/.aura/plugins``
-# so the active skill catalogue is skill-centric rather than package-layout-
-# centric while still supporting installed wheels / zip imports.
-_BUNDLED_SKILLS_PACKAGE = "aura.plugins.skills"
+# F-0910-011: bundled skills are a first-class internal plugin surface.
+# The source of truth is code-defined content below, not package-tree files.
+# At runtime we materialize those bundled skills into a dedicated hidden
+# skills root under ``~/.aura/plugins`` so the active catalogue is fully
+# detached from the Python package layout.
 _BUNDLED_SKILLS_EXTRACTED_ROOT_NAME = "skills"
 _bundled_skills_extraction: tuple[str, Path] | None = None
+_BUNDLED_SKILL_FILES: dict[str, str] = {
+    "verify": """---
+description: Verify the most recent change works end-to-end before claiming done.
+when_to_use: Before responding \"done\" / \"fixed\" / \"passing\" — run real checks.
+---
+# Verify
+
+Before claiming a task is complete:
+
+1. Run the project's tests (`make check`, `pytest`, `npm test`, etc.) and confirm
+   they pass.
+2. Re-run the specific failing case from the bug report — don't assume related
+   tests cover it.
+3. Read back the changed files to confirm the diff is what you intended.
+4. If the change touches a CLI / API surface, exercise it end-to-end at least
+   once instead of trusting unit tests alone.
+
+Evidence before assertions: paste the actual command output that proves the
+verification, not a paraphrase.
+""",
+    "simplify": """---
+description: Review the diff for reuse, dead code, and over-engineering before commit.
+when_to_use: After implementing a change, before committing — pause to simplify.
+---
+# Simplify
+
+Pre-commit pass over the current diff:
+
+1. Is there an existing helper / utility that already does this? Reuse it
+   instead of duplicating.
+2. Did you add a flag, knob, or abstraction that no caller currently exercises?
+   Drop it — half-wired extensibility rots.
+3. Are comments explaining \"what\" instead of \"why\"? Strip the \"what\"; the
+   code shows what.
+4. Is there dead code (unreachable branches, unused imports, stale docstrings
+   referencing removed behavior)? Delete it.
+5. Could the same outcome be expressed with fewer lines, fewer types, or one
+   less indirection? Do it.
+
+The bar: would a staff engineer approve this diff as-is, or would they ask
+for one more pass? If the latter, do the pass now.
+""",
+    "code-review": """---
+description: Code review the pending diff with explicit pass/fail criteria.
+when_to_use: Before opening a PR or merging — surface real issues, not nits.
+---
+# Code review
+
+Walk the diff with these checks. Surface only real issues; suppress nits.
+
+## Correctness
+- Does the code do what the description / spec / failing test says it should?
+- Are edge cases handled (empty input, None, concurrent access, partial
+  failure)?
+- Are error paths tested or at least exercised by the new code?
+
+## Safety
+- New `subprocess`, `eval`, `pickle.loads`, raw SQL string concat, or shell
+  interpolation? Check for injection.
+- New file writes / deletes outside an obviously-bounded path?
+- Secrets, tokens, internal hostnames in code or test fixtures?
+
+## Maintainability
+- Is the change minimal — only the lines that needed to change, changed?
+- Public API additions: is each one used by a caller in this same diff? If
+  not, defer them.
+- New abstraction layers: is there a second concrete user, or is this YAGNI?
+
+## Test quality
+- New behavior has at least one test that would fail against `main`.
+- Tests assert on observable behavior, not internal implementation details.
+- No `# type: ignore`, `# noqa`, or `pytest.skip` added without a reason in
+  the same line.
+
+Pass criteria: every check above is satisfied. If any check fails, file the
+issue against the diff before approving.
+""",
+}
 
 # Claude-code-compat namespace: skills written for claude-code reference
 # ``${CLAUDE_SKILL_DIR}`` / ``${CLAUDE_SESSION_ID}`` in their body. We accept
@@ -119,71 +194,24 @@ _activated_conditional_names: set[str] = set()
 
 @contextmanager
 def _bundled_skills_root(*, home_dir: Path | None = None) -> Iterator[Path | None]:
-    """Resolve bundled skills to a dedicated extracted ``.../skills`` root.
+    """Resolve bundled skills to a dedicated hidden runtime root.
 
-    The packaged source of truth lives under ``aura.plugins.skills`` (or a test
-    override package). The loader never treats that package path as the final
-    runtime root; instead it copies/materializes the packaged tree into a real
-    filesystem directory named ``skills`` and yields that extracted root.
-
-    For filesystem installs we keep one cached extraction per packaged location
-    so repeated ``load_skills(..., include_bundled=True)`` calls see stable
-    ``source_path`` identities. For non-filesystem backends (zip imports, etc.)
-    we materialize the traversable tree first, then copy from there into the
-    same dedicated extracted-root shape.
-
-    The extracted root is session-scoped and intentionally outlives the inner
-    packaged-resource context. That keeps ``source_path`` stable even when the
-    packaged source came from a short-lived zip traversable materialization.
+    The source of truth for bundled skills is the code-defined content in this
+    module. At runtime we materialize that content into a stable hidden root at
+    ``~/.aura/plugins/bundled-skills/<cache-key>/skills`` and yield that path.
     """
-    with _packaged_bundled_skills_root() as packaged_root:
-        if packaged_root is None:
-            yield None
-            return
-        yield _ensure_bundled_skills_extraction(
-            packaged_root,
-            home_dir=(home_dir.resolve() if home_dir is not None else Path.home().resolve()),
-        )
+    resolved_home = home_dir.resolve() if home_dir is not None else Path.home().resolve()
+    yield _ensure_bundled_skills_extraction(home_dir=resolved_home)
 
 
-@contextmanager
-def _packaged_bundled_skills_root() -> Iterator[Path | None]:
-    """Yield a real filesystem path for the packaged bundled-skills tree."""
-    try:
-        traversable = pkg_resources.files(_BUNDLED_SKILLS_PACKAGE)
-    except (ModuleNotFoundError, AttributeError):
-        yield None
-        return
-
-    try:
-        with pkg_resources.as_file(traversable) as packaged_root:
-            yield packaged_root if packaged_root.is_dir() else None
-            return
-    except (IsADirectoryError, FileNotFoundError):
-        pass
-
-    if not traversable.is_dir():
-        yield None
-        return
-
-    with tempfile.TemporaryDirectory(prefix="aura-packaged-skills-") as tmp:
-        materialized_root = Path(tmp) / _BUNDLED_SKILLS_EXTRACTED_ROOT_NAME
-        _materialize_traversable_dir(traversable, materialized_root)
-        yield materialized_root
-
-
-def _ensure_bundled_skills_extraction(
-    packaged_root: Path,
-    *,
-    home_dir: Path,
-) -> Path:
-    """Copy packaged bundled skills into a stable hidden runtime root."""
+def _ensure_bundled_skills_extraction(*, home_dir: Path) -> Path:
+    """Write bundled skills into a stable hidden runtime root."""
     global _bundled_skills_extraction
 
-    packaged_key = _bundled_skills_cache_key(packaged_root)
+    cache_key = _bundled_skills_cache_key()
     if _bundled_skills_extraction is not None:
         cached_key, cached_root = _bundled_skills_extraction
-        if cached_key == packaged_key and cached_root.is_dir():
+        if cached_key == cache_key and cached_root.is_dir():
             return cached_root
         _reset_bundled_skills_extraction()
 
@@ -192,21 +220,20 @@ def _ensure_bundled_skills_extraction(
         / ".aura"
         / "plugins"
         / "bundled-skills"
-        / packaged_key
+        / cache_key
         / _BUNDLED_SKILLS_EXTRACTED_ROOT_NAME
     )
     if extracted_root.exists():
         shutil.rmtree(extracted_root)
     extracted_root.parent.mkdir(parents=True, exist_ok=True)
-    _copy_directory(packaged_root, extracted_root)
-    _bundled_skills_extraction = (packaged_key, extracted_root)
+    _write_bundled_skill_files(extracted_root)
+    _bundled_skills_extraction = (cache_key, extracted_root)
     return extracted_root
 
 
-def _bundled_skills_cache_key(packaged_root: Path) -> str:
-    """Build a session-stable cache key for the packaged bundled-skills source."""
-    del packaged_root  # Package name, not temp extraction path, defines the source.
-    return _BUNDLED_SKILLS_PACKAGE
+def _bundled_skills_cache_key() -> str:
+    """Build a session-stable cache key for bundled Aura skills."""
+    return "aura-bundled-skills"
 
 
 def _reset_bundled_skills_extraction() -> None:
@@ -221,28 +248,13 @@ def _reset_bundled_skills_extraction() -> None:
     _bundled_skills_extraction = None
 
 
-def _materialize_traversable_dir(traversable: Any, destination: Path) -> None:
-    """Copy a directory traversable tree to a real filesystem path."""
+def _write_bundled_skill_files(destination: Path) -> None:
+    """Write the bundled skill source-of-truth content into ``destination``."""
     destination.mkdir(parents=True, exist_ok=True)
-    for child in traversable.iterdir():
-        child_dst = destination / child.name
-        if child.is_dir():
-            _materialize_traversable_dir(child, child_dst)
-            continue
-        child_dst.parent.mkdir(parents=True, exist_ok=True)
-        child_dst.write_bytes(child.read_bytes())
-
-
-def _copy_directory(source: Path, destination: Path) -> None:
-    """Recursively copy ``source`` into ``destination`` without metadata needs."""
-    destination.mkdir(parents=True, exist_ok=True)
-    for child in source.iterdir():
-        child_dst = destination / child.name
-        if child.is_dir():
-            _copy_directory(child, child_dst)
-            continue
-        child_dst.parent.mkdir(parents=True, exist_ok=True)
-        child_dst.write_bytes(child.read_bytes())
+    for skill_name, body in _BUNDLED_SKILL_FILES.items():
+        skill_dir = destination / skill_name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / _SKILL_FILE).write_text(body, encoding="utf-8")
 
 
 def load_skills(

@@ -1,16 +1,14 @@
 """F-0910-011 — bundled (managed-layer) skills shipped with Aura.
 
 Decision: ship 3 real bundled skills (verify / simplify / code-review)
-from the packaged namespace ``aura/plugins/skills/``. At runtime they are
-materialized into a dedicated hidden root under ``~/.aura/plugins/.../skills``
-so the active skill catalogue is skill-centric and detached from package
-layout. ``include_bundled=True`` opts in.
+as code-defined bundled content. At runtime they are materialized into a
+dedicated hidden root under ``~/.aura/plugins/.../skills`` so the active skill
+catalogue is skill-centric and detached from package layout.
+``include_bundled=True`` opts in.
 """
 
 from __future__ import annotations
 
-import sys
-import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -70,7 +68,7 @@ def test_bundled_skills_load_from_hidden_global_skills_root(tmp_path: Path) -> N
         assert "/.aura/plugins/bundled-skills/" in rendered
         assert skill.source_path.parent.name in {"verify", "simplify", "code-review"}
         assert skill.source_path.parent.parent.name == "skills"
-        assert skill.source_path.parent.parent.parent.name == "aura.plugins.skills"
+        assert skill.source_path.parent.parent.parent.name == "aura-bundled-skills"
         assert "resources" not in skill.source_path.parts
 
 
@@ -103,58 +101,31 @@ def test_bundled_skills_disabled_by_default(tmp_path: Path) -> None:
     assert names == set()
 
 
-def _install_zip_backed_bundled_package(
+def test_bundled_skills_root_uses_hidden_global_plugins_dir(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pkg_root = tmp_path / "zip_pkg_src"
-    skills_dir = pkg_root / "zipskills_pkg" / "plugins" / "skills" / "zip-skill"
-    skills_dir.mkdir(parents=True)
-    _write(pkg_root / "zipskills_pkg" / "__init__.py", "")
-    _write(pkg_root / "zipskills_pkg" / "plugins" / "__init__.py", "")
-    _write(pkg_root / "zipskills_pkg" / "plugins" / "skills" / "__init__.py", "")
-    _write(
-        skills_dir / "SKILL.md",
-        "---\ndescription: zip backed skill\n---\nZIP-SKILL-BODY\n",
-    )
+    home = tmp_path / "home"
 
-    archive_path = tmp_path / "zipskills_pkg.zip"
-    with zipfile.ZipFile(archive_path, "w") as zf:
-        for path in pkg_root.rglob("*"):
-            if path.is_file():
-                zf.write(path, path.relative_to(pkg_root).as_posix())
-
-    monkeypatch.syspath_prepend(str(archive_path))
-    sys.modules.pop("zipskills_pkg", None)
-    sys.modules.pop("zipskills_pkg.plugins", None)
-    sys.modules.pop("zipskills_pkg.plugins.skills", None)
-    monkeypatch.setattr(loader, "_BUNDLED_SKILLS_PACKAGE", "zipskills_pkg.plugins.skills")
-
-
-def test_bundled_skills_root_supports_zip_backed_dedicated_package(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install_zip_backed_bundled_package(tmp_path, monkeypatch)
-
-    with loader._bundled_skills_root(home_dir=tmp_path / "home") as bundled_root:
+    with loader._bundled_skills_root(home_dir=home) as bundled_root:
         assert bundled_root is not None
         assert bundled_root.is_dir()
         assert bundled_root.name == "skills"
-        assert (bundled_root / "zip-skill" / "SKILL.md").is_file()
+        assert "/.aura/plugins/bundled-skills/" in bundled_root.as_posix()
+        assert (bundled_root / "verify" / "SKILL.md").is_file()
+        assert (bundled_root / "simplify" / "SKILL.md").is_file()
+        assert (bundled_root / "code-review" / "SKILL.md").is_file()
 
 
-def test_bundled_skills_root_reuses_session_extraction_for_zip_package(
+def test_bundled_skills_root_reuses_session_extraction(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _install_zip_backed_bundled_package(tmp_path, monkeypatch)
+    home = tmp_path / "home"
 
-    with loader._bundled_skills_root(home_dir=tmp_path / "home") as first_root:
+    with loader._bundled_skills_root(home_dir=home) as first_root:
         assert first_root is not None
         first_path = first_root
     assert first_path.is_dir()
 
-    with loader._bundled_skills_root(home_dir=tmp_path / "home") as second_root:
+    with loader._bundled_skills_root(home_dir=home) as second_root:
         assert second_root == first_path
-        assert (second_root / "zip-skill" / "SKILL.md").is_file()
+        assert (second_root / "verify" / "SKILL.md").is_file()

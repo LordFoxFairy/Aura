@@ -3,7 +3,7 @@
 Populated once at Agent construction from :func:`load_skills`. Conditional
 skills (``paths:`` frontmatter) are held in ``loader._conditional_skills``
 and only enter this registry after a matching file is touched — see
-:func:`aura.core.skills.loader.activate_conditional_skills_for_paths`.
+:func:`aura.capabilities.skills_runtime.loader.activate_conditional_skills_for_paths`.
 """
 
 from __future__ import annotations

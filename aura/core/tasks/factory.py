@@ -74,6 +74,7 @@ from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
 
+from aura.capabilities.skills_runtime import SkillRegistry
 from aura.config.schema import AuraConfig, ToolsConfig
 from aura.core import llm
 from aura.core.hooks import HookChain
@@ -83,7 +84,6 @@ from aura.core.permissions.safety import DEFAULT_SAFETY, SafetyPolicy
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.permissions.subagent_asker import SubagentAutoDenyAsker
 from aura.core.persistence.storage import SessionStorage
-from aura.core.skills import SkillRegistry
 from aura.core.tasks.agent_types import get_agent_type
 from aura.schemas.state import ReadCarryover
 from aura.schemas.tool import ToolError

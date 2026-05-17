@@ -39,6 +39,8 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from aura.capabilities.skills_runtime.command import SkillCommand
+from aura.capabilities.skills_runtime.types import Skill
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.hooks.permission import (
@@ -49,8 +51,6 @@ from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.persistence import journal as journal_module
 from aura.core.persistence.storage import SessionStorage
-from aura.core.skills.command import SkillCommand
-from aura.core.skills.types import Skill
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel
@@ -470,7 +470,7 @@ async def test_internal_tools_exempt_from_restrict(tmp_path: Path) -> None:
 
 
 def test_loader_parses_restrict_tools_frontmatter(tmp_path: Path) -> None:
-    from aura.core.skills.loader import load_skills
+    from aura.capabilities.skills_runtime.loader import load_skills
 
     skills_dir = tmp_path / ".aura" / "skills" / "demo"
     skills_dir.mkdir(parents=True)

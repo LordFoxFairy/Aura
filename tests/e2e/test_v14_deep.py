@@ -143,7 +143,7 @@ _SKILLS_LOAD_DRIVER = textwrap.dedent(
 
     sys.path.insert(0, {repo_root!r})
 
-    from aura.core.skills.loader import load_skills
+    from aura.capabilities.skills_runtime.loader import load_skills
 
     cwd = Path(sys.argv[1])
     home = Path(sys.argv[2])
@@ -212,7 +212,7 @@ _SKILL_VISIBILITY_DRIVER = textwrap.dedent(
 
     from aura.core.memory.context import Context
     from aura.core.memory.rules import RulesBundle
-    from aura.core.skills.loader import load_skills
+    from aura.capabilities.skills_runtime.loader import load_skills
 
     cwd = Path(sys.argv[1])
     home = Path(sys.argv[2])
@@ -310,8 +310,8 @@ _ALLOWED_TOOLS_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.core.permissions.session import SessionRuleSet
-    from aura.core.skills.command import install_skill_allow_rules
-    from aura.core.skills.types import Skill
+    from aura.capabilities.skills_runtime.command import install_skill_allow_rules
+    from aura.capabilities.skills_runtime.types import Skill
 
     out = Path(sys.argv[1])
 
@@ -369,8 +369,8 @@ _RESTRICT_TOOLS_DRIVER = textwrap.dedent(
     from aura.core.permissions.session import RuleSet, SessionRuleSet
     from aura.core.persistence import journal
     from aura.core.persistence.storage import SessionStorage
-    from aura.core.skills.restrict import install_restrict_lease
-    from aura.core.skills.types import Skill
+    from aura.capabilities.skills_runtime.restrict import install_restrict_lease
+    from aura.capabilities.skills_runtime.types import Skill
     from tests.conftest import FakeChatModel, FakeTurn
 
     db_path = sys.argv[1]
@@ -1379,8 +1379,8 @@ _INLINE_CMD_DRIVER = textwrap.dedent(
 
     sys.path.insert(0, {repo_root!r})
 
-    from aura.core.skills.loader import render_skill_body
-    from aura.core.skills.types import Skill
+    from aura.capabilities.skills_runtime.loader import render_skill_body
+    from aura.capabilities.skills_runtime.types import Skill
 
     out = Path(sys.argv[1])
 

@@ -16,7 +16,7 @@ from aura.core.agent import Agent
 from aura.core.commands.builtin import ContextCommand
 from aura.core.commands.registry import CommandRegistry
 from aura.core.persistence.storage import SessionStorage
-from aura.core.skills.types import Skill
+from aura.capabilities.skills_runtime.types import Skill
 from tests.conftest import FakeChatModel, FakeTurn
 
 

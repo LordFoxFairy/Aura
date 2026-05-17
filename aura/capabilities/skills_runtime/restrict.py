@@ -1,6 +1,6 @@
 """V14 ``restrict-tools`` lease — strict whitelist scoped to a single turn.
 
-Companion to v0.13's :func:`aura.core.skills.command.install_skill_allow_rules`.
+Companion to v0.13's :func:`aura.capabilities.skills_runtime.command.install_skill_allow_rules`.
 The two layers stack:
 
 - ``allowed_tools`` (permissive): auto-allow declared tools for the rest of

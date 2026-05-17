@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from aura.capabilities.skills_runtime.types import Skill
 from aura.core.memory.context import Context
 from aura.core.memory.rules import RulesBundle
-from aura.core.skills.types import Skill
 
 
 def _skill(

@@ -160,7 +160,7 @@ def _project_dirs_up_to_home(cwd: Path, home: Path) -> list[Path]:
     """Return cwd, cwd.parent, ..., up to (but NOT including) ``home``.
 
     Outermost-first order. Mirrors the walk-up pattern used by skills
-    (:func:`aura.core.skills.loader._project_dirs_up_to_home`). If
+    (:func:`aura.capabilities.skills_runtime.loader._project_dirs_up_to_home`). If
     ``cwd`` is not under ``home`` (pathological test setups / CI
     running from ``/tmp``), returns ``[cwd]`` — we still scan the
     project layer at ``cwd``, but we don't traverse up into the real

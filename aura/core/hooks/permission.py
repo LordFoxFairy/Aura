@@ -49,6 +49,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
 
+from aura.capabilities.skills_runtime.restrict import has_active_lease, tool_allowed_by_lease
 from aura.core.hooks import PreToolHook
 from aura.core.permissions.decision import Decision
 from aura.core.permissions.denials import PermissionDenial
@@ -58,7 +59,6 @@ from aura.core.permissions.safety import DEFAULT_SAFETY, SafetyPolicy, is_protec
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.permissions.store import PermissionStoreError, save_rule
 from aura.core.persistence import journal
-from aura.core.skills.restrict import has_active_lease, tool_allowed_by_lease
 from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult, resolve_is_destructive

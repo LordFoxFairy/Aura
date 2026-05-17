@@ -16,6 +16,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
+from aura.capabilities.skills_runtime import Skill, SkillRegistry, load_skills
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core import llm
 from aura.core.abort import AbortController, AbortException
@@ -54,7 +55,6 @@ from aura.core.runtime.tool_factory import (
     STATEFUL_TOOL_FACTORIES,
     ToolRuntime,
 )
-from aura.core.skills import Skill, SkillRegistry, load_skills
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
 from aura.core.tokens import estimate_message_tokens, estimate_text_tokens

@@ -30,9 +30,9 @@ if TYPE_CHECKING:
     # imports to preserve the ``aura.schemas`` leaf invariant
     # (``aura/schemas/__init__.py`` enforces that nothing under
     # ``aura/schemas`` reaches into other ``aura`` modules at runtime).
+    from aura.capabilities.skills_runtime.types import Skill
     from aura.core.permissions.decision import Decision
     from aura.core.permissions.denials import PermissionDenial as Denial
-    from aura.core.skills.types import Skill
 else:
     # Runtime fallbacks — needed because :class:`LoopState` (a stdlib
     # dataclass) is used as a pydantic field type on stateful tools
@@ -91,7 +91,7 @@ class TokenStats:
 @dataclass(frozen=True)
 class SkillRestrictLease:
     """Public counterpart of the runtime ``_RestrictEntry`` in
-    :mod:`aura.core.skills.restrict`.
+    :mod:`aura.capabilities.skills_runtime.restrict`.
 
     Phase 1 introduces the public type so :class:`LoopSlots` can name
     it; Task 6 migrates the skill loader (writer) and the permission
@@ -106,7 +106,7 @@ class SkillRestrictLease:
     ``LoopSlots.skill_restrict_leases`` slot therefore holds a
     ``list[SkillRestrictLease]`` (default empty) — each entry expires
     independently when ``LoopState.turn_count`` advances past its
-    ``install_turn`` (see :func:`aura.core.skills.restrict._active_leases`).
+    ``install_turn`` (see :func:`aura.capabilities.skills_runtime.restrict._active_leases`).
     """
 
     install_turn: int

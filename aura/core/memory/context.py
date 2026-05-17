@@ -24,11 +24,11 @@ from typing import Any, Literal
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
+from aura.capabilities.skills_runtime.types import Skill
 from aura.core.memory import project_memory
 from aura.core.memory.rules import Rule, RulesBundle
 from aura.core.memory.rules import match as match_rules
 from aura.core.persistence import journal
-from aura.core.skills.types import Skill
 from aura.schemas.state import ReadCarryover
 from aura.schemas.todos import TodoItem
 

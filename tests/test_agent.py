@@ -1139,7 +1139,7 @@ async def test_agent_skills_loaded_at_init_from_cwd_and_home(
 async def test_agent_record_skill_invocation_reaches_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aura.core.skills.types import Skill
+    from aura.capabilities.skills_runtime.types import Skill
 
     _chdir(monkeypatch, tmp_path)
     agent = _agent(tmp_path, turns=[])

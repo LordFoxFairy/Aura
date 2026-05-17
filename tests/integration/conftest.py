@@ -35,7 +35,7 @@ from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.hooks import HookChain
 from aura.core.persistence.storage import SessionStorage
-from aura.core.skills.loader import clear_conditional_state
+from aura.capabilities.skills_runtime.loader import clear_conditional_state
 from aura.schemas.events import AgentEvent
 from aura.tools.ask_user import QuestionAsker
 from tests.conftest import FakeChatModel, FakeTurn

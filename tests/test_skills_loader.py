@@ -1,4 +1,6 @@
-"""Tests for aura.core.skills.loader — directory-per-skill (claude-code v2.1.88 format).
+"""Tests for aura.capabilities.skills_runtime.loader.
+
+Directory-per-skill format matches claude-code v2.1.88.
 
 Covers:
 - Directory-per-skill discovery: ``<root>/.aura/skills/<name>/SKILL.md``.

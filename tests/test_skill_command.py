@@ -1,4 +1,4 @@
-"""Tests for aura.core.skills.command.SkillCommand."""
+"""Tests for aura.capabilities.skills_runtime.command.SkillCommand."""
 
 from __future__ import annotations
 

@@ -13,13 +13,13 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from aura.capabilities.tools.registry import ToolRegistry
 from aura.config.schema import AuraConfig
 from aura.core import journal as journal_module
 from aura.core.agent import Agent
 from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
 from aura.core.persistence.storage import SessionStorage
-from aura.core.registry import ToolRegistry
 from aura.schemas.events import (
     AgentEvent,
     Final,

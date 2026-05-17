@@ -23,7 +23,7 @@ from rich.text import Text
 
 from aura import __version__
 from aura.capabilities.commands import CommandRegistry
-from aura.cli.commands import build_default_registry, dispatch
+from aura.capabilities.commands.registry import build_default_registry, dispatch
 from aura.cli.completion import SlashCommandCompleter, resolve_history_path
 from aura.cli.render import Renderer
 from aura.cli.spinner import ThinkingSpinner

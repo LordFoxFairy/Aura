@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
 from aura.capabilities.skills_runtime import Skill, SkillRegistry, load_skills
+from aura.capabilities.tools.registry import ToolRegistry
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core import llm
 from aura.core.abort import AbortController, AbortException
@@ -48,7 +49,6 @@ from aura.core.permissions.safety import SafetyPolicy
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
-from aura.core.registry import ToolRegistry
 from aura.core.runtime.mcp import McpRuntime
 from aura.core.runtime.session import SessionRuntime
 from aura.core.runtime.tool_factory import (

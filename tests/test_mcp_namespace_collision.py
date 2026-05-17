@@ -19,8 +19,8 @@ from typing import Any
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
+from aura.capabilities.tools.registry import ToolRegistry
 from aura.core.mcp.adapter import _MCP_PREFIX, add_aura_metadata
-from aura.core.registry import ToolRegistry
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 
 

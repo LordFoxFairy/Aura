@@ -18,9 +18,9 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from aura.capabilities.tools.registry import ToolRegistry
 from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
-from aura.core.registry import ToolRegistry
 from aura.schemas.events import ToolCallCompleted
 from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.base import build_tool

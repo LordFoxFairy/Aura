@@ -9,7 +9,7 @@ import pytest
 
 from aura.capabilities.commands.team import TeamCommand
 from aura.capabilities.commands.team import TeamCommand as CapabilityTeamCommand
-from aura.cli.commands import build_default_registry, dispatch
+from aura.capabilities.commands.registry import build_default_registry, dispatch
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.persistence.storage import SessionStorage

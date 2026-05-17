@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage
 
+from aura.capabilities.tools.registry import ToolRegistry
 from aura.core.loop import AgentLoop
-from aura.core.registry import ToolRegistry
 from aura.schemas.state import LoopSlots, LoopState
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 

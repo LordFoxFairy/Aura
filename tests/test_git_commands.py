@@ -29,7 +29,7 @@ from aura.capabilities.commands.git import (
     _git,
     _GitTimeoutError,
 )
-from aura.cli.commands import build_default_registry
+from aura.capabilities.commands.registry import build_default_registry
 from aura.core.agent import Agent
 
 # ---------------------------------------------------------------------------

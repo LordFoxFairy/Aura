@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import AIMessage
 
-from aura.cli.commands import build_default_registry, dispatch
+from aura.capabilities.commands.registry import build_default_registry, dispatch
 from aura.config.schema import AuraConfig
 from aura.core import llm
 from aura.core.agent import Agent

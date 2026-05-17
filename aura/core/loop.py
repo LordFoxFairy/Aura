@@ -22,6 +22,7 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
 
+from aura.capabilities.tools.registry import ToolRegistry
 from aura.config.schema import RetryConfig
 from aura.core.abort import AbortController, AbortException, current_abort_signal
 from aura.core.compact import Compactor, MicrocompactPolicy, apply_microcompact
@@ -29,7 +30,6 @@ from aura.core.hooks import HookChain
 from aura.core.memory.context import Context
 from aura.core.permissions.decision import Decision
 from aura.core.persistence import journal
-from aura.core.registry import ToolRegistry
 from aura.core.retry import with_retry
 from aura.schemas.events import (
     AgentEvent,

@@ -17,10 +17,10 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from aura.capabilities.tools.registry import ToolRegistry
 from aura.core.hooks import HookChain
 from aura.core.loop import _MAX_LENGTH_RETRY, AgentLoop
 from aura.core.persistence import journal
-from aura.core.registry import ToolRegistry
 from aura.schemas.events import AgentEvent, Final, ToolCallStarted
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from aura.capabilities.commands.registry import build_default_registry, dispatch
 from aura.cli.buddy import current_user_seed, generate_buddy
-from aura.cli.commands import build_default_registry, dispatch
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.persistence.storage import SessionStorage

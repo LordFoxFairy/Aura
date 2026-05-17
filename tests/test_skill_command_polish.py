@@ -26,7 +26,7 @@ from aura.capabilities.commands.registry import CommandRegistry as _Reg
 from aura.capabilities.commands.types import CommandResult, CommandSource
 from aura.capabilities.skills_runtime.command import SkillCommand
 from aura.capabilities.skills_runtime.types import Skill
-from aura.cli.commands import build_default_registry
+from aura.capabilities.commands.registry import build_default_registry
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.persistence import journal as journal_module

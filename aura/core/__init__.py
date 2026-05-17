@@ -1,5 +1,6 @@
 """Core agent loop, state, registry, hooks, and built-in hook factories."""
 
+from aura.capabilities.tools.registry import ToolRegistry
 from aura.core.agent import Agent, build_agent
 from aura.core.hooks import (
     HookChain,
@@ -27,7 +28,6 @@ from aura.core.loop import AgentLoop, ToolStep
 from aura.core.permissions.denials import PermissionDenial
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
-from aura.core.registry import ToolRegistry
 from aura.errors import AuraError
 from aura.schemas.events import (
     AgentEvent,

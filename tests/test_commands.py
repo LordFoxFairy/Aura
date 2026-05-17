@@ -15,10 +15,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from aura.capabilities.commands.registry import build_default_registry, dispatch
 from aura.capabilities.commands.registry import (
     build_default_registry as build_capability_default_registry,
 )
-from aura.cli.commands import build_default_registry, dispatch
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.llm import UnknownModelSpecError

@@ -39,8 +39,9 @@ from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool
 
+from aura.capabilities.tools.catalog import assemble_tool_pool
+from aura.capabilities.tools.registry import ToolRegistry
 from aura.core.persistence import journal
-from aura.core.registry import ToolRegistry, assemble_tool_pool
 
 if TYPE_CHECKING:
     from aura.config.schema import MCPServerConfig

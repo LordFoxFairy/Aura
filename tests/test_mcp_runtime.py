@@ -27,9 +27,9 @@ import pytest
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
+from aura.capabilities.tools.registry import ToolRegistry
 from aura.config.schema import MCPServerConfig
 from aura.core.persistence import journal
-from aura.core.registry import ToolRegistry
 from aura.core.runtime.mcp import McpRuntime
 from aura.schemas.tool import ToolMetadata
 

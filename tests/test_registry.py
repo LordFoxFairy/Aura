@@ -10,11 +10,12 @@ import pytest
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
+from aura.capabilities.tools.catalog import assemble_tool_pool
 from aura.capabilities.tools.catalog import assemble_tool_pool as assemble_capability_tool_pool
+from aura.capabilities.tools.registry import ToolRegistry, ToolRegistryError
 from aura.capabilities.tools.registry import ToolRegistry as CapabilityToolRegistry
 from aura.capabilities.tools.registry import ToolRegistryError as CapabilityToolRegistryError
 from aura.core.loop import ToolStep, partition_batches
-from aura.core.registry import ToolRegistry, ToolRegistryError, assemble_tool_pool
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from aura.tools.read_file import read_file

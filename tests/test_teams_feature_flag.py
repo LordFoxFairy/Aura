@@ -28,7 +28,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aura.cli.commands import build_default_registry
+from aura.capabilities.commands.registry import build_default_registry
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.persistence.storage import SessionStorage

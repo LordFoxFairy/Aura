@@ -1,8 +1,8 @@
 """Capabilities-owned slash command surface.
 
 This package owns Aura's builtin slash-command implementations and registry,
-but keeps package import side effects minimal so core compatibility façades can
-import specific submodules without triggering the whole command graph.
+while keeping import side effects minimal so callers can import targeted
+submodules without triggering the whole command graph.
 """
 
 from __future__ import annotations

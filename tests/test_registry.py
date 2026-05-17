@@ -1,4 +1,4 @@
-"""Tests for aura.core.registry — ToolRegistry + assemble_tool_pool."""
+"""Tests for capabilities tool registry facades and assemble_tool_pool."""
 
 from __future__ import annotations
 

@@ -5,8 +5,8 @@ Tauri 2 + Rust + React desktop frontend for Aura. Sibling to `aura/` (the Python
 ## Phase 1 — what's shipped
 
 - **Rust IPC bridge** (`src-tauri/src/lib.rs`): on app start, spawns `python -m aura.desktop.headless` (preferring `uv run` when available), pipes its stdout NDJSON event stream to Tauri's `aura-event` channel, and exposes `send_prompt(text)`, `send_permission_response(...)`, and `stop_aura()` Tauri commands.
-- **Headless Aura entry** (`aura/desktop/headless.py`): single-tenant stdio mode that reads prompt and permission-response requests from stdin and emits one event per line on stdout. It serializes internal `AgentEvent` values through `aura.transport.wire` so desktop, future HTTP/SSE surfaces, and AG-UI adapters share the same event contract.
-- **Shared transport layer** (`aura/transport/`): `wire.py` defines Aura's stable JSON event shape, `agui.py` maps that shape to AG-UI-style lifecycle/text/tool/state events, `sse.py` frames JSON payloads for outbound Server-Sent Events, and `stream.py` adapts `Agent.astream(...)` into those transports.
+- **Headless Aura entry** (`aura/desktop/headless.py`): single-tenant stdio mode that reads prompt and permission-response requests from stdin and emits one event per line on stdout. It serializes internal `AgentEvent` values through `aura.adapters.protocol.wire` so desktop and other protocol adapters share the same event contract.
+- **Protocol adapters** (`aura/adapters/protocol/`): `wire.py` defines Aura's stable JSON event shape, `agui.py` maps that shape to AG-UI-style lifecycle/text/tool/state events, and `stream.py` adapts `Agent.astream(...)` into protocol-specific outputs.
 - **React frontend** (`frontend/src/main.tsx`, `frontend/src/components/`): conversation UI with streaming assistant bubbles, tool-call cards, status surfaces, and desktop permission prompts.
 
 ## Layout
@@ -59,7 +59,7 @@ The bundle target depends on platform: `.app` on macOS, `.msi`/`.exe` on Windows
 
 ### Python stdout NDJSON
 
-Each line on the headless subprocess's stdout is one JSON object produced by `aura.transport.wire`:
+Each line on the headless subprocess's stdout is one JSON object produced by `aura.adapters.protocol.wire`:
 
 | event | fields | meaning |
 |---|---|---|
@@ -80,18 +80,18 @@ User prompts go the other way as `{"kind":"prompt","text":"..."}` written to std
 Permission responses go back as `{"kind":"permission_response","id":"...","choice":"accept|always|deny","feedback":"..."}`.
 Tool events should be correlated by `id` whenever present. Legacy tool events may omit `id`; the frontend generates a local id for rendering and falls back to the most recent incomplete tool with the same name.
 
-### AG-UI and SSE
+### AG-UI and stream helpers
 
-External HTTP-style integrations should use the shared adapter chain instead of reading `AgentEvent` directly:
+External integrations should use the shared adapter chain instead of reading `AgentEvent` directly:
 
 ```text
 Agent.astream(prompt)
-  -> aura.transport.wire.event_to_wire(...)
-  -> aura.transport.agui.AguiAdapter.convert(...)
-  -> aura.transport.sse.encode_json_sse(...)
+  -> aura.adapters.protocol.wire.event_to_wire(...)
+  -> aura.adapters.protocol.agui.AguiAdapter.convert(...)
+  -> aura.adapters.protocol.stream.encode_json_sse(...)
 ```
 
-`aura.transport.sse` is outbound Server-Sent Event framing for Aura run events. It is separate from any inbound MCP server transport named SSE.
+`aura.adapters.protocol.stream` includes SSE framing helpers for outbound Aura run events. This is separate from MCP transport configuration that also uses the term SSE.
 
 ### Rust bridge events
 

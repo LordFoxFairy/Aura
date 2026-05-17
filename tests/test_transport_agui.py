@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 from types import SimpleNamespace
 
-from aura.adapters.protocol.agui import AguiAdapter
+from aura.adapters.protocol import AguiAdapter
 from aura.adapters.protocol.bridge import AguiAdapter as BridgeAguiAdapter
 from aura.adapters.protocol.bridge import AguiEventBridge
 from aura.domain.protocol.events import (
@@ -21,6 +22,15 @@ from aura.schemas.state import LoopSlots
 def test_agui_adapter_is_bridge_owned_implementation() -> None:
     assert AguiAdapter is BridgeAguiAdapter
     assert AguiAdapter.__module__ == "aura.adapters.protocol.bridge"
+
+
+def test_agui_compat_module_removed() -> None:
+    try:
+        importlib.import_module("aura.adapters.protocol.agui")
+    except ModuleNotFoundError:
+        pass
+    else:
+        raise AssertionError("aura.adapters.protocol.agui should be removed")
 
 
 def test_agui_adapter_wraps_text_stream_in_run_and_message_events() -> None:

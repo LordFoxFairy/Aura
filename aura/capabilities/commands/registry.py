@@ -1,9 +1,8 @@
 """Command registry ownership for Aura's slash-command surface.
 
 This module owns the command registry abstraction plus default-registry
-assembly. Compatibility façades in ``aura.core.commands`` and
-``aura.cli.commands`` re-export these symbols so legacy import paths stay
-stable while ownership lives under ``aura.capabilities``.
+assembly. CLI and core entrypoints import this module directly so command
+ownership stays centralized under ``aura.capabilities``.
 """
 
 from __future__ import annotations

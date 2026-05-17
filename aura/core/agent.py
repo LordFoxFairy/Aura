@@ -581,7 +581,7 @@ class Agent:
         # :meth:`_build_loop`); drained by :meth:`astream` between loop
         # yields so consumers see compact lifecycle events interleaved
         # with the normal event stream. Each entry is a wire-format dict
-        # produced by :func:`aura.transport.wire.compact_event_to_wire`.
+        # produced by :func:`aura.adapters.protocol.wire.compact_event_to_wire`.
         self._pending_compact_events: list[dict[str, Any]] = []
         self._loop = self._build_loop()
         # Phase 2 Task 8 — MCP lifecycle (manager + commands + connect /

@@ -1,64 +1,67 @@
-"""Compatibility façade for the capabilities-owned builtin tool catalogue.
+"""Public package surface for Aura tools.
 
-Runtime stays lazy to avoid a package-init cycle:
-``aura.capabilities.tools.catalog`` imports concrete ``aura.tools.<tool>``
-modules, and importing a submodule always runs ``aura.tools.__init__`` first.
-Static type checking still needs the exported names visible, so TYPE_CHECKING
-gets explicit imports while runtime uses ``__getattr__``.
+This module is the stable package-level API for callers that want canonical
+builtin tool singletons/classes via imports like ``from aura.tools import bash,
+read_file``. It is a real public surface, not a compatibility shim.
 """
 
-from __future__ import annotations
+from aura.capabilities.tools.registry import ToolRegistry, ToolRegistryError
+from aura.schemas.tool import ToolError, ToolResult, tool_metadata
+from aura.tools.ask_user import AskUserQuestion
+from aura.tools.base import Tool, build_tool
+from aura.tools.bash import Bash, bash
+from aura.tools.bash_background import BashBackground
+from aura.tools.edit_file import EditFile, edit_file
+from aura.tools.enter_plan_mode import EnterPlanMode
+from aura.tools.exit_plan_mode import ExitPlanMode
+from aura.tools.glob import Glob, glob
+from aura.tools.grep import Grep, grep
+from aura.tools.mcp_read_resource import MCPReadResourceTool
+from aura.tools.read_file import ReadFile, read_file
+from aura.tools.send_message import SendMessage
+from aura.tools.skill import SkillTool
+from aura.tools.task_create import TaskCreate
+from aura.tools.task_get import TaskGet
+from aura.tools.task_list import TaskList
+from aura.tools.task_output import TaskOutput
+from aura.tools.task_stop import TaskStop
+from aura.tools.todo_write import TodoWrite
+from aura.tools.web_fetch import WebFetch, web_fetch
+from aura.tools.web_search import WebSearch
+from aura.tools.write_file import WriteFile, write_file
 
-from importlib import import_module
-from typing import TYPE_CHECKING, Any
+BUILTIN_TOOLS = {
+    "bash": bash,
+    "edit_file": edit_file,
+    "glob": glob,
+    "grep": grep,
+    "read_file": read_file,
+    "web_fetch": web_fetch,
+    "write_file": write_file,
+}
 
-if TYPE_CHECKING:
-    from aura.capabilities.tools.catalog import (
-        BUILTIN_STATEFUL_TOOLS,
-        BUILTIN_TOOLS,
-        AskUserQuestion,
-        Bash,
-        BashBackground,
-        EditFile,
-        EnterPlanMode,
-        ExitPlanMode,
-        Glob,
-        Grep,
-        MCPReadResourceTool,
-        ReadFile,
-        SendMessage,
-        SkillTool,
-        TaskCreate,
-        TaskGet,
-        TaskList,
-        TaskOutput,
-        TaskStop,
-        TodoWrite,
-        ToolError,
-        ToolResult,
-        WebFetch,
-        WebSearch,
-        WriteFile,
-        assemble_tool_pool,
-        bash,
-        build_tool,
-        edit_file,
-        glob,
-        grep,
-        read_file,
-        tool_metadata,
-        web_fetch,
-        write_file,
-    )
-
-_CATALOG_MODULE = "aura.capabilities.tools.catalog"
+BUILTIN_STATEFUL_TOOLS = {
+    "todo_write": TodoWrite,
+    "ask_user_question": AskUserQuestion,
+    "task_create": TaskCreate,
+    "task_output": TaskOutput,
+    "task_get": TaskGet,
+    "task_list": TaskList,
+    "task_stop": TaskStop,
+    "web_search": WebSearch,
+    "enter_plan_mode": EnterPlanMode,
+    "exit_plan_mode": ExitPlanMode,
+    "bash_background": BashBackground,
+    "skill": SkillTool,
+    "send_message": SendMessage,
+}
 
 __all__ = [
-    "BUILTIN_STATEFUL_TOOLS",
-    "BUILTIN_TOOLS",
     "AskUserQuestion",
     "Bash",
     "BashBackground",
+    "BUILTIN_STATEFUL_TOOLS",
+    "BUILTIN_TOOLS",
     "EditFile",
     "EnterPlanMode",
     "ExitPlanMode",
@@ -74,12 +77,14 @@ __all__ = [
     "TaskOutput",
     "TaskStop",
     "TodoWrite",
+    "Tool",
     "ToolError",
+    "ToolRegistry",
+    "ToolRegistryError",
     "ToolResult",
     "WebFetch",
     "WebSearch",
     "WriteFile",
-    "assemble_tool_pool",
     "bash",
     "build_tool",
     "edit_file",
@@ -90,18 +95,3 @@ __all__ = [
     "web_fetch",
     "write_file",
 ]
-
-
-def _catalog() -> Any:
-    return import_module(_CATALOG_MODULE)
-
-
-def __getattr__(name: str) -> Any:
-    try:
-        return getattr(_catalog(), name)
-    except AttributeError as exc:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
-
-
-def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(__all__))

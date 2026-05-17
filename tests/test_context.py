@@ -13,10 +13,10 @@ from langchain_core.messages import (
     SystemMessage,
 )
 
+from aura.capabilities.skills_runtime.types import Skill
 from aura.core.memory.context import Context, NestedFragment, _ReadRecord
 from aura.core.memory.context import _render_todos_body as render_todos_body
 from aura.core.memory.rules import Rule, RulesBundle
-from aura.capabilities.skills_runtime.types import Skill
 from aura.core.tasks.types import TaskNotification
 from aura.schemas.state import ReadCarryover, ReadRecord
 from aura.schemas.todos import TodoItem

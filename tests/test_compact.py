@@ -23,13 +23,13 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
+from aura.capabilities.skills_runtime.types import Skill
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.compact.compact import _is_prompt_too_long
 from aura.core.compact.constants import MICROCOMPACT_CLEAR_MARKER
 from aura.core.persistence import journal
 from aura.core.persistence.storage import SessionStorage
-from aura.capabilities.skills_runtime.types import Skill
 from aura.schemas.todos import TodoItem
 from tests.conftest import FakeChatModel, FakeTurn
 

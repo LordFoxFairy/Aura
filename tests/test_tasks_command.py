@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
+from aura.capabilities.commands.tasks import TasksCommand
 from aura.capabilities.commands.tasks import TasksCommand as CapabilityTasksCommand
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.commands.tasks import TasksCommand
 from aura.core.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 

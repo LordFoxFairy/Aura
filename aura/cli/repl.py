@@ -22,12 +22,12 @@ from rich.panel import Panel
 from rich.text import Text
 
 from aura import __version__
+from aura.capabilities.commands import CommandRegistry
 from aura.cli.commands import build_default_registry, dispatch
 from aura.cli.completion import SlashCommandCompleter, resolve_history_path
 from aura.cli.render import Renderer
 from aura.cli.spinner import ThinkingSpinner
 from aura.core.agent import Agent
-from aura.core.commands import CommandRegistry
 from aura.core.persistence import journal
 from aura.schemas.permissions import StatusLineConfig
 
@@ -974,7 +974,7 @@ def _print_active_team_status(agent: Agent, console: Console) -> None:
 
     Reads ``agent.state.slots.active_team`` (Phase 1 Task 6 — the slot
     owned by the ``/team enter`` command, see
-    ``aura.core.commands.team``). Resolves the slug to the
+    ``aura.capabilities.commands.team``). Resolves the slug to the
     human-readable team name via the manager when the slug points at
     the live team; falls back to displaying the slug otherwise
     (off-record teams). Silent no-op when the slot is unset — the

@@ -21,7 +21,7 @@ from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
 from prompt_toolkit.formatted_text import FormattedText
 
-from aura.core.commands import CommandRegistry
+from aura.capabilities.commands import CommandRegistry
 
 _AURA_DIR = ".aura"
 _HISTORY_FILE = "history"

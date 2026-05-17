@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aura.core.commands.types import CommandResult, CommandSource
+from aura.capabilities.commands.types import CommandResult, CommandSource
 from aura.core.mcp.manager import MCPServerStatus
 
 if TYPE_CHECKING:

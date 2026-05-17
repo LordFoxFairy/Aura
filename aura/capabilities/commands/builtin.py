@@ -1,6 +1,6 @@
 """Built-in slash commands — the four migrated from the old if-else.
 
-Each class satisfies the :class:`aura.core.commands.types.Command`
+Each class satisfies the :class:`aura.capabilities.commands.types.Command`
 Protocol by duck-typing (no ABC inheritance).
 """
 
@@ -11,8 +11,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from aura.capabilities.commands.registry import CommandRegistry
+from aura.capabilities.commands.types import CommandResult, CommandSource
 from aura.config.schema import AuraConfigError
-from aura.core.commands.types import CommandResult, CommandSource
 from aura.core.persistence.storage import SessionMeta
 
 if TYPE_CHECKING:

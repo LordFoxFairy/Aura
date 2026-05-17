@@ -27,9 +27,9 @@ from typing import Any
 import pytest
 
 from aura.adapters.protocol.wire import team_message_to_wire
+from aura.capabilities.commands.team import TeamCommand
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.commands.team import TeamCommand
 from aura.core.persistence.storage import SessionStorage
 from aura.core.teams.manager import TeamManager
 from tests.conftest import FakeChatModel

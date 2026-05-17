@@ -27,7 +27,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from aura.core.commands.types import CommandResult, CommandSource
+from aura.capabilities.commands.types import CommandResult, CommandSource
 from aura.core.persistence import journal
 
 if TYPE_CHECKING:

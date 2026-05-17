@@ -404,8 +404,8 @@ def test_prompt_session_no_toolbar_when_agent_not_passed(tmp_path: Path) -> None
     # Bare-bones construction (tests only exercising history/completion)
     # still works: without an agent, there's nothing to render in the bar,
     # so it's elided.
+    from aura.capabilities.commands import CommandRegistry
     from aura.cli.repl import _build_prompt_session
-    from aura.core.commands import CommandRegistry
 
     session = _build_prompt_session(CommandRegistry())
     assert session.bottom_toolbar is None
@@ -420,9 +420,9 @@ def test_prompt_session_bottom_toolbar_shows_context_when_agent_passed(
     # bar + pinned cached + cwd.
     import dataclasses
 
+    from aura.capabilities.commands import CommandRegistry
     from aura.cli.repl import _build_prompt_session
     from aura.core.agent import Agent
-    from aura.core.commands import CommandRegistry
     from aura.schemas.state import TokenStats
     from tests.conftest import FakeChatModel
     from tests.test_agent import _minimal_config, _storage
@@ -463,9 +463,9 @@ def test_prompt_session_has_refresh_interval_for_animated_buddy(
     natural Python equivalent — re-runs the bottom_toolbar callable
     every tick.
     """
+    from aura.capabilities.commands import CommandRegistry
     from aura.cli.repl import _build_prompt_session
     from aura.core.agent import Agent
-    from aura.core.commands import CommandRegistry
     from tests.conftest import FakeChatModel
     from tests.test_agent import _minimal_config, _storage
 
@@ -495,10 +495,10 @@ def test_prompt_session_bottom_toolbar_is_time_animated(
     successive callable invocations sample different frames and produce
     different rendered HTML.
     """
+    from aura.capabilities.commands import CommandRegistry
     from aura.cli import buddy as _buddy
     from aura.cli.repl import _build_prompt_session
     from aura.core.agent import Agent
-    from aura.core.commands import CommandRegistry
     from tests.conftest import FakeChatModel
     from tests.test_agent import _minimal_config, _storage
 

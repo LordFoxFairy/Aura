@@ -186,7 +186,7 @@ async def test_resume_picker_shows_first_prompt_preview(
     tmp_path: Path,
 ) -> None:
     """The picker's row label embeds the session's first user prompt."""
-    from aura.core.commands.builtin import session_label
+    from aura.capabilities.commands.builtin import session_label
 
     storage = SessionStorage(tmp_path / "db")
     storage.save(
@@ -204,7 +204,7 @@ async def test_resume_picker_shows_first_prompt_preview(
 # ---- format_relative_time --------------------------------------------------
 
 def test_format_relative_time_recent() -> None:
-    from aura.core.commands.builtin import format_relative_time
+    from aura.capabilities.commands.builtin import format_relative_time
 
     now = datetime(2026, 4, 25, 12, 0, 0)
     assert format_relative_time(datetime(2026, 4, 25, 11, 59, 58), now) == (
@@ -216,7 +216,7 @@ def test_format_relative_time_recent() -> None:
 
 
 def test_format_relative_time_minutes_hours_days() -> None:
-    from aura.core.commands.builtin import format_relative_time
+    from aura.capabilities.commands.builtin import format_relative_time
 
     now = datetime(2026, 4, 25, 12, 0, 0)
     assert format_relative_time(datetime(2026, 4, 25, 11, 0, 0), now) == (
@@ -234,7 +234,7 @@ def test_format_relative_time_minutes_hours_days() -> None:
 
 
 def test_format_relative_time_handles_clock_skew() -> None:
-    from aura.core.commands.builtin import format_relative_time
+    from aura.capabilities.commands.builtin import format_relative_time
 
     now = datetime(2026, 4, 25, 12, 0, 0)
     # ``when`` after ``now`` (clock skew between SQLite host and

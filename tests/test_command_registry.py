@@ -12,21 +12,21 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aura.capabilities.commands.registry import CommandRegistry as CapabilityCommandRegistry
-from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
-from aura.core.commands import (
+from aura.capabilities.commands import (
     Command,
     CommandRegistry,
     CommandResult,
     CommandSource,
 )
-from aura.core.commands.builtin import (
+from aura.capabilities.commands.builtin import (
     ClearCommand,
     ExitCommand,
     HelpCommand,
     ModelCommand,
 )
+from aura.capabilities.commands.registry import CommandRegistry as CapabilityCommandRegistry
+from aura.config.schema import AuraConfig
+from aura.core.agent import Agent
 from aura.core.llm import UnknownModelSpecError
 from aura.core.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel

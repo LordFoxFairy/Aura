@@ -18,8 +18,8 @@ from typing import Any, cast
 
 import pytest
 
+from aura.capabilities.commands.mcp import MCPCommand
 from aura.core.agent import Agent
-from aura.core.commands.mcp_cmd import MCPCommand
 from aura.core.mcp.manager import MCPServerStatus
 
 

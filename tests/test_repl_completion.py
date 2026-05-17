@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 import pytest
 from prompt_toolkit.document import Document
 
+from aura.capabilities.commands import CommandRegistry
+from aura.capabilities.commands.types import CommandResult
 from aura.cli.completion import SlashCommandCompleter, resolve_history_path
-from aura.core.commands import CommandRegistry
-from aura.core.commands.types import CommandResult
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
@@ -39,7 +39,7 @@ class _FakeCommand:
 def _registry(*commands: _FakeCommand) -> CommandRegistry:
     r = CommandRegistry()
     for c in commands:
-        r.register(c)  # type: ignore[arg-type]
+        r.register(c)
     return r
 
 
@@ -67,7 +67,7 @@ def test_slash_completer_includes_skill_commands() -> None:
 
     # Register a skill-style command AFTER the completer is built — this
     # mimics how Skills and MCP commands show up at agent.aconnect() time.
-    r.register(_FakeCommand("/skill-name", "invoke skill"))  # type: ignore[arg-type]
+    r.register(_FakeCommand("/skill-name", "invoke skill"))
 
     matches = _completions(completer, "/sk")
     assert matches == ["/skill-name"]

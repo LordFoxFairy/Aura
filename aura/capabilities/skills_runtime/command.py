@@ -19,11 +19,11 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING
 
+from aura.capabilities.commands.types import CommandResult, CommandSource
 from aura.capabilities.skills_runtime.errors import format_missing_args_error
 from aura.capabilities.skills_runtime.loader import render_skill_body
 from aura.capabilities.skills_runtime.restrict import install_restrict_lease
 from aura.capabilities.skills_runtime.types import Skill
-from aura.core.commands.types import CommandResult, CommandSource
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import SessionRuleSet
 from aura.core.persistence import journal

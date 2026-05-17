@@ -31,10 +31,10 @@ import pytest
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
+from aura.capabilities.commands.mcp import MCPCommand
 from aura.config import mcp_approvals, mcp_store
 from aura.config.schema import MCPServerConfig
 from aura.core import journal
-from aura.core.commands.mcp_cmd import MCPCommand
 from aura.core.mcp.manager import MCPManager
 
 

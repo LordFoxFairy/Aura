@@ -9,10 +9,10 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from aura.capabilities.commands.export import ExportCommand
 from aura.cli.commands import build_default_registry
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.commands.export import ExportCommand
 from aura.core.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 

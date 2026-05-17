@@ -12,7 +12,11 @@ from typing import Any
 
 _EXPORTS: dict[str, str] = {
     "ClearCommand": "aura.capabilities.commands.builtin",
+    "Command": "aura.capabilities.commands.types",
+    "CommandKind": "aura.capabilities.commands.types",
     "CommandRegistry": "aura.capabilities.commands.registry",
+    "CommandResult": "aura.capabilities.commands.types",
+    "CommandSource": "aura.capabilities.commands.types",
     "CompactCommand": "aura.capabilities.commands.builtin",
     "ContextCommand": "aura.capabilities.commands.builtin",
     "ExitCommand": "aura.capabilities.commands.builtin",

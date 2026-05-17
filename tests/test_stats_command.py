@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-from aura.core.commands.stats import StatsCommand
+from aura.capabilities.commands.stats import StatsCommand
 from aura.core.hooks.budget import make_usage_tracking_hook
 from aura.core.persistence import journal as journal_module
 from aura.schemas.state import LoopState

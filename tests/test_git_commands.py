@@ -22,15 +22,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from aura.cli.commands import build_default_registry
-from aura.core.agent import Agent
-from aura.core.commands.git_commands import (
+from aura.capabilities.commands.git import (
     GitDiffCommand,
     GitLogCommand,
     GitStatusCommand,
     _git,
     _GitTimeoutError,
 )
+from aura.cli.commands import build_default_registry
+from aura.core.agent import Agent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -316,7 +316,7 @@ async def test_log_clamps_count_above_100(
         return 0, "abc123 only\n", ""
 
     with patch(
-        "aura.core.commands.git_commands._git", side_effect=fake_git,
+        "aura.capabilities.commands.git._git", side_effect=fake_git,
     ):
         await GitLogCommand().handle("200", agent)
 
@@ -382,7 +382,7 @@ async def test_status_timeout_returns_friendly_error(
 
     with (
         patch("asyncio.create_subprocess_exec", side_effect=fake_exec),
-        patch("aura.core.commands.git_commands._DEFAULT_TIMEOUT_S", 0.05),
+        patch("aura.capabilities.commands.git._DEFAULT_TIMEOUT_S", 0.05),
     ):
         result = await GitStatusCommand().handle("", agent)
 

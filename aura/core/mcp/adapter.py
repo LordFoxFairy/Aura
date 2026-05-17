@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from langchain_core.tools import BaseTool
 
-from aura.core.commands.types import CommandResult, CommandSource
+from aura.capabilities.commands.types import CommandResult, CommandSource
 from aura.schemas.tool import ToolMetadata
 
 if TYPE_CHECKING:

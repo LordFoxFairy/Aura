@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from aura.core.commands.types import CommandResult, CommandSource
+from aura.capabilities.commands.types import CommandResult, CommandSource
 from aura.core.tasks.types import TaskRecord
 
 if TYPE_CHECKING:

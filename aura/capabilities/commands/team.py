@@ -33,7 +33,7 @@ import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
-from aura.core.commands.types import CommandKind, CommandResult, CommandSource
+from aura.capabilities.commands.types import CommandKind, CommandResult, CommandSource
 from aura.core.persistence.storage import SessionStorage
 from aura.core.teams.manager import (
     TeamError,

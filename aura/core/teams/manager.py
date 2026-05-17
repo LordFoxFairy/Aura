@@ -18,7 +18,7 @@ Responsibilities:
 
 What we deliberately do NOT do here:
 
-- No CLI, no slash dispatch — that's :mod:`aura.core.commands.team`.
+- No CLI, no slash dispatch — that's :mod:`aura.capabilities.commands.team`.
 - No long-lived loop logic — that's :mod:`aura.core.teams.runtime`.
 - No safety / permission policy choices — we hand the parent's
   policy snapshot to ``SubagentFactory.spawn`` and trust the existing

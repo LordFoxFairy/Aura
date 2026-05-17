@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aura.core.commands.types import Command, CommandResult
+from aura.capabilities.commands.types import Command, CommandResult
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent

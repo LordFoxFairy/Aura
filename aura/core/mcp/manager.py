@@ -71,7 +71,7 @@ from aura.core.mcp.adapter import add_aura_metadata, make_mcp_command, normalize
 from aura.core.mcp.types import MCPServerConfig
 
 if TYPE_CHECKING:
-    from aura.core.commands.types import Command
+    from aura.capabilities.commands.types import Command
 
 
 MCPServerState = Literal[

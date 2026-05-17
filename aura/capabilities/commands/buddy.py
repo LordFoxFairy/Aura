@@ -24,7 +24,7 @@ import contextlib
 import sys
 from typing import TYPE_CHECKING
 
-from aura.core.commands.types import CommandResult, CommandSource
+from aura.capabilities.commands.types import CommandResult, CommandSource
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent

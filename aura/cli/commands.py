@@ -5,12 +5,12 @@ implementations and default-registry assembly now lives under
 ``aura.capabilities.commands``.
 """
 
+from aura.capabilities.commands import Command, CommandResult
 from aura.capabilities.commands.registry import (
     CommandRegistry,
     build_default_registry,
     dispatch,
 )
-from aura.core.commands import Command, CommandResult
 
 __all__ = [
     "Command",

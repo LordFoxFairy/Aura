@@ -1,9 +1,4 @@
-"""Public package surface for Aura tools.
-
-This module is the stable package-level API for callers that want canonical
-builtin tool singletons/classes via imports like ``from aura.tools import bash,
-read_file``. It is a real public surface, not a compatibility shim.
-"""
+"""Public package surface for Aura tools."""
 
 from aura.capabilities.tools.registry import ToolRegistry, ToolRegistryError
 from aura.schemas.tool import ToolError, ToolResult, tool_metadata

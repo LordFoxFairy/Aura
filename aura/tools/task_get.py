@@ -1,17 +1,4 @@
-"""task_get — full structured snapshot of a single TaskRecord.
-
-A richer sibling of ``task_output``: same read-only, concurrency-safe
-shape, but returns the lifecycle metadata (``started_at``, ``finished_at``,
-``duration_seconds``, ``parent_id``, ``progress``) that a caller polling
-a subagent needs to reason about "is this still moving", "did it ever
-finish", "what was the child actually doing".
-
-``messages`` is expensive to serialize (full BaseMessage transcript) and
-floods the parent's context; the default response omits it. Set
-``include_messages=True`` to get the transcript as a list of
-``{type, content}`` dicts — used sparingly, typically only once the
-caller has decided to debug a failed task.
-"""
+"""task_get — full structured snapshot of a TaskRecord."""
 
 from __future__ import annotations
 
@@ -31,10 +18,7 @@ class TaskGetParams(BaseModel):
     )
     include_messages: bool = Field(
         default=False,
-        description=(
-            "When True, include the full subagent transcript. Off by "
-            "default — the transcript is chatty and usually not needed."
-        ),
+        description="When True, include the full subagent transcript.",
     )
 
 
@@ -46,9 +30,6 @@ def _preview(args: dict[str, Any]) -> str:
 def _serialize_messages(rec: TaskRecord) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for msg in rec.messages:
-        # BaseMessage.type is the string the langchain serialisation layer
-        # uses (``human``/``ai``/``tool``/``system``); content is whatever
-        # the model layer handed back (str or list for multi-part).
         out.append({"type": msg.type, "content": msg.content})
     return out
 

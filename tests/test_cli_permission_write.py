@@ -1,4 +1,4 @@
-"""Tests for aura.cli.permission_write — write/edit-specialized widget.
+"""Tests for cli.permission_write — write/edit-specialized widget.
 
 Covers:
 * dispatch routing (write_file / edit_file → write widget)
@@ -16,10 +16,10 @@ import pytest
 from pydantic import BaseModel
 from rich.console import Console
 
-from aura.cli import permission_write
-from aura.cli.permission_write import build_diff_fragments, build_write_preview
 from aura.core.permissions.rule import Rule
 from aura.tools.base import build_tool
+from cli import permission_write
+from cli.permission_write import build_diff_fragments, build_write_preview
 
 
 class _WriteP(BaseModel):
@@ -168,7 +168,7 @@ async def test_dispatch_routes_write_file(
         calls["write"] += 1
         return 1, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "run_bash_permission", fake_bash)
     monkeypatch.setattr(perm_mod, "run_generic_permission", fake_generic)
@@ -201,7 +201,7 @@ async def test_dispatch_routes_edit_file(
         calls["write"] += 1
         return 1, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "run_bash_permission", fake_bash)
     monkeypatch.setattr(perm_mod, "run_generic_permission", fake_generic)

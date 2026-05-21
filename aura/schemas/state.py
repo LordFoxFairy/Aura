@@ -117,7 +117,7 @@ class SkillRestrictLease:
 class BuddyState:
     """Status-bar pet observer state — mood + last-event metadata.
 
-    Owned by the buddy hooks in :mod:`aura.cli.buddy`. The spec §3.1
+    Owned by the buddy hooks in :mod:`cli.buddy`. The spec §3.1
     sketch named the slot ``mood: str``; in practice the state machine
     needs three coupled fields (mood label + last event timestamp +
     sticky-worry flag) to avoid flicker and preserve worry across
@@ -127,7 +127,7 @@ class BuddyState:
 
     Defaults match the pre-migration "no events fired yet" shape:
     ``mood="idle"``, ``last_event_ts=0.0``, ``had_recent_error=False``
-    — reading :func:`aura.cli.buddy.get_mood` on a fresh
+    — reading :func:`cli.buddy.get_mood` on a fresh
     :class:`LoopState` returns ``"idle"`` as before.
     """
 

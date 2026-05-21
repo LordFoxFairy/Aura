@@ -1,4 +1,4 @@
-"""Tests for aura.cli.permission — inline interactive list widget.
+"""Tests for cli.permission — inline interactive list widget.
 
 The heart of the v0.7.5 rewrite is the ``_pick_choice_interactive``
 prompt_toolkit Application. Testing pt Applications in-process is
@@ -25,7 +25,12 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 from rich.console import Console
 
-from aura.cli.permission import (
+from aura.core import journal as journal_module
+from aura.core.hooks.permission import AskerResponse
+from aura.core.permissions.matchers import exact_match_on
+from aura.core.permissions.rule import Rule
+from aura.tools.base import build_tool
+from cli.permission import (
     _build_explanation,
     _compose_option_two,
     _preview,
@@ -34,11 +39,6 @@ from aura.cli.permission import (
     make_cli_asker,
     print_bypass_banner,
 )
-from aura.core import journal as journal_module
-from aura.core.hooks.permission import AskerResponse
-from aura.core.permissions.matchers import exact_match_on
-from aura.core.permissions.rule import Rule
-from aura.tools.base import build_tool
 
 
 class _P(BaseModel):
@@ -270,7 +270,7 @@ async def test_accept_returns_accept(
     monkeypatch: pytest.MonkeyPatch, _journal_capture: Path,
 ) -> None:
     picker, _ = _stub_picker(1)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     resp = await asker(
@@ -286,7 +286,7 @@ async def test_accept_returns_accept(
 
 async def test_deny_returns_deny(monkeypatch: pytest.MonkeyPatch) -> None:
     picker, _ = _stub_picker(3)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     resp = await asker(
@@ -301,7 +301,7 @@ async def test_cancelled_picker_returns_deny(
     # Picker returns None (user Ctrl+C / Esc). That must resolve to
     # deny in the AskerResponse AND the journal.
     picker, _ = _stub_picker(None)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     resp = await asker(
@@ -319,7 +319,7 @@ async def test_always_with_precise_rule_is_project_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     picker, _ = _stub_picker(2)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     resp = await asker(
@@ -336,7 +336,7 @@ async def test_always_fallback_to_session_when_no_matcher(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     picker, _ = _stub_picker(2)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     tool = _bash_like(with_matcher=False)
@@ -353,7 +353,7 @@ async def test_picker_default_is_3_for_destructive(
     # tools — so ↑/↓ cursor starts on "No" and a blind Enter can't
     # destroy anything.
     picker, captured = _stub_picker(3)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     await asker(
@@ -368,7 +368,7 @@ async def test_picker_default_is_1_for_safe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     picker, captured = _stub_picker(1)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     await asker(
@@ -381,7 +381,7 @@ async def test_picker_default_is_1_for_safe(
 
 async def test_picker_receives_tag(monkeypatch: pytest.MonkeyPatch) -> None:
     picker, captured = _stub_picker(3)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     await asker(
@@ -396,7 +396,7 @@ async def test_picker_receives_option_two_label_with_project(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     picker, captured = _stub_picker(1)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     await asker(
@@ -414,7 +414,7 @@ async def test_picker_unavailable_writes_journal(
     # Picker raises (e.g. pt can't take over the TTY) → fail-closed
     # deny + journal the unavailability.
     monkeypatch.setattr(
-        "aura.cli.permission._pick_choice_interactive",
+        "cli.permission._pick_choice_interactive",
         _stub_picker_raises(RuntimeError("no tty")),
     )
     console, _ = _capture_console()
@@ -432,7 +432,7 @@ async def test_keyboard_interrupt_is_deny(
 ) -> None:
     # Outer KeyboardInterrupt escapes pt's c-c binding → still deny.
     monkeypatch.setattr(
-        "aura.cli.permission._pick_choice_interactive",
+        "cli.permission._pick_choice_interactive",
         _stub_picker_raises(KeyboardInterrupt()),
     )
     console, _ = _capture_console()
@@ -455,7 +455,7 @@ async def test_audit_line_prints_after_decision(
     # closes (it erased itself) — otherwise operators scanning the
     # conversation can't tell what happened.
     picker, _ = _stub_picker(1)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, buf = _capture_console()
     asker = make_cli_asker(console=console)
     await asker(
@@ -482,7 +482,7 @@ async def test_feedback_flows_through_accept(
     # note through to AskerResponse.feedback AND record it in the
     # permission_answered journal event.
     picker, _ = _stub_picker(1, feedback="needs --verbose")
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     resp = await asker(
@@ -500,7 +500,7 @@ async def test_feedback_flows_through_deny(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     picker, _ = _stub_picker(3, feedback="wrong dir")
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     resp = await asker(
@@ -514,7 +514,7 @@ async def test_feedback_flows_through_always(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     picker, _ = _stub_picker(2, feedback="trusted suite")
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     resp = await asker(
@@ -533,7 +533,7 @@ async def test_empty_feedback_is_backwards_compatible(
     # When the user never pressed Tab, feedback is "" — the journal
     # event should NOT carry a spurious feedback field.
     picker, _ = _stub_picker(1)  # feedback defaults to ""
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console)
     resp = await asker(
@@ -589,7 +589,7 @@ async def _drive_picker(
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from aura.cli import permission as cli_permission_mod
+    from cli import permission as cli_permission_mod
 
     with create_pipe_input() as inp:
         inp.send_text(keys)
@@ -768,7 +768,7 @@ async def test_dispatch_generic_for_non_specialized_tool(
         calls["generic"] += 1
         return 1, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "run_bash_permission", fake_bash)
     monkeypatch.setattr(perm_mod, "run_write_permission", fake_write)
@@ -804,7 +804,7 @@ async def test_dispatch_bash_for_bash_tool(
         calls["generic"] += 1
         return 1, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "run_bash_permission", fake_bash)
     monkeypatch.setattr(perm_mod, "run_write_permission", fake_write)
@@ -833,7 +833,7 @@ async def test_dispatch_write_for_edit_file_tool(
         calls["generic"] += 1
         return 1, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "run_bash_permission", fake_bash)
     monkeypatch.setattr(perm_mod, "run_write_permission", fake_write)
@@ -875,7 +875,7 @@ async def test_timeout_resolves_to_deny(
 ) -> None:
 
     monkeypatch.setattr(
-        "aura.cli.permission._pick_choice_interactive",
+        "cli.permission._pick_choice_interactive",
         _stub_picker_raises(TimeoutError()),
     )
     console, _ = _capture_console()
@@ -892,7 +892,7 @@ async def test_timeout_writes_journal_entry(
 ) -> None:
 
     monkeypatch.setattr(
-        "aura.cli.permission._pick_choice_interactive",
+        "cli.permission._pick_choice_interactive",
         _stub_picker_raises(TimeoutError()),
     )
     console, _ = _capture_console()
@@ -918,7 +918,7 @@ async def test_timeout_none_preserves_legacy_behavior(
     # timeout=None means "wait forever" — the picker runs normally and
     # its preset answer propagates through. No wait_for wrapping fires.
     picker, captured = _stub_picker(1)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console, timeout=None)
     resp = await asker(
@@ -932,7 +932,7 @@ async def test_timeout_plumbed_through_to_picker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     picker, captured = _stub_picker(1)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console, timeout=5.0)
     await asker(tool=_bash_like(), args={"command": "ls"}, rule_hint=_HINT)
@@ -946,7 +946,7 @@ async def test_fast_response_not_affected_by_timeout(
     # its preset value and no TimeoutError fires — the asker resolves
     # normally.
     picker, _ = _stub_picker(1)
-    monkeypatch.setattr("aura.cli.permission._pick_choice_interactive", picker)
+    monkeypatch.setattr("cli.permission._pick_choice_interactive", picker)
     console, _ = _capture_console()
     asker = make_cli_asker(console=console, timeout=5.0)
     resp = await asker(
@@ -961,13 +961,13 @@ async def test_real_timeout_via_wait_for() -> None:
     # Stub run_async with a coroutine that sleeps longer than the
     # timeout; confirm TimeoutError bubbles.
     #
-    # Application now lives in ``aura.cli.permission_generic`` (where
+    # Application now lives in ``cli.permission_generic`` (where
     # the shared pt driver lives); patch the symbol there. Use a
     # non-specialized tool so the generic widget path runs.
     import asyncio
 
-    from aura.cli import permission as permission_module
-    from aura.cli import permission_generic
+    from cli import permission as permission_module
+    from cli import permission_generic
 
     class _FakeApp:
         is_running = True
@@ -1019,12 +1019,12 @@ async def test_real_timeout_via_wait_for() -> None:
 # request_id) and returns the four-state new :class:`AskerResponse`.
 # Same widget driver as legacy; UI behavior matches.
 # ---------------------------------------------------------------------------
-from aura.cli.permission import (  # noqa: E402
+from aura.schemas.permissions import AskerPrompt  # noqa: E402
+from aura.schemas.permissions import AskerResponse as AskerResponseV2  # noqa: E402
+from cli.permission import (  # noqa: E402
     legacy_asker_from_v2,
     make_cli_asker_v2,
 )
-from aura.schemas.permissions import AskerPrompt  # noqa: E402
-from aura.schemas.permissions import AskerResponse as AskerResponseV2  # noqa: E402
 
 
 def _make_v2_prompt(
@@ -1052,7 +1052,7 @@ async def test_v2_yes_returns_yes(
     async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
         return 1, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
     asker = make_cli_asker_v2()
@@ -1073,7 +1073,7 @@ async def test_v2_yes_always_returns_yes_always(
     async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
         return 2, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
     asker = make_cli_asker_v2()
@@ -1085,7 +1085,7 @@ async def test_v2_no_returns_no(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
         return 3, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
     asker = make_cli_asker_v2()
@@ -1098,7 +1098,7 @@ async def test_v2_cancel_resolves_to_no(monkeypatch: pytest.MonkeyPatch) -> None
     async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
         return None, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
     asker = make_cli_asker_v2()
@@ -1112,7 +1112,7 @@ async def test_v2_timeout_resolves_to_no(
     async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
         raise TimeoutError
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
     asker = make_cli_asker_v2(timeout=0.1)
@@ -1131,7 +1131,7 @@ async def test_v2_default_choice_is_3_for_destructive(
         captured.update(kw)
         return 3, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
     asker = make_cli_asker_v2()
@@ -1148,7 +1148,7 @@ async def test_v2_default_choice_is_1_for_safe(
         captured.update(kw)
         return 1, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
     asker = make_cli_asker_v2()
@@ -1160,7 +1160,7 @@ async def test_v2_request_id_echoed(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
         return 1, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
     asker = make_cli_asker_v2()
@@ -1174,7 +1174,7 @@ async def test_v2_widget_failure_resolves_to_no(
     async def fake_run_widget(**_kw: Any) -> tuple[int | None, str]:
         raise RuntimeError("no tty")
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "_run_widget", fake_run_widget)
     asker = make_cli_asker_v2()

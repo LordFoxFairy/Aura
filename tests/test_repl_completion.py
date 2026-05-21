@@ -10,7 +10,7 @@ from prompt_toolkit.document import Document
 
 from aura.capabilities.commands import CommandRegistry
 from aura.capabilities.commands.types import CommandResult
-from aura.cli.completion import SlashCommandCompleter, resolve_history_path
+from cli.completion import SlashCommandCompleter, resolve_history_path
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent

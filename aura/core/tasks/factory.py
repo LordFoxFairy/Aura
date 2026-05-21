@@ -75,6 +75,7 @@ from uuid import uuid4
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
+from aura.capabilities.agents import get_agent_def
 from aura.capabilities.skills_runtime import SkillRegistry
 from aura.config.schema import AuraConfig, ToolsConfig
 from aura.core import llm
@@ -85,7 +86,6 @@ from aura.core.permissions.rule import Rule
 from aura.core.permissions.safety import DEFAULT_SAFETY, SafetyPolicy
 from aura.core.permissions.session import RuleSet, SessionRuleSet
 from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.agent_types import get_agent_type
 from aura.schemas.state import ReadCarryover
 from aura.schemas.tool import ToolError
 
@@ -273,7 +273,7 @@ class SubagentFactory:
         # Resolve the subagent flavor first — any unknown name raises
         # ValueError with the valid set, which the calling tool
         # (``task_create``) surfaces to the LLM as a ToolError.
-        type_def = get_agent_type(agent_type)
+        type_def = get_agent_def(agent_type)
 
         # Build the effective allowlist. Layered precedence:
         #   1. general-purpose (empty ``type_def.tools``) → inherit parent

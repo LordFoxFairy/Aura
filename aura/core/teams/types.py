@@ -42,7 +42,7 @@ class TeammateMember(BaseModel):
 
     ``name`` is the unique slug within the team — the recipient string callers
     use in :class:`SendMessage`. ``agent_type`` selects the flavor (matches
-    :mod:`aura.core.tasks.agent_types`). ``model_name`` overrides the leader's
+    :mod:`aura.capabilities.agents`). ``model_name`` overrides the leader's
     model for this teammate; ``None`` inherits.
 
     ``backend_type`` selects the runtime strategy (default ``"in_process"``).

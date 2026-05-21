@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from aura.cli.repl import _build_mode_key_bindings, _cycle_mode
 from aura.core.agent import Agent
+from cli.repl import _build_mode_key_bindings, _cycle_mode
 from tests.conftest import FakeChatModel
 from tests.test_agent import _minimal_config, _storage
 

@@ -11,9 +11,6 @@ from aura.core.permissions.matchers import path_prefix_on
 from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
 from aura.tools.base import Tool
 
-# F-02-009 — pre-stat size cap mirroring claude-code's edit-pre-stat
-# guard. 256 MB is well above any reasonable source file but well below
-# the size at which ``read_bytes`` would OOM the agent process.
 _MAX_EDIT_SIZE = 256 * 1024 * 1024
 
 
@@ -59,13 +56,6 @@ class EditFile(Tool):
     )
 
     def validate_input(self, args: dict[str, Any]) -> ValidationResult:
-        """Reject edits with structurally unusable args.
-
-        Phase 5 Task 2 — args-only check. Existence / "is a file" /
-        empty-old_str-when-file-exists / size-cap rejections all need
-        filesystem state, so they stay in ``_run`` as runtime errors.
-        Empty path is a pure args-shape problem and surfaces here.
-        """
         path = args.get("path", "")
         if not isinstance(path, str) or path == "":
             return ValidationResult(
@@ -79,16 +69,8 @@ class EditFile(Tool):
     ) -> dict[str, Any]:
         p = Path(path).expanduser()
 
-        # --- New-file branch (mirrors claude-code FileEditTool.ts:226-227).
-        # Only reachable through direct SDK ainvoke for non-existent paths.
-        # Via the agent loop, the must-read-first hook has a matching
-        # bypass for ``old_str == "" and not path.exists()``; any other
-        # shape stays gated, so write_file remains the canonical
-        # agent-driven creation surface.
         if not p.exists():
             if old_str == "":
-                # New file: no pre-existing line-ending style to preserve;
-                # write LF as-is (bytes to avoid universal-newline translation).
                 p.write_bytes(new_str.encode("utf-8"))
                 return {"replacements": 1, "created": True}
             raise ToolError(f"not found: {path}")
@@ -100,8 +82,6 @@ class EditFile(Tool):
                 "use a non-empty old_str to identify the region"
             )
 
-        # F-02-009 — refuse files above _MAX_EDIT_SIZE before ``read_bytes``
-        # so we never load a multi-GB file into memory just to fail later.
         size = p.stat().st_size
         if size > _MAX_EDIT_SIZE:
             raise ToolError(
@@ -109,32 +89,23 @@ class EditFile(Tool):
                 f"({_MAX_EDIT_SIZE // (1024 * 1024)} MB cap)"
             )
 
-        # Read bytes (not ``read_text``) so universal-newline translation
-        # does not erase the original line-ending signal before we detect it.
         try:
             raw = p.read_bytes().decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ToolError(f"not UTF-8: {exc}") from exc
 
-        # Detect line-ending style. "Mixed" means the file has both CRLF
-        # AND bare-LF lines (not counting CRLF's trailing LF). If mixed,
-        # we MUST NOT normalize: the restore step (replace \n -> \r\n)
-        # would silently convert every bare-LF line to CRLF — surgical-
-        # edit promise violated. Instead, match + write on raw content.
+        # Mixed CRLF + bare-LF: preserve as-is; normalizing would corrupt
+        # the surviving bare-LF lines on write.
         crlf_count = raw.count("\r\n")
         bare_lf_count = raw.count("\n") - crlf_count
         has_bare_cr_only = "\r" in raw and "\n" not in raw
         mixed_endings = crlf_count > 0 and bare_lf_count > 0
 
         if mixed_endings:
-            # No normalization. Match on raw; old_str/new_str must carry
-            # whatever endings the LLM actually wants to match/write.
             content = raw
             old_str_n = old_str
             new_str_n = new_str
         else:
-            # Uniform file: detect the single style, normalize to LF for
-            # matching, restore on write.
             if crlf_count > 0:
                 original_newline = "\r\n"
             elif has_bare_cr_only:
@@ -142,7 +113,6 @@ class EditFile(Tool):
             else:
                 original_newline = "\n"
             content = raw.replace("\r\n", "\n").replace("\r", "\n")
-            # Defensive: LLM-supplied args may carry CRLF of their own.
             old_str_n = old_str.replace("\r\n", "\n").replace("\r", "\n")
             new_str_n = new_str.replace("\r\n", "\n").replace("\r", "\n")
 
@@ -166,12 +136,8 @@ class EditFile(Tool):
             else content.replace(old_str_n, new_str_n, 1)
         )
 
-        # Restore original line-ending style on write (uniform-file branch
-        # only — mixed_endings already writes raw bytes per-line).
         if not mixed_endings and original_newline != "\n":
             new_content = new_content.replace("\n", original_newline)
-        # Write as bytes to bypass universal-newline translation on write,
-        # which would otherwise convert \n -> os.linesep on Windows.
         p.write_bytes(new_content.encode("utf-8"))
         return {"replacements": occurrences if replace_all else 1}
 

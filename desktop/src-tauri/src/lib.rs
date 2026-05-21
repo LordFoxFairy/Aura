@@ -1,6 +1,6 @@
 //! Aura desktop — Rust backend.
 //!
-//! Spawns ``python -m aura.desktop.headless`` as a child process, streams
+//! Spawns ``python -m desktop.host.headless`` as a child process, streams
 //! line-delimited JSON events from its stdout into Tauri events the
 //! frontend subscribes to via ``listen("aura-event", ...)``. User
 //! prompts come down via the ``send_prompt`` command which writes one
@@ -126,7 +126,7 @@ async fn stop_aura(state: State<'_, AuraProcess>) -> Result<(), String> {
 
 /// Spawn the aura headless subprocess and wire its stdout → tauri event stream.
 async fn spawn_aura(app: AppHandle) -> Result<AuraProcess, String> {
-    // Locate the repo root so we can run ``python -m aura.desktop.headless``.
+    // Locate the repo root so we can run ``python -m desktop.host.headless``.
     // src-tauri/ → desktop/ → repo root.
     let repo_root = std::env::current_dir()
         .map_err(|e| format!("current_dir: {e}"))?
@@ -140,9 +140,9 @@ async fn spawn_aura(app: AppHandle) -> Result<AuraProcess, String> {
     // are picked up automatically. Fall back to bare ``python -m`` if
     // ``uv`` isn't on PATH (rare on dev machines but covered).
     let (program, args): (&str, Vec<&str>) = if which::which("uv").is_ok() {
-        ("uv", vec!["run", "python", "-m", "aura.desktop.headless"])
+        ("uv", vec!["run", "python", "-m", "desktop.host.headless"])
     } else {
-        ("python", vec!["-m", "aura.desktop.headless"])
+        ("python", vec!["-m", "desktop.host.headless"])
     };
 
     let mut child = Command::new(program)

@@ -90,7 +90,6 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     legacy zero-arg build path intact for tests and callers that only need
     the static builtin set.
     """
-    from aura.capabilities.commands.buddy import BuddyCommand
     from aura.capabilities.commands.builtin import (
         ClearCommand,
         CompactCommand,
@@ -132,7 +131,6 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
     registry.register(GitDiffCommand())
     registry.register(GitLogCommand())
     registry.register(MCPCommand())
-    registry.register(BuddyCommand())
     registry.register(ResumeCommand())
     if agent is not None and agent._config.teams.enabled:
         registry.register(TeamCommand())

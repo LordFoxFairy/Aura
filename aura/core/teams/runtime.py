@@ -8,7 +8,7 @@ Two callers run this module:
 - ``InProcessBackend.spawn`` schedules :func:`run_teammate` directly on
   the leader's asyncio loop.
 - ``PaneBackend.spawn`` launches the entrypoint defined in
-  :mod:`aura.cli.teammate_entrypoint`, which in turn calls
+  :mod:`cli.teammate_entrypoint`, which in turn calls
   :func:`run_teammate_main` to build a fresh Agent + Mailbox and drive
   the same loop inside its own subprocess.
 

@@ -75,7 +75,7 @@ async def _run_command(
 ) -> str | None:
     """Run ``command`` with ``envelope`` JSON on stdin; return stdout or None.
 
-    Mirrors :func:`aura.cli.statusline_hook.run_statusline_command`'s
+    Mirrors :func:`cli.statusline_hook.run_statusline_command`'s
     contract verbatim — ``None`` on any failure (timeout, non-zero exit,
     spawn error, decode error). Caller decides what to do with stdout
     (use it as the rewritten prompt for ``user_prompt_submit``; ignore

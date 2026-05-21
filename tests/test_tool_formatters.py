@@ -1,8 +1,8 @@
-"""Tests for per-tool result formatters in aura.cli.render."""
+"""Tests for per-tool result formatters in cli.render."""
 
 from __future__ import annotations
 
-from aura.cli.render import (
+from cli.render import (
     _TOOL_RESULT_FORMATTERS,
     _format_bash_result,
     _format_edit_file_result,

@@ -1,4 +1,4 @@
-"""Tests for aura.cli.render.Renderer."""
+"""Tests for cli.render.Renderer."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import io
 
 from rich.console import Console
 
-from aura.cli.render import Renderer
 from aura.schemas.events import (
     AssistantDelta,
     Final,
@@ -14,6 +13,7 @@ from aura.schemas.events import (
     ToolCallCompleted,
     ToolCallStarted,
 )
+from cli.render import Renderer
 
 
 def _capture() -> tuple[Renderer, io.StringIO]:
@@ -385,7 +385,7 @@ def test_looks_like_markdown_heuristic_matrix() -> None:
     # Direct unit test for the marker heuristic. One positive case per
     # supported syntax + confirmation that marker-free prose does NOT
     # route through rich.Markdown.
-    from aura.cli.render import _looks_like_markdown
+    from cli.render import _looks_like_markdown
 
     assert _looks_like_markdown("# heading") is True
     assert _looks_like_markdown("## sub heading") is True

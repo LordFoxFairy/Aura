@@ -197,11 +197,6 @@ def test_default_hooks_returns_populated_chain() -> None:
 
     hooks = default_hooks()
     assert isinstance(hooks, HookChain)
-    # v0.13: default_hooks now ships a pre_model hook that flips the
-    # buddy mood to "thinking" during model invocation. Pre-buddy
-    # default_hooks shipped no pre_model entries; updating the bound
-    # to >= 1 keeps the assertion meaningful (chain is populated)
-    # without pinning the exact count.
-    assert len(hooks.pre_model) >= 1
+    assert hooks.pre_model == []
     assert len(hooks.post_model) >= 1
     assert len(hooks.post_tool) >= 1

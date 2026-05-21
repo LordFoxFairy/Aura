@@ -1,9 +1,9 @@
 """Shared tool-error hint table.
 
-Lives here (rather than in ``aura.cli.render``) because BOTH the renderer
+Lives here (rather than in ``cli.render``) because BOTH the renderer
 (visual panel for the user) AND the loop's ToolMessage builder (text the
 MODEL sees) need to consult it. Keeping the table in ``cli`` would mean
-the loop depends on ``aura.cli`` — a layering inversion.
+the loop depends on ``cli`` — a layering inversion.
 
 The table is substring-keyed: first hit wins, so more-specific phrases
 go BEFORE shorter prefixes. Matching is case-insensitive on the lowercased

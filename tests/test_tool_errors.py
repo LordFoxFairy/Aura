@@ -1,6 +1,6 @@
 """Tests for hint-propagation to the LLM's ToolMessage + bash progress events.
 
-Feature 1: ``aura.cli.render._hint_for_error`` used to be a UI-only affair —
+Feature 1: ``cli.render._hint_for_error`` used to be a UI-only affair —
 the hint went to the red Panel but the model saw only the raw error. These
 tests lock in the fix: on a failing tool, the SAME hint text surfaces in
 the ToolMessage content the model reads next turn.
@@ -228,7 +228,7 @@ def test_renderer_prints_progress_chunk_dim() -> None:
 
     from rich.console import Console
 
-    from aura.cli.render import Renderer
+    from cli.render import Renderer
 
     buf = io.StringIO()
     console = Console(file=buf, force_terminal=False, width=200, highlight=False)

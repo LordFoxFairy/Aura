@@ -1,9 +1,4 @@
-"""File name pattern matching.
-
-Inside a git repository, enumeration goes through ``git ls-files`` so the
-result honors ``.gitignore`` and only includes tracked files — mirrors
-claude-code's GlobTool. Outside a git repo, falls back to ``Path.glob``.
-"""
+"""File name pattern matching (git-aware inside repos)."""
 
 from __future__ import annotations
 
@@ -61,10 +56,6 @@ def _find_git_root(start: Path) -> Path | None:
 
 
 def _git_tracked_set(repo_root: Path) -> set[Path] | None:
-    """Resolved absolute paths of all git-tracked files in ``repo_root``.
-
-    Returns ``None`` if git is unavailable or the call fails.
-    """
     if shutil.which("git") is None:
         return None
     try:
@@ -112,8 +103,6 @@ class Glob(BaseTool):
             raise ToolError(f"not a directory: {root}")
 
         candidates: list[Path] = [p for p in root.glob(pattern) if p.is_file()]
-        # Inside a git repo, intersect with `git ls-files` so .gitignored or
-        # untracked files are excluded — same semantics as claude-code's glob.
         matches = candidates
         repo_root = _find_git_root(root)
         if repo_root is not None:

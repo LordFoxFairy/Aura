@@ -1,4 +1,4 @@
-"""Tests for aura.cli.permission_bash — bash-specialized permission widget.
+"""Tests for cli.permission_bash — bash-specialized permission widget.
 
 Covers:
 * dispatch routing (bash tool → bash widget)
@@ -16,10 +16,10 @@ import pytest
 from pydantic import BaseModel
 from rich.console import Console
 
-from aura.cli import permission_bash
-from aura.cli.permission_bash import detect_dangerous
 from aura.core.permissions.rule import Rule
 from aura.tools.base import build_tool
+from cli import permission_bash
+from cli.permission_bash import detect_dangerous
 
 
 class _P(BaseModel):
@@ -168,7 +168,7 @@ async def test_dispatch_routes_bash_to_bash_widget(
         calls["write"] += 1
         return 1, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "run_bash_permission", fake_bash)
     monkeypatch.setattr(perm_mod, "run_generic_permission", fake_generic)
@@ -199,7 +199,7 @@ async def test_dispatch_routes_bash_background_to_bash_widget(
         calls["generic"] += 1
         return 1, ""
 
-    from aura.cli import permission as perm_mod
+    from cli import permission as perm_mod
 
     monkeypatch.setattr(perm_mod, "run_bash_permission", fake_bash)
     monkeypatch.setattr(perm_mod, "run_generic_permission", fake_generic)

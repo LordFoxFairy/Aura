@@ -12,14 +12,29 @@ Cancellation is cooperative: the parent Agent keeps a ``task_id ->
 asyncio.Task`` map, and ``Agent.close()`` cancels the running handles.
 ``run_task`` turns ``CancelledError`` into ``status=cancelled`` on the
 record before re-raising.
+
+Runner topologies (claude-code parity, mirrored under
+:mod:`aura.core.tasks.runners`):
+
+- ``LocalAgentTask`` — fire-and-forget in-process child Agent.
+- ``InProcessTeammateTask`` — long-lived in-process teammate.
+- ``RemoteAgentTask`` — subprocess teammate.
 """
 
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.run import run_task
+from aura.core.tasks.runners import (
+    InProcessTeammateTask,
+    LocalAgentTask,
+    RemoteAgentTask,
+)
 from aura.core.tasks.store import TasksStore
 from aura.core.tasks.types import TaskRecord, TaskStatus
 
 __all__ = [
+    "InProcessTeammateTask",
+    "LocalAgentTask",
+    "RemoteAgentTask",
     "SubagentFactory",
     "TaskRecord",
     "TaskStatus",

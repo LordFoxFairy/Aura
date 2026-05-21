@@ -4,8 +4,8 @@ Tauri 2 + Rust + React desktop frontend for Aura. Sibling to `aura/` (the Python
 
 ## Phase 1 — what's shipped
 
-- **Rust IPC bridge** (`src-tauri/src/lib.rs`): on app start, spawns `python -m aura.desktop.headless` (preferring `uv run` when available), pipes its stdout NDJSON event stream to Tauri's `aura-event` channel, and exposes `send_prompt(text)`, `send_permission_response(...)`, and `stop_aura()` Tauri commands.
-- **Headless Aura entry** (`aura/desktop/headless.py`): single-tenant stdio mode that reads prompt and permission-response requests from stdin and emits one event per line on stdout. It serializes internal `AgentEvent` values through `aura.adapters.protocol.wire` so desktop and other protocol adapters share the same event contract.
+- **Rust IPC bridge** (`src-tauri/src/lib.rs`): on app start, spawns `python -m desktop.host.headless` (preferring `uv run` when available), pipes its stdout NDJSON event stream to Tauri's `aura-event` channel, and exposes `send_prompt(text)`, `send_permission_response(...)`, and `stop_aura()` Tauri commands.
+- **Headless Aura entry** (`desktop/host/headless.py`): single-tenant stdio mode that reads prompt and permission-response requests from stdin and emits one event per line on stdout. It serializes internal `AgentEvent` values through `aura.adapters.protocol.wire` so desktop and other protocol adapters share the same event contract.
 - **Protocol adapters** (`aura/adapters/protocol/`): `wire.py` defines Aura's stable JSON event shape, `agui.py` maps that shape to AG-UI-style lifecycle/text/tool/state events, and `stream.py` adapts `Agent.astream(...)` into protocol-specific outputs.
 - **React frontend** (`frontend/src/main.tsx`, `frontend/src/components/`): conversation UI with streaming assistant bubbles, tool-call cards, status surfaces, and desktop permission prompts.
 
@@ -44,7 +44,7 @@ cd ..               # back to desktop/
 cargo tauri dev
 ```
 
-The dev shell starts Vite (frontend hot-reload) and a debug Tauri window. The Rust backend spawns `uv run python -m aura.desktop.headless` from the repo root; ensure `uv sync` has been run there.
+The dev shell starts Vite (frontend hot-reload) and a debug Tauri window. The Rust backend spawns `uv run python -m desktop.host.headless` from the repo root; ensure `uv sync` has been run there.
 
 ## Build (release)
 

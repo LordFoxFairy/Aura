@@ -1,10 +1,4 @@
-"""send_message — the LLM-facing surface for team comms.
-
-Phase A: text + (model-facing) shutdown_request only. The tool resolves
-the active team via the calling Agent's ``team`` attribute; absence
-raises ``ToolError`` so the LLM sees a clear message rather than a
-silent no-op.
-"""
+"""send_message — append a message to a teammate's mailbox."""
 
 from __future__ import annotations
 
@@ -20,10 +14,6 @@ from aura.core.teams.types import (
 )
 from aura.schemas.tool import ToolError, ToolMetadata
 
-# Surface only the kinds the model is allowed to emit. ``shutdown_response``
-# is internal (the runtime emits it implicitly by exiting), so we hide it
-# from the schema — exposing it would let a teammate forge an "ack"
-# without actually shutting down.
 SendMessageKind = Literal["text", "shutdown_request"]
 
 
@@ -33,27 +23,16 @@ class SendMessageParams(BaseModel):
     to: str = Field(
         min_length=1,
         max_length=64,
-        description=(
-            "Recipient member name, the literal 'leader' to message the "
-            "team leader, or 'broadcast' to fan out to every active "
-            "member of the team."
-        ),
+        description="Recipient member name, 'leader', or 'broadcast'.",
     )
     body: str = Field(
         min_length=1,
         max_length=MAX_BODY_CHARS,
-        description=(
-            "Plain-text message body. Wrap structured data in markdown / "
-            "code fences; the team channel is text-only in Phase A."
-        ),
+        description="Plain-text message body.",
     )
     kind: SendMessageKind = Field(
         default="text",
-        description=(
-            "Use 'text' for normal messages. 'shutdown_request' asks the "
-            "recipient to exit cleanly (used by the leader to drain a "
-            "teammate before remove)."
-        ),
+        description="'text' for normal messages; 'shutdown_request' asks recipient to exit.",
     )
 
 
@@ -65,14 +44,6 @@ def _preview(args: dict[str, Any]) -> str:
 
 
 class SendMessage(BaseTool):
-    """Append a message to a teammate's mailbox.
-
-    Stateful: the calling Agent injects itself via ``__init__`` so the
-    tool can resolve ``agent.team`` at invoke time. Outside a team the
-    tool is still bound (the LLM keeps seeing it in the schema) but
-    invocation raises a clear ToolError.
-    """
-
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     name: str = "send_message"
@@ -97,9 +68,6 @@ class SendMessage(BaseTool):
 
     def __init__(self, *, agent: Any, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        # ``Agent`` reference; typed ``Any`` to dodge the Agent → tools
-        # → Agent import cycle. The only attribute we touch is ``.team``
-        # which is set / cleared by ``Agent.join_team`` / ``leave_team``.
         self._agent = agent
 
     def _run(
@@ -116,14 +84,7 @@ class SendMessage(BaseTool):
                 "send_message: the calling agent is not in a team. "
                 "Create a team via /team create first.",
             )
-        # Sender resolution: a teammate Agent has ``_team_member_name``
-        # stamped by ``join_team``; the leader doesn't have one and is
-        # the sole sender outside that. We surface "leader" explicitly
-        # so message envelopes are unambiguous.
         sender = getattr(self._agent, "_team_member_name", None) or TEAM_LEADER_NAME
-        # Validate ``to`` against the live membership before hitting the
-        # mailbox so a typo'd name returns a usable error rather than
-        # appending a message no one will ever read.
         record = manager.team
         valid_names: set[str] = {TEAM_LEADER_NAME, BROADCAST_RECIPIENT}
         if record is not None:

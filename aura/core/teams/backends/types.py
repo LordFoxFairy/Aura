@@ -5,7 +5,7 @@ Two implementations satisfy this Protocol:
 - :class:`~aura.core.teams.backends.in_process.InProcessBackend` — wraps
   ``run_teammate`` in an asyncio task on the leader's loop.
 - :class:`~aura.core.teams.backends.pane.PaneBackend` — splits a tmux
-  pane and runs ``python -m aura.cli.teammate_entrypoint`` inside it.
+  pane and runs ``python -m cli.teammate_entrypoint`` inside it.
 
 Designed so the manager can dispatch on ``member.backend_type`` without
 caring which implementation is in use. Mirrors claude-code's

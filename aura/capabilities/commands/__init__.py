@@ -24,7 +24,6 @@ _EXPORTS: dict[str, str] = {
     "GitLogCommand": "aura.capabilities.commands.git",
     "GitStatusCommand": "aura.capabilities.commands.git",
     "HelpCommand": "aura.capabilities.commands.builtin",
-    "BuddyCommand": "aura.capabilities.commands.buddy",
     "ExportCommand": "aura.capabilities.commands.export",
     "MCPCommand": "aura.capabilities.commands.mcp",
     "ModelCommand": "aura.capabilities.commands.builtin",

@@ -1,4 +1,4 @@
-"""Tests for the aura.cli.commands façade.
+"""Tests for the cli.commands façade.
 
 Exercises the public surface (``build_default_registry`` + async
 ``dispatch``) end-to-end — mechanics of the underlying registry and each
@@ -60,7 +60,6 @@ def test_default_registry_has_builtin_set() -> None:
         "/stats",
         "/tasks", "/task-get", "/task-stop",
         "/status", "/diff", "/log", "/mcp",
-        "/buddy",
         "/resume",
     }
 
@@ -68,7 +67,6 @@ def test_default_registry_has_builtin_set() -> None:
 def test_default_registry_remaining_commands_are_owned_by_capabilities() -> None:
     r = build_default_registry()
     commands = {cmd.name: cmd for cmd in r.list()}
-    assert commands["/buddy"].__class__.__module__ == "aura.capabilities.commands.buddy"
     assert commands["/export"].__class__.__module__ == "aura.capabilities.commands.export"
     assert commands["/mcp"].__class__.__module__ == "aura.capabilities.commands.mcp"
     assert commands["/stats"].__class__.__module__ == "aura.capabilities.commands.stats"

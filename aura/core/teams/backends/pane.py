@@ -4,7 +4,7 @@ Implements claude-code's pane backend (``utils/swarm/teamHelpers.ts``):
 
 1. ``tmux split-window -h -P -F '#{pane_id}'`` to allocate a new pane;
    capture its ID.
-2. ``tmux send-keys -t <pane_id> 'python -m aura.cli.teammate_entrypoint
+2. ``tmux send-keys -t <pane_id> 'python -m cli.teammate_entrypoint
    --team-id ... --member ... --storage-root ...' Enter`` to start the
    teammate subprocess inside that pane.
 3. The subprocess loads its own :class:`~aura.core.agent.Agent`, builds a
@@ -303,7 +303,7 @@ class PaneBackend:
         storage: SessionStorage,
         seed_prompt: str | None,
     ) -> list[str]:
-        """Build the ``python -m aura.cli.teammate_entrypoint ...`` argv.
+        """Build the ``python -m cli.teammate_entrypoint ...`` argv.
 
         Uses ``sys.executable`` so the spawned subprocess inherits the
         same interpreter (venv + aura installed). ``storage_root`` is
@@ -314,7 +314,7 @@ class PaneBackend:
         argv = [
             sys.executable,
             "-m",
-            "aura.cli.teammate_entrypoint",
+            "cli.teammate_entrypoint",
             "--team-id", team_id,
             "--member", member.name,
             "--storage-root", str(storage_root),

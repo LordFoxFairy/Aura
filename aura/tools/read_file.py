@@ -1,34 +1,4 @@
-"""read_file tool — UTF-8 read with 1 MB cap + offset/limit slicing.
-
-Mirrors claude-code FileReadTool: `offset` (0-indexed line start in Aura —
-claude-code uses 1-indexed; we normalize to 0 for parity with Python slice
-semantics) and `limit` (max lines). `partial` in the return dict flips true
-when the caller saw less than the full file; the must-read-first invariant
-uses it to reject edit_file after a sliced read.
-
-Round 1C — device path block. Reading from ``/dev/stdin`` /
-``/dev/random`` etc. either hangs the process forever (stdin / tty),
-returns garbage that wastes the LLM's context (zero / random), or
-exposes kernel memory (``/proc/kcore``). Reject the closed set so the
-LLM can't accidentally tunnel into one even if the path is constructed
-indirectly.
-
-Round 3B — token budget. A perfectly valid 1 MB UTF-8 text file is
-still ~250k tokens — enough to evict every other context message. Cap
-at :data:`_TOKEN_BUDGET` and reject (rather than silently truncate) so
-the LLM sees a clear error and learns to slice.
-
-F-02-003 — head-truncation at the byte cap. Files exceeding
-:data:`_MAX_BYTES` are read up to the cap (head bytes), with
-``partial=True`` and ``truncated_at_bytes`` set on the result, instead
-of being rejected outright. The token-budget check above still fires on
-the truncated content, so oversized text files surface as a clear
-"slice with offset/limit" error rather than a silent partial.
-
-F-02-005 — BOM-aware decode. We sniff the first 2-3 bytes for UTF-16
-(LE/BE) and UTF-8 BOMs and decode accordingly; UTF-8 BOM is stripped
-from the returned string. No BOM ⇒ plain UTF-8.
-"""
+"""read_file — UTF-8/UTF-16 read with 1 MB cap + offset/limit slicing."""
 
 from __future__ import annotations
 
@@ -43,26 +13,10 @@ from aura.tools.base import Tool
 
 _MAX_BYTES = 1024 * 1024
 
-# Round 3B token budget. 25k tokens is generous (~100 KB of text) but
-# still well within a single-turn context. The standard char/token
-# heuristic (4 chars per token) is a low-end estimate — actual
-# tokenisers vary, but biased-low here means we reject only when the
-# file is unambiguously oversized rather than borderline.
 _TOKEN_BUDGET = 25_000
 _CHARS_PER_TOKEN_HEURISTIC = 4
 
-# Round 1C — closed set of paths the tool always refuses, irrespective
-# of permission rules. Three categories:
-#   1. Interactive endpoints (``/dev/stdin``, ``/dev/tty``, ``/dev/console``)
-#      — read() blocks forever on these in a non-interactive process.
-#   2. Pseudo-files that produce useless input (``/dev/zero``,
-#      ``/dev/random``, ``/dev/urandom``, ``/dev/full``) — would just
-#      burn the tool's 1 MB cap on garbage / never return.
-#   3. Kernel memory (``/proc/kcore``, ``/proc/kmem``) — sensitive
-#      contents, also typically unreadable as user but worth listing
-#      so a SUID context doesn't accidentally exfil.
-# ``/dev/fd/*`` and ``/proc/self/fd/*`` cover the "stdin via /dev/fd"
-# trick that bypasses a literal ``/dev/stdin`` allowlist.
+# Interactive / pseudo-file / kernel-memory paths the tool always refuses.
 _BLOCKED_DEVICE_PATHS: frozenset[str] = frozenset({
     "/dev/stdin",
     "/dev/tty",
@@ -85,16 +39,7 @@ _BLOCKED_DEVICE_PATHS: frozenset[str] = frozenset({
 
 
 def _resolve_blocked_device(path: str) -> str | None:
-    """Return the resolved path iff it points at a blocked device, else None.
-
-    Resolves the path WITHOUT requiring it to exist (``strict=False``)
-    so a missing file gets the existing "not found" diagnostic from the
-    main read path rather than this device-block error. Comparing the
-    resolved string against the closed set catches both literal paths
-    and symlink chains that point at the same target. Returns None if
-    resolution itself fails (cycle, permission) so the main read path
-    surfaces the OS error verbatim.
-    """
+    # strict=False lets missing files surface "not found" via the main path.
     try:
         resolved = str(Path(path).resolve(strict=False))
     except (OSError, RuntimeError):
@@ -105,14 +50,6 @@ def _resolve_blocked_device(path: str) -> str | None:
 
 
 def _reject_blocked_device(path: str) -> None:
-    """Defense-in-depth raise for the device-path block.
-
-    The validation gate (``ReadFile.validate_input``) catches the same
-    set as a structured ``ValidationResult``; this raise stays on the
-    ``_run`` path so direct ``ainvoke`` callers (e.g., the SDK or tests
-    that bypass the loop's validate-then-execute split) still get a
-    clean error.
-    """
     resolved = _resolve_blocked_device(path)
     if resolved is not None:
         raise ToolError(
@@ -122,12 +59,6 @@ def _reject_blocked_device(path: str) -> None:
 
 
 def _decode_with_bom(data: bytes) -> str:
-    """Decode bytes with BOM-aware encoding selection.
-
-    UTF-16 LE/BE BOMs ⇒ decode via the ``utf-16`` codec, which honours
-    the leading BOM and strips it from the result. UTF-8 BOM ⇒ skip the
-    3-byte BOM and decode as utf-8. No BOM ⇒ plain utf-8.
-    """
     if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
         return data.decode("utf-16")
     if data.startswith(b"\xef\xbb\xbf"):
@@ -136,14 +67,6 @@ def _decode_with_bom(data: bytes) -> str:
 
 
 def _validate_content_tokens(content: str) -> None:
-    """Reject reads that would blow the token budget.
-
-    Applied to BOTH the full-file read and any sliced (offset+limit)
-    read — a slice is still a slice, but if the user requested 30k
-    lines via ``limit=`` we should still refuse rather than truncate
-    silently. The error message tells the LLM to slice; the standard
-    self-correction is ``read_file(path, offset=, limit=)``.
-    """
     estimated_tokens = len(content) // _CHARS_PER_TOKEN_HEURISTIC
     if estimated_tokens > _TOKEN_BUDGET:
         raise ToolError(
@@ -178,41 +101,19 @@ class ReadFile(Tool):
         "the cap with partial=True and truncated_at_bytes set."
     )
     args_schema: type[BaseModel] = ReadFileParams
-    # Phase 2 Task 2 pilot — typed metadata replaces the legacy
-    # ``tool_metadata(...)`` dict. Loop / hook / CLI readers see the same
-    # values via ``aura.tools._meta_access.meta_dict`` while the 20 other
-    # builtins finish migrating in Task 3. ``capability_flags`` carries
-    # the legacy ``is_search_command`` signal so the renderer's
-    # search-fold heuristic continues to fire on long read output;
-    # Task 3 promotes this signal across the board (or replaces it
-    # outright if the renderer learns a different folding policy).
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=True,
         is_destructive=False,
         is_concurrency_safe=True,
         rule_matcher=path_prefix_on("path"),
         args_preview=_preview,
-        # Plain filesystem I/O up to 1 MB. 10s is generous — anything
-        # slower is a stuck NFS mount or a dying disk; surface the error
-        # rather than hang.
         timeout_sec=10.0,
         capability_flags=frozenset({"search_command"}),
     )
 
     def validate_input(self, args: dict[str, Any]) -> ValidationResult:
-        """Reject reads pointing at the blocked-device closed set.
-
-        Phase 5 Task 2 — args-only check, no I/O. Path resolution
-        happens via ``Path.resolve(strict=False)``; symlink chains that
-        target a blocked device are caught here just like the ``_run``
-        defense-in-depth raise.
-        """
         path = args.get("path", "")
         if not isinstance(path, str):
-            # Arg-schema validation should reject non-string paths
-            # before this method runs; defensive accept here so a
-            # malformed args dict surfaces via the schema layer rather
-            # than this validator.
             return ValidationResult(invalid=False)
         resolved = _resolve_blocked_device(path)
         if resolved is not None:
@@ -229,21 +130,11 @@ class ReadFile(Tool):
     def _run(
         self, path: str, offset: int = 0, limit: int | None = None,
     ) -> dict[str, Any]:
-        # Round 1C — block the kernel/interactive device set BEFORE the
-        # filesystem touch. Catches direct paths and symlink chains;
-        # missing files fall through to the main read path's "not found".
-        # Defense-in-depth: ``validate_input`` already covers this set
-        # for callers going through the loop's validation gate (Task 8);
-        # this raise keeps direct ``ainvoke`` callers (SDK, tests) honest.
         _reject_blocked_device(path)
         p = Path(path)
         if not p.exists():
             raise ToolError(f"not found: {path}")
         size = p.stat().st_size
-        # F-02-003 — head-truncate at the byte cap (instead of rejecting),
-        # surface partial=True + truncated_at_bytes so the caller can detect
-        # the cut. Read bytes (not text) so BOM sniffing happens before
-        # decode.
         truncated_at_bytes: int | None = None
         if size > _MAX_BYTES:
             with p.open("rb") as fh:
@@ -256,14 +147,10 @@ class ReadFile(Tool):
         except UnicodeDecodeError as exc:
             raise ToolError(f"not UTF-8: {exc}") from exc
 
-        # splitlines(keepends=True) preserves line terminators so re-joining
-        # gives byte-identical slice output for the lines we return.
         all_lines = content.splitlines(keepends=True)
         total_lines = len(all_lines)
 
         if offset >= total_lines:
-            # Over-shoot: be honest about it — partial=True so the caller
-            # knows they didn't see the end of the file.
             return {
                 "content": "",
                 "lines": 0,
@@ -278,8 +165,6 @@ class ReadFile(Tool):
         sliced = all_lines[offset:end]
         joined = "".join(sliced)
 
-        # Round 3B — apply the token budget to the slice we're about to
-        # return (covers both full reads and oversized slices).
         _validate_content_tokens(joined)
 
         partial = (
@@ -298,10 +183,4 @@ class ReadFile(Tool):
         }
 
 
-# Annotated as concrete ``ReadFile`` (not the wider ``BaseTool``) so
-# typed callers can read the new ``aura_metadata: ToolMetadata`` field
-# without a cast. Phase 2 Task 4 will add ``aura_metadata`` to a
-# typed base class so this narrowing isn't needed; until then, the
-# concrete type is the cheapest way to keep mypy happy at the access
-# sites without sprinkling ``cast(...)`` everywhere.
 read_file: ReadFile = ReadFile()

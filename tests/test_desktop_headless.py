@@ -12,7 +12,6 @@ from pydantic import BaseModel
 
 from aura.core.permissions.rule import Rule
 from aura.core.permissions.session import RuleSet
-from aura.desktop import headless
 from aura.schemas.events import (
     AssistantDelta,
     Final,
@@ -22,6 +21,7 @@ from aura.schemas.events import (
 )
 from aura.schemas.permissions import PermissionsConfig
 from aura.tools.base import build_tool
+from desktop.host import headless, session_service
 
 
 async def _wait_for_emitted(
@@ -138,8 +138,7 @@ def test_build_aura_state_uses_numeric_defaults() -> None:
         context_window=None,
     )
 
-    payload = headless._build_aura_state(agent, 1.25)  # type: ignore[arg-type]
-
+    payload = headless._build_aura_state(agent, 1.25)
     assert set(payload) == {
         "event",
         "model",
@@ -198,8 +197,7 @@ def test_build_aura_state_preserves_typed_token_usage() -> None:
         context_window=128000,
     )
 
-    payload = headless._build_aura_state(agent, 0.5)  # type: ignore[arg-type]
-
+    payload = headless._build_aura_state(agent, 0.5)
     assert payload["model"] == "openai:gpt-4o-mini"
     assert payload["mode"] == "accept_edits"
     assert payload["tokens"]["last_input"] == 11
@@ -411,30 +409,30 @@ async def test_run_wires_permission_deny_ask_and_disable_bypass(
     monkeypatch.setattr(headless, "load_config", lambda: cfg)
     monkeypatch.setattr(headless, "make_model_for_spec", lambda *_args: object())
     monkeypatch.setattr(
-        "aura.desktop.headless.perm_store.load",
+        "desktop.host.headless.perm_store.load",
         lambda _root: PermissionsConfig(mode="default", disable_bypass=True),
     )
     monkeypatch.setattr(
-        "aura.desktop.headless.perm_store.load_ruleset",
+        "desktop.host.headless.perm_store.load_ruleset",
         lambda *_args, **_kwargs: RuleSet((Rule("web_fetch", None),)),
     )
     monkeypatch.setattr(
-        "aura.desktop.headless.perm_store.load_deny_ruleset",
+        "desktop.host.headless.perm_store.load_deny_ruleset",
         lambda _root: RuleSet((Rule("bash", None),)),
     )
     monkeypatch.setattr(
-        "aura.desktop.headless.perm_store.load_ask_ruleset",
+        "desktop.host.headless.perm_store.load_ask_ruleset",
         lambda _root: RuleSet((Rule("write_file", None),)),
     )
     monkeypatch.setattr(headless, "make_permission_hook", fake_permission_hook)
     monkeypatch.setattr(headless, "Agent", FakeAgent)
-    monkeypatch.setattr("aura.desktop.headless.asyncio.StreamReader", FakeReader)
+    monkeypatch.setattr("desktop.host.headless.asyncio.StreamReader", FakeReader)
     monkeypatch.setattr(
-        "aura.desktop.headless.asyncio.StreamReaderProtocol",
+        "desktop.host.headless.asyncio.StreamReaderProtocol",
         lambda _reader: object(),
     )
     monkeypatch.setattr(
-        "aura.desktop.headless.asyncio.get_running_loop",
+        "desktop.host.headless.asyncio.get_running_loop",
         lambda: FakeLoop(),
     )
 
@@ -473,19 +471,19 @@ async def test_run_refuses_configured_bypass_when_disable_bypass_true(
     monkeypatch.setattr(headless, "load_config", lambda: cfg)
     monkeypatch.setattr(headless, "make_model_for_spec", lambda *_args: object())
     monkeypatch.setattr(
-        "aura.desktop.headless.perm_store.load",
+        "desktop.host.headless.perm_store.load",
         lambda _root: PermissionsConfig(mode="bypass", disable_bypass=True),
     )
     monkeypatch.setattr(
-        "aura.desktop.headless.perm_store.load_ruleset",
+        "desktop.host.headless.perm_store.load_ruleset",
         lambda *_args, **_kwargs: RuleSet((Rule("web_fetch", None),)),
     )
     monkeypatch.setattr(
-        "aura.desktop.headless.perm_store.load_deny_ruleset",
+        "desktop.host.headless.perm_store.load_deny_ruleset",
         lambda _root: RuleSet((Rule("bash", None),)),
     )
     monkeypatch.setattr(
-        "aura.desktop.headless.perm_store.load_ask_ruleset",
+        "desktop.host.headless.perm_store.load_ask_ruleset",
         lambda _root: RuleSet((Rule("write_file", None),)),
     )
     monkeypatch.setattr(headless, "Agent", ExplodingAgent)
@@ -498,3 +496,19 @@ async def test_run_refuses_configured_bypass_when_disable_bypass_true(
             "(permissions.disable_bypass=true)"
         ),
     }]
+
+
+def test_desktop_session_service_module_exists() -> None:
+    assert hasattr(session_service, "run_session_driver")
+
+
+@pytest.mark.asyncio
+async def test_headless_run_delegates_to_session_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_driver() -> int:
+        return 7
+
+    monkeypatch.setattr(session_service, "run_session_driver", fake_driver)
+
+    assert await headless._run() == 7

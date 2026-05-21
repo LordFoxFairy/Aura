@@ -1,30 +1,4 @@
-"""skill — LLM-invocable tool that injects a predefined Skill into the next turn.
-
-Companion to the user-facing ``/<skill-name>`` slash command. Both paths end
-at :meth:`Agent.record_skill_invocation`, which threads the Skill into the
-Context's append-only ``_invoked_skills`` list — the body is rendered as a
-``<skill-invoked>`` HumanMessage on the next ``Context.build``.
-
-Argument passing mirrors claude-code's slash-command arg contract: the LLM
-optionally supplies an ``arguments: [...]`` list; placeholders named after
-the skill's ``arguments:`` frontmatter (``${arg-name}``) are substituted
-into the body before it's recorded. A skill that declares no arguments
-ignores any arguments the LLM passes (don't error — the LLM may hand over
-empty lists defensively). A mismatched arg count raises a ToolError so the
-LLM can re-plan.
-
-State is injected at Agent construction time — see ``Agent.__init__``'s
-stateful-tools wiring block. Dependencies: a ``recorder`` closure that
-proxies to :meth:`Agent.record_skill_invocation`, the ``SkillRegistry``
-for name lookup, and a ``session_id_provider`` callable so the body-render
-step can substitute ``${AURA_SESSION_ID}``. Passing a provider (vs a bare
-string) avoids re-wiring the tool every ``/clear`` (though Aura today does
-rebuild it; the callable is cheap insurance against a future refactor).
-
-Read-only + not destructive: invoking a skill only schedules a next-turn
-context injection. No filesystem, no network, no side effects outside the
-in-memory Context.
-"""
+"""skill — inject a predefined Skill into the next turn's context."""
 
 from __future__ import annotations
 
@@ -55,22 +29,11 @@ class SkillParams(BaseModel):
     name: str = Field(
         ...,
         min_length=1,
-        description=(
-            "The skill name to invoke. Must match a Skill.name registered in "
-            "the SkillRegistry (see <skills-available> in the pinned context "
-            "for the catalogue). Names are case-sensitive and do NOT include "
-            "the leading slash used by the human-typed ``/<name>`` command."
-        ),
+        description="Skill name; case-sensitive; no leading slash.",
     )
     arguments: list[str] | None = Field(
         default=None,
-        description=(
-            "Positional argument values for skills that declare an "
-            "``arguments:`` frontmatter field. Order matches the declared "
-            "names. Pass null / omit when the skill takes no arguments. "
-            "Extra values beyond the declared count are ignored; too few "
-            "values raises a ToolError naming the missing argument."
-        ),
+        description="Positional arg values matching the skill's declared arguments.",
     )
 
 
@@ -83,10 +46,6 @@ def _preview(args: dict[str, Any]) -> str:
 
 
 class SkillTool(BaseTool):
-    """Invoke a predefined skill by name."""
-
-    # ``SkillRecorder`` is a bare Callable alias; ``SkillRegistry`` is a
-    # plain class (not a pydantic model). Same rationale as EnterPlanMode.
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     name: str = "skill"
@@ -107,8 +66,6 @@ class SkillTool(BaseTool):
         args_preview=_preview,
         timeout_sec=None,
     )
-    # PrivateAttr: pydantic would try to coerce bare callables / non-model
-    # types as fields; stash them behind the model instead.
     _recorder: SkillRecorder = PrivateAttr()
     _registry: SkillRegistry = PrivateAttr()
     _session_id_provider: SessionIdProvider = PrivateAttr()
@@ -128,23 +85,10 @@ class SkillTool(BaseTool):
         super().__init__(**kwargs)
         self._recorder = recorder
         self._registry = registry
-        # Default to a constant "default" session id when no provider was
-        # wired — keeps unit tests that construct SkillTool directly (no
-        # Agent) simple; Agent.__init__ always passes a real provider.
         self._session_id_provider = session_id_provider or (lambda: "default")
-        # ``session_rules_provider`` lets the tool install allow-rules on
-        # the same ``SessionRuleSet`` the permission hook consults (v0.13
-        # runtime enforcement of ``allowed-tools``). ``None`` → no-op,
-        # same contract as ``SkillCommand`` when the Agent was built
-        # without a ruleset (unit tests / SDK callers that don't wire
-        # permissions). Closure-over-self in Agent.__init__ so /clear
-        # (which drops rules) stays in sync with the live instance.
         self._session_rules_provider = (
             session_rules_provider or (lambda: None)
         )
-        # V14 ``restrict-tools`` lease — needs the live LoopState so the
-        # install can stamp the current turn_count as the expiry sentinel.
-        # ``None`` → no-op (unit tests / SDK callers not running a Loop).
         self._loop_state_provider = (
             loop_state_provider or (lambda: None)
         )
@@ -163,14 +107,8 @@ class SkillTool(BaseTool):
         self, name: str, arguments: list[str] | None,
     ) -> dict[str, Any]:
         skill = self._registry.get(name)
-        # ``disable_model_invocation=True`` skills are hidden from the
-        # model's <skills-available> catalogue (see
-        # SkillRegistry.model_visible). If the model somehow references
-        # one by name anyway (stale context, hand-authored transcript),
-        # refuse the invocation — matching claude-code's contract that
-        # ``disable-model-invocation`` is the hard "model cannot call this
-        # skill" flag. The error shape mirrors the unknown-skill branch so
-        # the model's retry logic treats "hidden" the same as "missing".
+        # disable_model_invocation skills are surfaced as "missing" so the
+        # model's retry logic doesn't distinguish hidden vs unknown.
         if skill is not None and skill.disable_model_invocation:
             available = [s.name for s in self._registry.model_visible()]
             raise ToolError(
@@ -182,16 +120,12 @@ class SkillTool(BaseTool):
                 f"no skill named {name!r}; available: {available}"
             )
 
-        # Validate argument count against the skill's declared ``arguments``.
         declared = skill.arguments
         values = list(arguments) if arguments else []
         if declared and len(values) < len(declared):
             raise ToolError(
                 format_missing_args_error(name, declared, len(values))
             )
-        # Skills with NO declared arguments silently ignore extras — the
-        # LLM may defensively pass [] or unrelated lists and we don't want
-        # to error for the "pass-through" case.
 
         rendered_body = render_skill_body(
             skill,
@@ -200,24 +134,10 @@ class SkillTool(BaseTool):
         )
         invoked_skill = dataclasses.replace(skill, body=rendered_body)
         self._recorder(invoked_skill)
-        # v0.13 enforcement: install session-scoped allow-rules for each
-        # declared tool. Permissive (auto-allow) — matches claude-code's
-        # ``context.alwaysAllowRules.command``. Symmetric with
-        # ``SkillCommand.handle`` so slash and tool invocation paths have
-        # identical permission-layer side effects.
         install_skill_allow_rules(skill, self._session_rules_provider())
-        # V14 ``restrict-tools`` lease — symmetric with SkillCommand.handle.
-        # Skipped silently when no LoopState provider is wired (unit-test
-        # path).
         loop_state = self._loop_state_provider()
         if loop_state is not None:
             install_restrict_lease(skill, loop_state)
-        # Mirror SkillCommand.handle's audit emit — same event shape,
-        # same ``allowed_tools`` and origin-layer ``source`` — so the
-        # audit trail captures declared intent regardless of which path
-        # (slash vs tool) invoked the skill. ``invocation="tool"``
-        # distinguishes the model-driven path from the user's slash
-        # command.
         from aura.core.persistence import journal
 
         journal.write(

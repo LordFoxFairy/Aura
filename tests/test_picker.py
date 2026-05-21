@@ -1,4 +1,4 @@
-"""Tests for :mod:`aura.cli.picker` — the scrollable, filterable picker.
+"""Tests for :mod:`cli.picker` — the scrollable, filterable picker.
 
 Driven via ``prompt_toolkit.input.create_pipe_input`` + ``DummyOutput`` so
 the picker runs in a memory-only terminal harness — same pattern as the
@@ -17,7 +17,7 @@ from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
-from aura.cli.picker import (
+from cli.picker import (
     DEFAULT_PAGE_SIZE,
     PickerResult,
     SimplePickerItem,

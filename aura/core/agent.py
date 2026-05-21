@@ -652,7 +652,7 @@ class Agent:
         # the B2/G1 audit gap against claude-code.
         #
         # ``attachments``: optional HumanMessages to prepend BEFORE the user's
-        # HumanMessage. CLI-layer @mention preprocessing (aura.cli.attachments)
+        # HumanMessage. CLI-layer @mention preprocessing (cli.attachments)
         # builds ``<mcp-resource>`` envelopes that land here. Persisted with
         # the user turn so reactive-compact (and any retry) can read them
         # from history without re-injection.
@@ -1306,7 +1306,7 @@ class Agent:
         """Live MCP manager, or ``None`` before/outside ``aconnect``.
 
         Exposed for the CLI-layer ``@mention`` preprocessor (see
-        :mod:`aura.cli.attachments`), which needs read access to the
+        :mod:`cli.attachments`), which needs read access to the
         resources catalogue and ``read_resource`` without reaching into a
         private attribute. Always ``None`` when no servers are configured
         or when ``aconnect`` hasn't run yet — the caller short-circuits on
@@ -1633,7 +1633,7 @@ class Agent:
         loop binds against) and rebinds the loop's tool list. No-op
         with no configured servers; failures are journaled and
         swallowed inside the runtime (graceful degradation). MCP
-        resources are exposed via :mod:`aura.cli.attachments`'
+        resources are exposed via :mod:`cli.attachments`'
         ``@server:uri`` preprocessor, NOT as an LLM tool.
         """
         merged = await self._mcp_runtime.connect_all(self._registry.tools())

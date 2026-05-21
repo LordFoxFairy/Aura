@@ -43,6 +43,7 @@ from aura.core.persistence.storage import SessionStorage
 from aura.core.tasks.factory import SubagentFactory
 from aura.core.tasks.store import TasksStore
 from aura.core.teams.mailbox import Mailbox
+from aura.core.teams.memory import redact_secrets
 from aura.core.teams.types import (
     BROADCAST_RECIPIENT,
     MAX_BODY_CHARS,
@@ -1224,6 +1225,12 @@ class TeamManager:
             raise TeamError(
                 f"body length {len(body)} exceeds MAX_BODY_CHARS={MAX_BODY_CHARS}",
             )
+        # Secret-scrub the body BEFORE it lands in any mailbox / wire
+        # event. Cross-member text is the highest-leak surface — once a
+        # secret hits the JSONL inbox every teammate on disk has it.
+        # ``redact_secrets`` is conservative (false positives over false
+        # negatives) which matches the threat model exactly.
+        body = redact_secrets(body)
         recipients: list[str]
         if recipient == BROADCAST_RECIPIENT:
             recipients = [m.name for m in self._team.members]
@@ -1254,7 +1261,14 @@ class TeamManager:
         return sent
 
     def _post(self, msg: TeamMessage) -> None:
-        """Internal append (skips fan-out + length checks; for control msgs)."""
+        """Internal append (skips fan-out + length checks; for control msgs).
+
+        Control messages (shutdown_request / shutdown_response) get
+        the same redaction treatment as text — the body could carry a
+        teammate-supplied justification that an LLM accidentally
+        pasted an API key into.
+        """
+        msg = msg.model_copy(update={"body": redact_secrets(msg.body)})
         self.mailbox().append(msg)
         if self._team is not None:
             from aura.adapters.protocol.wire import team_message_to_wire

@@ -1,7 +1,7 @@
 """Subprocess tests for ``aura mcp {add,list,remove}``.
 
 These tests spawn the real ``aura`` binary (via ``uv run`` when
-available, falling back to ``python -m aura.cli.__main__``). Each test
+available, falling back to ``python -m cli.__main__``). Each test
 sets ``HOME`` to a ``tmp_path`` so the store writes to an isolated
 location and the developer's real ``~/.aura/mcp_servers.json`` is never
 touched.
@@ -40,10 +40,10 @@ def _aura_invocation() -> list[str] | None:
     if shutil.which("uv") is not None:
         return ["uv", "run", "aura"]
     try:
-        import aura.cli.__main__  # noqa: F401
+        import cli.__main__  # noqa: F401
     except Exception:  # noqa: BLE001
         return None
-    return [sys.executable, "-m", "aura.cli.__main__"]
+    return [sys.executable, "-m", "cli.__main__"]
 
 
 @pytest.fixture(scope="module")
@@ -51,7 +51,7 @@ def aura_binary() -> Sequence[str]:
     invocation = _aura_invocation()
     if invocation is None:
         pytest.skip(
-            "neither `uv` nor `python -m aura.cli.__main__` is usable — "
+            "neither `uv` nor `python -m cli.__main__` is usable — "
             "cannot run mcp subcommand tests"
         )
     return invocation

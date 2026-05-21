@@ -27,6 +27,12 @@ from aura.core.teams.backends import (
 )
 from aura.core.teams.mailbox import Mailbox
 from aura.core.teams.manager import TeamManager
+from aura.core.teams.memory import (
+    append_team_note,
+    redact_secrets,
+    team_memory_path,
+    team_memory_prompt,
+)
 from aura.core.teams.runtime import run_teammate, run_teammate_main
 from aura.core.teams.types import (
     BackendType,
@@ -47,10 +53,14 @@ __all__ = [
     "TeamRecord",
     "TeammateBackend",
     "TeammateMember",
+    "append_team_note",
     "get_backend",
     "is_inside_tmux",
     "pane_backend_available",
+    "redact_secrets",
     "run_teammate",
     "run_teammate_main",
+    "team_memory_path",
+    "team_memory_prompt",
     "tmux_available",
 ]

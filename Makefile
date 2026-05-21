@@ -9,7 +9,7 @@ fmt:
 	uv run ruff format .
 
 type:
-	uv run mypy aura tests
+	uv run mypy aura cli desktop/host tests
 
 test:
 	uv run pytest -v

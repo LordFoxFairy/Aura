@@ -1,4 +1,4 @@
-"""Tests for aura.cli.__main__ entry point."""
+"""Tests for cli.__main__ entry point."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import pytest
 
 def test_version_flag_fast_path() -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "aura.cli", "--version"],
+        [sys.executable, "-m", "cli", "--version"],
         capture_output=True,
         text=True,
         check=False,
@@ -24,7 +24,7 @@ def test_version_flag_fast_path() -> None:
 
 def test_help_flag() -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "aura.cli", "--help"],
+        [sys.executable, "-m", "cli", "--help"],
         capture_output=True,
         text=True,
         check=False,
@@ -50,8 +50,8 @@ def test_plaintext_api_key_emits_warning_only_in_verbose(tmp_path: Path) -> None
 
     from rich.console import Console
 
-    from aura.cli.__main__ import _warn_plaintext_api_keys
     from aura.config.loader import load_config
+    from cli.__main__ import _warn_plaintext_api_keys
 
     cfg = load_config(user_config=config_path, project_config=tmp_path / "absent.json")
 
@@ -84,9 +84,9 @@ def test_plaintext_api_key_writes_journal_event(tmp_path: Path) -> None:
     import pytest
     from rich.console import Console
 
-    from aura.cli.__main__ import _warn_plaintext_api_keys
     from aura.config.loader import load_config
     from aura.core.persistence import journal
+    from cli.__main__ import _warn_plaintext_api_keys
 
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
@@ -125,8 +125,8 @@ def _ns(**kw: object) -> object:
 def test_resolve_mode_defaults_to_default() -> None:
     # Post-2026-04-21: _resolve_mode takes a PermissionsConfig, not AuraConfig.
     # No flag + default PermissionsConfig (mode="default") → "default".
-    from aura.cli.__main__ import _resolve_mode
     from aura.schemas.permissions import PermissionsConfig
+    from cli.__main__ import _resolve_mode
 
     args = _ns(bypass_permissions=False)
     assert _resolve_mode(args, PermissionsConfig()) == "default"  # type: ignore[arg-type]
@@ -135,8 +135,8 @@ def test_resolve_mode_defaults_to_default() -> None:
 def test_resolve_mode_reads_permissions_config_mode() -> None:
     # PermissionsConfig comes from settings.json (via store.load), not from
     # AuraConfig. Mode set there should be honored when the flag is off.
-    from aura.cli.__main__ import _resolve_mode
     from aura.schemas.permissions import PermissionsConfig
+    from cli.__main__ import _resolve_mode
 
     perm_cfg = PermissionsConfig(mode="bypass")
     args = _ns(bypass_permissions=False)
@@ -144,8 +144,8 @@ def test_resolve_mode_reads_permissions_config_mode() -> None:
 
 
 def test_resolve_mode_cli_flag_wins_over_settings_default() -> None:
-    from aura.cli.__main__ import _resolve_mode
     from aura.schemas.permissions import PermissionsConfig
+    from cli.__main__ import _resolve_mode
 
     perm_cfg = PermissionsConfig(mode="default")
     args = _ns(bypass_permissions=True)
@@ -156,8 +156,8 @@ def test_resolve_mode_cli_flag_wins_even_over_settings_bypass() -> None:
     # Trivial but worth locking: flag True always wins regardless of the
     # settings value. (A user could explicitly set bypass in both places;
     # ordering must be predictable.)
-    from aura.cli.__main__ import _resolve_mode
     from aura.schemas.permissions import PermissionsConfig
+    from cli.__main__ import _resolve_mode
 
     perm_cfg = PermissionsConfig(mode="bypass")
     args = _ns(bypass_permissions=True)
@@ -174,7 +174,7 @@ def test_bypass_refused_message_is_stable() -> None:
     # The error message is the single piece of text the operator sees
     # when their --bypass-permissions attempt gets refused. Lock its
     # shape so docs / support runbooks can reference it.
-    from aura.cli.__main__ import _bypass_refused_message
+    from cli.__main__ import _bypass_refused_message
 
     msg = _bypass_refused_message()
     assert "--bypass-permissions is disabled" in msg
@@ -190,7 +190,7 @@ def test_bypass_refused_end_to_end_via_main(
     # misroute to a stale parent venv in editable-install setups)
     # with HOME + cwd scoped to tmp_path and the LLM factory
     # monkeypatched out so startup never touches real providers.
-    from aura.cli.__main__ import main
+    from cli.__main__ import main
 
     # Minimal user config so load_config succeeds.
     user_aura_dir = tmp_path / ".aura"
@@ -233,8 +233,8 @@ def test_disable_bypass_false_allows_bypass_flag() -> None:
     # main() path requires an LLM client; the kill-switch check lives
     # AFTER _resolve_mode in main() and is covered by the subprocess
     # test above.
-    from aura.cli.__main__ import _resolve_mode
     from aura.schemas.permissions import PermissionsConfig
+    from cli.__main__ import _resolve_mode
 
     perm_cfg = PermissionsConfig(disable_bypass=False)
     args = _ns(bypass_permissions=True)
@@ -246,8 +246,8 @@ def test_main_wires_allow_deny_and_ask_rules_into_permission_layers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aura.cli.__main__ import main
     from aura.core.hooks import HookChain
+    from cli.__main__ import main
 
     user_aura_dir = tmp_path / ".aura"
     user_aura_dir.mkdir()
@@ -313,10 +313,10 @@ def test_main_wires_allow_deny_and_ask_rules_into_permission_layers(
     async def fake_repl(*_args: object, **_kwargs: object) -> None:
         return None
 
-    import aura.cli.repl as repl_mod
     import aura.core.agent as agent_mod
     import aura.core.hooks.file_watcher as watcher_mod
     import aura.core.hooks.permission as permission_mod
+    import cli.repl as repl_mod
 
     monkeypatch.chdir(project_dir)
     monkeypatch.setenv("HOME", str(tmp_path))

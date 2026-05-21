@@ -1,13 +1,4 @@
-"""Ripgrep-backed content search.
-
-Shells out to ``rg`` (ripgrep). The three output modes mirror claude-code's
-GrepTool: ``files_with_matches`` (default, just paths), ``count`` (per-file
-match counts), and ``content`` (line-level matches with optional context).
-
-VCS metadata directories (``.git``, ``.svn``, ``.hg``) are auto-excluded —
-mirrors claude-code's VCS_DIRECTORIES_TO_EXCLUDE. Lines longer than
-``max_columns`` (default 500) are truncated by rg with a ``[...]`` indicator.
-"""
+"""Ripgrep-backed content search."""
 
 from __future__ import annotations
 
@@ -85,15 +76,7 @@ def _preview(args: dict[str, Any]) -> str:
     return f"pattern: {args.get('pattern', '')}  @ {args.get('path', '.')}"
 
 
-# Sentinel separators for content-mode output. rg's default separators
-# (``:`` for matches, ``-`` for context) are ambiguous inside paths that
-# legitimately contain them (e.g. ``src/v-42-release/foo.rs`` — a path
-# whose ``-42-`` chews through the naïve ``-<digits>-`` heuristic). Using
-# characters that cannot appear in POSIX file paths nor in rg's other
-# output fields gives an unambiguous parse. ``\x1f`` (ASCII unit
-# separator) for match lines; ``\x02`` for context lines — both are
-# POSIX-safe argv (not NUL) and not part of Python's ``str.splitlines``
-# terminator set (so we avoid the ``\x1e`` record-separator trap).
+# Non-printable separators so paths containing ':' / '-' parse unambiguously.
 _MATCH_SEP = "\x1f"
 _CTX_SEP = "\x02"
 
@@ -103,8 +86,7 @@ _VCS_EXCLUDE_GLOBS: tuple[str, ...] = ("!.git", "!.svn", "!.hg")
 
 def _build_argv(p: GrepParams) -> list[str]:
     argv: list[str] = ["rg", "--line-number", f"--max-columns={p.max_columns}"]
-    # VCS-metadata excludes go before user globs so an explicit positive
-    # glob from the caller can still re-include them.
+    # Excludes go first so user globs can still positively re-include.
     for g in _VCS_EXCLUDE_GLOBS:
         argv += ["--glob", g]
     if p.case_insensitive:
@@ -133,12 +115,6 @@ def _build_argv(p: GrepParams) -> list[str]:
 
 
 def _parse_content_line(line: str, has_context: bool) -> dict[str, Any] | None:
-    """Parse one rg --line-number content-mode output line.
-
-    Match lines use ``_MATCH_SEP`` (unit separator); context lines use
-    ``_CTX_SEP`` (STX). Split with maxsplit=2 so the ``text`` field may
-    itself contain the separator byte without corrupting the parse.
-    """
     mparts = line.split(_MATCH_SEP, 2)
     if len(mparts) == 3 and mparts[1].isdigit():
         return {
@@ -204,7 +180,7 @@ class Grep(BaseTool):
         if proc.returncode >= 2:
             raise ToolError(f"grep: {(proc.stderr or '').strip()}")
 
-        # exit 1 = no matches; exit 0 = matches. Both yield parseable stdout.
+        # exit 0 = matches, 1 = no matches; both yield parseable stdout.
         lines = [ln for ln in proc.stdout.splitlines() if ln]
         limit = params.head_limit
 
@@ -228,12 +204,11 @@ class Grep(BaseTool):
                 "truncated": truncated,
             }
 
-        # content mode — parse matches + optional context lines
         has_context = params.context_before > 0 or params.context_after > 0
         parsed: list[dict[str, Any]] = []
         for ln in lines:
             if ln == "--":
-                continue  # rg inserts -- between context groups
+                continue
             entry = _parse_content_line(ln, has_context)
             if entry is not None:
                 parsed.append(entry)

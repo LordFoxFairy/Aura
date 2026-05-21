@@ -2,7 +2,7 @@
 ``Agent.mcp_manager`` accessor.
 
 The v0.10.x architecture exposes MCP resources via the CLI-layer
-``@server:uri`` attachment preprocessor (see :mod:`aura.cli.attachments`
+``@server:uri`` attachment preprocessor (see :mod:`cli.attachments`
 and :file:`tests/integration/test_mcp_attachments.py`). The old LLM-tool
 auto-registration (``mcp_read_resource``) was deprecated at the same
 time — the tool class is still importable for programmatic SDK users

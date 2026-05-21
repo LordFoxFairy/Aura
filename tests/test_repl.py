@@ -1,4 +1,4 @@
-"""Tests for aura.cli.repl.run_repl_async."""
+"""Tests for cli.repl.run_repl_async."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ import pytest
 from langchain_core.messages import AIMessage
 from rich.console import Console
 
-from aura.cli.repl import run_repl_async
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.core.persistence.storage import SessionStorage
+from cli.repl import run_repl_async
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -94,7 +94,6 @@ async def test_eof_exits_cleanly(tmp_path: Path) -> None:
 async def test_empty_input_does_not_reach_agent(tmp_path: Path) -> None:
     # Providers 400 on empty user turns — REPL must never round-trip
     # them to the model. Whitespace-only lines are reprompted silently.
-    # Scripted inputs: empty string, whitespace, then an exit.
     agent = _agent(tmp_path, turns=[FakeTurn(message=AIMessage(content="should not fire"))])
     console, buf = _capture_console()
 
@@ -186,12 +185,11 @@ async def test_non_bypass_mode_uses_plain_prompt(tmp_path: Path) -> None:
 
 
 async def test_welcome_banner_shows_core_info_compactly(tmp_path: Path) -> None:
-    # Single compact cyan Panel (v0.8.0 shape restored after operator
-    # feedback). Branding line + keybinding hints + model + cwd + tip, all
-    # inside ONE Panel. ``expand=False`` so the panel is content-sized,
-    # not terminal-sized. Cyan border drawn with box-drawing glyphs.
+    # Single compact cyan Panel. Branding line + keybinding hints + model
+    # + cwd + tip, all inside ONE Panel. ``expand=False`` so the panel is
+    # content-sized, not terminal-sized.
     from aura import __version__
-    from aura.cli.repl import _STARTUP_TIPS
+    from cli.repl import _STARTUP_TIPS
 
     agent = _agent(tmp_path)
     console, buf = _capture_console()
@@ -215,8 +213,7 @@ async def test_welcome_banner_shows_core_info_compactly(tmp_path: Path) -> None:
     assert "Ctrl+D" in out
     assert "exit" in out
 
-    # Cyan Panel border uses Unicode box-drawing glyphs — pick any of the
-    # four corner characters; if the Panel vanishes all four disappear.
+    # Cyan Panel border uses Unicode box-drawing glyphs.
     assert any(glyph in out for glyph in ("╭", "╮", "╰", "╯"))
 
     # Tip line matches one of the curated options (exact substring).
@@ -225,39 +222,13 @@ async def test_welcome_banner_shows_core_info_compactly(tmp_path: Path) -> None:
     await agent.aclose()
 
 
-def test_welcome_banner_spinner_frames_are_non_empty_and_include_settle_glyph(
-    tmp_path: Path,
-) -> None:
-    # U2: the animated welcome banner rotates through the same glyph
-    # family the in-turn ThinkingSpinner uses, then settles on ``✱``.
-    # Guard the constants so the animation is never silently de-armed
-    # (e.g. an empty tuple would make the Live loop a no-op).
-    from aura.cli.repl import (
-        _BANNER_ANIMATION_SECONDS,
-        _BANNER_SETTLE_GLYPH,
-        _BANNER_SPINNER_FRAMES,
-    )
-    assert _BANNER_SPINNER_FRAMES
-    assert _BANNER_SETTLE_GLYPH == "✱"
-    # Frame set must overlap with the ThinkingSpinner's glyphs (visual
-    # continuity between startup and in-flight). At least one common
-    # character is required — catches accidental typo drift.
-    from aura.cli.spinner import _GLYPHS as _THINKING_GLYPHS
-    assert set(_BANNER_SPINNER_FRAMES) & set(_THINKING_GLYPHS)
-    # Animation duration must be user-perceptible (>=0.4s) but not
-    # obstructive (<=3s).
-    assert 0.4 <= _BANNER_ANIMATION_SECONDS <= 3.0
-
-
 def test_welcome_banner_static_path_renders_settled_glyph_for_non_tty(
     tmp_path: Path,
 ) -> None:
     # StringIO-backed Console reports ``is_terminal=False``; the welcome
     # helper MUST take the short-circuit path and print the settled
-    # banner WITHOUT running a Live animation. Dogfood check: the
-    # captured output carries the settled ``✱`` glyph AND none of the
-    # intermediate spinner frames (the animation never ran).
-    from aura.cli.repl import _BANNER_SPINNER_FRAMES, _print_welcome
+    # banner WITHOUT running a Live animation.
+    from cli.repl import _BANNER_SPINNER_FRAMES, _print_welcome
 
     agent = _agent(tmp_path)
     console, buf = _capture_console()
@@ -280,23 +251,18 @@ def test_welcome_banner_static_path_renders_settled_glyph_for_non_tty(
 def test_welcome_banner_animated_path_runs_in_real_tty(
     tmp_path: Path,
 ) -> None:
-    # U2 dogfood: drive a REAL pty + Aura subprocess and confirm the
-    # welcome banner scrolls with an animated leading glyph ending in
-    # ``✱``. This is the ground truth that a StringIO test can't give.
-    # Uses Python's ``pty`` module — no external deps.
+    # Dogfood: drive a REAL pty + Aura subprocess and confirm the welcome
+    # banner scrolls with an animated leading glyph ending in ``✱``.
     import os
     import pty
     import select
     import sys
     import time as _time
 
-    # Spawn a tiny driver that imports the helper and prints the banner
-    # with a REAL Rich Console attached to the pty (is_terminal=True).
-    # The driver exits when the banner finishes so the test doesn't hang.
     driver = (
         "from pathlib import Path\n"
         "from rich.console import Console\n"
-        "from aura.cli.repl import _print_welcome\n"
+        "from cli.repl import _print_welcome\n"
         "from aura.core.agent import Agent\n"
         "from aura.config.schema import AuraConfig\n"
         "from aura.core.persistence.storage import SessionStorage\n"
@@ -336,7 +302,6 @@ def test_welcome_banner_animated_path_runs_in_real_tty(
             # child is done AND the pipe has drained.
             done_pid, _status = os.waitpid(pid, os.WNOHANG)
             if done_pid == pid:
-                # Drain any remaining bytes.
                 while True:
                     rlist, _, _ = select.select([fd], [], [], 0.1)
                     if not rlist:
@@ -376,10 +341,8 @@ async def test_welcome_banner_renders_even_with_odd_version(
     tmp_path: Path,
 ) -> None:
     # Banner must not crash when ``__version__`` drifts (e.g. a dev build
-    # sets it to "0.0.0+dev"). Poke the module dict (not attribute access)
-    # so mypy doesn't flag ``__version__`` as non-exported and ruff doesn't
-    # flag a constant setattr.
-    from aura.cli import repl as repl_mod
+    # sets it to "0.0.0+dev").
+    from cli import repl as repl_mod
 
     agent = _agent(tmp_path)
     console, buf = _capture_console()
@@ -400,147 +363,18 @@ async def test_welcome_banner_renders_even_with_odd_version(
     await agent.aclose()
 
 
-def test_prompt_session_no_toolbar_when_agent_not_passed(tmp_path: Path) -> None:
-    # Bare-bones construction (tests only exercising history/completion)
-    # still works: without an agent, there's nothing to render in the bar,
-    # so it's elided.
-    from aura.capabilities.commands import CommandRegistry
-    from aura.cli.repl import _build_prompt_session
-
-    session = _build_prompt_session(CommandRegistry())
-    assert session.bottom_toolbar is None
-
-
-def test_prompt_session_bottom_toolbar_shows_context_when_agent_passed(
-    tmp_path: Path,
-) -> None:
-    # Real REPL wiring: pass an Agent, get a live toolbar callable. The
-    # toolbar reads ``slots.token_stats`` fresh on each render; exercise
-    # it with seeded stats and assert the rendered HTML carries model +
-    # bar + pinned cached + cwd.
-    import dataclasses
-
-    from aura.capabilities.commands import CommandRegistry
-    from aura.cli.repl import _build_prompt_session
-    from aura.core.agent import Agent
-    from aura.schemas.state import TokenStats
-    from tests.conftest import FakeChatModel
-    from tests.test_agent import _minimal_config, _storage
-
-    agent = Agent(
-        config=_minimal_config(enabled=[]),
-        model=FakeChatModel(turns=[]),
-        storage=_storage(tmp_path),
-    )
-    agent.state.slots = dataclasses.replace(
-        agent.state.slots,
-        token_stats=TokenStats(
-            last_input_tokens=5400,
-            last_cache_read_tokens=34_000,
-        ),
-    )
-
-    session = _build_prompt_session(CommandRegistry(), agent=agent)
-    assert callable(session.bottom_toolbar)
-    html = session.bottom_toolbar()
-    # HTML carries the pieces as children of ansigray / ansi-color tags.
-    text = str(html)
-    assert "5.4k/" in text            # live tokens over window
-    assert "34.0k cached" in text or "34k cached" in text
-    agent.close()
-
-
-def test_prompt_session_has_refresh_interval_for_animated_buddy(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The session ticks ``refresh_interval`` so the animated buddy
-    fragment visibly cycles in the bottom toolbar even while the user
-    isn't typing. Without this, pt only re-renders on input/invalidate
-    and the buddy looks frozen.
-
-    Mirrors claude-code's ``CompanionStatusBar.tsx`` which schedules its
-    own animation interval; pt's built-in ``refresh_interval`` is the
-    natural Python equivalent — re-runs the bottom_toolbar callable
-    every tick.
-    """
-    from aura.capabilities.commands import CommandRegistry
-    from aura.cli.repl import _build_prompt_session
-    from aura.core.agent import Agent
-    from tests.conftest import FakeChatModel
-    from tests.test_agent import _minimal_config, _storage
-
-    agent = Agent(
-        config=_minimal_config(enabled=[]),
-        model=FakeChatModel(turns=[]),
-        storage=_storage(tmp_path),
-    )
-    session = _build_prompt_session(CommandRegistry(), agent=agent)
-    # > 0 means pt schedules a periodic UI refresh; 0 disables it. The
-    # exact value isn't pinned (display tuning), but it must be in the
-    # 0.05–2.0s range — fast enough to look animated, slow enough to
-    # avoid CPU churn.
-    assert session.refresh_interval > 0
-    assert session.refresh_interval <= 2.0
-    agent.close()
-
-
-def test_prompt_session_bottom_toolbar_is_time_animated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The toolbar callable returns time-varying content given different
-    ``time.time()`` values — the animation hook actually drives the
-    glyph rotation, not just a static snapshot.
-
-    We monkeypatch ``time.time`` (used by the buddy time-aware hook) so
-    successive callable invocations sample different frames and produce
-    different rendered HTML.
-    """
-    from aura.capabilities.commands import CommandRegistry
-    from aura.cli import buddy as _buddy
-    from aura.cli.repl import _build_prompt_session
-    from aura.core.agent import Agent
-    from tests.conftest import FakeChatModel
-    from tests.test_agent import _minimal_config, _storage
-
-    monkeypatch.delenv("AURA_NO_BUDDY", raising=False)
-
-    agent = Agent(
-        config=_minimal_config(enabled=[]),
-        model=FakeChatModel(turns=[]),
-        storage=_storage(tmp_path),
-    )
-    session = _build_prompt_session(CommandRegistry(), agent=agent)
-    assert callable(session.bottom_toolbar)
-
-    # Sample one full frame ring; expect ≥2 distinct rendered HTML strs.
-    rendered: set[str] = set()
-    for i in range(len(_buddy.BUDDY_FRAMES)):
-        fake_now = i * _buddy.BUDDY_FRAME_INTERVAL
-        monkeypatch.setattr(
-            "aura.cli.repl.time.time", lambda v=fake_now: v,
-        )
-        html = session.bottom_toolbar()
-        rendered.add(str(html))
-    assert len(rendered) >= 2, (
-        "buddy fragment should cycle frames as time.time() advances; "
-        f"got {len(rendered)} distinct renders"
-    )
-    agent.close()
-
-
 async def test_alt_enter_inserts_newline_in_prompt_buffer(
     tmp_path: Path,
 ) -> None:
     # Real-pt round-trip: drive a PromptSession built with the shared
     # KeyBindings via create_pipe_input. Send Alt+Enter (ESC + CR) then
     # Enter (CR). The Alt+Enter binding must insert a literal newline;
-    # only the final CR submits. Result should carry "\n" between the
-    # two halves of the typed text.
+    # only the final CR submits.
     from prompt_toolkit import PromptSession
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from aura.cli.repl import _build_mode_key_bindings
+    from cli.repl import _build_mode_key_bindings
 
     agent = _agent(tmp_path)
     console, _buf = _capture_console()
@@ -560,13 +394,12 @@ async def test_ctrl_j_inserts_newline_in_prompt_buffer(
     tmp_path: Path,
 ) -> None:
     # Ctrl+J (0x0a, "\n") is the universal fallback for terminals that
-    # remap Shift+Enter. Same contract as Alt+Enter: insert a literal
-    # newline, don't submit.
+    # remap Shift+Enter. Same contract as Alt+Enter.
     from prompt_toolkit import PromptSession
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from aura.cli.repl import _build_mode_key_bindings
+    from cli.repl import _build_mode_key_bindings
 
     agent = _agent(tmp_path)
     console, _buf = _capture_console()
@@ -586,8 +419,7 @@ async def test_multiline_slash_command_uses_first_line_only(
 ) -> None:
     # If a user pastes a multi-line block whose first line is a slash
     # command (e.g. ``/exit`` followed by stray paste lines), the REPL
-    # must still dispatch the command cleanly. Policy: first line is
-    # the command, remaining lines are ignored.
+    # must still dispatch the command cleanly.
     agent = _agent(tmp_path)
     console, _buf = _capture_console()
 
@@ -604,8 +436,7 @@ async def test_multiline_non_slash_input_reaches_agent_intact(
     tmp_path: Path,
 ) -> None:
     # Multi-line natural-language / pasted-code prompts must flow through
-    # to the agent with newlines preserved. Subclass FakeChatModel to
-    # snoop the HumanMessage seen by ``_agenerate``.
+    # to the agent with newlines preserved.
     from langchain_core.messages import BaseMessage, HumanMessage
 
     captured: list[str] = []
@@ -662,15 +493,12 @@ async def test_single_line_slash_command_unchanged(tmp_path: Path) -> None:
 
 
 def test_post_turn_status_is_slim_done_marker(tmp_path: Path) -> None:
-    # Bug fix — the post-turn checkpoint used to duplicate the whole
-    # bottom_toolbar (model / ctx bar / pinned / mode / cwd), which
-    # then collided with pt's live bottom_toolbar above the prompt.
-    # Shape is now: a single dim line with "done" + elapsed seconds.
-    # Nothing from the live toolbar should show up inline.
+    # Shape: a single dim line with "done" + elapsed seconds. Nothing
+    # else should appear in scrollback per turn.
     import dataclasses
 
-    from aura.cli.repl import _print_post_turn_status
     from aura.schemas.state import TokenStats
+    from cli.repl import _print_post_turn_status
 
     agent = _agent(tmp_path)
     # Seed stats that WOULD have shown up in the old render — they must
@@ -690,7 +518,7 @@ def test_post_turn_status_is_slim_done_marker(tmp_path: Path) -> None:
     # New shape: "done" marker + elapsed seconds.
     assert "done" in out
     assert "21.4s" in out
-    # Old content that now lives ONLY in bottom_toolbar must not appear.
+    # No status-bar duplicate noise.
     assert "model:" not in out
     assert "pinned" not in out
     assert "cached" not in out
@@ -704,7 +532,7 @@ def test_post_turn_status_is_slim_done_marker(tmp_path: Path) -> None:
 def test_post_turn_status_elides_duration_when_zero(tmp_path: Path) -> None:
     # Defensive: zero elapsed means "we don't have a measurement yet".
     # Skip the duration tail instead of printing "0.0s" noise.
-    from aura.cli.repl import _print_post_turn_status
+    from cli.repl import _print_post_turn_status
 
     agent = _agent(tmp_path)
     console, buf = _capture_console()
@@ -720,9 +548,8 @@ def test_post_turn_status_elides_duration_when_zero(tmp_path: Path) -> None:
 def test_post_turn_status_uses_integer_seconds_at_or_above_60s(
     tmp_path: Path,
 ) -> None:
-    # Consistency with the live bottom_toolbar: sub-minute shows decimal,
-    # ≥60s drops the decimal (visual noise at that scale).
-    from aura.cli.repl import _print_post_turn_status
+    # Sub-minute shows decimal, ≥60s drops the decimal (visual noise).
+    from cli.repl import _print_post_turn_status
 
     agent = _agent(tmp_path)
     console, buf = _capture_console()
@@ -738,16 +565,13 @@ def test_post_turn_status_uses_integer_seconds_at_or_above_60s(
 async def test_shift_tab_cycles_mode_silently_no_scrollback_spam(
     tmp_path: Path,
 ) -> None:
-    # Regression — rapid shift+tab presses used to spam the scrollback
-    # with dozens of "mode: X (press shift+tab to cycle …)" lines
-    # (operator report + tmp/img_2.png). Fix: bindings only flip state
-    # + call ``event.app.invalidate()`` so the bottom_toolbar redraws
-    # with the new mode. Zero scrollback output.
+    # Bindings only flip state + call ``event.app.invalidate()``. Zero
+    # scrollback output.
     from prompt_toolkit import PromptSession
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from aura.cli.repl import _build_mode_key_bindings
+    from cli.repl import _build_mode_key_bindings
 
     agent = _agent(tmp_path)
     console, buf = _capture_console()
@@ -764,7 +588,7 @@ async def test_shift_tab_cycles_mode_silently_no_scrollback_spam(
 
     # State changed: default → accept_edits.
     assert agent.mode == "accept_edits"
-    # Nothing printed — bottom_toolbar is the sole feedback surface.
+    # Nothing printed to scrollback.
     out = buf.getvalue()
     assert "mode:" not in out
     assert "shift+tab to cycle" not in out
@@ -774,15 +598,13 @@ async def test_shift_tab_cycles_mode_silently_no_scrollback_spam(
 async def test_ctrl_c_with_text_clears_buffer_and_does_not_exit(
     tmp_path: Path,
 ) -> None:
-    # U1: claude-code parity (src/hooks/useExitOnCtrlCD.ts + PromptInput's
-    # onBufferReset). When the buffer has text, Ctrl+C discards it and
-    # leaves the session alive — never an exit on first press with content.
-    # Typed "abc" then Ctrl+C; the session stays open until we send "\r".
+    # When the buffer has text, Ctrl+C discards it and leaves the session
+    # alive — never an exit on first press with content.
     from prompt_toolkit import PromptSession
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from aura.cli.repl import _build_mode_key_bindings
+    from cli.repl import _build_mode_key_bindings
 
     agent = _agent(tmp_path)
     console, _buf = _capture_console()
@@ -802,23 +624,18 @@ async def test_ctrl_c_with_text_clears_buffer_and_does_not_exit(
 async def test_ctrl_c_empty_buffer_single_press_does_not_exit(
     tmp_path: Path,
 ) -> None:
-    # U1: empty-buffer first Ctrl+C must NOT exit — it arms a "press
-    # again to exit" state. Mirror of useExitOnCtrlCD's pending state.
-    # Send Ctrl+C then "hi\r"; prompt should return "hi", not raise
-    # KeyboardInterrupt. (Exit on double-press is tested separately.)
+    # Empty-buffer first Ctrl+C must NOT exit — it arms a "press again to
+    # exit" state.
     from prompt_toolkit import PromptSession
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from aura.cli.repl import _build_mode_key_bindings
+    from cli.repl import _build_mode_key_bindings
 
     agent = _agent(tmp_path)
     console, _buf = _capture_console()
     kb = _build_mode_key_bindings(agent, console)
     with create_pipe_input() as inp:
-        # Bare Ctrl+C, then "hi" + CR (wait long enough the window closes
-        # is NOT needed — the next typing keystroke happens immediately
-        # and doesn't re-trigger the double-press path).
         inp.send_text("\x03hi\r")
         session: PromptSession[str] = PromptSession(
             key_bindings=kb, input=inp, output=DummyOutput(),
@@ -831,15 +648,13 @@ async def test_ctrl_c_empty_buffer_single_press_does_not_exit(
 async def test_ctrl_c_double_press_empty_buffer_raises_keyboard_interrupt(
     tmp_path: Path,
 ) -> None:
-    # U1: TWO bare Ctrl+C within the window raises KeyboardInterrupt,
-    # which the outer REPL loop treats as the exit signal. Parity with
-    # claude-code's useDoublePress.
-    import pytest
+    # TWO bare Ctrl+C within the window raises KeyboardInterrupt, which
+    # the outer REPL loop treats as the exit signal.
     from prompt_toolkit import PromptSession
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from aura.cli.repl import _build_mode_key_bindings
+    from cli.repl import _build_mode_key_bindings
 
     agent = _agent(tmp_path)
     console, _buf = _capture_console()
@@ -857,16 +672,15 @@ async def test_ctrl_c_double_press_empty_buffer_raises_keyboard_interrupt(
 async def test_ctrl_c_second_press_outside_window_does_not_exit(
     tmp_path: Path,
 ) -> None:
-    # U1: if the second Ctrl+C arrives AFTER the 800ms window, it
-    # restarts the arm — does not exit. This guards against a
-    # forgotten-but-never-cleared state.
+    # If the second Ctrl+C arrives AFTER the 800ms window, it restarts
+    # the arm — does not exit.
     import time as _time
 
     from prompt_toolkit import PromptSession
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from aura.cli.repl import _build_mode_key_bindings, _CtrlCState
+    from cli.repl import _build_mode_key_bindings, _CtrlCState
 
     agent = _agent(tmp_path)
     console, _buf = _capture_console()
@@ -890,18 +704,15 @@ async def test_ctrl_c_second_press_outside_window_does_not_exit(
 async def test_ctrl_c_text_present_does_not_arm_double_press(
     tmp_path: Path,
 ) -> None:
-    # U1: Ctrl+C on a non-empty buffer clears the text but MUST NOT arm
-    # the exit window — otherwise "Ctrl+C clear input, then Ctrl+C
-    # clear-again-accidentally-discovers-empty-buffer" would exit.
-    # Contract: only BARE Ctrl+C (empty buffer) advances the exit state
-    # machine.
+    # Ctrl+C on a non-empty buffer clears the text but MUST NOT arm the
+    # exit window.
     import time as _time
 
     from prompt_toolkit import PromptSession
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from aura.cli.repl import _build_mode_key_bindings, _CtrlCState
+    from cli.repl import _build_mode_key_bindings, _CtrlCState
 
     agent = _agent(tmp_path)
     console, _buf = _capture_console()
@@ -915,8 +726,7 @@ async def test_ctrl_c_text_present_does_not_arm_double_press(
         )
         result = await session.prompt_async("> ")
     assert result == "q"
-    # Buffer-clearing Ctrl+C does NOT advance the double-press state —
-    # exit window remains inactive.
+    # Buffer-clearing Ctrl+C does NOT advance the double-press state.
     assert state.last_press_at == 0.0
     assert not state.hint_active(_time.monotonic())
     await agent.aclose()
@@ -925,13 +735,13 @@ async def test_ctrl_c_text_present_does_not_arm_double_press(
 async def test_escape_resets_mode_silently_no_scrollback_spam(
     tmp_path: Path,
 ) -> None:
-    # Same silent-feedback contract as shift+tab: escape must flip
-    # mode and invalidate the toolbar, without printing to stdout.
+    # Same silent-feedback contract as shift+tab: escape must flip mode
+    # without printing to stdout.
     from prompt_toolkit import PromptSession
     from prompt_toolkit.input import create_pipe_input
     from prompt_toolkit.output import DummyOutput
 
-    from aura.cli.repl import _build_mode_key_bindings
+    from cli.repl import _build_mode_key_bindings
 
     agent = _agent(tmp_path)
     agent.set_mode("accept_edits")
@@ -952,162 +762,9 @@ async def test_escape_resets_mode_silently_no_scrollback_spam(
     await agent.aclose()
 
 
-async def test_mention_preprocessor_injects_attachment_into_turn(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # The REPL's ``_run_turn`` calls ``extract_and_resolve_attachments``
-    # before handing the prompt to ``astream``. When the agent has a live
-    # MCP manager that knows the mentioned URI, the rendered
-    # ``<mcp-resource>`` envelope must reach the LLM's ``_agenerate``.
-    from langchain_core.messages import BaseMessage, HumanMessage
-
-    from aura.core import agent as agent_module
-
-    class _FakeMgr:
-        def __init__(self, configs: object) -> None:
-            # Minimal MCPManager-shaped object — only the surface used by
-            # the preprocessor + aconnect.
-            self._resources: dict[tuple[str, str], object] = {
-                ("srv", "mem://doc.md"): object(),
-            }
-
-        def resources_catalogue(
-            self,
-        ) -> list[tuple[str, str, str, str, str | None]]:
-            return [("srv", "mem://doc.md", "doc.md", "", None)]
-
-        async def read_resource(self, uri: str) -> dict[str, object]:
-            return {
-                "uri": uri,
-                "server": "srv",
-                "contents": [
-                    {"type": "text", "text": "INJECTED DOC", "uri": uri},
-                ],
-            }
-
-        async def start_all(self) -> tuple[list[object], list[object]]:
-            return [], []
-
-        async def stop_all(self) -> None:
-            return None
-
-    monkeypatch.setattr(agent_module, "MCPManager", _FakeMgr)
-
-    captured: list[list[BaseMessage]] = []
-
-    class _Capture(FakeChatModel):
-        async def _agenerate(  # type: ignore[override]
-            self,
-            messages: list[BaseMessage],
-            stop: list[str] | None = None,
-            run_manager: object | None = None,
-            **kwargs: object,
-        ) -> object:
-            captured.append(list(messages))
-            return await super()._agenerate(
-                messages, stop, run_manager, **kwargs,  # type: ignore[arg-type]
-            )
-
-    cfg = AuraConfig.model_validate({
-        "providers": [{"name": "openai", "protocol": "openai"}],
-        "router": {"default": "openai:gpt-4o-mini"},
-        "tools": {"enabled": []},
-        "mcp_servers": [
-            {
-                "name": "srv",
-                "transport": "stdio",
-                "command": "echo",
-                "args": ["noop"],
-            },
-        ],
-    })
-    agent = Agent(
-        config=cfg,
-        model=_Capture(
-            turns=[FakeTurn(message=AIMessage(content="ok"))],  # type: ignore[call-arg]
-        ),
-        storage=SessionStorage(tmp_path / "db"),
-    )
-    await agent.aconnect()
-    console, buf = _capture_console()
-    await run_repl_async(
-        agent,
-        input_fn=_ScriptedInput(["pull @srv:mem://doc.md", "/exit"]),
-        console=console,
-    )
-    # B3: live MCP manager inside async loop → must use aclose().
-    await agent.aclose()
-
-    assert captured, "model was never invoked"
-    # Envelope injected BEFORE the user's HumanMessage.
-    sent = captured[0]
-    envelopes = [
-        m for m in sent
-        if isinstance(m, HumanMessage)
-        and isinstance(m.content, str)
-        and "<mcp-resource" in m.content
-    ]
-    assert len(envelopes) == 1
-    assert "INJECTED DOC" in str(envelopes[0].content)
-    # REPL surfaces a dim confirmation line for each attached resource.
-    assert "attached @srv:mem://doc.md" in buf.getvalue()
-
-
-async def test_prompt_without_mentions_skips_attachment_path(
-    tmp_path: Path,
-) -> None:
-    # A plain prompt MUST NOT trigger any MCP calls or inject envelopes,
-    # even when the agent has no manager wired (common path).
-    from langchain_core.messages import BaseMessage, HumanMessage
-
-    captured: list[list[BaseMessage]] = []
-
-    class _Capture(FakeChatModel):
-        async def _agenerate(  # type: ignore[override]
-            self,
-            messages: list[BaseMessage],
-            stop: list[str] | None = None,
-            run_manager: object | None = None,
-            **kwargs: object,
-        ) -> object:
-            captured.append(list(messages))
-            return await super()._agenerate(
-                messages, stop, run_manager, **kwargs,  # type: ignore[arg-type]
-            )
-
-    agent = Agent(
-        config=AuraConfig.model_validate({
-            "providers": [{"name": "openai", "protocol": "openai"}],
-            "router": {"default": "openai:gpt-4o-mini"},
-            "tools": {"enabled": []},
-        }),
-        model=_Capture(
-            turns=[FakeTurn(message=AIMessage(content="ok"))],  # type: ignore[call-arg]
-        ),
-        storage=SessionStorage(tmp_path / "db"),
-    )
-    console, _buf = _capture_console()
-    await run_repl_async(
-        agent,
-        input_fn=_ScriptedInput(["just a plain prompt", "/exit"]),
-        console=console,
-    )
-    await agent.aclose()
-
-    assert captured
-    sent = captured[0]
-    assert not any(
-        isinstance(m, HumanMessage)
-        and isinstance(m.content, str)
-        and "<mcp-resource" in m.content
-        for m in sent
-    )
-
-
 async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:
     # Real resilience: if Agent.astream raises (network error, client bug,
-    # provider 500), the REPL must print an error and keep looping, NOT
-    # crash the interactive session with a traceback.
+    # provider 500), the REPL must print an error and keep looping.
     class _ExplodingModel:
         async def ainvoke(self, *a: object, **kw: object) -> object:
             raise RuntimeError("network went sideways")

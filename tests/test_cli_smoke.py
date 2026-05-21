@@ -58,7 +58,7 @@ def _aura_invocation() -> list[str] | None:
 
     1. ``uv run aura`` — mirrors how the user invokes the CLI locally.
        Picks up the project-managed venv automatically.
-    2. ``python -m aura.cli.__main__`` — fallback that still exercises
+    2. ``python -m cli.__main__`` — fallback that still exercises
        the module path, for environments where ``uv`` isn't on PATH
        (rare in our CI, but cheap insurance).
 
@@ -71,10 +71,10 @@ def _aura_invocation() -> list[str] | None:
     # cwd because the aura package is already on sys.path when pytest
     # is running.
     try:
-        import aura.cli.__main__  # noqa: F401
+        import cli.__main__  # noqa: F401
     except Exception:  # noqa: BLE001
         return None
-    return [sys.executable, "-m", "aura.cli.__main__"]
+    return [sys.executable, "-m", "cli.__main__"]
 
 
 @pytest.fixture(scope="module")
@@ -89,7 +89,7 @@ def aura_binary() -> Sequence[str]:
     invocation = _aura_invocation()
     if invocation is None:
         pytest.skip(
-            "neither `uv` nor `python -m aura.cli.__main__` is usable in "
+            "neither `uv` nor `python -m cli.__main__` is usable in "
             "this environment — cannot run CLI smoke tests"
         )
     return invocation

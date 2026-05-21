@@ -367,7 +367,7 @@ async def test_tool_invocation_unknown_uri_raises_tool_error() -> None:
 #
 # ``MCPReadResourceTool`` is NOT auto-registered as of v0.10.x — resources
 # flow through the CLI-layer ``@server:uri`` attachment preprocessor
-# (see :mod:`aura.cli.attachments`). ``aconnect`` exposes the manager on
+# (see :mod:`cli.attachments`). ``aconnect`` exposes the manager on
 # :attr:`Agent.mcp_manager` but does not touch ``available_tools`` for the
 # resource surface anymore. The tool class remains importable for
 # programmatic SDK users who want LLM-driven reads (tested above via

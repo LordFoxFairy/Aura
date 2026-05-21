@@ -12,13 +12,6 @@ import io
 
 from rich.console import Console
 
-from aura.cli.render import (
-    _FOLD_HEAD_LINES,
-    _FOLD_TAIL_LINES,
-    _FOLD_THRESHOLD,
-    _SEARCH_COMMAND_TOOLS,
-    Renderer,
-)
 from aura.schemas.events import ToolCallCompleted
 from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.glob import glob
@@ -26,6 +19,13 @@ from aura.tools.grep import grep
 from aura.tools.read_file import read_file
 from aura.tools.web_fetch import web_fetch
 from aura.tools.web_search import WebSearch
+from cli.render import (
+    _FOLD_HEAD_LINES,
+    _FOLD_TAIL_LINES,
+    _FOLD_THRESHOLD,
+    _SEARCH_COMMAND_TOOLS,
+    Renderer,
+)
 
 
 def _capture() -> tuple[Renderer, io.StringIO]:

@@ -14,9 +14,7 @@ from aura.adapters.protocol.wire import (
     permission_request_to_wire,
     task_notification_to_wire,
 )
-from aura.cli.render import Renderer
 from aura.core.tasks.types import TaskNotification
-from aura.desktop import headless
 from aura.domain.protocol.events import (
     AssistantDeltaEvent,
     CompactEvent,
@@ -41,6 +39,8 @@ from aura.schemas.events import (
     ToolCallProgress,
     ToolCallStarted,
 )
+from cli.render import Renderer
+from desktop.host import headless
 
 
 class _UnsafeArg:

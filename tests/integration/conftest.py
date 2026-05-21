@@ -294,7 +294,7 @@ def _reset_prompt_mutex() -> Generator[None, None, None]:
     unit-scope tests — the module-global's blast radius is narrow in
     practice; the reset matches that narrowness.
     """
-    from aura.cli._coordination import _reset_prompt_mutex_for_tests
+    from cli._coordination import _reset_prompt_mutex_for_tests
 
     _reset_prompt_mutex_for_tests()
     yield

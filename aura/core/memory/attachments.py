@@ -7,7 +7,7 @@ The Memory subsystem's load-bearing invariant (see
 :mod:`aura.core.memory` ``__init__`` docstring) is that
 :meth:`aura.core.memory.context.Context.build` is the single site where
 messages are assembled for the LLM. Attachments — ``@server:uri``
-mentions resolved by :mod:`aura.cli.attachments` — are a legitimate
+mentions resolved by :mod:`cli.attachments` — are a legitimate
 second injection channel (per the v0.11 G1 behaviour: user's turn
 persists *with* attachments BEFORE the first ``model.ainvoke``), but
 their envelope *layout* (the ``<mcp-resource server="..." uri="...">``

@@ -17,10 +17,10 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from aura.core.hooks.must_read_first import make_must_read_first_hook
-from aura.core.memory.context import Context
-from aura.core.memory.rules import RulesBundle
-from aura.core.persistence import journal as journal_module
+from aura.application.hooks.must_read_first import make_must_read_first_hook
+from aura.application.memory.context import Context
+from aura.application.memory.rules import RulesBundle
+from aura.infrastructure.persistence import journal as journal_module
 from aura.schemas.permissions import Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult

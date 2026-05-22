@@ -13,7 +13,7 @@ whole family.
 
 from __future__ import annotations
 
-from aura.core.permissions.matchers import exact_match_on
+from aura.domain.permission.matchers import exact_match_on
 
 
 def test_exact_match_no_glob_meta_matches_verbatim() -> None:

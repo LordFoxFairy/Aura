@@ -20,12 +20,12 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import AIMessage
 
-from aura.capabilities.commands.registry import build_default_registry, dispatch
+from aura.application.commands.registry import build_default_registry, dispatch
 from aura.config.schema import AuraConfig
-from aura.core import llm
 from aura.core.agent import Agent
-from aura.core.llm import MissingCredentialError, UnknownModelSpecError
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure import llm
+from aura.infrastructure.llm import MissingCredentialError, UnknownModelSpecError
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 

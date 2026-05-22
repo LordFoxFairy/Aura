@@ -1,13 +1,4 @@
-"""write_file tool — create or overwrite UTF-8 text files.
-
-Round 3B (F-02-007) — must-read-first staleness gate. The actual mtime
-check that rejects writes when the on-disk file is newer than the
-parent's last read lives in :mod:`aura.core.hooks.must_read_first`,
-not here: the tool itself is dumb-by-design (open + write + return),
-which keeps the no-permission-bypass invariant trivially auditable.
-The hook fires BEFORE this tool runs and short-circuits the call
-whenever the read fingerprint is missing or stale.
-"""
+"""write_file — create or overwrite UTF-8 text files."""
 
 from __future__ import annotations
 
@@ -16,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from aura.core.permissions.matchers import path_prefix_on
+from aura.domain.permission.matchers import path_prefix_on
 from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
 from aura.tools.base import Tool
 
@@ -49,12 +40,6 @@ class WriteFile(Tool):
     )
 
     def validate_input(self, args: dict[str, Any]) -> ValidationResult:
-        """Reject writes with structurally unusable args.
-
-        Phase 5 Task 2 — args-only check. ``is_dir`` / ``mkdir``
-        rejections need filesystem state and stay in ``_run``. An
-        empty path is a pure args-shape problem and surfaces here.
-        """
         path = args.get("path", "")
         if not isinstance(path, str) or path == "":
             return ValidationResult(

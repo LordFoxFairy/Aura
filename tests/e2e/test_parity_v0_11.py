@@ -119,7 +119,7 @@ _RESUME_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.persistence.storage import SessionStorage
+    from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel
 
     phase = sys.argv[1]
@@ -295,16 +295,16 @@ _DENIALS_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.hooks import HookChain
-    from aura.core.hooks.permission import make_permission_hook
-    from aura.core.permissions.rule import Rule
-    from aura.core.permissions.safety import (
+    from aura.application.hooks import HookChain
+    from aura.application.hooks.permission import make_permission_hook
+    from aura.domain.permission.rule import Rule
+    from aura.domain.permission.safety import (
         DEFAULT_PROTECTED_READS,
         DEFAULT_PROTECTED_WRITES,
         SafetyPolicy,
     )
-    from aura.core.permissions.session import RuleSet, SessionRuleSet
-    from aura.core.persistence.storage import SessionStorage
+    from aura.domain.permission.session import RuleSet, SessionRuleSet
+    from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel, FakeTurn
 
     db_path = sys.argv[1]
@@ -313,7 +313,7 @@ _DENIALS_DRIVER = textwrap.dedent(
     # A deny-everything asker (never actually called because safety trips first).
     class _NeverAsker:
         async def __call__(self, *, tool, args, rule_hint):
-            from aura.core.hooks.permission import AskerResponse
+            from aura.application.hooks.permission import AskerResponse
             return AskerResponse(choice="deny")
 
     cfg = AuraConfig.model_validate({{
@@ -429,8 +429,8 @@ _SUBAGENT_READS_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.persistence.storage import SessionStorage
-    from aura.core.tasks.factory import SubagentFactory
+    from aura.infrastructure.persistence.storage import SessionStorage
+    from aura.application.tasks.factory import SubagentFactory
     from aura.schemas.state import ReadCarryover, ReadRecord
     from tests.conftest import FakeChatModel, FakeTurn
 
@@ -546,10 +546,10 @@ _LIVE_MODE_DRIVER = textwrap.dedent(
     from aura.config.schema import AuraConfig
     from aura.core import journal
     from aura.core.agent import Agent
-    from aura.core.hooks import HookChain
-    from aura.core.hooks.permission import make_permission_hook
-    from aura.core.permissions.session import RuleSet, SessionRuleSet
-    from aura.core.persistence.storage import SessionStorage
+    from aura.application.hooks import HookChain
+    from aura.application.hooks.permission import make_permission_hook
+    from aura.domain.permission.session import RuleSet, SessionRuleSet
+    from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel, FakeTurn
 
     db_path = sys.argv[1]
@@ -563,7 +563,7 @@ _LIVE_MODE_DRIVER = textwrap.dedent(
     # before the asker is consulted — that's the path we care about here).
     class _DenyAsker:
         async def __call__(self, *, tool, args, rule_hint):
-            from aura.core.hooks.permission import AskerResponse
+            from aura.application.hooks.permission import AskerResponse
             return AskerResponse(choice="deny")
 
     cfg = AuraConfig.model_validate({{
@@ -693,8 +693,8 @@ _ACLOSE_DRIVER = textwrap.dedent(
     from aura.config.schema import AuraConfig
     from aura.core import journal
     from aura.core.agent import Agent
-    from aura.core.mcp.manager import MCPServerStatus
-    from aura.core.persistence.storage import SessionStorage
+    from aura.infrastructure.mcp.manager import MCPServerStatus
+    from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel
 
     db_path = sys.argv[1]

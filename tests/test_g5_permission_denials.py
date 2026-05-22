@@ -29,17 +29,17 @@ from langchain_core.messages import AIMessage, ToolCall
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
-from aura.core.hooks import HookChain
-from aura.core.hooks.permission import (
+from aura.application.hooks import HookChain
+from aura.application.hooks.permission import (
     AskerResponse,
     make_permission_hook,
 )
-from aura.core.permissions.denials import PermissionDenial
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet, SessionRuleSet
-from aura.core.persistence.storage import SessionStorage
+from aura.application.permission.denials import PermissionDenial
+from aura.config.schema import AuraConfig
+from aura.core.agent import Agent
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool

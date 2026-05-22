@@ -10,9 +10,9 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.core.permissions.matchers import exact_match_on
-from aura.core.persistence import journal
-from aura.core.tasks.store import TasksStore
+from aura.application.tasks.store import TasksStore
+from aura.domain.permission.matchers import exact_match_on
+from aura.infrastructure.persistence import journal
 from aura.schemas.tool import ToolMetadata
 from aura.tools.bash import _is_bash_destructive
 

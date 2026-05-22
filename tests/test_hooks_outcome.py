@@ -33,9 +33,9 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import HookChain, PreToolHook
-from aura.core.permissions.decision import Decision
-from aura.core.permissions.rule import Rule
+from aura.application.hooks import HookChain, PreToolHook
+from aura.application.permission.decision import Decision
+from aura.domain.permission.rule import Rule
 from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult

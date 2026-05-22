@@ -11,13 +11,13 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage
 
-from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
-from aura.core.compact.constants import (
+from aura.application.compact.constants import (
     AUTO_COMPACT_HEADROOM_TOKENS,
     auto_compact_threshold_for,
 )
-from aura.core.persistence.storage import SessionStorage
+from aura.config.schema import AuraConfig
+from aura.core.agent import Agent
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -30,7 +30,7 @@ def _config() -> AuraConfig:
 
 
 def test_function_returns_window_minus_headroom() -> None:
-    from aura.core.llm import get_context_window
+    from aura.infrastructure.llm import get_context_window
 
     spec = "openai:gpt-4o-mini"
     expected = get_context_window(spec) - AUTO_COMPACT_HEADROOM_TOKENS

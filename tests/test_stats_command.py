@@ -23,9 +23,9 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-from aura.capabilities.commands.stats import StatsCommand
-from aura.core.hooks.budget import make_usage_tracking_hook
-from aura.core.persistence import journal as journal_module
+from aura.application.commands.stats import StatsCommand
+from aura.application.hooks.budget import make_usage_tracking_hook
+from aura.infrastructure.persistence import journal as journal_module
 from aura.schemas.state import LoopState
 
 
@@ -38,7 +38,7 @@ class _StubAgent:
 
 
 def test_stats_command_owned_by_capabilities_module() -> None:
-    assert StatsCommand.__module__ == "aura.capabilities.commands.stats"
+    assert StatsCommand.__module__ == "aura.application.commands.stats"
 
 
 def _ai(

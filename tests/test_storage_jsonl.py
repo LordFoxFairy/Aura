@@ -1,6 +1,6 @@
 """F-05-002 / V14-Persistence-V3: per-project nested JSONL session storage.
 
-Pins the wire-level invariants ``aura.core.persistence.storage`` exposes:
+Pins the wire-level invariants ``aura.infrastructure.persistence.storage`` exposes:
 
   - ``append`` writes one JSONL line per call to the v3 path.
   - ``load`` returns messages in the order they landed.
@@ -27,7 +27,7 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:

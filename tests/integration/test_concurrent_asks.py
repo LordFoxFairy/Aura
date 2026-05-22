@@ -28,15 +28,15 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import HookChain
-from aura.core.hooks.permission import (
+from aura.application.hooks import HookChain
+from aura.application.hooks.permission import (
     AskerResponse,
     PermissionAsker,
     make_permission_hook,
 )
-from aura.core.permissions.decision import Decision
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet, SessionRuleSet
+from aura.application.permission.decision import Decision
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.schemas.permissions import Outcome, Replace
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
@@ -73,11 +73,10 @@ def _make_fake_bash(run_counter: list[str]) -> BaseTool:
 def _mutex_wrapped_asker(inner: PermissionAsker) -> PermissionAsker:
     """Wrap an asker in the same prompt_mutex the real CLI widgets use.
 
-    Mirrors ``cli.permission_generic.run_generic_permission`` line 367:
-    every interactive widget acquires ``prompt_mutex`` before owning the
-    terminal. Tests that want to assert serialization rely on this
-    wrapper — without it the ``ScriptedPermissionAsker`` directly
-    observes no contention.
+    Every interactive widget acquires ``prompt_mutex`` before owning the
+    terminal (see :func:`cli.forms.widget.render_form`). Tests that want
+    to assert serialization rely on this wrapper — without it the
+    ``ScriptedPermissionAsker`` directly observes no contention.
     """
 
     async def _wrapped(

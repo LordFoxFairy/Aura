@@ -89,7 +89,7 @@ def _expand_in_place(item: dict[str, object], missing: list[str]) -> dict[str, o
     accumulate in *missing* (deduplicated by the expander itself).
     Non-string leaves (ints, bools, None) pass through unchanged.
     """
-    from aura.core.mcp.adapter import _expand_env_vars  # noqa: PLC0415
+    from aura.infrastructure.mcp.adapter import _expand_env_vars  # noqa: PLC0415
 
     def _walk(node: object) -> object:
         if isinstance(node, str):
@@ -160,7 +160,7 @@ def _project_dirs_up_to_home(cwd: Path, home: Path) -> list[Path]:
     """Return cwd, cwd.parent, ..., up to (but NOT including) ``home``.
 
     Outermost-first order. Mirrors the walk-up pattern used by skills
-    (:func:`aura.capabilities.skills_runtime.loader._project_dirs_up_to_home`). If
+    (:func:`aura.infrastructure.skills.loader._project_dirs_up_to_home`). If
     ``cwd`` is not under ``home`` (pathological test setups / CI
     running from ``/tmp``), returns ``[cwd]`` — we still scan the
     project layer at ``cwd``, but we don't traverse up into the real

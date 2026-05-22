@@ -1,8 +1,8 @@
-"""Tests for aura.core.permissions.matchers — exact_match_on, path_prefix_on."""
+"""Tests for aura.domain.permission.matchers — exact_match_on, path_prefix_on."""
 
 from __future__ import annotations
 
-from aura.core.permissions.matchers import exact_match_on, path_prefix_on
+from aura.domain.permission.matchers import exact_match_on, path_prefix_on
 
 # ---------------------------------------------------------------------------
 # exact_match_on

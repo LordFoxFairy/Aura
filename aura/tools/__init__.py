@@ -1,6 +1,6 @@
 """Public package surface for Aura tools."""
 
-from aura.capabilities.tools.registry import ToolRegistry, ToolRegistryError
+from aura.domain.tool_registry import ToolRegistry, ToolRegistryError
 from aura.schemas.tool import ToolError, ToolResult, tool_metadata
 from aura.tools.ask_user import AskUserQuestion
 from aura.tools.base import Tool, build_tool
@@ -11,7 +11,6 @@ from aura.tools.enter_plan_mode import EnterPlanMode
 from aura.tools.exit_plan_mode import ExitPlanMode
 from aura.tools.glob import Glob, glob
 from aura.tools.grep import Grep, grep
-from aura.tools.mcp_read_resource import MCPReadResourceTool
 from aura.tools.read_file import ReadFile, read_file
 from aura.tools.send_message import SendMessage
 from aura.tools.skill import SkillTool
@@ -62,7 +61,6 @@ __all__ = [
     "ExitPlanMode",
     "Glob",
     "Grep",
-    "MCPReadResourceTool",
     "ReadFile",
     "SendMessage",
     "SkillTool",

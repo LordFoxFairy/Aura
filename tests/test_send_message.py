@@ -9,13 +9,13 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import AIMessage
 
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.store import TasksStore
+from aura.application.teams.manager import TeamManager
 from aura.config.schema import AuraConfig
-from aura.core.permissions.safety import DEFAULT_SAFETY
-from aura.core.permissions.session import RuleSet
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.store import TasksStore
-from aura.core.teams.manager import TeamManager
+from aura.domain.permission.safety import DEFAULT_SAFETY
+from aura.domain.permission.session import RuleSet
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.tool import ToolError
 from aura.tools.send_message import SendMessage
 from tests.conftest import FakeChatModel, FakeTurn

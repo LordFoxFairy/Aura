@@ -11,7 +11,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from aura.capabilities.agents import (
+from aura.infrastructure.agents import (
     AgentDef,
     all_agent_defs,
     get_agent_def,

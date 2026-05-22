@@ -1,4 +1,4 @@
-"""Tests for aura.core.permissions.mode — Mode literal alias + DEFAULT_MODE.
+"""Tests for aura.domain.permission.mode — Mode literal alias + DEFAULT_MODE.
 
 Extended (2026-04-21) for the 4-mode permission completion:
 ``plan`` and ``accept_edits`` join the existing ``default`` / ``bypass``.
@@ -16,14 +16,14 @@ import pytest
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from aura.core.hooks.permission import (
+from aura.application.hooks.permission import (
     AskerResponse,
     make_permission_hook,
 )
-from aura.core.permissions.decision import Decision
-from aura.core.permissions.mode import DEFAULT_MODE, Mode
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet, SessionRuleSet
+from aura.application.permission.decision import Decision
+from aura.domain.permission.mode import DEFAULT_MODE, Mode
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
 from aura.schemas.tool import (
     ToolMetadata,
@@ -126,7 +126,7 @@ def journal_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
     def _capture(event: str, /, **fields: Any) -> None:
         events.append((event, fields))
 
-    from aura.core.persistence import journal as journal_mod
+    from aura.infrastructure.persistence import journal as journal_mod
 
     monkeypatch.setattr(journal_mod, "write", _capture)
     return events

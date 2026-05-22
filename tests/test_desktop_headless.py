@@ -10,8 +10,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet
 from aura.schemas.events import (
     AssistantDelta,
     Final,

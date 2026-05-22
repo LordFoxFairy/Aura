@@ -1,0 +1,775 @@
+"""Persistent session storage — sqlite3 index + JSONL transcripts.
+
+Layout (v3, per-project nested):
+    <storage_root>/
+      projects/<encoded-cwd>/<session-id>.jsonl
+      projects/<encoded-cwd>/<session-id>/subagents/agent-<task>.jsonl
+      index.sqlite
+      teams/<team_id>/...
+
+``<encoded-cwd>`` rewrites each ``/`` as ``-`` (claude-code parity).
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import sqlite3
+import threading
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
+from langchain_core.messages import BaseMessage, messages_from_dict, messages_to_dict
+
+from aura.infrastructure.persistence import journal
+
+_PREVIEW_MAX_CHARS: int = 79
+
+
+@dataclass(frozen=True)
+class SessionMeta:
+    session_id: str
+    created_at: datetime
+    last_used_at: datetime
+    message_count: int
+    first_user_prompt: str
+
+
+@dataclass(frozen=True)
+class TranscriptMeta:
+    task_id: str
+    path: Path
+    message_count: int
+    last_modified: datetime
+
+
+_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS messages (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   TEXT NOT NULL,
+    turn_index   INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(session_id, turn_index)
+);
+CREATE INDEX IF NOT EXISTS ix_messages_session ON messages(session_id, turn_index);
+"""
+
+
+def _encode_cwd_str(cwd: Path) -> str:
+    """Encode an absolute cwd into the projects/ bucket name."""
+    abs_cwd = cwd if cwd.is_absolute() else (Path.cwd() / cwd).resolve()
+    return str(abs_cwd).replace(os.sep, "-")
+
+
+class SessionStorage:
+    """SQLite + JSONL storage for per-session message lists."""
+
+    _conn: sqlite3.Connection
+
+    def __init__(self, path: Path, *, cwd: Path | None = None) -> None:
+        self._path = path
+        self._in_memory: bool = str(path) == ":memory:"
+        # cwd captured at construction so a later os.chdir() can't silently
+        # rebucket sessions mid-flight.
+        self._default_cwd: Path = (
+            cwd if cwd is not None else Path.cwd()
+        ).resolve()
+        if not self._in_memory:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(path), check_same_thread=False)
+        self._conn.executescript(_SCHEMA_SQL)
+        self._conn.commit()
+        self._append_lock = threading.Lock()
+        if not self._in_memory:
+            self._maybe_migrate_legacy()
+            self._maybe_migrate_v2_to_v3()
+
+    # ------------------------------------------------------------------
+    # v3 path API.
+    # ------------------------------------------------------------------
+
+    def _projects_dir(self) -> Path:
+        return self._path.parent / "projects"
+
+    def _encode_cwd(self, cwd: Path | None = None) -> str:
+        return _encode_cwd_str(cwd if cwd is not None else self._default_cwd)
+
+    def _project_dir(self, cwd: Path | None = None) -> Path:
+        return self._projects_dir() / self._encode_cwd(cwd)
+
+    def session_jsonl_path(
+        self, session_id: str, *, cwd: Path | None = None,
+    ) -> Path:
+        self._validate_session_id(session_id)
+        return self._project_dir(cwd) / f"{session_id}.jsonl"
+
+    def memory_dir(self, *, cwd: Path | None = None) -> Path:
+        """Per-project auto-memory directory; not created until first write."""
+        return self._project_dir(cwd) / "memory"
+
+    def session_dir(
+        self, session_id: str, *, cwd: Path | None = None,
+    ) -> Path:
+        self._validate_session_id(session_id)
+        return self._project_dir(cwd) / session_id
+
+    def subagent_transcript_path(
+        self,
+        task_id: str,
+        *,
+        parent_session_id: str | None = None,
+        cwd: Path | None = None,
+    ) -> Path:
+        """``parent_session_id=None`` falls back to the flat ad-hoc bucket."""
+        self._validate_task_id(task_id)
+        if parent_session_id is None:
+            return (
+                self._path.parent / "subagents" / f"agent-{task_id}.jsonl"
+            )
+        return (
+            self.session_dir(parent_session_id, cwd=cwd)
+            / "subagents"
+            / f"agent-{task_id}.jsonl"
+        )
+
+    def subagent_metadata_path(
+        self,
+        task_id: str,
+        *,
+        parent_session_id: str | None = None,
+        cwd: Path | None = None,
+    ) -> Path:
+        transcript = self.subagent_transcript_path(
+            task_id,
+            parent_session_id=parent_session_id,
+            cwd=cwd,
+        )
+        return transcript.with_suffix(".meta.json")
+
+    # ------------------------------------------------------------------
+    # Migrations.
+    # ------------------------------------------------------------------
+
+    def _maybe_migrate_legacy(self) -> None:
+        """Drain the legacy ``messages`` table into JSONL once."""
+        cur = self._conn.cursor()
+        try:
+            cur.execute(
+                "SELECT session_id, payload_json FROM messages "
+                "ORDER BY session_id, turn_index"
+            )
+            rows = cur.fetchall()
+        except sqlite3.DatabaseError:
+            return
+        if not rows:
+            return
+        from collections import defaultdict
+        buckets: dict[str, list[str]] = defaultdict(list)
+        for sid, payload in rows:
+            buckets[sid].append(payload)
+        any_drained = False
+        for sid, payloads in buckets.items():
+            jsonl = self.session_jsonl_path(sid)
+            jsonl.parent.mkdir(parents=True, exist_ok=True)
+            if jsonl.exists():
+                continue
+            with jsonl.open("w", encoding="utf-8") as fh:
+                for p in payloads:
+                    envelope = {
+                        "ts": datetime.now(UTC).isoformat(),
+                        "payload": json.loads(p),
+                    }
+                    fh.write(json.dumps(envelope, ensure_ascii=False))
+                    fh.write("\n")
+            any_drained = True
+            self._refresh_index_for_session(sid, jsonl)
+        if any_drained:
+            backup = self._path.with_suffix(
+                self._path.suffix + f".legacy-{int(datetime.now().timestamp())}"
+            )
+            self._conn.commit()
+            self._conn.close()
+            with contextlib.suppress(OSError):
+                self._path.rename(backup)
+            self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
+            self._conn.executescript(_SCHEMA_SQL)
+            self._conn.commit()
+
+    def _maybe_migrate_v2_to_v3(self) -> None:
+        """Rename v2 flat dirs to ``*.legacy-<ts>`` and fold v2 index in."""
+        root = self._path.parent
+        legacy_sessions = root / "sessions"
+        legacy_subagents = root / "subagents"
+        ts = int(datetime.now().timestamp())
+
+        renamed_sessions: Path | None = None
+        renamed_subagents: Path | None = None
+
+        if legacy_sessions.is_dir():
+            has_jsonl = any(legacy_sessions.glob("*.jsonl"))
+            has_index = (legacy_sessions / "index.sqlite").exists()
+            if has_jsonl or has_index:
+                renamed_sessions = root / f"sessions.legacy-{ts}"
+                with contextlib.suppress(OSError):
+                    legacy_sessions.rename(renamed_sessions)
+
+        if legacy_subagents.is_dir():
+            has_jsonl = any(legacy_subagents.glob("*.jsonl"))
+            if has_jsonl:
+                renamed_subagents = root / f"subagents.legacy-{ts}"
+                with contextlib.suppress(OSError):
+                    legacy_subagents.rename(renamed_subagents)
+
+        if renamed_sessions is not None:
+            old_index = renamed_sessions / "index.sqlite"
+            if old_index.exists():
+                self._merge_legacy_index(old_index)
+
+        if renamed_sessions is not None or renamed_subagents is not None:
+            journal.write(
+                "storage_layout_v3_migration",
+                renamed_sessions=(
+                    str(renamed_sessions) if renamed_sessions else None
+                ),
+                renamed_subagents=(
+                    str(renamed_subagents) if renamed_subagents else None
+                ),
+            )
+
+    def _merge_legacy_index(self, old_index_path: Path) -> None:
+        try:
+            old_conn = sqlite3.connect(str(old_index_path))
+        except sqlite3.DatabaseError:
+            return
+        try:
+            try:
+                rows = old_conn.execute(
+                    "SELECT session_id, message_count, first_user_prompt, "
+                    "created_at, last_used_at FROM sessions"
+                ).fetchall()
+            except sqlite3.DatabaseError:
+                return
+        finally:
+            old_conn.close()
+        if not rows:
+            return
+        new_index = self._index_path()
+        new_index.parent.mkdir(parents=True, exist_ok=True)
+        idx = sqlite3.connect(str(new_index))
+        try:
+            idx.executescript(_INDEX_SCHEMA_SQL)
+            for sid, count, prompt, created, last in rows:
+                idx.execute(
+                    "INSERT INTO sessions("
+                    "session_id, message_count, first_user_prompt, "
+                    "created_at, last_used_at"
+                    ") VALUES (?, ?, ?, COALESCE(?, datetime('now')), "
+                    "COALESCE(?, datetime('now'))) "
+                    "ON CONFLICT(session_id) DO UPDATE SET "
+                    "  message_count = excluded.message_count, "
+                    "  first_user_prompt = excluded.first_user_prompt, "
+                    "  last_used_at = excluded.last_used_at",
+                    (sid, int(count or 0), prompt or "", created, last),
+                )
+            idx.commit()
+        finally:
+            idx.close()
+
+    # ------------------------------------------------------------------
+    # Index helpers.
+    # ------------------------------------------------------------------
+
+    def _index_path(self) -> Path:
+        return self._path.parent / "index.sqlite"
+
+    def _refresh_index_for_session(
+        self, session_id: str, jsonl_path: Path,
+    ) -> None:
+        index_path = self._index_path()
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        message_count = 0
+        first_prompt = ""
+        if jsonl_path.exists():
+            with jsonl_path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        env = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    payload = env.get("payload") if isinstance(env, dict) else None
+                    if not isinstance(payload, dict):
+                        payload = env if isinstance(env, dict) else None
+                    if payload is None:
+                        continue
+                    message_count += 1
+                    if (
+                        not first_prompt
+                        and payload.get("type") == "human"
+                    ):
+                        data = payload.get("data") or {}
+                        content = data.get("content")
+                        if isinstance(content, str):
+                            first_prompt = content
+        idx = sqlite3.connect(str(index_path))
+        try:
+            idx.executescript(_INDEX_SCHEMA_SQL)
+            idx.execute(
+                "INSERT INTO sessions("
+                "session_id, message_count, first_user_prompt, "
+                "created_at, last_used_at"
+                ") VALUES (?, ?, ?, datetime('now'), datetime('now')) "
+                "ON CONFLICT(session_id) DO UPDATE SET "
+                "  message_count = excluded.message_count, "
+                "  first_user_prompt = excluded.first_user_prompt, "
+                "  last_used_at = datetime('now')",
+                (session_id, message_count, first_prompt),
+            )
+            idx.commit()
+        finally:
+            idx.close()
+
+    # ------------------------------------------------------------------
+    # Connection lifecycle.
+    # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def __enter__(self) -> SessionStorage:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def _validate_session_id(self, session_id: str) -> None:
+        if not session_id or "/" in session_id or ".." in session_id:
+            raise ValueError(f"invalid session_id: {session_id!r}")
+
+    def _validate_task_id(self, task_id: str) -> None:
+        if not task_id or "/" in task_id or ".." in task_id:
+            raise ValueError(f"invalid task_id: {task_id!r}")
+
+    # ------------------------------------------------------------------
+    # Append / load / save.
+    # ------------------------------------------------------------------
+
+    def append(self, session_id: str, message: BaseMessage) -> None:
+        """Append one envelope line + refresh the index row.
+
+        ``:memory:`` storage mirrors into the in-process table only.
+        """
+        self._validate_session_id(session_id)
+        if self._in_memory:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT COALESCE(MAX(turn_index), -1) + 1 FROM messages "
+                "WHERE session_id = ?",
+                (session_id,),
+            )
+            next_idx = int(cur.fetchone()[0])
+            payload = json.dumps(messages_to_dict([message])[0])
+            cur.execute(
+                "INSERT INTO messages "
+                "(session_id, turn_index, payload_json) VALUES (?, ?, ?)",
+                (session_id, next_idx, payload),
+            )
+            self._conn.commit()
+            return
+        jsonl_path = self.session_jsonl_path(session_id)
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        envelope = {
+            "ts": datetime.now(UTC).isoformat(),
+            "payload": messages_to_dict([message])[0],
+        }
+        with self._append_lock, jsonl_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(envelope, ensure_ascii=False))
+            fh.write("\n")
+        self._refresh_index_for_session(session_id, jsonl_path)
+
+    def write_subagent_transcript(
+        self,
+        task_id: str,
+        messages: list[BaseMessage],
+        *,
+        parent_session_id: str | None = None,
+        cwd: Path | None = None,
+    ) -> Path:
+        self._validate_task_id(task_id)
+        path = self.subagent_transcript_path(
+            task_id,
+            parent_session_id=parent_session_id,
+            cwd=cwd,
+        )
+        if self._in_memory:
+            return path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payloads = messages_to_dict(messages)
+        with path.open("w", encoding="utf-8") as fh:
+            for payload in payloads:
+                fh.write(json.dumps(payload, ensure_ascii=False))
+                fh.write("\n")
+        return path
+
+    def list_subagent_transcripts(self) -> list[TranscriptMeta]:
+        """Enumerate persisted subagent transcripts, newest first, deduped."""
+        by_task: dict[str, TranscriptMeta] = {}
+
+        def _consume(p: Path) -> None:
+            if not p.is_file():
+                return
+            name = p.name
+            task_id: str | None = None
+            if name.startswith("agent-") and name.endswith(".jsonl"):
+                task_id = name[len("agent-"): -len(".jsonl")]
+            elif name.startswith("subagent-") and name.endswith(".jsonl"):
+                task_id = name[len("subagent-"): -len(".jsonl")]
+            if task_id is None:
+                return
+            try:
+                with p.open("r", encoding="utf-8") as fh:
+                    count = sum(1 for line in fh if line.strip())
+                mtime = datetime.fromtimestamp(p.stat().st_mtime)
+            except OSError:
+                return
+            current = by_task.get(task_id)
+            if current is None or mtime > current.last_modified:
+                by_task[task_id] = TranscriptMeta(
+                    task_id=task_id,
+                    path=p,
+                    message_count=count,
+                    last_modified=mtime,
+                )
+
+        flat = self._path.parent / "subagents"
+        if flat.is_dir():
+            for p in flat.iterdir():
+                _consume(p)
+
+        projects = self._projects_dir()
+        if projects.is_dir():
+            for proj in projects.iterdir():
+                if not proj.is_dir():
+                    continue
+                for session_sub in proj.iterdir():
+                    if not session_sub.is_dir():
+                        continue
+                    sub_dir = session_sub / "subagents"
+                    if not sub_dir.is_dir():
+                        continue
+                    for p in sub_dir.iterdir():
+                        _consume(p)
+
+        out = list(by_task.values())
+        out.sort(key=lambda m: m.last_modified, reverse=True)
+        return out
+
+    def load_subagent_transcript(self, task_id: str) -> list[BaseMessage]:
+        self._validate_task_id(task_id)
+        candidates: list[Path] = []
+        projects = self._projects_dir()
+        if projects.is_dir():
+            for proj in projects.iterdir():
+                if not proj.is_dir():
+                    continue
+                for session_sub in proj.iterdir():
+                    if not session_sub.is_dir():
+                        continue
+                    sub_dir = session_sub / "subagents"
+                    if not sub_dir.is_dir():
+                        continue
+                    candidates.append(sub_dir / f"agent-{task_id}.jsonl")
+                    candidates.append(sub_dir / f"subagent-{task_id}.jsonl")
+        flat = self._path.parent / "subagents"
+        candidates.append(flat / f"agent-{task_id}.jsonl")
+        candidates.append(flat / f"subagent-{task_id}.jsonl")
+
+        for path in candidates:
+            if not path.exists():
+                continue
+            dicts: list[dict[str, object]] = []
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        dicts.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+            return list(messages_from_dict(dicts))
+        return []
+
+    def save(self, session_id: str, messages: list[BaseMessage]) -> None:
+        """Save full history. Prefix-extension is appended; otherwise rewrite atomically."""
+        self._validate_session_id(session_id)
+        journal.write(
+            "storage_save", session=session_id, count=len(messages),
+        )
+        new_payloads = messages_to_dict(messages)
+        if not self._in_memory:
+            jsonl_path = self.session_jsonl_path(session_id)
+            jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+            existing = self._read_jsonl_payloads(jsonl_path)
+            if (
+                len(new_payloads) >= len(existing)
+                and new_payloads[: len(existing)] == existing
+            ):
+                tail = new_payloads[len(existing):]
+                with self._append_lock, jsonl_path.open("a", encoding="utf-8") as fh:
+                    for p in tail:
+                        envelope = {
+                            "ts": datetime.now(UTC).isoformat(),
+                            "payload": p,
+                        }
+                        fh.write(json.dumps(envelope, ensure_ascii=False))
+                        fh.write("\n")
+            else:
+                tmp = jsonl_path.with_suffix(jsonl_path.suffix + ".tmp")
+                with tmp.open("w", encoding="utf-8") as fh:
+                    for p in new_payloads:
+                        envelope = {
+                            "ts": datetime.now(UTC).isoformat(),
+                            "payload": p,
+                        }
+                        fh.write(json.dumps(envelope, ensure_ascii=False))
+                        fh.write("\n")
+                tmp.replace(jsonl_path)
+            self._refresh_index_for_session(session_id, jsonl_path)
+        cur = self._conn.cursor()
+        cur.execute("BEGIN")
+        try:
+            cur.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            rows: list[tuple[str, int, str]] = [
+                (session_id, i, json.dumps(p)) for i, p in enumerate(new_payloads)
+            ]
+            if rows:
+                cur.executemany(
+                    "INSERT INTO messages (session_id, turn_index, payload_json) VALUES (?, ?, ?)",
+                    rows,
+                )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def _read_jsonl_payloads(self, jsonl_path: Path) -> list[dict[str, object]]:
+        if not jsonl_path.exists():
+            return []
+        out: list[dict[str, object]] = []
+        with jsonl_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    env = json.loads(line)
+                except json.JSONDecodeError:
+                    journal.write(
+                        "storage_skip_corrupt_line",
+                        path=str(jsonl_path),
+                    )
+                    continue
+                if isinstance(env, dict) and "payload" in env:
+                    payload = env["payload"]
+                    if isinstance(payload, dict):
+                        out.append(payload)
+                elif isinstance(env, dict):
+                    out.append(env)
+        return out
+
+    def load(self, session_id: str) -> list[BaseMessage]:
+        """Load messages: v3 nested → v2 legacy backup → in-process table."""
+        self._validate_session_id(session_id)
+        cur = self._conn.cursor()
+        jsonl_path = self.session_jsonl_path(session_id)
+        payloads = self._read_jsonl_payloads(jsonl_path)
+        if not payloads:
+            for legacy_dir in sorted(
+                self._path.parent.glob("sessions.legacy-*"),
+                reverse=True,
+            ):
+                legacy_path = legacy_dir / f"{session_id}.jsonl"
+                if legacy_path.exists():
+                    payloads = self._read_jsonl_payloads(legacy_path)
+                    if payloads:
+                        break
+        if not payloads:
+            cur.execute(
+                "SELECT payload_json FROM messages WHERE session_id = ? ORDER BY turn_index",
+                (session_id,),
+            )
+            payloads = [json.loads(row[0]) for row in cur.fetchall()]
+        messages = list(messages_from_dict(payloads))
+        journal.write(
+            "storage_load", session=session_id, count=len(messages),
+        )
+        return messages
+
+    def clear(self, session_id: str) -> None:
+        self._validate_session_id(session_id)
+        journal.write("storage_clear", session=session_id)
+        cur = self._conn.cursor()
+        cur.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+        self._conn.commit()
+        if self._in_memory:
+            return
+        jsonl_path = self.session_jsonl_path(session_id)
+        if jsonl_path.exists():
+            jsonl_path.unlink()
+        index_path = self._index_path()
+        if index_path.exists():
+            idx = sqlite3.connect(str(index_path))
+            try:
+                idx.execute(
+                    "DELETE FROM sessions WHERE session_id = ?",
+                    (session_id,),
+                )
+                idx.commit()
+            finally:
+                idx.close()
+
+    # ------------------------------------------------------------------
+    # Resume + enumeration.
+    # ------------------------------------------------------------------
+
+    def list_sessions(self, *, limit: int = 20) -> list[SessionMeta]:
+        """Recent sessions newest-first. Falls back to in-process table for ``:memory:``."""
+        index_path = self._index_path()
+        out: list[SessionMeta] = []
+        if index_path.exists():
+            idx = sqlite3.connect(str(index_path))
+            try:
+                rows = idx.execute(
+                    "SELECT session_id, message_count, first_user_prompt, "
+                    "last_used_at FROM sessions ORDER BY last_used_at DESC, "
+                    "session_id ASC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            finally:
+                idx.close()
+            for sid, count, prompt, last in rows:
+                try:
+                    last_dt = datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
+                except (TypeError, ValueError):
+                    last_dt = datetime.now()
+                out.append(SessionMeta(
+                    session_id=sid,
+                    created_at=last_dt,
+                    last_used_at=last_dt,
+                    message_count=int(count),
+                    first_user_prompt=_truncate_one_line(prompt or ""),
+                ))
+            if out:
+                return out
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                session_id,
+                MIN(created_at) AS created_at,
+                MAX(created_at) AS last_used_at,
+                COUNT(*) AS message_count
+            FROM messages
+            GROUP BY session_id
+            ORDER BY MAX(created_at) DESC, session_id ASC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows_legacy = cur.fetchall()
+        for session_id, created_at, last_used_at, msg_count in rows_legacy:
+            preview = self._first_user_prompt(session_id)
+            out.append(
+                SessionMeta(
+                    session_id=session_id,
+                    created_at=_parse_naive(created_at),
+                    last_used_at=_parse_naive(last_used_at),
+                    message_count=int(msg_count),
+                    first_user_prompt=preview,
+                ),
+            )
+        return out
+
+    def session_count(self) -> int:
+        cur = self._conn.cursor()
+        cur.execute("SELECT COUNT(DISTINCT session_id) FROM messages")
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+    def list_team_ids(self) -> list[str]:
+        teams_root = self._teams_root()
+        if not teams_root.is_dir():
+            return []
+        return sorted(p.name for p in teams_root.iterdir() if p.is_dir())
+
+    def team_config_path(self, team_id: str) -> Path:
+        path = self._team_dir(team_id) / "config.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def team_inbox_path(self, team_id: str, member: str) -> Path:
+        path = self._team_dir(team_id) / "inbox" / f"{member}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def team_transcript_path(self, team_id: str, member: str) -> Path:
+        path = self._team_dir(team_id) / "transcripts" / f"{member}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def team_root(self, team_id: str) -> Path:
+        path = self._team_dir(team_id)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _team_dir(self, team_id: str) -> Path:
+        return self._teams_root() / team_id
+
+    def _teams_root(self) -> Path:
+        return self._path.parent / "teams"
+
+    def _first_user_prompt(self, session_id: str) -> str:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT payload_json FROM messages "
+            "WHERE session_id = ? ORDER BY turn_index",
+            (session_id,),
+        )
+        for (payload_json,) in cur.fetchall():
+            try:
+                payload = json.loads(payload_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            msg_type = payload.get("type")
+            data = payload.get("data") or {}
+            content = data.get("content")
+            if msg_type == "human" and isinstance(content, str) and content:
+                return _truncate_one_line(content)
+        return ""
+
+
+_INDEX_SCHEMA_SQL = (
+    "CREATE TABLE IF NOT EXISTS sessions("
+    "session_id TEXT PRIMARY KEY, "
+    "created_at TEXT NOT NULL DEFAULT (datetime('now')), "
+    "last_used_at TEXT NOT NULL DEFAULT (datetime('now')), "
+    "message_count INTEGER NOT NULL DEFAULT 0, "
+    "first_user_prompt TEXT NOT NULL DEFAULT '');"
+)
+
+
+def _truncate_one_line(text: str) -> str:
+    flat = " ".join(text.split())
+    if len(flat) <= _PREVIEW_MAX_CHARS:
+        return flat
+    return flat[:_PREVIEW_MAX_CHARS] + "…"
+
+
+def _parse_naive(s: str) -> datetime:
+    return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")

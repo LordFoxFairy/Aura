@@ -9,12 +9,12 @@ from typing import Any
 
 import pytest
 
-from aura.core.abort import AbortController
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.store import TasksStore
-from aura.core.teams.mailbox import Mailbox
-from aura.core.teams.runtime import _format_envelope, run_teammate
-from aura.core.teams.types import TeamMessage
+from aura.application.tasks.store import TasksStore
+from aura.application.teams.mailbox import Mailbox
+from aura.application.teams.runtime import _format_envelope, run_teammate
+from aura.domain.abort import AbortController
+from aura.domain.team import TeamMessage
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
 
 

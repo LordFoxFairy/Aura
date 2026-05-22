@@ -1,11 +1,11 @@
-"""Tests for aura.core.permissions.decision — Decision shape + invariants."""
+"""Tests for aura.application.permission.decision — Decision shape + invariants."""
 
 from __future__ import annotations
 
 import pytest
 
-from aura.core.permissions.decision import Decision
-from aura.core.permissions.rule import Rule
+from aura.application.permission.decision import Decision
+from aura.domain.permission.rule import Rule
 
 
 def test_simple_allow_decision_has_no_rule() -> None:

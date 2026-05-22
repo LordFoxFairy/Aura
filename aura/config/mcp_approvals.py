@@ -133,7 +133,7 @@ def _load_raw() -> dict[str, Any]:
     """Read and parse the approvals file; return ``{}`` on any error.
 
     A missing file is the first-run path. A malformed file (bad JSON,
-    wrong shape) is logged via :mod:`aura.core.persistence.journal` and
+    wrong shape) is logged via :mod:`aura.infrastructure.persistence.journal` and
     treated as empty — silently re-prompting is safer than honouring a
     half-readable approvals file. Callers always see a dict shape.
     """

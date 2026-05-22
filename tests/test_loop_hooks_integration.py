@@ -11,11 +11,11 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.capabilities.tools.registry import ToolRegistry
-from aura.core.hooks import HookChain
-from aura.core.hooks.budget import make_size_budget_hook
+from aura.application.hooks import HookChain
+from aura.application.hooks.budget import make_size_budget_hook
+from aura.application.permission.decision import Decision
 from aura.core.loop import AgentLoop
-from aura.core.permissions.decision import Decision
+from aura.domain.tool_registry import ToolRegistry
 from aura.schemas.events import (
     AgentEvent,
     PermissionAudit,
@@ -245,7 +245,7 @@ async def test_auto_allow_decision_emits_permission_audit_between_started_and_co
     reads it directly onto ToolStep.permission_decision → emits
     PermissionAudit → sequence is Started → Audit → Completed.
     """
-    from aura.core.permissions.rule import Rule
+    from aura.domain.permission.rule import Rule
 
     async def stashing_hook(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object
@@ -334,7 +334,7 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
     Direct-return contract: the Loop reads the decision off the outcome
     dataclass, never from a transient slot.
     """
-    from aura.core.permissions.rule import Rule
+    from aura.domain.permission.rule import Rule
 
     expected_decision = Decision(
         allow=True, reason="rule_allow", rule=Rule(tool="echo", content=None),
@@ -401,7 +401,7 @@ async def test_per_call_decisions_do_not_leak_across_tool_calls() -> None:
 
     Each call has a distinct Decision object; the loop must emit one
     PermissionAudit per call, matching the per-call decision."""
-    from aura.core.permissions.rule import Rule
+    from aura.domain.permission.rule import Rule
 
     decisions = [
         Decision(allow=True, reason="rule_allow", rule=Rule(tool="echo", content=None)),

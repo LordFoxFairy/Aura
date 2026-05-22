@@ -10,12 +10,12 @@ import pytest
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from aura.capabilities.tools.catalog import assemble_tool_pool
-from aura.capabilities.tools.catalog import assemble_tool_pool as assemble_capability_tool_pool
-from aura.capabilities.tools.registry import ToolRegistry, ToolRegistryError
-from aura.capabilities.tools.registry import ToolRegistry as CapabilityToolRegistry
-from aura.capabilities.tools.registry import ToolRegistryError as CapabilityToolRegistryError
+from aura.application.tools_catalog import assemble_tool_pool
+from aura.application.tools_catalog import assemble_tool_pool as assemble_capability_tool_pool
 from aura.core.loop import ToolStep, partition_batches
+from aura.domain.tool_registry import ToolRegistry, ToolRegistryError
+from aura.domain.tool_registry import ToolRegistry as CapabilityToolRegistry
+from aura.domain.tool_registry import ToolRegistryError as CapabilityToolRegistryError
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from aura.tools.read_file import read_file
@@ -57,8 +57,8 @@ def test_core_tool_registry_facade_points_at_capabilities_module() -> None:
     assert ToolRegistry is CapabilityToolRegistry
     assert ToolRegistryError is CapabilityToolRegistryError
     assert assemble_tool_pool is assemble_capability_tool_pool
-    assert ToolRegistry.__module__ == "aura.capabilities.tools.registry"
-    assert assemble_tool_pool.__module__ == "aura.capabilities.tools.catalog"
+    assert ToolRegistry.__module__ == "aura.domain.tool_registry"
+    assert assemble_tool_pool.__module__ == "aura.application.tools_catalog"
 
 
 def test_registry_empty_is_empty() -> None:
@@ -424,6 +424,6 @@ def test_registry_register_error_names_offending_tool() -> None:
 def test_registry_error_inherits_aura_error() -> None:
     """``ToolRegistryError`` is part of the AuraError hierarchy so callers
     using ``except AuraError`` catch it uniformly with other expected errors."""
-    from aura.errors import AuraError
+    from aura.domain.errors import AuraError
 
     assert issubclass(ToolRegistryError, AuraError)

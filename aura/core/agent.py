@@ -10,60 +10,60 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
-    from aura.core.tasks.types import TaskNotification
+    from aura.domain.task import TaskNotification
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
-from aura.capabilities.skills_runtime import Skill, SkillRegistry, load_skills
-from aura.capabilities.tools.registry import ToolRegistry
-from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core import llm
-from aura.core.abort import AbortController, AbortException
-from aura.core.compact import (
+from aura.application.compact import (
     MICROCOMPACT_KEEP_RECENT,
     MICROCOMPACT_TRIGGER_PAIRS,
     CompactResult,
     MicrocompactPolicy,
     run_compact,
 )
-from aura.core.compact.compactor import Compactor as CompactorImpl
-from aura.core.compact.constants import (
+from aura.application.compact.compactor import Compactor
+from aura.application.compact.constants import (
     AUTO_COMPACT_THRESHOLD,
     auto_compact_threshold_for,
 )
-from aura.core.hooks import HookChain
-from aura.core.hooks.bash_safety import make_bash_safety_hook
-from aura.core.hooks.budget import default_hooks
-from aura.core.hooks.must_read_first import make_must_read_first_hook
-from aura.core.loop import DEFAULT_SESSION as _DEFAULT_SESSION
-from aura.core.loop import AgentLoop
-from aura.core.mcp import MCPManager
-from aura.core.memory import project_memory, rules
-from aura.core.memory.context import Context
-from aura.core.memory.system_prompt import build_system_prompt
-from aura.core.permissions.denials import PermissionDenial
-from aura.core.permissions.mode import Mode
-from aura.core.permissions.safety import SafetyPolicy
-from aura.core.permissions.session import RuleSet, SessionRuleSet
-from aura.core.persistence import journal
-from aura.core.persistence.storage import SessionStorage
-from aura.core.runtime.mcp import McpRuntime
-from aura.core.runtime.session import SessionRuntime
-from aura.core.runtime.tool_factory import (
+from aura.application.hooks import HookChain
+from aura.application.hooks.bash_safety import make_bash_safety_hook
+from aura.application.hooks.budget import default_hooks
+from aura.application.hooks.must_read_first import make_must_read_first_hook
+from aura.application.memory import project_memory, rules
+from aura.application.memory.context import Context
+from aura.application.memory.system_prompt import build_system_prompt
+from aura.application.permission.denials import PermissionDenial
+from aura.application.runtime.mcp import McpRuntime
+from aura.application.runtime.session import SessionRuntime
+from aura.application.runtime.tool_factory import (
     STATEFUL_TOOL_FACTORIES,
     ToolRuntime,
 )
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.store import TasksStore
-from aura.core.tokens import estimate_message_tokens, estimate_text_tokens
-from aura.domain.protocol.events import WireEvent
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.store import TasksStore
+from aura.config.schema import AuraConfig, AuraConfigError
+from aura.core.loop import DEFAULT_SESSION as _DEFAULT_SESSION
+from aura.core.loop import AgentLoop
+from aura.domain.abort import AbortController, AbortException
+from aura.domain.permission.mode import Mode
+from aura.domain.permission.safety import SafetyPolicy
+from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.domain.tokens import estimate_message_tokens, estimate_text_tokens
+from aura.domain.tool_registry import ToolRegistry
+from aura.infrastructure import llm
+from aura.infrastructure.mcp import MCPManager
+from aura.infrastructure.persistence import journal
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.skills import Skill, SkillRegistry, load_skills
+from aura.infrastructure.wire.event_dto import WireEvent
 from aura.schemas.events import AgentEvent, AssistantDelta, Final
 from aura.schemas.state import LoopState, ReadCarryover
 from aura.schemas.tool import ToolError
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
-from aura.tools.ask_user import QuestionAsker
+from aura.tools.ask_user import FormQuestionDict, UserAsker
 
 # Substring signatures that identify provider-level "context length exceeded"
 # errors. We match on stringified message — not exception type — so we don't
@@ -120,8 +120,8 @@ def _is_context_overflow(exc: BaseException) -> bool:
 
 
 async def _unavailable_question_asker(
-    question: str, options: list[str] | None, default: str | None,
-) -> str:
+    _questions: list[FormQuestionDict],
+) -> dict[str, str]:
     # Registered when no ``question_asker`` was injected (e.g. SDK caller
     # drives astream without a REPL). The tool stays visible to the LLM —
     # invoking it surfaces this error as a ToolError in the tool result,
@@ -144,7 +144,7 @@ class Agent:
         available_tools: dict[str, BaseTool] | None = None,
         session_id: str = _DEFAULT_SESSION,
         session_rules: SessionRuleSet | None = None,
-        question_asker: QuestionAsker | None = None,
+        question_asker: UserAsker | None = None,
         auto_compact_threshold: int = AUTO_COMPACT_THRESHOLD,
         auto_microcompact_enabled: bool = True,
         microcompact_trigger_pairs: int = MICROCOMPACT_TRIGGER_PAIRS,
@@ -384,7 +384,7 @@ class Agent:
         self._running_aborts: dict[str, AbortController] = {}
         # Round 6L. Populated by ``join_team``; ``None`` outside a team.
         # Typed loose (``object | None``) to avoid a circular import on
-        # :class:`aura.core.teams.manager.TeamManager`.
+        # :class:`aura.application.teams.manager.TeamManager`.
         self._team: object | None = None
         # Round 6L. ``None`` for the leader / non-team agents; set to
         # the member name by :meth:`join_team` for teammates so
@@ -403,7 +403,7 @@ class Agent:
         # outlives any specific record reference; the bounded
         # _enqueue_task_notification call drops oldest on overflow.
         def _on_terminal(rec: object) -> None:
-            from aura.core.tasks.types import TaskNotification, TaskRecord
+            from aura.domain.task import TaskNotification, TaskRecord
             if not isinstance(rec, TaskRecord):
                 return
             summary = (
@@ -418,7 +418,7 @@ class Agent:
                 description=rec.description,
             )
             self._enqueue_task_notification(notification)
-            from aura.adapters.protocol.wire import task_notification_to_wire
+            from aura.infrastructure.wire.wire import task_notification_to_wire
             self._enqueue_protocol_event(
                 task_notification_to_wire(
                     notification,
@@ -431,7 +431,7 @@ class Agent:
         self._current_abort: AbortController | None = None
         # Stateless built-ins come from shared singletons; stateful ones are
         # instantiated per-Agent so each gets its own dependency (LoopState
-        # for todo_write, QuestionAsker for ask_user_question).
+        # for todo_write, UserAsker for ask_user_question).
         self._available_tools = (
             dict(available_tools) if available_tools is not None else dict(BUILTIN_TOOLS)
         )
@@ -570,7 +570,7 @@ class Agent:
         # post-construction. Imported lazily to avoid an import cycle:
         # auto_reload imports Agent for type-checking, Agent imports
         # auto_reload at runtime.
-        from aura.core.hooks.auto_reload import (
+        from aura.application.hooks.auto_reload import (
             make_aura_md_reload_hook,
             make_cwd_rules_reload_hook,
         )
@@ -616,7 +616,7 @@ class Agent:
         # ``getattr``-based introspection avoids mypy errors when the
         # symbols haven't been added yet upstream (Tier D/F).
         try:
-            from aura.core import llm as _llm_mod
+            from aura.infrastructure import llm as _llm_mod
             from aura.tools import web_fetch as _wf_mod
             _make_factory = getattr(_llm_mod, "make_summary_model_factory", None)
             _set_default = getattr(_wf_mod, "set_default_model_factory", None)
@@ -1029,7 +1029,7 @@ class Agent:
         """Summarize old history, preserve session state, rebuild Context.
 
         Entry point for ``/compact`` and (future) auto-compact. The heavy
-        lifting lives in :func:`aura.core.compact.run_compact`; this method
+        lifting lives in :func:`aura.application.compact.run_compact`; this method
         exists so callers have a stable surface and so the skill/command
         layer doesn't need to reach into the compact module directly.
         """
@@ -1357,7 +1357,7 @@ class Agent:
         ``cwd_changed`` journal event is emitted, and every registered
         :class:`CwdChangedHook` consumer fires with ``(old_cwd, new_cwd)``.
         Default-shipped consumer refreshes project memory + rules from
-        the new cwd (see :func:`aura.core.hooks.auto_reload
+        the new cwd (see :func:`aura.application.hooks.auto_reload
         .make_cwd_rules_reload_hook`).
 
         We do NOT shell out to ``os.chdir`` here — the Agent's ``_cwd``
@@ -1422,12 +1422,12 @@ class Agent:
     def context_window(self) -> int:
         """Effective context window in tokens. Honors
         ``AuraConfig.context_window`` override when set, otherwise falls
-        back to ``aura.core.llm.get_context_window`` for the current
+        back to ``aura.infrastructure.llm.get_context_window`` for the current
         model. Kept on Agent so the bottom bar has one clean place to
         read it from rather than re-resolving on every render."""
         if self._config.context_window is not None:
             return self._config.context_window
-        from aura.core.llm import get_context_window
+        from aura.infrastructure.llm import get_context_window
         return get_context_window(self.current_model)
 
     @property
@@ -1545,7 +1545,7 @@ class Agent:
         # buffer between loop yields so AG-UI consumers see
         # ``aura.compact.event`` interleaved with the regular event
         # stream.
-        self._compactor = CompactorImpl(
+        self._compactor = Compactor(
             agent=self,
             config=self._config.compact,
             summary_model=self._model,
@@ -1768,7 +1768,7 @@ def build_agent(
     available_tools: dict[str, BaseTool] | None = None,
     session_id: str = _DEFAULT_SESSION,
     session_rules: SessionRuleSet | None = None,
-    question_asker: QuestionAsker | None = None,
+    question_asker: UserAsker | None = None,
     mode: str = "default",
     disable_bypass: bool = False,
     ruleset: RuleSet | None = None,

@@ -28,10 +28,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aura.capabilities.commands.registry import build_default_registry
+from aura.application.commands.registry import build_default_registry
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
 

@@ -27,12 +27,12 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks.permission import (
+from aura.application.hooks.permission import (
     AskerResponse,
     make_permission_hook,
 )
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet, SessionRuleSet
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
 from aura.tools.base import build_tool
 
@@ -80,7 +80,7 @@ def journal_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
     def _capture(event: str, /, **fields: Any) -> None:
         events.append((event, fields))
 
-    from aura.core.persistence import journal as journal_mod
+    from aura.infrastructure.persistence import journal as journal_mod
     monkeypatch.setattr(journal_mod, "write", _capture)
     return events
 

@@ -29,18 +29,18 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.capabilities.skills_runtime.command import SkillCommand
-from aura.capabilities.skills_runtime.types import Skill
-from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
-from aura.core.hooks.permission import (
+from aura.application.hooks.permission import (
     AskerResponse,
     make_permission_hook,
 )
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet, SessionRuleSet
-from aura.core.persistence import journal as journal_module
-from aura.core.persistence.storage import SessionStorage
+from aura.config.schema import AuraConfig
+from aura.core.agent import Agent
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.infrastructure.persistence import journal as journal_module
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.skills.command import SkillCommand
+from aura.infrastructure.skills.types import Skill
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool

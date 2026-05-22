@@ -3,21 +3,18 @@
 
 The v0.10.x architecture exposes MCP resources via the CLI-layer
 ``@server:uri`` attachment preprocessor (see :mod:`cli.attachments`
-and :file:`tests/integration/test_mcp_attachments.py`). The old LLM-tool
-auto-registration (``mcp_read_resource``) was deprecated at the same
-time — the tool class is still importable for programmatic SDK users
-but is no longer wired into the default Agent.
+and :file:`tests/integration/test_mcp_attachments.py`). There is no
+LLM-tool surface for resource reads — ``aconnect`` exposes the live
+manager and nothing more.
 
 This file covers what the integration tier still needs to assert at the
 manager-→-Agent boundary:
 
 1. ``aconnect`` exposes the live :class:`MCPManager` on
    :attr:`Agent.mcp_manager` (the attachment preprocessor relies on this).
-2. ``aconnect`` no longer auto-registers ``mcp_read_resource`` regardless
-   of whether the catalogue has entries (parity with claude-code).
-3. Programmatic SDK users can still import + instantiate
-   :class:`MCPReadResourceTool` and have it round-trip a URI through the
-   manager (the opt-in path still works).
+2. ``aconnect`` never auto-registers a ``mcp_read_resource`` tool
+   regardless of whether the catalogue has entries (parity with
+   claude-code).
 """
 
 from __future__ import annotations
@@ -37,7 +34,7 @@ from tests.integration.conftest import build_integration_agent
 
 
 class FakeMCPManager:
-    """Drop-in stand-in for :class:`aura.core.mcp.MCPManager`.
+    """Drop-in stand-in for :class:`aura.infrastructure.mcp.MCPManager`.
 
     Exposes exactly the surface :meth:`Agent.aconnect` touches:
 
@@ -129,9 +126,9 @@ async def test_aconnect_exposes_manager_without_auto_registering_tool(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Catalogue has entries — prior versions would auto-register
-    # ``mcp_read_resource`` here. v0.10.x replaces that with the CLI
-    # @mention preprocessor, so the tool must NOT appear.
+    # Catalogue has entries — prior versions would auto-register a
+    # resource-reader tool here. The CLI @mention preprocessor replaces
+    # that surface, so no such tool ever appears.
     resources = {
         "mem://a": "contents-of-a",
         "mem://b": "contents-of-b",
@@ -141,7 +138,7 @@ async def test_aconnect_exposes_manager_without_auto_registering_tool(
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.persistence.storage import SessionStorage
+    from aura.infrastructure.persistence.storage import SessionStorage
 
     cfg = AuraConfig.model_validate(_cfg_with_one_server())
     agent = Agent(
@@ -177,7 +174,7 @@ async def test_aconnect_empty_catalogue_still_exposes_manager(
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.persistence.storage import SessionStorage
+    from aura.infrastructure.persistence.storage import SessionStorage
 
     cfg = AuraConfig.model_validate(_cfg_with_one_server())
     agent = Agent(
@@ -195,41 +192,6 @@ async def test_aconnect_empty_catalogue_still_exposes_manager(
     finally:
         # B3: live MCP manager inside async loop → must use aclose().
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Test 3 — programmatic SDK use: the deprecated tool still works when wired
-# explicitly by a caller that wants LLM-driven resource reads.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_deprecated_tool_still_works_for_programmatic_sdk_users() -> None:
-    # The class is deprecated (not auto-registered) but remains importable
-    # + invocable. This guard prevents accidentally deleting it during
-    # later cleanups — SDK users who opted into the LLM-driven surface
-    # should not silently lose it.
-    from aura.tools.mcp_read_resource import MCPReadResourceTool, build_description
-
-    async def reader(uri: str) -> dict[str, Any]:
-        return {
-            "uri": uri,
-            "server": "fake",
-            "contents": [{"type": "text", "text": f"body-of-{uri}", "uri": uri}],
-        }
-
-    tool = MCPReadResourceTool(
-        resource_reader=reader,
-        description=build_description(
-            [("fake", "mem://doc", "doc", "", None)],
-        ),
-    )
-    # Deprecation marker is on aura_metadata capability_flags, but the tool still functions.
-    assert tool.aura_metadata is not None
-    assert "deprecated" in tool.aura_metadata.capability_flags
-    out = await tool.ainvoke({"uri": "mem://doc"})
-    assert out["uri"] == "mem://doc"
-    assert out["contents"][0]["text"] == "body-of-mem://doc"
 
 
 # ---------------------------------------------------------------------------

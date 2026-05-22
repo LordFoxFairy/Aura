@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from aura.capabilities.skills_runtime import loader
-from aura.capabilities.skills_runtime.loader import (
+from aura.infrastructure.skills import loader
+from aura.infrastructure.skills.loader import (
     clear_conditional_state,
     load_skills,
 )

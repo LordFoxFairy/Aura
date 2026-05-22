@@ -1,6 +1,6 @@
 """Filesystem-loaded subagent definitions.
 
-Covers :mod:`aura.capabilities.agents.loader`: built-ins always load,
+Covers :mod:`aura.infrastructure.agents.loader`: built-ins always load,
 markdown files with YAML frontmatter parse into ``AgentDef``s, missing
 ``.aura/agents`` directory falls back to built-ins only.
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aura.capabilities.agents import (
+from aura.infrastructure.agents import (
     AgentDef,
     all_agent_defs,
     builtin_agents,

@@ -12,17 +12,17 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.store import TasksStore
+from aura.application.teams.manager import TeamError, TeamManager
 from aura.config.schema import AuraConfig
-from aura.core import llm
-from aura.core.abort import AbortController
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.safety import DEFAULT_SAFETY
-from aura.core.permissions.session import RuleSet
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.store import TasksStore
-from aura.core.teams.manager import TeamError, TeamManager
-from aura.core.teams.types import TEAM_LEADER_NAME, TeamRecord
+from aura.domain.abort import AbortController
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.safety import DEFAULT_SAFETY
+from aura.domain.permission.session import RuleSet
+from aura.domain.team import TEAM_LEADER_NAME, TeamRecord
+from aura.infrastructure import llm
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolMetadata
 from tests.conftest import FakeChatModel, FakeTurn
@@ -369,7 +369,7 @@ async def test_aadd_member_propagates_explicit_model_to_task_and_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.core.teams.backends.registry as registry
+    import aura.infrastructure.teams_backends.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)
@@ -389,7 +389,7 @@ async def test_aadd_member_records_inherited_model_without_spawn_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.core.teams.backends.registry as registry
+    import aura.infrastructure.teams_backends.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)
@@ -409,7 +409,7 @@ async def test_pane_force_remove_marks_teammate_task_cancelled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.core.teams.backends.registry as registry
+    import aura.infrastructure.teams_backends.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)
@@ -431,7 +431,7 @@ async def test_pane_session_cleanup_marks_teammate_task_cancelled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.core.teams.backends.registry as registry
+    import aura.infrastructure.teams_backends.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)
@@ -449,7 +449,7 @@ async def test_aadd_member_rejects_invalid_model_without_state_leak(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.core.teams.backends.registry as registry
+    import aura.infrastructure.teams_backends.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)
@@ -471,7 +471,7 @@ async def test_aadd_member_rejects_empty_model_without_state_leak(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.core.teams.backends.registry as registry
+    import aura.infrastructure.teams_backends.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)
@@ -626,29 +626,6 @@ async def test_session_cleanup_preserves_unrelated_abort_controllers(
     await mgr.cleanup_session_teams()
 
     assert set(running_aborts) == {"unrelated-task"}
-
-
-def test_load_round_trip(tmp_path: Path) -> None:
-    storage = SessionStorage(tmp_path / "sessions.db")
-    mgr1 = TeamManager(
-        leader=_leader_stub(storage),
-        storage=storage,
-        factory=_factory(),
-        running_aborts={},
-        tasks_store=TasksStore(),
-        runtime_runner=_no_runtime,
-    )
-    mgr1.create_team("alpha")
-    mgr2 = TeamManager.load(
-        leader=_leader_stub(storage),
-        storage=storage,
-        factory=_factory(),
-        running_aborts={},
-        tasks_store=TasksStore(),
-        team_id="alpha",
-    )
-    assert mgr2.team is not None
-    assert mgr2.team.team_id == "alpha"
 
 
 @pytest.mark.asyncio

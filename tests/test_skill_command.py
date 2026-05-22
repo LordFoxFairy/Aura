@@ -1,4 +1,4 @@
-"""Tests for aura.capabilities.skills_runtime.command.SkillCommand."""
+"""Tests for aura.infrastructure.skills.command.SkillCommand."""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from aura.capabilities.commands import CommandRegistry
-from aura.capabilities.skills_runtime.command import SkillCommand
-from aura.capabilities.skills_runtime.types import Skill
+from aura.application.commands import CommandRegistry
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.skills.command import SkillCommand
+from aura.infrastructure.skills.types import Skill
 from tests.conftest import FakeChatModel
 
 

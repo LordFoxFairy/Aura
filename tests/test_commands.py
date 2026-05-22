@@ -15,14 +15,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aura.capabilities.commands.registry import build_default_registry, dispatch
-from aura.capabilities.commands.registry import (
+from aura.application.commands.registry import build_default_registry, dispatch
+from aura.application.commands.registry import (
     build_default_registry as build_capability_default_registry,
 )
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.llm import UnknownModelSpecError
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.llm import UnknownModelSpecError
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
 
@@ -44,7 +44,7 @@ def _agent(tmp_path: Path) -> Agent:
 
 def test_cli_build_default_registry_facade_points_at_capabilities_module() -> None:
     assert build_default_registry is build_capability_default_registry
-    spec = importlib.util.find_spec("aura.capabilities.commands.registry")
+    spec = importlib.util.find_spec("aura.application.commands.registry")
     assert spec is not None
 
 
@@ -67,9 +67,9 @@ def test_default_registry_has_builtin_set() -> None:
 def test_default_registry_remaining_commands_are_owned_by_capabilities() -> None:
     r = build_default_registry()
     commands = {cmd.name: cmd for cmd in r.list()}
-    assert commands["/export"].__class__.__module__ == "aura.capabilities.commands.export"
-    assert commands["/mcp"].__class__.__module__ == "aura.capabilities.commands.mcp"
-    assert commands["/stats"].__class__.__module__ == "aura.capabilities.commands.stats"
+    assert commands["/export"].__class__.__module__ == "aura.application.commands.export"
+    assert commands["/mcp"].__class__.__module__ == "aura.application.commands.mcp"
+    assert commands["/stats"].__class__.__module__ == "aura.application.commands.stats"
 
 
 @pytest.mark.asyncio

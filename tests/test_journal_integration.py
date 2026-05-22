@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage
 from aura.config.schema import AuraConfig
 from aura.core import journal as journal_module
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 

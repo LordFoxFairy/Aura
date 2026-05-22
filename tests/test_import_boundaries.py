@@ -113,8 +113,8 @@ def test_core_does_not_import_ui_frameworks() -> None:
 def test_new_package_roots_exist_and_import_cleanly() -> None:
     packages = (
         "aura.domain",
-        "aura.capabilities",
-        "aura.adapters",
+        "aura.application",
+        "aura.infrastructure",
     )
     for pkg in packages:
         module = importlib.import_module(pkg)
@@ -185,11 +185,11 @@ def test_layer_boundaries_for_new_roots() -> None:
         (
             "domain",
             (
-                "aura.capabilities",
+                "aura.application",
+                "aura.infrastructure",
                 "aura.adapters",
             ),
         ),
-        ("capabilities", ("aura.adapters",)),
     )
 
     for subdir, forbidden in policy:

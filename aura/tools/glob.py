@@ -10,7 +10,7 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from aura.core.permissions.matchers import exact_match_on
+from aura.domain.permission.matchers import exact_match_on
 from aura.schemas.tool import ToolError, ToolMetadata
 
 

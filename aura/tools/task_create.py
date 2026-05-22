@@ -8,12 +8,12 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.capabilities.agents import all_agent_defs, get_agent_def
-from aura.core import llm
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.run import run_task
-from aura.core.tasks.store import TasksStore
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.run import run_task
+from aura.application.tasks.store import TasksStore
+from aura.infrastructure import llm
+from aura.infrastructure.agents import all_agent_defs, get_agent_def
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.tool import ToolError, ToolMetadata
 
 

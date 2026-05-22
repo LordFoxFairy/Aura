@@ -1,4 +1,4 @@
-"""Tests for aura.core.permissions.store — settings.json load/save/round-trip."""
+"""Tests for aura.infrastructure.permission_store — settings.json load/save/round-trip."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 from aura.config.schema import AuraConfigError
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet
-from aura.core.permissions.store import (
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet
+from aura.infrastructure.permission_store import (
     PermissionStoreError,
     ensure_local_settings,
     load,
@@ -358,7 +358,7 @@ def test_ensure_local_template_roundtrips_through_save_rule(tmp_path: Path) -> N
     # The "//" comment key must NOT be clobbered when save_rule later
     # appends a rule — save_rule preserves unrelated top-level keys, and
     # this is a test for that specific round-trip.
-    from aura.core.permissions.store import save_rule
+    from aura.infrastructure.permission_store import save_rule
     (tmp_path / ".aura").mkdir()
     ensure_local_settings(tmp_path)
     save_rule(tmp_path, Rule(tool="bash", content="npm test"), scope="local")

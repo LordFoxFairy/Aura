@@ -1,56 +1,49 @@
-"""Subprocess entrypoint smoke tests.
+"""``cli teammate`` subcommand smoke tests.
 
-The pane backend launches teammates via
-``python -m cli.teammate_entrypoint``; this suite verifies the
-module is importable, the argparse front matches the documented shape,
-and ``--help`` runs cleanly. Real subprocess round-trip is covered by
-the pane backend tests (which require an actual tmux session).
+The pane backend launches teammates via ``python -m cli teammate``;
+this suite verifies the argparse front matches the documented shape and
+that the pane backend's argv builder lines up with the subcommand's
+parser. Real subprocess round-trip is covered by the pane backend tests
+(which require an actual tmux session).
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib
+import inspect
+from pathlib import Path
 
 import pytest
 
-
-def test_teammate_entrypoint_imports_clean() -> None:
-    """Module imports without side effects (config load, agent build, etc.)."""
-    mod = importlib.import_module("cli.teammate_entrypoint")
-    assert hasattr(mod, "main")
-    assert hasattr(mod, "_make_parser")
+from cli.__main__ import _make_parser, run_as_teammate
 
 
-def test_teammate_entrypoint_parser_required_flags() -> None:
+def test_teammate_subcommand_required_flags() -> None:
     """``--team-id``, ``--member``, ``--storage-root`` are all required."""
-    from cli.teammate_entrypoint import _make_parser
-
     parser = _make_parser()
-    # Missing required flags -> argparse exits 2.
     with pytest.raises(SystemExit):
-        parser.parse_args([])
+        parser.parse_args(["teammate"])
     args = parser.parse_args([
+        "teammate",
         "--team-id", "t1",
         "--member", "alice",
         "--storage-root", "/tmp/aura",
     ])
+    assert args.subcommand == "teammate"
     assert args.team_id == "t1"
     assert args.member == "alice"
     assert args.storage_root == "/tmp/aura"
-    # Defaults for optional flags.
     assert args.agent_type == "general-purpose"
     assert args.model is None
     assert args.system_prompt is None
     assert args.seed_prompt is None
 
 
-def test_teammate_entrypoint_parser_optional_flags() -> None:
+def test_teammate_subcommand_optional_flags() -> None:
     """Optional flags carry through to the parsed Namespace."""
-    from cli.teammate_entrypoint import _make_parser
-
     parser = _make_parser()
     args = parser.parse_args([
+        "teammate",
         "--team-id", "t1",
         "--member", "alice",
         "--storage-root", "/tmp/aura",
@@ -65,13 +58,13 @@ def test_teammate_entrypoint_parser_optional_flags() -> None:
     assert args.seed_prompt == "Find the bug"
 
 
-def test_teammate_entrypoint_help_runs_clean(capsys: pytest.CaptureFixture[str]) -> None:
-    """``--help`` prints to stdout and exits zero (argparse convention)."""
-    from cli.teammate_entrypoint import _make_parser
-
+def test_teammate_subcommand_help_runs_clean(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``teammate --help`` prints to stdout and exits zero."""
     parser = _make_parser()
     with pytest.raises(SystemExit) as exc_info:
-        parser.parse_args(["--help"])
+        parser.parse_args(["teammate", "--help"])
     assert exc_info.value.code == 0
     captured = capsys.readouterr()
     assert "team-id" in captured.out
@@ -79,35 +72,23 @@ def test_teammate_entrypoint_help_runs_clean(capsys: pytest.CaptureFixture[str])
     assert "storage-root" in captured.out
 
 
-def test_teammate_entrypoint_main_function_signature() -> None:
-    """``main`` accepts an optional argv list and returns an int."""
-    # Verify signature shape — the caller passes ``argv: list[str] | None``.
-    import inspect
-
-    from cli.teammate_entrypoint import main
-
-    sig = inspect.signature(main)
-    assert "argv" in sig.parameters
-    # Default is None so ``main()`` parses sys.argv.
-    assert sig.parameters["argv"].default is None
-    # Return annotation is int (string form due to ``from __future__ import
-    # annotations`` deferring evaluation).
+def test_run_as_teammate_signature() -> None:
+    """``run_as_teammate`` takes a Namespace and returns an int."""
+    sig = inspect.signature(run_as_teammate)
+    assert "args" in sig.parameters
     assert sig.return_annotation in (int, "int")
 
 
 def test_argparse_parser_matches_pane_backend_command_shape() -> None:
-    """Pane backend's argv must be parseable by the entrypoint parser.
+    """Pane backend's argv must be parseable by the ``teammate`` subcommand.
 
     Smoke test that ``PaneBackend._build_subprocess_command`` produces
     a list of args this parser accepts. Catches drift if either side
     renames a flag without the other.
     """
-    from pathlib import Path
-
-    from aura.core.persistence.storage import SessionStorage
-    from aura.core.teams.backends.pane import PaneBackend
-    from aura.core.teams.types import TeammateMember
-    from cli.teammate_entrypoint import _make_parser
+    from aura.domain.team import TeammateMember
+    from aura.infrastructure.persistence.storage import SessionStorage
+    from aura.infrastructure.teams_backends.pane import PaneBackend
 
     storage = SessionStorage(Path(":memory:"))
     member = TeammateMember(
@@ -122,11 +103,12 @@ def test_argparse_parser_matches_pane_backend_command_shape() -> None:
         storage=storage,
         seed_prompt="hi there",
     )
-    # Drop ``python -m cli.teammate_entrypoint`` (first 3 elements);
-    # the entrypoint module is invoked via ``-m`` so argparse sees the
-    # tail as its argv.
+    # argv is ``[python, -m, cli, teammate, --team-id, ...]``; drop the
+    # interpreter + ``-m cli`` prefix so the parser sees the same tail
+    # the cli would see during a real spawn.
     parser = _make_parser()
     parsed = parser.parse_args(argv[3:])
+    assert parsed.subcommand == "teammate"
     assert parsed.team_id == "t1"
     assert parsed.member == "alice"
     assert parsed.agent_type == "general-purpose"
@@ -134,15 +116,7 @@ def test_argparse_parser_matches_pane_backend_command_shape() -> None:
     assert parsed.seed_prompt == "hi there"
 
 
-def test_main_module_invocation_form() -> None:
-    """``python -m cli.teammate_entrypoint`` resolves to a real module."""
-    import importlib.util
-
-    spec = importlib.util.find_spec("cli.teammate_entrypoint")
-    assert spec is not None
-    assert spec.origin is not None
-    assert isinstance(_make_parser_top := importlib.import_module(
-        "cli.teammate_entrypoint",
-    )._make_parser, type(lambda: None))
-    parser = _make_parser_top()
+def test_make_parser_returns_argparse_parser() -> None:
+    """``_make_parser`` returns a usable :class:`argparse.ArgumentParser`."""
+    parser = _make_parser()
     assert isinstance(parser, argparse.ArgumentParser)

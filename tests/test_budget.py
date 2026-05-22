@@ -1,4 +1,4 @@
-"""Tests for aura.core.hooks.budget."""
+"""Tests for aura.application.hooks.budget."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import PostToolHook
-from aura.core.hooks.budget import make_size_budget_hook
+from aura.application.hooks import PostToolHook
+from aura.application.hooks.budget import make_size_budget_hook
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
@@ -154,7 +154,7 @@ async def test_no_per_tool_budget_falls_back_to_global() -> None:
 
 
 async def test_usage_tracking_hook_accumulates_total_tokens() -> None:
-    from aura.core.hooks.budget import make_usage_tracking_hook
+    from aura.application.hooks.budget import make_usage_tracking_hook
 
     hook = make_usage_tracking_hook()
     state = LoopState()
@@ -179,12 +179,12 @@ async def test_usage_tracking_hook_falls_back_to_estimator_when_usage_missing() 
     Pre-fix, ``state.total_tokens_used`` stayed pinned at zero so auto-
     compact never armed and the status bar lied about utilization.
     """
-    from aura.core.hooks.budget import make_usage_tracking_hook
+    from aura.application.hooks.budget import make_usage_tracking_hook
 
     hook = make_usage_tracking_hook()
     state = LoopState()
 
-    from aura.core.tokens import estimate_text_tokens
+    from aura.domain.tokens import estimate_text_tokens
 
     ai = AIMessage(content="no usage here")
     await hook(ai_message=ai, history=[], state=state)
@@ -192,8 +192,8 @@ async def test_usage_tracking_hook_falls_back_to_estimator_when_usage_missing() 
 
 
 def test_default_hooks_returns_populated_chain() -> None:
-    from aura.core.hooks import HookChain
-    from aura.core.hooks.budget import default_hooks
+    from aura.application.hooks import HookChain
+    from aura.application.hooks.budget import default_hooks
 
     hooks = default_hooks()
     assert isinstance(hooks, HookChain)

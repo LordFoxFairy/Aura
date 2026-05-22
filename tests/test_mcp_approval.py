@@ -31,11 +31,11 @@ import pytest
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
-from aura.capabilities.commands.mcp import MCPCommand
+from aura.application.commands.mcp import MCPCommand
 from aura.config import mcp_approvals, mcp_store
 from aura.config.schema import MCPServerConfig
 from aura.core import journal
-from aura.core.mcp.manager import MCPManager
+from aura.infrastructure.mcp.manager import MCPManager
 
 
 class _P(BaseModel):
@@ -81,7 +81,7 @@ def _stub_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     Tool/prompt/resource discovery returns empty lists by default; tests
     needing tools should patch ``fake_client.get_tools`` directly.
     """
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     fake_client = MagicMock()
     fake_client.connections = {}

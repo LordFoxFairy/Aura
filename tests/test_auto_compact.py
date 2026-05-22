@@ -28,11 +28,11 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
+from aura.application.compact import CompactResult
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.compact import CompactResult
-from aura.core.persistence import journal
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence import journal
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 

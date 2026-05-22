@@ -1,4 +1,4 @@
-"""Tests for aura.core.mcp.manager — MCPManager wraps MultiServerMCPClient."""
+"""Tests for aura.infrastructure.mcp.manager — MCPManager wraps MultiServerMCPClient."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
 from aura.config.schema import MCPServerConfig
-from aura.core.mcp.manager import MCPManager, MCPServerStatus
+from aura.infrastructure.mcp.manager import MCPManager, MCPServerStatus
 from aura.schemas.tool_meta_access import meta_dict
 
 
@@ -51,7 +51,7 @@ async def test_start_all_single_server_wraps_tools_with_aura_metadata(
     async def _fake_list_resources(client: Any, server_name: str) -> list[Any]:
         return []
 
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     monkeypatch.setattr(
         manager_mod, "MultiServerMCPClient", lambda cfg: fake_client,
@@ -83,7 +83,7 @@ async def test_start_all_broken_server_graceful_degrade(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
 ) -> None:
     from aura.core import journal
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     log_path = tmp_path / "journal.jsonl"
     journal.configure(log_path)
@@ -138,7 +138,7 @@ async def test_stop_all_suppresses_teardown_errors(
     # The library currently has no close() method; stop_all is defensively
     # written to call any close/__aexit__ if the library adds one, and must
     # never propagate exceptions from teardown.
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     fake_client = MagicMock()
     fake_client.get_tools = AsyncMock(return_value=[])
@@ -169,7 +169,7 @@ async def test_stop_all_suppresses_teardown_errors(
 async def test_start_all_skips_disabled_servers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     fake_client = MagicMock()
     fake_client.get_tools = AsyncMock(return_value=[_fake_tool("t")])
@@ -237,7 +237,7 @@ def _patch_manager_internals(
     async def _fake_list_resources(client: Any, server_name: str) -> list[Any]:
         return []
 
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     def _make_client(connections: dict[str, Any]) -> MagicMock:
         # Library populates ``.connections`` from the ctor arg; mimic that
@@ -582,8 +582,8 @@ async def test_list_changed_handler_journals_only_relevant_methods(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The handler journals tools/prompts/resources list_changed; others ignored."""
-    from aura.core.mcp.manager import _make_list_changed_logger
-    from aura.core.persistence import journal as journal_module
+    from aura.infrastructure.mcp.manager import _make_list_changed_logger
+    from aura.infrastructure.persistence import journal as journal_module
     log_path = tmp_path / "audit.jsonl"
     journal_module.configure(log_path)
     try:

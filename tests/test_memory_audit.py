@@ -14,17 +14,17 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import SystemMessage
 
-from aura.core import journal as journal_module
-from aura.core.memory import project_memory as pm
-from aura.core.memory import rules as rules_module
-from aura.core.memory.context import Context
-from aura.core.memory.rules import (
+from aura.application.memory import project_memory as pm
+from aura.application.memory import rules as rules_module
+from aura.application.memory.context import Context
+from aura.application.memory.rules import (
     Rule,
     RulesBundle,
     _extract_globs,
     _truncate,
     load_rules,
 )
+from aura.core import journal as journal_module
 
 
 def _patch_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:

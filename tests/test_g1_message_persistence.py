@@ -44,7 +44,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -338,7 +338,7 @@ def _pre_append_then_kill_driver() -> str:
 
         from aura.config.schema import AuraConfig
         from aura.core.agent import Agent
-        from aura.core.persistence.storage import SessionStorage
+        from aura.infrastructure.persistence.storage import SessionStorage
         from tests.conftest import FakeChatModel
 
         db_path = sys.argv[1]
@@ -498,7 +498,7 @@ async def test_save_happens_before_turn_begin_in_journal(
     a ``storage_save`` for the session precedes the first ``turn_begin``
     of an astream call. If this flips, the pre-save contract regressed.
     """
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
 
     log_path = tmp_path / "audit.jsonl"
     journal.configure(log_path)

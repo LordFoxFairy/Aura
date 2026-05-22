@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from aura.core.hooks.auto_reload import make_cwd_rules_reload_hook
+from aura.application.hooks.auto_reload import make_cwd_rules_reload_hook
 from aura.schemas.state import LoopState
 
 
@@ -24,7 +24,7 @@ def _minimal_agent(tmp_path: Path) -> Any:
     """Build a bare Agent with no tools enabled — enough for set_cwd tests."""
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.persistence.storage import SessionStorage
+    from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel
 
     cfg = AuraConfig.model_validate(
@@ -103,7 +103,7 @@ async def test_set_cwd_emits_journal_event(
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
     log_path = tmp_path / "events.jsonl"
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
     journal.configure(log_path)
 
     agent = _minimal_agent(tmp_path)
@@ -134,7 +134,7 @@ async def test_cwd_rules_reload_refreshes_rules_from_new_cwd(
     fake_home = tmp_path / "_home"
     fake_home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: fake_home)
-    from aura.core.memory import project_memory, rules
+    from aura.application.memory import project_memory, rules
     project_memory.clear_cache()
     rules.clear_cache()
 

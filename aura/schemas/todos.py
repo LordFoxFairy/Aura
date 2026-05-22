@@ -1,14 +1,4 @@
-"""Typed todo schema — ``TodoItem``.
-
-Shared data type for both ``aura.tools.todo_write`` (as its ``args_schema``)
-and ``aura.core.memory.context`` (for rendering the ``<todos>`` prompt
-block). ``state.slots.todos`` holds ``list[TodoItem]`` — pydantic
-instances, not dumped dicts — so both the writer and the reader get typed
-attribute access without silent dict-shape drift.
-
-The rendering helper lives with the consumer (``aura.core.memory.context``),
-not here — schemas are data only.
-"""
+"""Typed todo schema."""
 
 from __future__ import annotations
 
@@ -23,21 +13,14 @@ class TodoItem(BaseModel):
     content: str = Field(
         ...,
         min_length=1,
-        description="Imperative form of the task (e.g. 'Add retry logic').",
+        description="Imperative form of the task.",
     )
     status: TodoStatus = Field(
         ...,
-        description=(
-            "Current state of this item. Keep EXACTLY ONE item in_progress "
-            "while actively working; flip to completed the moment the item's "
-            "work is finished. Use pending for queued items not yet started."
-        ),
+        description="Current state; keep exactly one in_progress while working.",
     )
     active_form: str = Field(
         ...,
         min_length=1,
-        description=(
-            "Present-continuous phrasing shown while this item is in_progress "
-            "(e.g. 'Adding retry logic'). Matches content but in -ing form."
-        ),
+        description="Present-continuous phrasing shown while in_progress.",
     )

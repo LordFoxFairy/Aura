@@ -1,4 +1,4 @@
-"""Unit tests for ``aura.core.memory.attachments`` — the envelope-builder
+"""Unit tests for ``aura.application.memory.attachments`` — the envelope-builder
 helpers that shape ``<mcp-resource>`` ``HumanMessage``\\ s.
 
 The wire-shape of these messages is load-bearing: the LLM is trained on
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from langchain_core.messages import HumanMessage
 
-from aura.core.memory.attachments import build_mcp_resource_message
+from aura.application.memory.attachments import build_mcp_resource_message
 
 
 def test_build_envelope_has_server_and_uri_attributes() -> None:

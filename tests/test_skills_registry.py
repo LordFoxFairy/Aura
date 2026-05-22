@@ -1,4 +1,4 @@
-"""Tests for aura.capabilities.skills_runtime.registry.SkillRegistry."""
+"""Tests for aura.infrastructure.skills.registry.SkillRegistry."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from aura.capabilities.skills_runtime.registry import SkillRegistry
-from aura.capabilities.skills_runtime.types import Skill
+from aura.infrastructure.skills.registry import SkillRegistry
+from aura.infrastructure.skills.types import Skill
 
 
 def _skill(name: str, *, desc: str = "d", body: str = "b") -> Skill:

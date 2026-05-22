@@ -22,11 +22,11 @@ from pathlib import Path
 
 from langchain_core.messages import AIMessage
 
+from aura.application.memory.context import Context
+from aura.application.memory.rules import RulesBundle
+from aura.application.tasks.factory import SubagentFactory
 from aura.config.schema import AuraConfig
-from aura.core.memory.context import Context
-from aura.core.memory.rules import RulesBundle
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import SubagentFactory
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import ReadCarryover, ReadRecord
 from tests.conftest import FakeChatModel, FakeTurn
 

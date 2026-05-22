@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from aura.core.tasks.store import TasksStore
+from aura.application.tasks.store import TasksStore
 from aura.tools.task_list import TaskList
 
 

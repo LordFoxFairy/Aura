@@ -1,24 +1,4 @@
-"""task_stop — cancel a still-running task (subagent or shell).
-
-Mirrors claude-code's ``TaskStopTool``: the tool looks up the detached
-``asyncio.Task`` handle on the parent Agent's running-tasks map, calls
-``.cancel()``, and awaits it (with a timeout so a stuck child doesn't
-block the parent's loop).
-
-For ``shell`` tasks (spawned by ``bash_background``), the tool instead
-reaches into the ``_running_shells`` map that holds the
-``asyncio.subprocess.Process`` handle, delivers SIGTERM → 3s → SIGKILL,
-and lets the bash_background coroutine flip the record to cancelled
-when it observes the early exit.
-
-The actual "mark cancelled on the record" happens inside the background
-coroutine (``run_task`` for subagents, ``bash_background``'s spawned
-watcher for shell) when it catches the early termination — that
-guarantees the record always reflects the true lifecycle regardless of
-who cancelled it (this tool, ``Agent.close()``, or Ctrl+C). This tool
-only arms the cancel; it doesn't touch the store directly for
-``running``-handle cases.
-"""
+"""task_stop — cancel a running task (subagent or shell)."""
 
 from __future__ import annotations
 
@@ -29,16 +9,10 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.core.tasks.store import TasksStore
+from aura.application.tasks.store import TasksStore
 from aura.schemas.tool import ToolError, ToolMetadata
 
-# Upper bound on how long we wait for the child to unwind after
-# ``.cancel()``. Most subagents unwind in a single event-loop tick; this
-# cap just stops the tool from hanging forever if a child has misbehaving
-# shielded coroutines.
 _CANCEL_TIMEOUT_SECONDS = 2.0
-# Between SIGTERM and SIGKILL for shell tasks. Mirrors bash_background's
-# own shutdown ladder so manual stop and timeout-kill behave identically.
 _SHELL_TERM_GRACE = 3.0
 
 
@@ -54,8 +28,6 @@ def _preview(args: dict[str, Any]) -> str:
 
 
 class TaskStop(BaseTool):
-    """Cancel a running subagent; error if task is unknown or already done."""
-
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     name: str = "task_stop"
@@ -73,10 +45,8 @@ class TaskStop(BaseTool):
         timeout_sec=None,
     )
     store: TasksStore
-    # See task_create for why ``running`` / ``running_shells`` are
-    # PrivateAttrs rather than pydantic fields — identity-sharing with the
-    # owning Agent. pydantic v2 would deep-copy them during model validation
-    # and break the live-reference contract.
+    # PrivateAttr — pydantic v2 deep-copies dict fields, breaking the
+    # identity-sharing contract with the owning Agent.
     _running: dict[str, asyncio.Task[None]] = PrivateAttr()
     _running_shells: dict[str, asyncio.subprocess.Process] = PrivateAttr()
 
@@ -119,41 +89,24 @@ class TaskStop(BaseTool):
     async def _stop_subagent(self, task_id: str) -> dict[str, Any]:
         handle = self._running.get(task_id)
         if handle is None or handle.done():
-            # Store says running but we have no live handle — race with the
-            # cleanup done-callback. Fall through to a direct mark so the
-            # record doesn't get stuck in "running" forever.
             self.store.mark_cancelled(task_id)
             return {"task_id": task_id, "status": "cancelled"}
         handle.cancel()
         try:
-            # Shield the await from the caller's own cancel so we get a
-            # clean read on the child's terminal state. The child raises
-            # CancelledError when it finishes unwinding, which is expected
-            # and swallowed here; any other exception surfaces for triage.
             await asyncio.wait_for(
                 asyncio.shield(handle), timeout=_CANCEL_TIMEOUT_SECONDS,
             )
         except asyncio.CancelledError:
             pass
         except TimeoutError:
-            # Child didn't unwind in time — force the record flag anyway
-            # so the LLM sees a consistent state. The detached task will
-            # eventually finish and run_task will no-op on an already-final
-            # record.
             self.store.mark_cancelled(task_id)
         return {"task_id": task_id, "status": "cancelled"}
 
     async def _stop_shell(self, task_id: str) -> dict[str, Any]:
         proc = self._running_shells.get(task_id)
         if proc is None or proc.returncode is not None:
-            # Either the process already exited (race with the watcher's
-            # cleanup) or it was never registered. Flip the record so the
-            # LLM doesn't see a stuck "running".
             self.store.mark_cancelled(task_id)
             return {"task_id": task_id, "status": "cancelled"}
-        # SIGTERM → grace → SIGKILL. Errors from terminate/kill are
-        # swallowed — we're in a cleanup path and cannot raise over
-        # the caller's intent.
         with contextlib.suppress(ProcessLookupError, Exception):
             proc.terminate()
         with contextlib.suppress(TimeoutError, Exception):
@@ -163,9 +116,5 @@ class TaskStop(BaseTool):
                 proc.kill()
             with contextlib.suppress(TimeoutError, Exception):
                 await asyncio.wait_for(proc.wait(), timeout=_SHELL_TERM_GRACE)
-        # The bash_background watcher may still be looping on line reads;
-        # mark cancelled here so the record is terminal immediately, and
-        # the watcher's own "final transition" path no-ops on an already-
-        # terminal record.
         self.store.mark_cancelled(task_id)
         return {"task_id": task_id, "status": "cancelled"}

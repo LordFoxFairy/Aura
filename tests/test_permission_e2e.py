@@ -26,14 +26,14 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from aura.application.hooks import HookChain
+from aura.application.hooks.permission import AskerResponse, make_permission_hook
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.hooks import HookChain
-from aura.core.hooks.permission import AskerResponse, make_permission_hook
-from aura.core.permissions import store
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import SessionRuleSet
-from aura.core.persistence.storage import SessionStorage
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import SessionRuleSet
+from aura.infrastructure import permission_store as store
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 

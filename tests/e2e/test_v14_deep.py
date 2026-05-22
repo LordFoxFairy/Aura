@@ -143,7 +143,7 @@ _SKILLS_LOAD_DRIVER = textwrap.dedent(
 
     sys.path.insert(0, {repo_root!r})
 
-    from aura.capabilities.skills_runtime.loader import load_skills
+    from aura.infrastructure.skills.loader import load_skills
 
     cwd = Path(sys.argv[1])
     home = Path(sys.argv[2])
@@ -210,9 +210,9 @@ _SKILL_VISIBILITY_DRIVER = textwrap.dedent(
 
     sys.path.insert(0, {repo_root!r})
 
-    from aura.core.memory.context import Context
-    from aura.core.memory.rules import RulesBundle
-    from aura.capabilities.skills_runtime.loader import load_skills
+    from aura.application.memory.context import Context
+    from aura.application.memory.rules import RulesBundle
+    from aura.infrastructure.skills.loader import load_skills
 
     cwd = Path(sys.argv[1])
     home = Path(sys.argv[2])
@@ -309,9 +309,9 @@ _ALLOWED_TOOLS_DRIVER = textwrap.dedent(
 
     sys.path.insert(0, {repo_root!r})
 
-    from aura.core.permissions.session import SessionRuleSet
-    from aura.capabilities.skills_runtime.command import install_skill_allow_rules
-    from aura.capabilities.skills_runtime.types import Skill
+    from aura.domain.permission.session import SessionRuleSet
+    from aura.infrastructure.skills.command import install_skill_allow_rules
+    from aura.infrastructure.skills.types import Skill
 
     out = Path(sys.argv[1])
 
@@ -364,13 +364,13 @@ _RESTRICT_TOOLS_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.hooks import HookChain
-    from aura.core.hooks.permission import make_permission_hook
-    from aura.core.permissions.session import RuleSet, SessionRuleSet
-    from aura.core.persistence import journal
-    from aura.core.persistence.storage import SessionStorage
-    from aura.capabilities.skills_runtime.restrict import install_restrict_lease
-    from aura.capabilities.skills_runtime.types import Skill
+    from aura.application.hooks import HookChain
+    from aura.application.hooks.permission import make_permission_hook
+    from aura.domain.permission.session import RuleSet, SessionRuleSet
+    from aura.infrastructure.persistence import journal
+    from aura.infrastructure.persistence.storage import SessionStorage
+    from aura.infrastructure.skills.restrict import install_restrict_lease
+    from aura.infrastructure.skills.types import Skill
     from tests.conftest import FakeChatModel, FakeTurn
 
     db_path = sys.argv[1]
@@ -381,7 +381,7 @@ _RESTRICT_TOOLS_DRIVER = textwrap.dedent(
 
     class _AlwaysAllowAsker:
         async def __call__(self, *, tool, args, rule_hint):
-            from aura.core.hooks.permission import AskerResponse
+            from aura.application.hooks.permission import AskerResponse
             return AskerResponse(choice="accept")
 
     cfg = AuraConfig.model_validate({{
@@ -427,7 +427,7 @@ _RESTRICT_TOOLS_DRIVER = textwrap.dedent(
         # lease just before the model sees the skill body.
         async def _install_lease(*, history, state, **_):
             install_restrict_lease(skill, state)
-        from aura.core.hooks import HookChain as HC
+        from aura.application.hooks import HookChain as HC
         agent = Agent(
             config=cfg,
             model=FakeChatModel(turns=turns),
@@ -502,14 +502,16 @@ _BYPASS_SEMANTICS_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.hooks import HookChain
-    from aura.core.hooks.permission import make_permission_hook
-    from aura.core.permissions.safety import (
-        DEFAULT_PROTECTED_READS, DEFAULT_PROTECTED_WRITES, SafetyPolicy,
+    from aura.application.hooks import HookChain
+    from aura.application.hooks.permission import make_permission_hook
+    from aura.domain.permission.safety import (
+        DEFAULT_PROTECTED_READS,
+        DEFAULT_PROTECTED_WRITES,
+        SafetyPolicy,
     )
-    from aura.core.permissions.session import RuleSet, SessionRuleSet
-    from aura.core.persistence import journal
-    from aura.core.persistence.storage import SessionStorage
+    from aura.domain.permission.session import RuleSet, SessionRuleSet
+    from aura.infrastructure.persistence import journal
+    from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel, FakeTurn
 
     db_path = sys.argv[1]
@@ -638,11 +640,11 @@ _DEDUP_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.hooks import HookChain
-    from aura.core.hooks.permission import make_permission_hook
-    from aura.core.permissions.session import RuleSet, SessionRuleSet
-    from aura.core.persistence import journal
-    from aura.core.persistence.storage import SessionStorage
+    from aura.application.hooks import HookChain
+    from aura.application.hooks.permission import make_permission_hook
+    from aura.domain.permission.session import RuleSet, SessionRuleSet
+    from aura.infrastructure.persistence import journal
+    from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel, FakeTurn
 
     db_path = sys.argv[1]
@@ -656,7 +658,7 @@ _DEDUP_DRIVER = textwrap.dedent(
     class _CountingAsker:
         async def __call__(self, *, tool, args, rule_hint):
             asker_calls["n"] += 1
-            from aura.core.hooks.permission import AskerResponse
+            from aura.application.hooks.permission import AskerResponse
             return AskerResponse(choice="accept")
 
     cfg = AuraConfig.model_validate({{
@@ -751,11 +753,11 @@ _SUBAGENT_LIFECYCLE_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.persistence import journal
-    from aura.core.persistence.storage import SessionStorage
-    from aura.core.tasks.factory import SubagentFactory
-    from aura.core.tasks.run import run_task
-    from aura.core.tasks.store import TasksStore
+    from aura.infrastructure.persistence import journal
+    from aura.infrastructure.persistence.storage import SessionStorage
+    from aura.application.tasks.factory import SubagentFactory
+    from aura.application.tasks.run import run_task
+    from aura.application.tasks.store import TasksStore
     from tests.conftest import FakeChatModel, FakeTurn
 
     journal_path = sys.argv[1]
@@ -837,11 +839,11 @@ _SUBAGENT_ISOLATION_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.persistence import journal
-    from aura.core.persistence.storage import SessionStorage
-    from aura.core.tasks.factory import SubagentFactory
-    from aura.core.tasks.run import run_task
-    from aura.core.tasks.store import TasksStore
+    from aura.infrastructure.persistence import journal
+    from aura.infrastructure.persistence.storage import SessionStorage
+    from aura.application.tasks.factory import SubagentFactory
+    from aura.application.tasks.run import run_task
+    from aura.application.tasks.store import TasksStore
     from tests.conftest import FakeChatModel, FakeTurn
 
     journal_path = sys.argv[1]
@@ -945,8 +947,8 @@ _MICROCOMPACT_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.persistence import journal
-    from aura.core.persistence.storage import SessionStorage
+    from aura.infrastructure.persistence import journal
+    from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel, FakeTurn
 
     db_path = sys.argv[1]
@@ -985,16 +987,16 @@ _MICROCOMPACT_DRIVER = textwrap.dedent(
     ]
 
     # Allow the read tool by default so we don't need an asker.
-    from aura.core.permissions.session import SessionRuleSet
-    from aura.core.hooks import HookChain
-    from aura.core.hooks.permission import make_permission_hook
-    from aura.core.permissions.session import RuleSet
-    from aura.core.permissions.rule import Rule
+    from aura.domain.permission.session import SessionRuleSet
+    from aura.application.hooks import HookChain
+    from aura.application.hooks.permission import make_permission_hook
+    from aura.domain.permission.session import RuleSet
+    from aura.domain.permission.rule import Rule
     rules = RuleSet([Rule(tool="read_file", content=None)])
 
     class _NeverAsker:
         async def __call__(self, *, tool, args, rule_hint):
-            from aura.core.hooks.permission import AskerResponse
+            from aura.application.hooks.permission import AskerResponse
             return AskerResponse(choice="deny")
 
     hook = make_permission_hook(
@@ -1089,8 +1091,8 @@ _AUTO_COMPACT_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.persistence import journal
-    from aura.core.persistence.storage import SessionStorage
+    from aura.infrastructure.persistence import journal
+    from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel, FakeTurn
 
     db_path = sys.argv[1]
@@ -1197,9 +1199,9 @@ _AURA_MD_RELOAD_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.hooks.file_watcher import FileWatcher
-    from aura.core.persistence import journal
-    from aura.core.persistence.storage import SessionStorage
+    from aura.application.hooks.file_watcher import FileWatcher
+    from aura.infrastructure.persistence import journal
+    from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel
 
     cwd = Path(sys.argv[1])
@@ -1294,7 +1296,7 @@ _LONG_HISTORY_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.persistence.storage import SessionStorage
+    from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel, FakeTurn
 
     db_path = sys.argv[1]
@@ -1379,8 +1381,8 @@ _INLINE_CMD_DRIVER = textwrap.dedent(
 
     sys.path.insert(0, {repo_root!r})
 
-    from aura.capabilities.skills_runtime.loader import render_skill_body
-    from aura.capabilities.skills_runtime.types import Skill
+    from aura.infrastructure.skills.loader import render_skill_body
+    from aura.infrastructure.skills.types import Skill
 
     out = Path(sys.argv[1])
 

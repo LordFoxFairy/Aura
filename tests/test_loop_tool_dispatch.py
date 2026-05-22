@@ -13,13 +13,13 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.capabilities.tools.registry import ToolRegistry
+from aura.application.hooks import HookChain
 from aura.config.schema import AuraConfig
 from aura.core import journal as journal_module
 from aura.core.agent import Agent
-from aura.core.hooks import HookChain
 from aura.core.loop import AgentLoop
-from aura.core.persistence.storage import SessionStorage
+from aura.domain.tool_registry import ToolRegistry
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.events import (
     AgentEvent,
     Final,
@@ -575,7 +575,7 @@ async def test_default_budget_hooks_do_not_cap_before_loop_level() -> None:
     # hook chain would silently win at a lower turn count and make the loop
     # cap dead code. With 30 scripted tool-call turns, loop.max_turns=None,
     # and default_hooks(), we must complete all 30 turns and reach natural stop.
-    from aura.core.hooks.budget import default_hooks
+    from aura.application.hooks.budget import default_hooks
 
     turns = [_make_tool_call_turn(f"tc_{i}") for i in range(30)]
     turns.append(FakeTurn(message=AIMessage(content="done")))

@@ -16,23 +16,23 @@ from typing import Any
 
 import pytest
 
-from aura.core.abort import AbortController
-from aura.core.persistence.storage import SessionStorage
-from aura.core.teams.backends import detection
-from aura.core.teams.backends.pane import PaneBackend, PaneBackendError, PaneHandle
-from aura.core.teams.backends.registry import (
+from aura.domain.abort import AbortController
+from aura.domain.team import TeammateMember
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.teams_backends import detection
+from aura.infrastructure.teams_backends.pane import PaneBackend, PaneBackendError, PaneHandle
+from aura.infrastructure.teams_backends.registry import (
     BackendUnavailable,
     _reset_for_tests,
     get_backend,
 )
-from aura.core.teams.types import TeammateMember
 
 
 class _LeaderStub:
     """Minimal manager stand-in — pane shutdown only reads ``team`` + ``_storage``."""
 
     def __init__(self, storage: SessionStorage, team_id: str) -> None:
-        from aura.core.teams.types import TeamRecord
+        from aura.domain.team import TeamRecord
 
         self._storage = storage
         self.team = TeamRecord(

@@ -21,15 +21,15 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatResult
 
-from aura.adapters.protocol.wire import task_notification_to_wire
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.run import run_task
+from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
-from aura.core.abort import AbortController, current_abort_signal
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.run import run_task
-from aura.core.tasks.store import TasksStore
-from aura.core.tasks.types import TaskNotification
+from aura.domain.abort import AbortController, current_abort_signal
+from aura.domain.task import TaskNotification
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.wire.wire import task_notification_to_wire
 from aura.tools.task_create import TaskCreate
 from aura.tools.task_get import TaskGet
 from aura.tools.task_output import TaskOutput

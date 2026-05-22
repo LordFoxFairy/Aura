@@ -1,4 +1,4 @@
-"""Tests for aura.core.permissions.rule — Rule parse, to_string, matches."""
+"""Tests for aura.domain.permission.rule — Rule parse, to_string, matches."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.permissions.rule import InvalidRuleError, Rule
-from aura.errors import AuraError
+from aura.domain.errors import AuraError
+from aura.domain.permission.rule import InvalidRuleError, Rule
 from aura.tools.base import build_tool
 
 

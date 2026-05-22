@@ -23,13 +23,13 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from aura.capabilities.skills_runtime.types import Skill
+from aura.application.compact.compact import _is_prompt_too_long
+from aura.application.compact.constants import MICROCOMPACT_CLEAR_MARKER
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.compact.compact import _is_prompt_too_long
-from aura.core.compact.constants import MICROCOMPACT_CLEAR_MARKER
-from aura.core.persistence import journal
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence import journal
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.skills.types import Skill
 from aura.schemas.todos import TodoItem
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -155,7 +155,7 @@ async def test_compact_replaces_middle_with_summary_preserves_tail(
 @pytest.mark.asyncio
 async def test_compact_keeps_last_n_turns_raw(tmp_path: Path) -> None:
     # Specifically assert KEEP_LAST_N_TURNS * 2 messages land raw at the tail.
-    from aura.core.compact.constants import KEEP_LAST_N_TURNS
+    from aura.application.compact.constants import KEEP_LAST_N_TURNS
 
     agent = _make_agent(tmp_path)
     _seed_history(agent, pairs=8)  # 16 messages total
@@ -266,7 +266,7 @@ async def test_compact_clears_nested_memory_fragments(tmp_path: Path) -> None:
     # Inject a synthetic nested fragment; compact must clear this — nested
     # memory is a DISCOVERY artefact and will be re-discovered on next
     # tool-touched-path.
-    from aura.core.memory.context import NestedFragment
+    from aura.application.memory.context import NestedFragment
 
     agent._context._nested_fragments.append(
         NestedFragment(source=tmp_path / "AURA.md", content="STALE")
@@ -282,7 +282,7 @@ async def test_compact_clears_nested_memory_fragments(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_compact_clears_matched_rules(tmp_path: Path) -> None:
-    from aura.core.memory.rules import Rule
+    from aura.application.memory.rules import Rule
 
     agent = _make_agent(tmp_path)
     _seed_history(agent, pairs=10)

@@ -14,12 +14,12 @@ from typing import Any
 
 import pytest
 
-from aura.core.abort import AbortController
-from aura.core.persistence.storage import SessionStorage
-from aura.core.teams.backends.in_process import InProcessBackend, InProcessHandle
-from aura.core.teams.backends.registry import get_backend
-from aura.core.teams.mailbox import Mailbox
-from aura.core.teams.types import TEAM_LEADER_NAME, TeammateMember, TeamMessage
+from aura.application.teams.mailbox import Mailbox
+from aura.domain.abort import AbortController
+from aura.domain.team import TEAM_LEADER_NAME, TeammateMember, TeamMessage
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.teams_backends.in_process import InProcessBackend, InProcessHandle
+from aura.infrastructure.teams_backends.registry import get_backend
 from aura.schemas.events import Final
 
 
@@ -136,7 +136,7 @@ def test_registry_returns_singleton_per_type() -> None:
 
 def test_member_backend_type_round_trips_via_config_json() -> None:
     """``backend_type`` + ``tmux_pane_id`` round-trip through Pydantic JSON."""
-    from aura.core.teams.types import TeamRecord
+    from aura.domain.team import TeamRecord
 
     member = TeammateMember(
         name="alice",
@@ -158,7 +158,7 @@ def test_member_backend_type_round_trips_via_config_json() -> None:
 
 def test_member_default_backend_type_is_in_process() -> None:
     """Existing config.json files (no backend_type field) load as in_process."""
-    from aura.core.teams.types import TeamRecord
+    from aura.domain.team import TeamRecord
 
     legacy_json = """{
         "team_id": "team-a",

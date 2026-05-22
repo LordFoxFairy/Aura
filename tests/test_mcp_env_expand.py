@@ -1,7 +1,7 @@
 """Tests for F-06-002: ``${VAR}`` / ``${VAR:-default}`` expansion in MCP
 stdio config.
 
-The expander itself lives in :mod:`aura.core.mcp.adapter`; the load-time
+The expander itself lives in :mod:`aura.infrastructure.mcp.adapter`; the load-time
 hook lives in :mod:`aura.config.mcp_store`. We exercise both layers:
 
 - :func:`_expand_env_vars` directly for grammar correctness.
@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from aura.config import mcp_store
-from aura.core.mcp.adapter import _expand_env_vars
+from aura.infrastructure.mcp.adapter import _expand_env_vars
 
 # ---------------------------------------------------------------------------
 # Direct expander grammar
@@ -177,7 +177,7 @@ def test_load_missing_var_warns_once_per_file(
     names. Missing references appear in non-required fields so the
     pydantic validator still accepts the entry; the warning is
     advisory."""
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
 
     journal_path = tmp_path / "journal.jsonl"
     journal.configure(journal_path)

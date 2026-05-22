@@ -9,11 +9,11 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from aura.capabilities.commands.export import ExportCommand
-from aura.capabilities.commands.registry import build_default_registry
+from aura.application.commands.export import ExportCommand
+from aura.application.commands.registry import build_default_registry
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
 
@@ -67,7 +67,7 @@ def test_export_command_registered_in_default_registry() -> None:
 
 
 def test_export_command_owned_by_capabilities_module() -> None:
-    assert ExportCommand.__module__ == "aura.capabilities.commands.export"
+    assert ExportCommand.__module__ == "aura.application.commands.export"
 
 
 # ---------------------------------------------------------------------------

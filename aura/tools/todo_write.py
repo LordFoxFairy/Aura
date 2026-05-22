@@ -1,8 +1,4 @@
-"""todo_write — replace the session's todo list.
-
-Schema (``TodoItem``) and ``<todos>`` rendering live in ``aura.core.todos``;
-this file is just the write path: pydantic-validated input → ``LoopState``.
-"""
+"""todo_write — replace the session's todo list."""
 
 from __future__ import annotations
 
@@ -23,11 +19,7 @@ class TodoWriteParams(BaseModel):
 
     @model_validator(mode="after")
     def _ensure_single_in_progress(self) -> TodoWriteParams:
-        # Matches claude-code TodoWrite policy: at most one item may be
-        # ``in_progress`` at a time. Multiple simultaneously-active items is
-        # the scope-creep signal the tool exists to discourage. Zero is fine
-        # — valid for "all pending" initial plans and "all completed" final
-        # states.
+        # At most one in_progress; zero is fine.
         n = sum(1 for t in self.todos if t.status == "in_progress")
         if n > 1:
             raise ValueError(
@@ -41,8 +33,6 @@ def _preview(args: dict[str, Any]) -> str:
 
 
 class TodoWrite(BaseTool):
-    # LoopState is a stdlib @dataclass, not a pydantic model; this lets pydantic
-    # accept it as a field type without trying to validate its internals.
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     name: str = "todo_write"
@@ -64,12 +54,7 @@ class TodoWrite(BaseTool):
     state: LoopState
 
     def _run(self, todos: list[TodoItem]) -> dict[str, Any]:
-        # ``state.slots.todos`` is the typed slot (Phase 1 / Task 5).
-        # ``LoopSlots`` is frozen so rebinding ``state.slots.todos`` is
-        # blocked, but the contained list is mutable — clear + extend
-        # matches the in-place mutation pattern used by ``turn_denials``
-        # and preserves list identity for any external observers
-        # (compact reset, /clear).
+        # Preserve list identity (LoopSlots is frozen but the list is mutable).
         self.state.slots.todos.clear()
         self.state.slots.todos.extend(todos)
         return {"message": "Todos updated."}

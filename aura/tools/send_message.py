@@ -7,7 +7,7 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.core.teams.types import (
+from aura.domain.team import (
     BROADCAST_RECIPIENT,
     MAX_BODY_CHARS,
     TEAM_LEADER_NAME,

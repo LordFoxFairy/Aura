@@ -1,4 +1,4 @@
-"""Tests for aura.core.hooks.permission.make_permission_hook.
+"""Tests for aura.application.hooks.permission.make_permission_hook.
 
 Covers the post-Plan-B decision flow in spec §5 — order, short-circuits,
 journal events, AskerResponse invariants, and the asker-exception-is-deny
@@ -22,15 +22,15 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks.permission import (
+from aura.application.hooks.permission import (
     AskerResponse,
     PermissionAsker,
     make_permission_hook,
 )
-from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet, SessionRuleSet
-from aura.core.permissions.store import PermissionStoreError
+from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.infrastructure.permission_store import PermissionStoreError
 from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
@@ -111,7 +111,7 @@ def journal_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
     def _capture(event: str, /, **fields: Any) -> None:
         events.append((event, fields))
 
-    from aura.core.persistence import journal as journal_mod
+    from aura.infrastructure.persistence import journal as journal_mod
 
     monkeypatch.setattr(journal_mod, "write", _capture)
     return events
@@ -529,7 +529,7 @@ async def test_ask_always_project_scope_calls_save_rule(
     def _fake_save(project_root: Path, r: Rule, *, scope: str = "project") -> None:
         save_calls.append((project_root, r, scope))
 
-    import aura.core.hooks.permission as permission_module
+    import aura.application.hooks.permission as permission_module
 
     monkeypatch.setattr(permission_module, "save_rule", _fake_save)
 
@@ -559,7 +559,7 @@ async def test_ask_always_project_save_failure_degrades_to_session(
     def _boom(project_root: Path, r: Rule, *, scope: str = "project") -> None:
         raise PermissionStoreError(source=str(project_root), detail="disk full")
 
-    import aura.core.hooks.permission as permission_module
+    import aura.application.hooks.permission as permission_module
 
     monkeypatch.setattr(permission_module, "save_rule", _boom)
 
@@ -622,7 +622,7 @@ async def test_asker_basexception_propagates_does_not_deny(
 
 async def test_hook_returns_decision_on_outcome() -> None:
     """The hook returns the Decision directly via Allow/Block/Replace (G4)."""
-    from aura.core.permissions.decision import Decision
+    from aura.application.permission.decision import Decision
 
     rules = RuleSet(rules=(Rule(tool="writer", content=None),))
     hook = make_permission_hook(
@@ -696,7 +696,7 @@ async def test_user_rule_wins_audit_over_default_when_both_match(
     both match, RuleSet iterates in tuple order → first-match wins. The
     CLI composes ``disk_rules + defaults`` (user rules first) so the
     user's explicit intent is what lands in the audit trail."""
-    from aura.core.permissions.matchers import path_prefix_on
+    from aura.domain.permission.matchers import path_prefix_on
     # Simulate the CLI's composition: user rule first, default tool-wide last.
     user_rule = Rule(tool="read_file", content="/tmp/specific")
     default_rule = Rule(tool="read_file", content=None)

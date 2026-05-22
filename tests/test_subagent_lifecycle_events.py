@@ -24,13 +24,13 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.run import run_task
+from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence import journal as journal_module
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.run import run_task
-from aura.core.tasks.store import TasksStore
+from aura.infrastructure.persistence import journal as journal_module
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 

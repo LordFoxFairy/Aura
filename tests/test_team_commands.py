@@ -7,20 +7,20 @@ from typing import cast
 
 import pytest
 
-from aura.capabilities.commands.registry import build_default_registry, dispatch
-from aura.capabilities.commands.team import TeamCommand
-from aura.capabilities.commands.team import TeamCommand as CapabilityTeamCommand
+from aura.application.commands.registry import build_default_registry, dispatch
+from aura.application.commands.team import TeamCommand
+from aura.application.commands.team import TeamCommand as CapabilityTeamCommand
+from aura.application.teams.manager import TeamManager
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
-from aura.core.teams.manager import TeamManager
-from aura.core.teams.types import TeammateMember
+from aura.domain.team import TeammateMember
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
 
 def test_team_command_core_facade_points_at_capabilities_module() -> None:
     assert TeamCommand is CapabilityTeamCommand
-    assert TeamCommand.__module__ == "aura.capabilities.commands.team"
+    assert TeamCommand.__module__ == "aura.application.commands.team"
 
 
 def _members(agent: Agent) -> list[TeammateMember]:
@@ -190,7 +190,7 @@ async def test_team_add_pane_backend_outside_tmux_errors(
     monkeypatch.delenv("TMUX", raising=False)
     # Reset registry singletons so the env-gate check actually runs
     # (it's bypassed if a singleton was cached by a prior test).
-    from aura.core.teams.backends.registry import _reset_for_tests
+    from aura.infrastructure.teams_backends.registry import _reset_for_tests
     _reset_for_tests()
     agent = _agent(tmp_path)
     cmd = TeamCommand()

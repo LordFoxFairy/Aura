@@ -1,4 +1,4 @@
-"""Tests for aura.core.hooks.logging — make_event_logger_hooks + wrap_with_event_logger."""
+"""Tests for aura.application.hooks.logging — make_event_logger_hooks + wrap_with_event_logger."""
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
+from aura.application.hooks import HookChain
+from aura.application.hooks.logging import make_event_logger_hooks, wrap_with_event_logger
 from aura.core import journal as journal_module
-from aura.core.hooks import HookChain
-from aura.core.hooks.logging import make_event_logger_hooks, wrap_with_event_logger
 from aura.schemas.permissions import Allow
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
@@ -247,7 +247,7 @@ def test_wrap_with_event_logger_preserves_inner_order() -> None:
         inner_calls.append("inner_post_model")
 
     async def _inner_pre_tool(**_: Any) -> Any:
-        from aura.core.permissions.decision import Decision
+        from aura.application.permission.decision import Decision
         from aura.schemas.permissions import Allow
         inner_calls.append("inner_pre_tool")
         return Allow(decision=Decision(allow=True, reason="mode_bypass"))

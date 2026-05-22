@@ -14,7 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 from aura.config.schema import AuraConfigError, MCPServerConfig
-from aura.core.mcp.manager import MCPManager
+from aura.infrastructure.mcp.manager import MCPManager
 
 # --- schema validation -----------------------------------------------------
 
@@ -163,7 +163,7 @@ def test_build_connections_mixed_transports() -> None:
 def test_unsupported_transport_raises_aura_config_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     monkeypatch.setattr(
         manager_mod, "_supported_transports", lambda: {"stdio"},
@@ -180,7 +180,7 @@ def test_disabled_server_bypasses_transport_gate(
 ) -> None:
     # Disabled servers are filtered first, so even an unsupported transport
     # entry doesn't break startup as long as it's off.
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     monkeypatch.setattr(
         manager_mod, "_supported_transports", lambda: {"stdio"},
@@ -199,7 +199,7 @@ def test_disabled_server_bypasses_transport_gate(
 async def test_start_all_passes_sse_connection_dict_to_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     captured: dict[str, Any] = {}
 

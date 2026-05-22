@@ -17,23 +17,23 @@ from uuid import uuid4
 
 from langchain_core.tools import BaseTool
 
-from aura.adapters.protocol.stream import stream_agent_wire
-from aura.adapters.protocol.wire import agent_state_to_wire, permission_request_to_wire
+from aura.application.hooks import HookChain
+from aura.application.hooks.permission import AskerResponse, make_permission_hook
 from aura.config.loader import load_config
 from aura.core.agent import Agent
-from aura.core.hooks import HookChain
-from aura.core.hooks.permission import AskerResponse, make_permission_hook
-from aura.core.llm import make_model_for_spec
-from aura.core.permissions import SafetyPolicy
-from aura.core.permissions import store as perm_store
-from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.safety import (
+from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.safety import (
     DEFAULT_PROTECTED_READS,
     DEFAULT_PROTECTED_WRITES,
+    SafetyPolicy,
 )
-from aura.core.permissions.session import RuleSet, SessionRuleSet
-from aura.core.persistence.storage import SessionStorage
+from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.infrastructure import permission_store as perm_store
+from aura.infrastructure.llm import make_model_for_spec
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.wire.stream import stream_agent_wire
+from aura.infrastructure.wire.wire import agent_state_to_wire, permission_request_to_wire
 from aura.schemas.tool_meta_access import meta_dict
 
 

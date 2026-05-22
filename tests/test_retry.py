@@ -1,4 +1,4 @@
-"""Tests for aura.core.retry — async retry helper with exponential backoff."""
+"""Tests for aura.infrastructure.retry — async retry helper with exponential backoff."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from typing import Any
 import pytest
 
 from aura.config.schema import RetryConfig
-from aura.core.persistence import journal
-from aura.core.retry import (
+from aura.infrastructure.persistence import journal
+from aura.infrastructure.retry import (
     _RETRY_AFTER_MAX_S,
     _extract_retry_after,
     _is_retriable,

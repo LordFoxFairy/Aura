@@ -9,10 +9,10 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from aura.capabilities.commands.registry import build_default_registry, dispatch
+from aura.application.commands.registry import build_default_registry, dispatch
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionMeta, SessionStorage
+from aura.infrastructure.persistence.storage import SessionMeta, SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -122,8 +122,6 @@ def test_session_meta_timestamps_are_naive_datetimes(tmp_path: Path) -> None:
     assert sessions[0].created_at.tzinfo is None
 
 
-# ---- restore_session_into ------------------------------------------------
-
 def test_resume_restores_full_history(tmp_path: Path) -> None:
     """Switching session_id makes the agent see the previous session's history.
 
@@ -186,7 +184,7 @@ async def test_resume_picker_shows_first_prompt_preview(
     tmp_path: Path,
 ) -> None:
     """The picker's row label embeds the session's first user prompt."""
-    from aura.capabilities.commands.builtin import session_label
+    from aura.application.commands.builtin import session_label
 
     storage = SessionStorage(tmp_path / "db")
     storage.save(
@@ -204,7 +202,7 @@ async def test_resume_picker_shows_first_prompt_preview(
 # ---- format_relative_time --------------------------------------------------
 
 def test_format_relative_time_recent() -> None:
-    from aura.capabilities.commands.builtin import format_relative_time
+    from aura.application.commands.builtin import format_relative_time
 
     now = datetime(2026, 4, 25, 12, 0, 0)
     assert format_relative_time(datetime(2026, 4, 25, 11, 59, 58), now) == (
@@ -216,7 +214,7 @@ def test_format_relative_time_recent() -> None:
 
 
 def test_format_relative_time_minutes_hours_days() -> None:
-    from aura.capabilities.commands.builtin import format_relative_time
+    from aura.application.commands.builtin import format_relative_time
 
     now = datetime(2026, 4, 25, 12, 0, 0)
     assert format_relative_time(datetime(2026, 4, 25, 11, 0, 0), now) == (
@@ -234,7 +232,7 @@ def test_format_relative_time_minutes_hours_days() -> None:
 
 
 def test_format_relative_time_handles_clock_skew() -> None:
-    from aura.capabilities.commands.builtin import format_relative_time
+    from aura.application.commands.builtin import format_relative_time
 
     now = datetime(2026, 4, 25, 12, 0, 0)
     # ``when`` after ``now`` (clock skew between SQLite host and

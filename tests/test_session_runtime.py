@@ -17,11 +17,11 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import SessionRuleSet
-from aura.core.persistence.storage import SessionStorage
-from aura.core.runtime.session import SessionRuntime
-from aura.core.tasks.types import TaskNotification
+from aura.application.runtime.session import SessionRuntime
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import SessionRuleSet
+from aura.domain.task import TaskNotification
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import ReadCarryover, ReadRecord
 
 # ----------------------------------------------------------------------

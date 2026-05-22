@@ -20,18 +20,18 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from aura.config.schema import AuraConfig
-from aura.core.abort import AbortController
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.runners import (
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.runners import (
     InProcessTeammateTask,
     LocalAgentTask,
     RemoteAgentTask,
 )
-from aura.core.tasks.store import TasksStore
-from aura.core.teams.mailbox import Mailbox
-from aura.core.teams.types import TeamMessage
+from aura.application.tasks.store import TasksStore
+from aura.application.teams.mailbox import Mailbox
+from aura.config.schema import AuraConfig
+from aura.domain.abort import AbortController
+from aura.domain.team import TeamMessage
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.events import Final
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -208,7 +208,7 @@ async def test_in_process_teammate_task_abort_idempotent(tmp_path: Path) -> None
 @pytest.mark.asyncio
 async def test_remote_agent_task_spawns_and_exits_cleanly(tmp_path: Path) -> None:
     # Build a tiny stand-in entrypoint module — far cheaper than booting
-    # the real ``cli.teammate_entrypoint`` (which loads the full Aura
+    # the real ``cli teammate`` subcommand (which loads the full Aura
     # config) and exercises the same subprocess plumbing.
     stub_dir = tmp_path / "remote_pkg"
     stub_dir.mkdir()
@@ -219,6 +219,10 @@ async def test_remote_agent_task_spawns_and_exits_cleanly(tmp_path: Path) -> Non
             import argparse
             import sys
             p = argparse.ArgumentParser()
+            # Absorb the ``teammate`` subcommand token RemoteAgentTask
+            # prepends so the stub matches the real ``python -m cli
+            # teammate ...`` shape.
+            p.add_argument("subcommand", choices=["teammate"])
             p.add_argument("--team-id", required=True)
             p.add_argument("--member", required=True)
             p.add_argument("--storage-root", required=True)
@@ -256,6 +260,7 @@ async def test_remote_agent_task_spawns_and_exits_cleanly(tmp_path: Path) -> Non
         env_python,
         "-m",
         "remote_pkg.stub_entry",
+        "teammate",
         "--team-id",
         "alpha",
         "--member",
@@ -288,6 +293,7 @@ async def test_remote_agent_task_abort_terminates_process(tmp_path: Path) -> Non
             import argparse
             import time
             p = argparse.ArgumentParser()
+            p.add_argument("subcommand", choices=["teammate"])
             p.add_argument("--team-id")
             p.add_argument("--member")
             p.add_argument("--storage-root")

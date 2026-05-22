@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from aura.errors import AuraError
+from aura.domain.errors import AuraError
 
 
 class ProviderConfig(BaseModel):
@@ -125,7 +125,7 @@ class RetryConfig(BaseModel):
     Wraps the narrow ``model.ainvoke(...)`` call in the agent loop — not the
     whole turn, and not tool invocations (those have their own semantics).
     ``None`` on :class:`AuraConfig.retry` means "use library defaults"
-    (:func:`aura.core.retry.with_retry` bakes those in); setting any field
+    (:func:`aura.infrastructure.retry.with_retry` bakes those in); setting any field
     here overrides the corresponding default while the rest keep library
     values. Bounds are defensive against footguns — ``max_attempts`` capped
     at 10 keeps a stuck provider from holding a turn hostage for minutes.
@@ -320,12 +320,12 @@ class AuraConfig(BaseModel):
     compact: CompactConfig = Field(default_factory=CompactConfig)
     # Retry policy for transient LLM provider errors (HTTP 429 / 503 / 504,
     # connection drops, "overloaded"). ``None`` = use library defaults from
-    # :func:`aura.core.retry.with_retry` (3 attempts, 1s base, 30s cap,
+    # :func:`aura.infrastructure.retry.with_retry` (3 attempts, 1s base, 30s cap,
     # jitter on). Pin ``max_attempts=1`` to disable retries entirely.
     retry: RetryConfig | None = None
     # Optional per-user override for the context window the status bar uses
     # to render the live context-pressure ratio. When ``None``, Aura looks
-    # the window up by model spec via ``aura.core.llm.get_context_window``;
+    # the window up by model spec via ``aura.infrastructure.llm.get_context_window``;
     # when set, this value wins regardless of model. Useful for:
     #  - frontier models not yet in the table that the user knows the exact
     #    window size of
@@ -339,7 +339,7 @@ class AuraConfig(BaseModel):
     # NOTE: permission config does NOT live here. Providers/router/storage/log
     # are runtime wiring; permissions are a separate concern with their own
     # file(s) at ``.aura/settings.json`` + ``.aura/settings.local.json``,
-    # loaded by ``aura.core.permissions.store.load``. Keeping them separate
+    # loaded by ``aura.infrastructure.permission_store.load``. Keeping them separate
     # means each file has ONE purpose and the user knows exactly which file
     # to edit. See spec §7.
 

@@ -14,10 +14,10 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage
 
+from aura.application.compact import CompactResult
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.compact import CompactResult
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -130,7 +130,7 @@ def _read_journal_lines(log: Path) -> list[dict[str, Any]]:
 async def test_breaker_emits_skip_journal_event(tmp_path: Path) -> None:
     import dataclasses as _dc
 
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
     log = tmp_path / "audit.jsonl"
     journal.configure(log)
     try:

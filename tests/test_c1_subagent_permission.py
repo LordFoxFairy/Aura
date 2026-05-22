@@ -36,18 +36,18 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
-from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.safety import DEFAULT_SAFETY
-from aura.core.permissions.session import RuleSet, SessionRuleSet
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import (
+from aura.application.tasks.factory import (
     SUBAGENT_AUTO_DENY_FEEDBACK,
     SubagentFactory,
     _SubagentPermissionAsker,
 )
+from aura.config.schema import AuraConfig
+from aura.core.agent import Agent
+from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.safety import DEFAULT_SAFETY
+from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import LoopState
 from aura.schemas.tool import (
     ToolMetadata,

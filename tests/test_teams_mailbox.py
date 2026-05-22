@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from aura.core.persistence.storage import SessionStorage
-from aura.core.teams.mailbox import Mailbox
-from aura.core.teams.types import MAX_BODY_CHARS, TeamMessage
+from aura.application.teams.mailbox import Mailbox
+from aura.domain.team import MAX_BODY_CHARS, TeamMessage
+from aura.infrastructure.persistence.storage import SessionStorage
 
 
 def _msg(

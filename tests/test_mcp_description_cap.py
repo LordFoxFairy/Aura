@@ -4,7 +4,7 @@ Audit: ``docs/audit-2026-04-25/06-mcp.md`` finding F-06-005. OpenAPI-generated
 MCP servers can dump 15-60 KB of endpoint docs into ``tool.description``;
 forwarding that verbatim into the LLM tool-schema bleeds tokens on every
 turn AND breaks prompt-cache stability. The cap lives in
-:func:`aura.core.mcp.adapter.add_aura_metadata` and matches claude-code's
+:func:`aura.infrastructure.mcp.adapter.add_aura_metadata` and matches claude-code's
 exact constant for parity with ``src/services/mcp/client.ts:218``.
 """
 
@@ -17,12 +17,12 @@ from typing import Any
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
-from aura.core.mcp.adapter import (
+from aura.infrastructure.mcp.adapter import (
     _MCP_DESCRIPTION_CAP,
     _cap_description,
     add_aura_metadata,
 )
-from aura.core.persistence import journal
+from aura.infrastructure.persistence import journal
 from aura.schemas.tool_meta_access import meta_dict
 
 

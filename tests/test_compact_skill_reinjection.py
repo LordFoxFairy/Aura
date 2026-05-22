@@ -13,10 +13,10 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from aura.capabilities.skills_runtime.types import Skill
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.skills.types import Skill
 from tests.conftest import FakeChatModel, FakeTurn
 
 

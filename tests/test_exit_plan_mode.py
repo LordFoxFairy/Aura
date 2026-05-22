@@ -16,14 +16,15 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks.permission import AskerResponse, make_permission_hook
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet, SessionRuleSet
+from aura.application.hooks.permission import AskerResponse, make_permission_hook
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
 from aura.schemas.tool import (
     ToolError,
     ToolResult,  # noqa: F401
 )
+from aura.tools.ask_user import FormQuestionDict
 from aura.tools.base import build_tool
 from aura.tools.exit_plan_mode import ExitPlanMode
 
@@ -46,7 +47,7 @@ class _FakeAgent:
 
 
 class _RecordingAsker:
-    """QuestionAsker spy — records each call, returns a configured answer.
+    """UserAsker spy — records each call, returns a configured answer.
 
     Mirrors the ``_stub_asker`` in ``test_ask_user.py`` but as a class so
     tests can mutate ``return_value`` between calls (exercising the
@@ -55,18 +56,13 @@ class _RecordingAsker:
 
     def __init__(self, return_value: str = "Yes") -> None:
         self.return_value = return_value
-        self.calls: list[dict[str, Any]] = []
+        self.calls: list[list[FormQuestionDict]] = []
 
     async def __call__(
-        self,
-        question: str,
-        options: list[str] | None,
-        default: str | None,
-    ) -> str:
-        self.calls.append(
-            {"question": question, "options": options, "default": default},
-        )
-        return self.return_value
+        self, questions: list[FormQuestionDict],
+    ) -> dict[str, str]:
+        self.calls.append(list(questions))
+        return {q.get("question", ""): self.return_value for q in questions}
 
 
 def _make_tool(
@@ -93,10 +89,10 @@ async def test_asks_user_before_mutating_mode() -> None:
     observed_modes: list[str] = []
 
     async def _peeking_asker(
-        _q: str, _opts: list[str] | None, _default: str | None,
-    ) -> str:
+        questions: list[FormQuestionDict],
+    ) -> dict[str, str]:
         observed_modes.append(agent.mode)
-        return "Yes"
+        return {q.get("question", ""): "Yes" for q in questions}
 
     tool = ExitPlanMode(
         mode_setter=agent.set_mode,
@@ -125,10 +121,13 @@ async def test_approval_flips_mode_and_includes_plan_in_result() -> None:
     assert len(asker.calls) == 1
     # The rendered prompt embeds the plan so the user sees WHAT they're
     # approving — not just a naked yes/no.
-    assert "1. edit foo" in asker.calls[0]["question"]
-    assert asker.calls[0]["options"] == ["Yes", "No"]
-    # Fail-safe default: "No" so a stray Enter doesn't auto-approve.
-    assert asker.calls[0]["default"] == "No"
+    only_q = asker.calls[0][0]
+    assert "1. edit foo" in only_q["question"]
+    options = only_q.get("options") or []
+    option_labels = [opt["label"] for opt in options]
+    assert option_labels == ["Yes", "No"]
+    # The header chip stays under the 12-char limit imposed by FormQuestion.
+    assert len(only_q["header"]) <= 12
 
 
 async def test_approval_with_accept_edits_target() -> None:

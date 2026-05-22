@@ -20,17 +20,17 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from aura.capabilities.commands import CommandRegistry
-from aura.capabilities.commands.builtin import HelpCommand
-from aura.capabilities.commands.registry import CommandRegistry as _Reg
-from aura.capabilities.commands.registry import build_default_registry
-from aura.capabilities.commands.types import CommandResult, CommandSource
-from aura.capabilities.skills_runtime.command import SkillCommand
-from aura.capabilities.skills_runtime.types import Skill
+from aura.application.commands import CommandRegistry
+from aura.application.commands.builtin import HelpCommand
+from aura.application.commands.registry import CommandRegistry as _Reg
+from aura.application.commands.registry import build_default_registry
+from aura.application.commands.types import CommandResult, CommandSource
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence import journal as journal_module
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence import journal as journal_module
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.skills.command import SkillCommand
+from aura.infrastructure.skills.types import Skill
 from aura.tools.skill import SkillTool
 from tests.conftest import FakeChatModel
 

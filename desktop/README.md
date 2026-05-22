@@ -80,18 +80,15 @@ User prompts go the other way as `{"kind":"prompt","text":"..."}` written to std
 Permission responses go back as `{"kind":"permission_response","id":"...","choice":"accept|always|deny","feedback":"..."}`.
 Tool events should be correlated by `id` whenever present. Legacy tool events may omit `id`; the frontend generates a local id for rendering and falls back to the most recent incomplete tool with the same name.
 
-### AG-UI and stream helpers
+### Wire event stream
 
-External integrations should use the shared adapter chain instead of reading `AgentEvent` directly:
+External integrations should drive the agent through `stream_agent_wire`, which yields the canonical Aura wire events:
 
 ```text
 Agent.astream(prompt)
   -> aura.adapters.protocol.wire.event_to_wire(...)
-  -> aura.adapters.protocol.agui.AguiAdapter.convert(...)
-  -> aura.adapters.protocol.stream.encode_json_sse(...)
+  -> aura.adapters.protocol.stream.stream_agent_wire(...)
 ```
-
-`aura.adapters.protocol.stream` includes SSE framing helpers for outbound Aura run events. This is separate from MCP transport configuration that also uses the term SSE.
 
 ### Rust bridge events
 

@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 import pytest
 from prompt_toolkit.document import Document
 
-from aura.capabilities.commands import CommandRegistry
-from aura.capabilities.commands.types import CommandResult
+from aura.application.commands import CommandRegistry
+from aura.application.commands.types import CommandResult
 from cli.completion import SlashCommandCompleter, resolve_history_path
 
 if TYPE_CHECKING:

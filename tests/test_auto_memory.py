@@ -16,9 +16,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aura.core.memory.project_memory import clear_cache, load_project_memory
-from aura.core.memory.system_prompt import build_system_prompt
-from aura.core.persistence.storage import SessionStorage
+from aura.application.memory.project_memory import clear_cache, load_project_memory
+from aura.application.memory.system_prompt import build_system_prompt
+from aura.infrastructure.persistence.storage import SessionStorage
 
 
 def test_memory_dir_resolves_under_per_project_layout(tmp_path: Path) -> None:

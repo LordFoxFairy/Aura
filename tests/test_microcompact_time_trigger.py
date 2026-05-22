@@ -11,7 +11,7 @@ import time
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from aura.core.compact.microcompact import MicrocompactPolicy, apply_microcompact
+from aura.application.compact.microcompact import MicrocompactPolicy, apply_microcompact
 
 
 def _ai_call(name: str, tc_id: str) -> AIMessage:

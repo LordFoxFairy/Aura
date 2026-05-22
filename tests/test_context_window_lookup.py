@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from aura.core.llm import get_context_window
+from aura.infrastructure.llm import get_context_window
 
 
 class TestKnownFamilies:
@@ -81,7 +81,7 @@ class TestUnknownDefault:
         assert get_context_window("totally-unknown-model-spec-2099") == 128_000
 
     def test_default_constant_is_128k(self) -> None:
-        from aura.core.llm import _DEFAULT_CONTEXT_WINDOW
+        from aura.infrastructure.llm import _DEFAULT_CONTEXT_WINDOW
         assert _DEFAULT_CONTEXT_WINDOW == 128_000
 
 

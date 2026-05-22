@@ -1,4 +1,4 @@
-"""Tests for aura.core.llm.create — lazy SDK loading + secret resolution."""
+"""Tests for aura.infrastructure.llm.create — lazy SDK loading + secret resolution."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from aura.config.schema import AuraConfigError, ProviderConfig
-from aura.core.llm import (
+from aura.infrastructure.llm import (
     MissingCredentialError,
     MissingProviderDependencyError,
     create,
@@ -34,7 +34,7 @@ def _stub_kwargs(model: Any) -> dict[str, Any]:
 
 
 def test_create_openai_happy_path_uses_default_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
@@ -51,7 +51,7 @@ def test_create_openai_happy_path_uses_default_env_var(monkeypatch: pytest.Monke
 
 
 def test_create_openai_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
@@ -72,7 +72,7 @@ def test_create_openai_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_create_openai_plaintext_api_key_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -86,7 +86,7 @@ def test_create_openai_plaintext_api_key_wins(monkeypatch: pytest.MonkeyPatch) -
 def test_create_openai_api_key_env_preferred_over_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.setenv("CUSTOM_KEY", "custom")
@@ -99,7 +99,7 @@ def test_create_openai_api_key_env_preferred_over_default(
 
 
 def test_create_anthropic_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubAnthropic)
@@ -115,7 +115,7 @@ def test_create_anthropic_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_create_ollama_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOllama)
 
@@ -129,7 +129,7 @@ def test_create_ollama_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_create_ollama_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOllama)
 
@@ -147,7 +147,7 @@ def test_create_ollama_with_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_create_missing_default_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -160,7 +160,7 @@ def test_create_missing_default_env_raises(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_create_missing_api_key_env_var_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("CUSTOM_KEY", raising=False)
@@ -173,7 +173,7 @@ def test_create_missing_api_key_env_var_raises(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_create_missing_sdk_raises_install_hint(monkeypatch: pytest.MonkeyPatch) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     def _boom(_protocol: str) -> type:
         raise MissingProviderDependencyError(
@@ -199,7 +199,7 @@ def test_create_errors_are_aura_config_error_subclasses() -> None:
 
 def test_create_empty_plaintext_api_key_falls_back_to_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """An empty-string api_key must NOT be forwarded — treat as missing."""
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -216,7 +216,7 @@ def test_create_empty_plaintext_api_key_falls_back_to_env(monkeypatch: pytest.Mo
 def test_create_empty_plaintext_api_key_with_no_fallback_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -230,7 +230,7 @@ def test_create_empty_plaintext_api_key_with_no_fallback_raises(
 def test_create_forwards_provider_params_to_constructor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -255,7 +255,7 @@ def test_create_resolved_fields_win_over_params(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """If a user puts 'model' in params, the resolved model_name still wins."""
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -288,7 +288,7 @@ def test_protocols_dict_matches_provider_literal() -> None:
     from typing import get_args
 
     from aura.config.schema import ProviderConfig
-    from aura.core.llm import _PROTOCOLS
+    from aura.infrastructure.llm import _PROTOCOLS
 
     # Pydantic's Literal annotation is accessible via the model's field info.
     protocol_field = ProviderConfig.model_fields["protocol"]

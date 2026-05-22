@@ -1,0 +1,335 @@
+"""Hook orchestration — :class:`HookChain` and built-in hook factories.
+
+Pure-type contracts (Protocols, outcome value objects) live in
+:mod:`aura.domain.hook`; this package owns composition + lifecycle
+journaling. Re-exported here so existing call sites keep a single
+import surface.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.tools import BaseTool
+
+from aura.application.permission.decision import Decision
+from aura.domain.hook import (
+    PRE_TOOL_ASK_PENDING_KEY,
+    CwdChangedHook,
+    FileChangedHook,
+    FileChangeKind,
+    NotificationHook,
+    NotificationKind,
+    PostModelHook,
+    PostToolHook,
+    PreModelHook,
+    PreToolHook,
+    SessionStartHook,
+    StopHook,
+    StopReason,
+    UserPromptSubmitHook,
+    UserPromptSubmitOutcome,
+)
+from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
+from aura.schemas.state import LoopState
+from aura.schemas.tool import ToolResult
+
+_ASK_RESOLVED_REASONS = frozenset({"user_accept", "user_always"})
+
+
+def _merge_outcomes(outcomes: list[Outcome], ask_requested: bool) -> Outcome:
+    """Apply spec §3.2 precedence on a pure-Outcome chain."""
+    for o in outcomes:
+        if isinstance(o, Block):
+            return o
+    for o in outcomes:
+        if isinstance(o, Replace):
+            return o
+    first_authoritative: Allow | None = None
+    last_allow: Allow | None = None
+    for o in outcomes:
+        if isinstance(o, Allow):
+            last_allow = o
+            if first_authoritative is None:
+                reason = getattr(getattr(o, "decision", None), "reason", "mode_bypass")
+                if reason != "mode_bypass":
+                    first_authoritative = o
+    winner_allow = first_authoritative if first_authoritative is not None else last_allow
+    if winner_allow is not None:
+        if ask_requested:
+            winner_reason = getattr(
+                getattr(winner_allow, "decision", None), "reason", "mode_bypass"
+            )
+            if winner_reason not in _ASK_RESOLVED_REASONS:
+                for o in outcomes:
+                    if isinstance(o, Ask):
+                        return o
+                return Ask(reason="pending escalation")
+        return winner_allow
+    for o in outcomes:
+        if isinstance(o, Ask):
+            return o
+    raise AssertionError("_merge_outcomes called with empty outcomes")
+
+
+@dataclass
+class HookChain:
+    pre_model: list[PreModelHook] = field(default_factory=list)
+    post_model: list[PostModelHook] = field(default_factory=list)
+    pre_tool: list[PreToolHook] = field(default_factory=list)
+    post_tool: list[PostToolHook] = field(default_factory=list)
+    file_changed: list[FileChangedHook] = field(default_factory=list)
+    cwd_changed: list[CwdChangedHook] = field(default_factory=list)
+    session_start: list[SessionStartHook] = field(default_factory=list)
+    user_prompt_submit: list[UserPromptSubmitHook] = field(default_factory=list)
+    notification: list[NotificationHook] = field(default_factory=list)
+    stop: list[StopHook] = field(default_factory=list)
+
+    async def run_pre_model(
+        self, *, history: list[BaseMessage], state: LoopState,
+    ) -> None:
+        for hook in self.pre_model:
+            await hook(history=history, state=state)
+
+    async def run_post_model(
+        self,
+        *,
+        ai_message: AIMessage,
+        history: list[BaseMessage],
+        state: LoopState,
+    ) -> None:
+        for hook in self.post_model:
+            await hook(ai_message=ai_message, history=history, state=state)
+
+    async def run_pre_tool(
+        self,
+        *,
+        tool: BaseTool,
+        args: dict[str, Any],
+        state: LoopState,
+        **kwargs: Any,
+    ) -> Outcome:
+        """Merge pre_tool outcomes per spec §3.2."""
+        from aura.infrastructure.persistence import journal
+
+        outcomes: list[Outcome] = []
+        ask_requested = False
+        prior_ask_pending = state.slots.ask_pending
+        try:
+            for hook in self.pre_tool:
+                raw = await hook(tool=tool, args=args, state=state, **kwargs)
+                outcomes.append(raw)
+
+                if isinstance(raw, Ask) and not ask_requested:
+                    ask_requested = True
+                    state.slots = dataclasses.replace(
+                        state.slots, ask_pending=True,
+                    )
+
+                if isinstance(raw, Block | Ask | Replace):
+                    decision_attr = getattr(raw, "decision", None)
+                    hook_name = (
+                        f"{getattr(hook, '__module__', '')}."
+                        f"{getattr(hook, '__qualname__', repr(hook))}"
+                    ).lstrip(".")
+                    journal.write(
+                        "pre_tool_hook_decision",
+                        hook=hook_name,
+                        tool=tool.name,
+                        allow=False if decision_attr is None else decision_attr.allow,
+                        reason="" if decision_attr is None else decision_attr.reason,
+                    )
+
+                if isinstance(raw, Block):
+                    return raw
+
+            if outcomes:
+                return _merge_outcomes(outcomes, ask_requested)
+            return Allow(decision=Decision(allow=True, reason="chain_empty"))
+        finally:
+            if state.slots.ask_pending != prior_ask_pending:
+                state.slots = dataclasses.replace(
+                    state.slots, ask_pending=prior_ask_pending,
+                )
+
+    async def run_post_tool(
+        self,
+        *,
+        tool: BaseTool,
+        args: dict[str, Any],
+        result: ToolResult,
+        state: LoopState,
+    ) -> ToolResult:
+        for hook in self.post_tool:
+            result = await hook(
+                tool=tool, args=args, result=result, state=state,
+            )
+        return result
+
+    async def run_file_changed(
+        self,
+        *,
+        path: Path,
+        kind: FileChangeKind,
+        state: LoopState,
+    ) -> None:
+        for hook in self.file_changed:
+            await hook(path=path, kind=kind, state=state)
+
+    async def run_cwd_changed(
+        self,
+        *,
+        old_cwd: Path,
+        new_cwd: Path,
+        state: LoopState,
+    ) -> None:
+        for hook in self.cwd_changed:
+            await hook(old_cwd=old_cwd, new_cwd=new_cwd, state=state)
+
+    async def run_session_start(
+        self,
+        *,
+        session_id: str,
+        mode: str,
+        cwd: Path,
+        model_name: str,
+        state: LoopState,
+    ) -> None:
+        from aura.infrastructure.persistence import journal
+        for hook in self.session_start:
+            try:
+                await hook(
+                    session_id=session_id,
+                    mode=mode,
+                    cwd=cwd,
+                    model_name=model_name,
+                    state=state,
+                )
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "lifecycle_hook_error",
+                    slot="session_start",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+
+    async def run_user_prompt_submit(
+        self,
+        *,
+        session_id: str,
+        turn_count: int,
+        user_text: str,
+        state: LoopState,
+    ) -> str:
+        """Compose user_prompt_submit chain left-to-right.
+
+        A non-None ``UserPromptSubmitOutcome.prompt`` rewrites; ``None``
+        passes through; raises drop the outcome.
+        """
+        from aura.infrastructure.persistence import journal
+        current = user_text
+        for hook in self.user_prompt_submit:
+            try:
+                outcome = await hook(
+                    session_id=session_id,
+                    turn_count=turn_count,
+                    user_text=current,
+                    state=state,
+                )
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "lifecycle_hook_error",
+                    slot="user_prompt_submit",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+                continue
+            if outcome is not None and outcome.prompt is not None:
+                current = outcome.prompt
+        return current
+
+    async def run_notification(
+        self,
+        *,
+        session_id: str,
+        kind: NotificationKind,
+        body: str,
+        state: LoopState,
+    ) -> None:
+        from aura.infrastructure.persistence import journal
+        for hook in self.notification:
+            try:
+                await hook(
+                    session_id=session_id,
+                    kind=kind,
+                    body=body,
+                    state=state,
+                )
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "lifecycle_hook_error",
+                    slot="notification",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+
+    async def run_stop(
+        self,
+        *,
+        session_id: str,
+        reason: StopReason,
+        turn_count: int,
+        state: LoopState,
+    ) -> None:
+        from aura.infrastructure.persistence import journal
+        for hook in self.stop:
+            try:
+                await hook(
+                    session_id=session_id,
+                    reason=reason,
+                    turn_count=turn_count,
+                    state=state,
+                )
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "lifecycle_hook_error",
+                    slot="stop",
+                    detail=f"{type(exc).__name__}: {exc}",
+                )
+
+    def merge(self, other: HookChain) -> HookChain:
+        return HookChain(
+            pre_model=[*self.pre_model, *other.pre_model],
+            post_model=[*self.post_model, *other.post_model],
+            pre_tool=[*self.pre_tool, *other.pre_tool],
+            post_tool=[*self.post_tool, *other.post_tool],
+            file_changed=[*self.file_changed, *other.file_changed],
+            cwd_changed=[*self.cwd_changed, *other.cwd_changed],
+            session_start=[*self.session_start, *other.session_start],
+            user_prompt_submit=[
+                *self.user_prompt_submit, *other.user_prompt_submit,
+            ],
+            notification=[*self.notification, *other.notification],
+            stop=[*self.stop, *other.stop],
+        )
+
+
+__all__ = [
+    "PRE_TOOL_ASK_PENDING_KEY",
+    "CwdChangedHook",
+    "FileChangeKind",
+    "FileChangedHook",
+    "HookChain",
+    "NotificationHook",
+    "NotificationKind",
+    "PostModelHook",
+    "PostToolHook",
+    "PreModelHook",
+    "PreToolHook",
+    "SessionStartHook",
+    "StopHook",
+    "StopReason",
+    "UserPromptSubmitHook",
+    "UserPromptSubmitOutcome",
+]

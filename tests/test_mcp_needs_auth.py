@@ -1,6 +1,6 @@
 """Tests for F-06-003: ``needs_auth`` MCP server state.
 
-The classifier (:func:`aura.core.mcp.manager._is_needs_auth_error`) routes
+The classifier (:func:`aura.infrastructure.mcp.manager._is_needs_auth_error`) routes
 auth-failure exceptions to ``needs_auth`` instead of plain ``error``;
 the manager's connect path then:
 
@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from aura.config.schema import MCPServerConfig
-from aura.core.mcp.manager import (
+from aura.infrastructure.mcp.manager import (
     MCPManager,
     _is_needs_auth_error,
 )
@@ -87,7 +87,7 @@ async def _empty_list(*_args: Any, **_kwargs: Any) -> list[Any]:
 def _wire_fake_client(
     monkeypatch: pytest.MonkeyPatch, fake_client: Any,
 ) -> None:
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     monkeypatch.setattr(
         manager_mod, "MultiServerMCPClient", lambda _cfg: fake_client,
@@ -106,7 +106,7 @@ async def test_auth_error_promotes_to_needs_auth_state(
 ) -> None:
     """A 401 from get_tools sets state=needs_auth + journals
     ``mcp_connect_needs_auth`` instead of ``mcp_connect_failed``."""
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
 
     log = tmp_path / "j.jsonl"
     journal.configure(log)
@@ -148,7 +148,7 @@ async def test_generic_error_stays_error_state(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
 ) -> None:
     """A generic (non-auth) failure remains the plain ``error`` state."""
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
 
     journal.configure(tmp_path / "j.jsonl")
 
@@ -176,7 +176,7 @@ async def test_needs_auth_skips_auto_reconnect_for_remote_transports(
 ) -> None:
     """A 401 on an SSE/streamable_http server must NOT schedule the
     exponential-backoff reconnect loop — retrying a 401 won't fix it."""
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
 
     journal.configure(tmp_path / "j.jsonl")
 
@@ -204,7 +204,7 @@ async def test_generic_error_on_remote_DOES_reconnect(
 ) -> None:
     """Regression: a non-auth error on remote transport still triggers
     the auto-reconnect ladder (the original behaviour)."""
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
 
     journal.configure(tmp_path / "j.jsonl")
 
@@ -230,7 +230,7 @@ def test_status_dataclass_carries_needs_auth_state() -> None:
     """The ``MCPServerStatus.state`` field accepts ``"needs_auth"``
     (the literal union covers it). Pin so a future literal narrowing
     doesn't drop the value."""
-    from aura.core.mcp.manager import MCPServerStatus
+    from aura.infrastructure.mcp.manager import MCPServerStatus
 
     s = MCPServerStatus(
         name="x",

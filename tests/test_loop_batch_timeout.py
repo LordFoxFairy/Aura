@@ -42,10 +42,10 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.capabilities.tools.registry import ToolRegistry
-from aura.core.hooks import HookChain
+from aura.application.hooks import HookChain
 from aura.core.loop import AgentLoop
-from aura.core.persistence import journal
+from aura.domain.tool_registry import ToolRegistry
+from aura.infrastructure.persistence import journal
 from aura.schemas.events import Final, ToolCallCompleted
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool

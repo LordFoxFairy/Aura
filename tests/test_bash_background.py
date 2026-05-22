@@ -21,9 +21,9 @@ from typing import Any
 
 import pytest
 
-from aura.core.hooks.bash_safety import make_bash_safety_hook
-from aura.core.tasks.store import TasksStore
-from aura.core.tasks.types import _SHELL_RECENT_ACTIVITIES_CAP
+from aura.application.hooks.bash_safety import make_bash_safety_hook
+from aura.application.tasks.store import TasksStore
+from aura.domain.task import _SHELL_RECENT_ACTIVITIES_CAP
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.bash_background import BashBackground

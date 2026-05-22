@@ -1,11 +1,11 @@
-"""Tests for aura.core.llm.resolve — router alias and direct provider:model specs."""
+"""Tests for aura.infrastructure.llm.resolve — router alias and direct provider:model specs."""
 
 from __future__ import annotations
 
 import pytest
 
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core.llm import UnknownModelSpecError, get_context_window, resolve
+from aura.infrastructure.llm import UnknownModelSpecError, get_context_window, resolve
 
 
 def _cfg(providers: list[dict[str, str]], router: dict[str, str]) -> AuraConfig:

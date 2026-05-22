@@ -1,4 +1,4 @@
-"""Tests for :class:`aura.core.runtime.mcp.McpRuntime` (Phase 2 Task 8).
+"""Tests for :class:`aura.application.runtime.mcp.McpRuntime` (Phase 2 Task 8).
 
 The runtime is exercised in isolation — no :class:`Agent`, no
 :class:`AgentLoop`, no real MCP transport. Each case constructs the
@@ -27,10 +27,10 @@ import pytest
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from aura.capabilities.tools.registry import ToolRegistry
+from aura.application.runtime.mcp import McpRuntime
 from aura.config.schema import MCPServerConfig
-from aura.core.persistence import journal
-from aura.core.runtime.mcp import McpRuntime
+from aura.domain.tool_registry import ToolRegistry
+from aura.infrastructure.persistence import journal
 from aura.schemas.tool import ToolMetadata
 
 

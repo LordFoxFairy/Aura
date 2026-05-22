@@ -250,7 +250,7 @@ def test_context_window_rejects_zero_and_negative() -> None:
 
 def test_aura_config_rejects_permissions_key() -> None:
     # Post-2026-04-21: permission config doesn't live in config.json anymore.
-    # It lives in settings.json (loaded by aura.core.permissions.store). If
+    # It lives in settings.json (loaded by aura.infrastructure.permission_store). If
     # a user writes ``"permissions": {...}`` in config.json they'd get silent
     # half-effects (old double-track bug). Now they get a loud
     # ``extra="forbid"`` error telling them to move it.

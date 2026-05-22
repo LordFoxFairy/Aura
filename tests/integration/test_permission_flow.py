@@ -21,11 +21,11 @@ from typing import Any, cast
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
-from aura.core.hooks import HookChain
-from aura.core.hooks.permission import AskerResponse, make_permission_hook
-from aura.core.permissions import store as perm_store
-from aura.core.permissions.mode import Mode
-from aura.core.permissions.session import SessionRuleSet
+from aura.application.hooks import HookChain
+from aura.application.hooks.permission import AskerResponse, make_permission_hook
+from aura.domain.permission.mode import Mode
+from aura.domain.permission.session import SessionRuleSet
+from aura.infrastructure import permission_store as perm_store
 from aura.schemas.events import ToolCallCompleted
 from tests.conftest import FakeChatModel, FakeTurn
 from tests.integration.conftest import (
@@ -267,11 +267,11 @@ async def test_plan_mode_exit_approval_flow_flips_mode_and_user_deny(
     # via a session rule); write_file is dry-run blocked in plan mode and
     # prompted in default mode.
     session = SessionRuleSet()
-    from aura.core.permissions.rule import Rule
+    from aura.domain.permission.rule import Rule
 
     session.add(Rule(tool="exit_plan_mode", content=None))
 
-    # The exit_plan_mode tool has its own asker (the QuestionAsker) — No on
+    # The exit_plan_mode tool has its own asker (the UserAsker) — No on
     # turn 2, Yes on turn 3.
     plan_asker = ScriptedAsker()
     plan_asker.queue_response("No")

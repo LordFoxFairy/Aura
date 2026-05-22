@@ -24,9 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from aura.config.schema import AuraConfig
-from aura.core.persistence.storage import SessionStorage
-from aura.core.runtime import (
+from aura.application.runtime import (
     STATEFUL_TOOL_FACTORIES,
     AskUserQuestionFactory,
     SendMessageFactory,
@@ -38,11 +36,13 @@ from aura.core.runtime import (
     TodoWriteFactory,
     ToolRuntime,
 )
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.store import TasksStore
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.store import TasksStore
+from aura.config.schema import AuraConfig
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import LoopState
 from aura.schemas.todos import TodoItem
-from aura.tools.ask_user import AskUserQuestion
+from aura.tools.ask_user import AskUserQuestion, FormQuestionDict
 from aura.tools.send_message import SendMessage
 from aura.tools.task_create import TaskCreate
 from aura.tools.task_get import TaskGet
@@ -169,9 +169,9 @@ def _stub_subagent_factory() -> SubagentFactory:
 
 
 async def _stub_asker(
-    question: str, options: list[str] | None, default: str | None
-) -> str:
-    return default or ""
+    questions: list[FormQuestionDict],
+) -> dict[str, str]:
+    return {q.get("question", ""): "" for q in questions}
 
 
 def test_ask_user_question_factory_wires_runtime_asker() -> None:

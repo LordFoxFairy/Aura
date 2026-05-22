@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage
 import aura.tools.web_fetch  # noqa: F401 — ensure submodule is imported
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.tools.web_fetch import web_fetch
 from tests.conftest import FakeChatModel, FakeTurn
 

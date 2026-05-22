@@ -27,17 +27,17 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import AIMessage
 
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.store import TasksStore
+from aura.application.teams.mailbox import Mailbox
+from aura.application.teams.manager import TeamError, TeamManager
+from aura.application.teams.runtime import run_teammate
 from aura.config.schema import AuraConfig
-from aura.core.abort import AbortController
-from aura.core.permissions.safety import DEFAULT_SAFETY
-from aura.core.permissions.session import RuleSet
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.store import TasksStore
-from aura.core.teams.mailbox import Mailbox
-from aura.core.teams.manager import TeamError, TeamManager
-from aura.core.teams.runtime import run_teammate
-from aura.core.teams.types import TEAM_LEADER_NAME, TeamMessage
+from aura.domain.abort import AbortController
+from aura.domain.permission.safety import DEFAULT_SAFETY
+from aura.domain.permission.session import RuleSet
+from aura.domain.team import TEAM_LEADER_NAME, TeamMessage
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.events import Final
 from tests.conftest import FakeChatModel, FakeTurn
 

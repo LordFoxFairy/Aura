@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from aura.core.persistence import journal
+from aura.infrastructure.persistence import journal
 
 
 @pytest.fixture(autouse=True)

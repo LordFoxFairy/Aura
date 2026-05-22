@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage
 
-from aura.core.hooks.budget import make_usage_tracking_hook
+from aura.application.hooks.budget import make_usage_tracking_hook
 from aura.schemas.state import LoopState
 
 
@@ -88,7 +88,7 @@ async def test_usage_hook_falls_back_to_char_estimator_when_usage_missing() -> N
     hook = make_usage_tracking_hook()
     state = LoopState()
 
-    from aura.core.tokens import estimate_text_tokens
+    from aura.domain.tokens import estimate_text_tokens
 
     ai = AIMessage(content="no usage here")
     await hook(ai_message=ai, history=[], state=state)

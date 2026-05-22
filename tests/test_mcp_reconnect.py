@@ -29,7 +29,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
 from aura.config.schema import MCPServerConfig
-from aura.core.mcp.manager import MCPManager
+from aura.infrastructure.mcp.manager import MCPManager
 
 
 class _P(BaseModel):
@@ -69,7 +69,7 @@ def _install_fake_client(
     ``session(name)`` / ``get_tools(server_name=...)`` lookups behave
     like the real library would.
     """
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     def _make_client(connections: dict[str, Any]) -> MagicMock:
         fake_client.connections = dict(connections)

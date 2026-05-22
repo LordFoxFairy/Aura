@@ -25,14 +25,15 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks.permission import AskerResponse, make_permission_hook
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet, SessionRuleSet
+from aura.application.hooks.permission import AskerResponse, make_permission_hook
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
 from aura.schemas.tool import (
     ToolError,
     ToolResult,  # noqa: F401
 )
+from aura.tools.ask_user import FormQuestionDict
 from aura.tools.base import build_tool
 from aura.tools.enter_plan_mode import EnterPlanMode
 from aura.tools.exit_plan_mode import ExitPlanMode
@@ -66,11 +67,11 @@ def _enter_tool(agent: _FakeAgent) -> EnterPlanMode:
 
 
 async def _always_yes_asker(
-    _question: str, _options: list[str] | None, _default: str | None,
-) -> str:
+    questions: list[FormQuestionDict],
+) -> dict[str, str]:
     # Default asker for exit_plan_mode tests that don't care about the
     # approval gate itself — test_exit_plan_mode.py covers the gate.
-    return "Yes"
+    return {q.get("question", ""): "Yes" for q in questions}
 
 
 def _exit_tool(

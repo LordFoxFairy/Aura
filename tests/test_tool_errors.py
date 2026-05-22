@@ -19,9 +19,9 @@ import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
-from aura.capabilities.tools.registry import ToolRegistry
-from aura.core.hooks import HookChain
+from aura.application.hooks import HookChain
 from aura.core.loop import AgentLoop
+from aura.domain.tool_registry import ToolRegistry
 from aura.schemas.events import (
     AgentEvent,
     ToolCallCompleted,

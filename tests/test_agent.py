@@ -12,14 +12,15 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from aura.application.hooks import HookChain
+from aura.application.memory import project_memory, rules
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core.agent import Agent, build_agent
-from aura.core.hooks import HookChain
-from aura.core.llm import UnknownModelSpecError
-from aura.core.memory import project_memory, rules
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.llm import UnknownModelSpecError
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.events import Final
 from aura.schemas.tool import ToolError, ToolResult
+from aura.tools.ask_user import FormQuestionDict
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -172,7 +173,7 @@ async def test_switch_model_via_router_alias(
 
     model_b = FakeChatModel(turns=[FakeTurn(AIMessage(content="second"))])
 
-    from aura.core import llm
+    from aura.infrastructure import llm
     monkeypatch.setattr(llm, "create", lambda provider, name: model_b)
 
     agent.switch_model("opus")
@@ -203,7 +204,7 @@ async def test_switch_model_via_direct_spec(
 
     model_b = FakeChatModel(turns=[FakeTurn(AIMessage(content="second"))])
 
-    from aura.core import llm
+    from aura.infrastructure import llm
     monkeypatch.setattr(llm, "create", lambda provider, name: model_b)
 
     agent.switch_model("openai:gpt-4o")
@@ -327,7 +328,7 @@ async def test_build_agent_factory_uses_modelfactory(
 
     fake_model = FakeChatModel(turns=[FakeTurn(AIMessage(content="factory-output"))])
 
-    from aura.core import llm
+    from aura.infrastructure import llm
     monkeypatch.setattr(llm, "create", lambda provider, name: fake_model)
 
     agent = build_agent(config)
@@ -475,7 +476,7 @@ def test_build_agent_forwards_available_tools(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     from aura.core import agent as agent_mod
-    from aura.core import llm
+    from aura.infrastructure import llm
 
     fake_model = FakeChatModel(turns=[])
     monkeypatch.setattr(
@@ -614,8 +615,8 @@ async def test_system_prompt_prepended_to_model_messages(tmp_path: Path) -> None
 def test_build_agent_uses_default_hooks_when_none_supplied(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    from aura.core import llm
     from aura.core.agent import build_agent
+    from aura.infrastructure import llm
 
     fake = FakeChatModel(turns=[])
     monkeypatch.setattr(
@@ -823,8 +824,8 @@ async def test_todo_write_tool_call_injects_todos_on_next_turn(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_clear_session_drops_session_rules_when_supplied(tmp_path: Path) -> None:
-    from aura.core.permissions.rule import Rule
-    from aura.core.permissions.session import SessionRuleSet
+    from aura.domain.permission.rule import Rule
+    from aura.domain.permission.session import SessionRuleSet
 
     session_rules = SessionRuleSet()
     session_rules.add(Rule(tool="bash", content="ls"))
@@ -855,10 +856,10 @@ def test_clear_session_is_noop_when_session_rules_not_supplied(tmp_path: Path) -
 def test_build_agent_threads_session_rules_into_agent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    from aura.core import llm
     from aura.core.agent import build_agent
-    from aura.core.permissions.rule import Rule
-    from aura.core.permissions.session import SessionRuleSet
+    from aura.domain.permission.rule import Rule
+    from aura.domain.permission.session import SessionRuleSet
+    from aura.infrastructure import llm
 
     fake = FakeChatModel(turns=[])
     monkeypatch.setattr(llm, "create", lambda provider, name: fake)
@@ -907,19 +908,21 @@ async def test_ask_user_question_without_asker_raises_ToolError_on_invoke(
     )
     tool = agent._available_tools["ask_user_question"]
     with pytest.raises(ToolError, match="no CLI asker"):
-        await tool.ainvoke({"question": "hi?"})
+        await tool.ainvoke({
+            "questions": [{"question": "hi?", "header": "Hi"}],
+        })
     await agent.aclose()
 
 
 @pytest.mark.asyncio
 async def test_ask_user_question_with_injected_asker_delegates(tmp_path: Path) -> None:
-    captured: list[tuple[str, list[str] | None, str | None]] = []
+    captured: list[list[FormQuestionDict]] = []
 
     async def _asker(
-        question: str, options: list[str] | None, default: str | None,
-    ) -> str:
-        captured.append((question, options, default))
-        return "stub answer"
+        questions: list[FormQuestionDict],
+    ) -> dict[str, str]:
+        captured.append(list(questions))
+        return {q.get("question", ""): "stub answer" for q in questions}
 
     cfg = _minimal_config(enabled=["ask_user_question"])
     agent = Agent(
@@ -929,25 +932,33 @@ async def test_ask_user_question_with_injected_asker_delegates(tmp_path: Path) -
         question_asker=_asker,
     )
     tool = agent._available_tools["ask_user_question"]
-    out = await tool.ainvoke({"question": "ready?", "options": ["yes", "no"]})
-    assert out == {"answer": "stub answer"}
-    assert captured == [("ready?", ["yes", "no"], None)]
+    out = await tool.ainvoke({
+        "questions": [{
+            "question": "ready?", "header": "Ready",
+            "options": [
+                {"label": "yes", "description": ""},
+                {"label": "no", "description": ""},
+            ],
+        }],
+    })
+    assert '"ready?"="stub answer"' in out["text"]
+    assert captured[0][0]["question"] == "ready?"
     await agent.aclose()
 
 
 def test_build_agent_threads_question_asker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    from aura.core import llm
     from aura.core.agent import build_agent
+    from aura.infrastructure import llm
 
     fake = FakeChatModel(turns=[])
     monkeypatch.setattr(llm, "create", lambda provider, name: fake)
 
     async def _asker(
-        question: str, options: list[str] | None, default: str | None,
-    ) -> str:
-        return "from-factory"
+        questions: list[FormQuestionDict],
+    ) -> dict[str, str]:
+        return {q.get("question", ""): "from-factory" for q in questions}
 
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
@@ -963,7 +974,7 @@ def test_build_agent_threads_question_asker(
 def test_ask_user_question_in_default_allow_rules() -> None:
     """Calling ``ask_user_question`` must not trigger a permission prompt —
     defeats the point. Locked via DEFAULT_ALLOW_RULES."""
-    from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
+    from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
     names = {r.tool for r in DEFAULT_ALLOW_RULES}
     assert "ask_user_question" in names
 
@@ -1139,7 +1150,7 @@ async def test_agent_skills_loaded_at_init_from_cwd_and_home(
 async def test_agent_record_skill_invocation_reaches_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aura.capabilities.skills_runtime.types import Skill
+    from aura.infrastructure.skills.types import Skill
 
     _chdir(monkeypatch, tmp_path)
     agent = _agent(tmp_path, turns=[])
@@ -1183,7 +1194,7 @@ async def test_agent_aconnect_registers_tools_into_registry(
     from langchain_core.tools import StructuredTool
 
     from aura.config.schema import MCPServerConfig
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
     from aura.schemas.tool import ToolMetadata
 
     class _McpArgs(BaseModel):
@@ -1231,13 +1242,13 @@ async def test_agent_aconnect_registers_tools_into_registry(
         async def stop_all(self) -> None:
             return None
 
-    # Agent does ``from aura.core.mcp import MCPManager`` at module load,
+    # Agent does ``from aura.infrastructure.mcp import MCPManager`` at module load,
     # so the name Agent resolves is the one in the agent module namespace.
     # Patch that (and the source modules for completeness).
     from aura.core import agent as agent_mod
     monkeypatch.setattr(agent_mod, "MCPManager", _FakeManager)
     monkeypatch.setattr(manager_mod, "MCPManager", _FakeManager)
-    import aura.core.mcp as mcp_pkg
+    import aura.infrastructure.mcp as mcp_pkg
     monkeypatch.setattr(mcp_pkg, "MCPManager", _FakeManager)
 
     cfg = AuraConfig.model_validate({
@@ -1308,7 +1319,7 @@ async def test_agent_aconnect_graceful_on_manager_failure(
     """If MCPManager.start_all blows up entirely, aconnect must not re-raise —
     the agent starts without MCP tools."""
     from aura.config.schema import MCPServerConfig
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     class _BrokenManager:
         def __init__(self, configs: list[MCPServerConfig]) -> None:
@@ -1323,7 +1334,7 @@ async def test_agent_aconnect_graceful_on_manager_failure(
     from aura.core import agent as agent_mod
     monkeypatch.setattr(agent_mod, "MCPManager", _BrokenManager)
     monkeypatch.setattr(manager_mod, "MCPManager", _BrokenManager)
-    import aura.core.mcp as mcp_pkg
+    import aura.infrastructure.mcp as mcp_pkg
     monkeypatch.setattr(mcp_pkg, "MCPManager", _BrokenManager)
 
     cfg = AuraConfig.model_validate({

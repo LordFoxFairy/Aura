@@ -18,9 +18,9 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.capabilities.tools.registry import ToolRegistry
-from aura.core.hooks import HookChain
+from aura.application.hooks import HookChain
 from aura.core.loop import AgentLoop
+from aura.domain.tool_registry import ToolRegistry
 from aura.schemas.events import ToolCallCompleted
 from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.base import build_tool
@@ -161,7 +161,7 @@ def test_bash_background_metadata_timeout_sec_is_none() -> None:
     # TasksStore + its own 3s TERM → KILL ladder inside the detached task.
     # An outer wait_for would cancel the task-spawn call and leak the
     # running subprocess.
-    from aura.core.tasks.store import TasksStore
+    from aura.application.tasks.store import TasksStore
 
     tool = BashBackground(store=TasksStore(), running_shells={})
     assert meta_dict(tool).get("timeout_sec") is None

@@ -1,4 +1,4 @@
-"""Tests for aura.core.permissions.safety — SafetyPolicy + is_protected.
+"""Tests for aura.application.permission.safety — SafetyPolicy + is_protected.
 
 Post Plan B refactor (2026-04-21): safety is direction-aware. Two lists,
 one ``is_write`` kwarg. Writes block destructive tools; reads block any
@@ -13,12 +13,12 @@ from typing import cast
 
 import pytest
 
-from aura.core.permissions.safety import (
+from aura.application.permission.safety import is_protected
+from aura.domain.permission.safety import (
     DEFAULT_PROTECTED_READS,
     DEFAULT_PROTECTED_WRITES,
     DEFAULT_SAFETY,
     SafetyPolicy,
-    is_protected,
 )
 
 # ---------------------------------------------------------------------------

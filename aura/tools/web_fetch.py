@@ -1,29 +1,4 @@
-"""web_fetch tool — fetch a URL, summarise via cheap model, optional cache.
-
-Three concerns layered onto the basic GET:
-
-- **Round 1C SSRF defense**. ``_reject_private_host`` rejects DNS that
-  resolves to private / loopback / link-local / multicast / metadata
-  IPs (including the AWS / GCP / Azure ``169.254.169.254`` instance
-  metadata endpoint). The :class:`_RedirectGuard` re-runs the same
-  check on every redirect so a 302 to ``http://localhost`` doesn't
-  bypass the gate. Capped at 5 redirects.
-- **Round 4E summary pipeline**. The fetched body is fed (with the
-  caller's prompt) to a cheap summary model — the result is a tight
-  digest the LLM can act on instead of the raw HTML. The model
-  factory is set globally by Agent.__init__ via
-  :func:`set_default_model_factory`; tests can also build a per-instance
-  tool via :func:`make_web_fetch`.
-- **Round 6N cache**. 15-minute TTL, LRU at 64 entries. Keyed by
-  ``(url, sha256(prompt))`` so the same URL with different prompts
-  don't share a slot. ``bypass_cache=True`` forces a refetch.
-
-Failure shape: every error path returns a dict (not a raise) with
-``status`` set to whatever the upstream said (or ``None`` for
-pre-flight rejection), ``summary=None``, ``error`` populated, and
-``raw_body_preview`` carrying the first ~500 chars of the body that
-DID arrive (helps the LLM diagnose 4xx/5xx without re-fetching).
-"""
+"""web_fetch — GET a URL, summarise via cheap model, optional cache."""
 
 from __future__ import annotations
 
@@ -47,7 +22,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.core.permissions.matchers import exact_match_on
+from aura.domain.permission.matchers import exact_match_on
 from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
 from aura.tools.base import Tool
 
@@ -56,50 +31,21 @@ _MAX_BYTES = 1024 * 1024
 _MAX_REDIRECTS = 5
 _PROMPT_MAX_CHARS = 4_000
 
-# Round 6N cache. 15-minute TTL is long enough to amortise cost across a
-# multi-turn conversation that revisits the same URL ("now look at the
-# class hierarchy"), short enough that a doc page that updated this hour
-# isn't permanently stale. 64 entries keeps the working-set small —
-# this is a per-process cache, not a CDN.
 _CACHE_TTL_SEC = 15 * 60
 _CACHE_MAX_ENTRIES = 64
 
-# Module-level model factory, wired by Agent.__init__ via
-# :func:`set_default_model_factory`. ``None`` means "no factory wired" —
-# the singleton then raises a clear ToolError on first invoke (rather
-# than silently swallowing the lack of a summary).
+# Module-level since every Agent shares the same web_fetch singleton.
 _DEFAULT_MODEL_FACTORY: Callable[[], BaseChatModel] | None = None
 
 
 def set_default_model_factory(
     factory: Callable[[], BaseChatModel] | None,
 ) -> None:
-    """Wire the module-level summary model factory.
-
-    Called by ``Agent.__init__`` once at construction time. Passing
-    ``None`` clears the factory (used between tests that build multiple
-    Agents in series).
-
-    Why a module-level global rather than per-instance: there's exactly
-    one shared ``web_fetch`` singleton in ``BUILTIN_TOOLS`` so every
-    Agent shares it. Wiring the factory at the singleton would mean
-    the LAST-built Agent's summary model is what every Agent uses —
-    deliberate, since Agents per-process are normally one in number.
-    """
     global _DEFAULT_MODEL_FACTORY
     _DEFAULT_MODEL_FACTORY = factory
 
 
 class _RedirectGuard(HTTPRedirectHandler):
-    """Re-run SSRF check on every redirect; cap at :data:`_MAX_REDIRECTS`.
-
-    Stock urllib.HTTPRedirectHandler doesn't expose a per-redirect hook,
-    but ``redirect_request`` is called for every 30x — we override and
-    re-validate the new host before returning a Request, so a 302 to
-    ``http://localhost`` from an attacker-controlled site can't pierce
-    the gate.
-    """
-
     max_redirections = _MAX_REDIRECTS
 
     def redirect_request(
@@ -111,9 +57,7 @@ class _RedirectGuard(HTTPRedirectHandler):
         headers: Any,
         newurl: str,
     ) -> Request | None:
-        # Re-check on every hop. ``_reject_private_host`` raises
-        # ToolError; let it propagate — urllib catches Exception in
-        # the outer urlopen and we surface it as a fetch_failed dict.
+        # Re-check every hop so a 302 to localhost can't bypass SSRF gate.
         new_host = urlparse(newurl).hostname
         if new_host is not None:
             _reject_private_host(new_host)
@@ -121,22 +65,12 @@ class _RedirectGuard(HTTPRedirectHandler):
 
 
 class WebFetchParams(BaseModel):
-    """``WebFetch`` input schema — Round 4E summary pipeline.
-
-    ``prompt`` is REQUIRED — without it the tool can't produce a
-    summary. Capped at 4_000 chars so a misbehaving LLM doesn't try
-    to ship the entire conversation history through here.
-    """
-
     model_config = ConfigDict(extra="forbid")
 
     url: str = Field(description="HTTP(S) URL to fetch.")
     prompt: str = Field(
         ..., min_length=1, max_length=_PROMPT_MAX_CHARS,
-        description=(
-            "Question / extraction goal the cheap model uses to "
-            "summarise the fetched page. Keep concise — capped at 4000 chars."
-        ),
+        description="Question / extraction goal for summarising the page.",
     )
     timeout: int = Field(
         default=_DEFAULT_TIMEOUT, ge=1, le=120,
@@ -144,18 +78,12 @@ class WebFetchParams(BaseModel):
     )
     bypass_cache: bool = Field(
         default=False,
-        description=(
-            "When True, skip the 15-min cache lookup and re-fetch. "
-            "Use sparingly — the cache pays off across multi-turn "
-            "conversations that revisit the same URL."
-        ),
+        description="When True, skip the 15-min cache and re-fetch.",
     )
 
 
 def _reject_private_host(host: str) -> None:
-    """SSRF defense: refuse hosts that resolve to non-public IPs."""
     try:
-        # getaddrinfo covers IPv4 + IPv6; any private result rejects.
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror as exc:
         raise ToolError(f"dns resolve failed for {host!r}: {exc}") from exc
@@ -180,12 +108,6 @@ def _reject_private_host(host: str) -> None:
 
 
 def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
-    """Lower-level fetcher returning the raw response shape.
-
-    Kept as a module-level function (not a method) so the test suite can
-    monkeypatch ``aura.tools.web_fetch._fetch`` to short-circuit the
-    network in tests of the wider summary pipeline.
-    """
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ToolError(f"not an http(s) URL: {url}")
 
@@ -200,12 +122,11 @@ def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
             data = resp.read(_MAX_BYTES + 1)
             status = resp.status
             content_type = resp.headers.get("Content-Type", "") or ""
-    except HTTPError as exc:  # 4xx / 5xx — surface status + body preview
-        # ``HTTPError`` IS a Response-like object — read the partial body
-        # so the summary path can still produce a useful diagnosis.
+    except HTTPError as exc:
+        # HTTPError is response-like; read body so summary path can describe it.
         try:
             body = exc.read(_MAX_BYTES + 1) if hasattr(exc, "read") else b""
-        except Exception:  # noqa: BLE001 — body read can fail on closed stream
+        except Exception:  # noqa: BLE001
             body = b""
         return {
             "url": url,
@@ -239,23 +160,10 @@ def _preview(args: dict[str, Any]) -> str:
 
 
 def _cache_key(url: str, prompt: str) -> str:
-    """Derive a cache key from URL + prompt hash.
-
-    Hashing the prompt (rather than embedding it) keeps the key short
-    + avoids leaking the prompt text into log lines that include the
-    cache key for diagnostics.
-    """
     return f"{url}\x00{hashlib.sha256(prompt.encode('utf-8')).hexdigest()}"
 
 
 class _Cache:
-    """Tiny LRU + TTL cache for summary results.
-
-    OrderedDict + manual move-to-end on get is the textbook minimal
-    LRU. TTL is checked on read so an entry can age out without a
-    background sweep.
-    """
-
     def __init__(self, max_entries: int = _CACHE_MAX_ENTRIES, ttl: float = _CACHE_TTL_SEC) -> None:
         self._entries: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
         self._max = max_entries
@@ -267,11 +175,8 @@ class _Cache:
             return None
         ts, payload = entry
         if time.time() - ts > self._ttl:
-            # Expired — drop it so the next miss doesn't keep tripping
-            # over a stale entry.
             del self._entries[key]
             return None
-        # LRU bump on access.
         self._entries.move_to_end(key)
         return payload
 
@@ -288,32 +193,16 @@ class _Cache:
 _CACHE = _Cache()
 
 
-# Limits applied to the body BEFORE it's fed to the summary model.
-# The model factory might be a frontier model with a 200k context, but
-# burning 200k input tokens to summarise one HTML page is wasteful; cap
-# the input so the cheap model stays cheap.
 _SUMMARY_CONTENT_INPUT_CAP_CHARS = 60_000
 
 
 def _truncate_for_summary(content: str) -> tuple[str, bool]:
-    """Trim ``content`` to :data:`_SUMMARY_CONTENT_INPUT_CAP_CHARS`.
-
-    Returns ``(trimmed, was_truncated)``. We keep the head (most pages
-    front-load the meaningful content); a future improvement could
-    walk to the first ``<body>`` tag, but the simple head-keep
-    catches the common case.
-    """
     if len(content) <= _SUMMARY_CONTENT_INPUT_CAP_CHARS:
         return content, False
     return content[:_SUMMARY_CONTENT_INPUT_CAP_CHARS], True
 
 
 def _build_summary_prompt(prompt: str, body: str) -> str:
-    """Render the cheap-model prompt envelope.
-
-    Keeps the structure tight + delimited so the summary model has a
-    clear "follow this question, look in this body" frame.
-    """
     return (
         "You are summarising a fetched web page for an AI agent. The "
         "agent provided a focused question; reply with a concise digest "
@@ -326,12 +215,6 @@ def _build_summary_prompt(prompt: str, body: str) -> str:
 
 
 def _model_name(model: BaseChatModel) -> str:
-    """Best-effort: extract a human-readable name for the summary model.
-
-    LangChain's chat models expose either ``model_name`` or ``model``
-    (different SDK conventions). We try both, fall back to the class
-    name. Used purely for the result payload — never for routing.
-    """
     return (
         getattr(model, "model_name", None)
         or getattr(model, "model", None)
@@ -345,12 +228,9 @@ async def _run_summary(
     prompt: str,
     body: str,
 ) -> tuple[str, bool, str]:
-    """Invoke the cheap model. Returns ``(text, truncated, model_name)``."""
     trimmed, truncated = _truncate_for_summary(body)
     digest_prompt = _build_summary_prompt(prompt, trimmed)
     ai = await model.ainvoke([HumanMessage(content=digest_prompt)])
-    # ``content`` may be str (most providers) or list[dict] (Anthropic
-    # multi-part). Normalise to str.
     text = ai.content if isinstance(ai.content, str) else str(ai.content)
     return text.strip(), truncated, _model_name(model)
 
@@ -377,8 +257,6 @@ def _failure_payload(
 
 
 class WebFetch(Tool):
-    """Fetch + summarise via a cheap model with optional caching."""
-
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     name: str = "web_fetch"
@@ -389,12 +267,7 @@ class WebFetch(Tool):
         "url+prompt). No auth / cookies."
     )
     args_schema: type[BaseModel] = WebFetchParams
-    # NOT ``is_read_only``. ``is_read_only`` in the permission gate means
-    # "safe to auto-approve, no prompt". Web fetch reaches external servers
-    # — the URL alone, the user's IP, and any query-string tokens leave the
-    # machine. Under prompt injection, the LLM could exfil data to an
-    # attacker-controlled host. Our SSRF guard (``_reject_private_host``)
-    # blocks internal-network scanning but NOT exfil. So: prompt by default.
+    # NOT is_read_only — fetching exfils request data over the network.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
         is_destructive=False,
@@ -404,9 +277,6 @@ class WebFetch(Tool):
         timeout_sec=30.0,
     )
 
-    # Optional per-instance factory (test override). When None, the
-    # tool falls back to the module-level ``_DEFAULT_MODEL_FACTORY``
-    # set by Agent.__init__.
     _instance_factory: Callable[[], BaseChatModel] | None = PrivateAttr(default=None)
 
     def __init__(
@@ -430,13 +300,6 @@ class WebFetch(Tool):
         )
 
     def validate_input(self, args: dict[str, Any]) -> ValidationResult:
-        """Reject URLs with unsupported schemes or no host.
-
-        Phase 5 Task 2 — args-only check, no DNS. The SSRF guard
-        (``_reject_private_host``) does need DNS resolution, so it
-        stays on the network path inside ``_fetch`` as a runtime
-        rejection. Scheme + presence-of-host are pure URL-parse work.
-        """
         url = args.get("url", "")
         if not isinstance(url, str) or not (
             url.startswith("http://") or url.startswith("https://")
@@ -469,35 +332,21 @@ class WebFetch(Tool):
         timeout: int = _DEFAULT_TIMEOUT,
         bypass_cache: bool = False,
     ) -> dict[str, Any]:
-        # Cache check FIRST (before the SSRF/network round-trip). Hits
-        # are cheap; misses fall through to the full pipeline.
         key = _cache_key(url, prompt)
         if not bypass_cache:
             cached = _CACHE.get(key)
             if cached is not None:
-                # Annotate the cache hit so callers can tell a hot
-                # answer from a fresh fetch — useful for "force a
-                # re-fetch via bypass_cache" debugging.
                 hit = dict(cached)
                 hit["cached"] = True
                 return hit
 
-        # Network fetch. Body errors fall through to the summary path
-        # so the model can describe a 404 / 500 if useful; transport
-        # errors become ToolError raises (signal vs. body distinction).
         try:
             fetched = _fetch(url=url, timeout=timeout)
         except ToolError:
-            # Reraise — the calling tool surface already turns ToolError
-            # into the standard failure shape.
             raise
 
-        # Empty body → still try summary. Some endpoints return 204 with
-        # the meaningful info in headers; the model is allowed to
-        # describe that.
         body = fetched.get("content", "")
 
-        # Summary leg.
         try:
             factory = self._resolve_factory()
         except ToolError:
@@ -534,8 +383,7 @@ class WebFetch(Tool):
             "summary_model_name": model_name,
             "cached": False,
         }
-        # Cache success only — failure shapes don't enter the cache so
-        # a transient blip doesn't lock in a 4xx for 15 minutes.
+        # Cache successes only — keeps a transient 4xx from sticking for 15 min.
         with contextlib.suppress(Exception):
             _CACHE.put(key, result)
         return result
@@ -544,35 +392,15 @@ class WebFetch(Tool):
 def make_web_fetch(
     model_factory: Callable[[], BaseChatModel] | None = None,
 ) -> WebFetch:
-    """Build a fresh :class:`WebFetch` with a per-instance factory.
-
-    Used by tests + SDK callers that want to bypass the module-level
-    singleton (e.g. building two Agents with different summary models in
-    the same process).
-    """
     return WebFetch(model_factory=model_factory)
 
 
-# Module-level singleton — composed into ``BUILTIN_TOOLS`` and consumed by
-# Agent.__init__. The first invocation without a wired factory raises a
-# clear ToolError pointing at ``set_default_model_factory``; production
-# callers always have it set before the LLM ever invokes the tool.
 web_fetch: WebFetch = WebFetch()
 
 
-# Bind the wiring helpers onto the singleton itself so call sites that
-# resolve through the ``aura.tools.__init__`` re-export
-# (``from aura.tools import web_fetch`` returns the SINGLETON, not the
-# module) can still reach the wiring entry point via getattr. Both
-# ``module.set_default_model_factory`` and
-# ``singleton.set_default_model_factory`` end up calling the same
-# module-level function — the static method is just a forwarding shim.
 _set_default_factory_attr = staticmethod(set_default_model_factory)
 _make_web_fetch_attr = staticmethod(make_web_fetch)
-# ``object.__setattr__`` because pydantic's BaseTool blocks regular
-# attribute assignment on instance for fields not declared on the
-# model. The singleton-attached helpers aren't fields; they're
-# convenience shortcuts to the module functions.
+# object.__setattr__ — BaseTool blocks regular assignment for non-fields.
 object.__setattr__(
     web_fetch, "set_default_model_factory", set_default_model_factory,
 )

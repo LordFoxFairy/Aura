@@ -1,4 +1,4 @@
-"""Unit tests for aura.core.permissions.bash_safety.check_bash_safety.
+"""Unit tests for aura.application.permission.bash_safety.check_bash_safety.
 
 Pure-function unit coverage of the 4 Tier A hard-floor checks:
   1. cr_outside_double_quote
@@ -12,7 +12,7 @@ test_bash_safety_hook.py, agent-wiring integration in test_agent.py.
 
 from __future__ import annotations
 
-from aura.core.permissions.bash_safety import (
+from aura.application.permission.bash_safety import (
     ZSH_DANGEROUS_COMMANDS,
     BashSafetyViolation,
     check_bash_safety,
@@ -622,17 +622,17 @@ def test_rm_rf_brace_outside_root_blocked() -> None:
 
 def test_brace_expansion_helper_handles_no_braces() -> None:
     """No braces in input → helper returns the input unchanged."""
-    from aura.core.permissions.bash_safety import _expand_braces
+    from aura.application.permission.bash_safety import _expand_braces
     assert _expand_braces("/etc/passwd") == ["/etc/passwd"]
 
 
 def test_brace_expansion_helper_unbalanced_braces_pass_through() -> None:
     """Malformed brace (unmatched ``{``) → return as-is, do not crash."""
-    from aura.core.permissions.bash_safety import _expand_braces
+    from aura.application.permission.bash_safety import _expand_braces
     assert _expand_braces("/etc/{passwd") == ["/etc/{passwd"]
 
 
 def test_brace_expansion_helper_single_alternative_pass_through() -> None:
     """``{onlyone}`` is not a real list → return as literal."""
-    from aura.core.permissions.bash_safety import _expand_braces
+    from aura.application.permission.bash_safety import _expand_braces
     assert _expand_braces("/etc/{onlyone}") == ["/etc/{onlyone}"]

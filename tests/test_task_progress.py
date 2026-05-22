@@ -9,7 +9,7 @@ without dragging a full chat loop into the fixture.
 
 from __future__ import annotations
 
-from aura.core.tasks.store import TasksStore
+from aura.application.tasks.store import TasksStore
 
 
 def test_progress_updates_on_record_activity() -> None:

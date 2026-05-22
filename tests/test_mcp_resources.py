@@ -1,14 +1,14 @@
 """Tests for MCP resources support.
 
-Exercises the three surfaces introduced for MCP resource exposure:
+Exercises the manager-side surfaces for MCP resource exposure:
 
 - :class:`MCPManager` — discovery (``start_all`` now calls
   ``session.list_resources``), accessor (``resources_catalogue``), and
   on-demand read (``read_resource``).
-- :class:`MCPReadResourceTool` — generic LLM-invocable tool with
-  dynamically-built description.
-- Agent wiring — ``aconnect()`` registers the tool iff ≥1 resource
-  was discovered across all connected servers.
+- Agent wiring — ``aconnect()`` exposes the live :class:`MCPManager`
+  on :attr:`Agent.mcp_manager` without auto-registering any
+  resource-reader tool (the CLI ``@server:uri`` preprocessor owns the
+  resource surface as of v0.10.x).
 """
 
 from __future__ import annotations
@@ -22,13 +22,8 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
 from aura.config.schema import MCPServerConfig
-from aura.core.mcp.adapter import normalize_resource_contents
-from aura.core.mcp.manager import MCPManager
-from aura.schemas.tool import ToolError
-from aura.tools.mcp_read_resource import (
-    MCPReadResourceTool,
-    build_description,
-)
+from aura.infrastructure.mcp.adapter import normalize_resource_contents
+from aura.infrastructure.mcp.manager import MCPManager
 
 
 class _P(BaseModel):
@@ -128,7 +123,7 @@ async def test_start_all_discovers_resources(
             _fake_resource("db://snapshot/latest", name="latest"),
         ]
 
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     monkeypatch.setattr(
         manager_mod, "MultiServerMCPClient", lambda cfg: fake_client,
@@ -172,7 +167,7 @@ async def test_start_all_resource_listing_failure_is_graceful(
         # wrapper would.
         return []
 
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     monkeypatch.setattr(
         manager_mod, "MultiServerMCPClient", lambda cfg: fake_client,
@@ -236,7 +231,7 @@ async def test_read_resource_routes_to_owning_server(
 
     fake_client.session = MagicMock(side_effect=lambda name: _SessionCtx(name))
 
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     monkeypatch.setattr(
         manager_mod, "MultiServerMCPClient", lambda cfg: fake_client,
@@ -276,7 +271,7 @@ async def test_read_resource_unknown_uri_raises_with_known_list(
     async def _fake_list_resources(client: Any, server_name: str) -> list[Any]:
         return [_fake_resource("doc://known")]
 
-    from aura.core.mcp import manager as manager_mod
+    from aura.infrastructure.mcp import manager as manager_mod
 
     monkeypatch.setattr(
         manager_mod, "MultiServerMCPClient", lambda cfg: fake_client,
@@ -299,88 +294,17 @@ async def test_read_resource_unknown_uri_raises_with_known_list(
 
 
 # ---------------------------------------------------------------------------
-# MCPReadResourceTool — description + invocation
+# Agent wiring — manager exposed without any resource-reader tool registration
 # ---------------------------------------------------------------------------
 
 
-def test_build_description_lists_all_uris() -> None:
-    catalogue = [
-        ("gh", "file:///doc.md", "doc", "the doc", "text/markdown"),
-        ("db", "db://s/1", "snapshot", "", None),
-    ]
-    desc = build_description(catalogue)
-    assert "file:///doc.md" in desc
-    assert "db://s/1" in desc
-    assert "[gh]" in desc
-    assert "[db]" in desc
-    assert "text/markdown" in desc
-    assert "the doc" in desc
-
-
-def test_build_description_empty_catalogue_signals_none() -> None:
-    desc = build_description([])
-    assert "No MCP resources" in desc
-
-
 @pytest.mark.asyncio
-async def test_tool_invocation_with_valid_uri_returns_contents() -> None:
-    async def reader(uri: str) -> dict[str, Any]:
-        return {
-            "uri": uri,
-            "server": "s1",
-            "contents": [{"type": "text", "text": "body", "uri": uri, "mime": None}],
-        }
-
-    tool = MCPReadResourceTool(
-        resource_reader=reader,
-        description=build_description(
-            [("s1", "doc://a", "a", "desc", "text/plain")],
-        ),
-    )
-    result = await tool.ainvoke({"uri": "doc://a"})
-    assert result["uri"] == "doc://a"
-    assert result["server"] == "s1"
-    assert result["contents"][0]["text"] == "body"
-
-
-@pytest.mark.asyncio
-async def test_tool_invocation_unknown_uri_raises_tool_error() -> None:
-    async def reader(uri: str) -> dict[str, Any]:
-        raise ValueError(f"unknown MCP resource uri {uri!r}; known uris: ['doc://a']")
-
-    tool = MCPReadResourceTool(
-        resource_reader=reader,
-        description=build_description(
-            [("s1", "doc://a", "a", "", None)],
-        ),
-    )
-    # LangChain's ainvoke doesn't catch ToolError; it surfaces as-is.
-    with pytest.raises(ToolError) as exc_info:
-        await tool.ainvoke({"uri": "doc://missing"})
-    msg = str(exc_info.value)
-    assert "doc://a" in msg
-
-
-# ---------------------------------------------------------------------------
-# Agent wiring
-# ---------------------------------------------------------------------------
-#
-# ``MCPReadResourceTool`` is NOT auto-registered as of v0.10.x — resources
-# flow through the CLI-layer ``@server:uri`` attachment preprocessor
-# (see :mod:`cli.attachments`). ``aconnect`` exposes the manager on
-# :attr:`Agent.mcp_manager` but does not touch ``available_tools`` for the
-# resource surface anymore. The tool class remains importable for
-# programmatic SDK users who want LLM-driven reads (tested above via
-# ``test_tool_invocation_*``).
-
-
-@pytest.mark.asyncio
-async def test_agent_aconnect_does_not_auto_register_resource_tool(
+async def test_agent_aconnect_exposes_manager_without_resource_tool(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
 ) -> None:
     from aura.config.schema import AuraConfig, StorageConfig
     from aura.core.agent import Agent
-    from aura.core.persistence.storage import SessionStorage
+    from aura.infrastructure.persistence.storage import SessionStorage
 
     cfg = AuraConfig(
         router={"default": "openai:gpt-4o-mini"},
@@ -391,9 +315,8 @@ async def test_agent_aconnect_does_not_auto_register_resource_tool(
     storage = SessionStorage(cfg.resolved_storage_path())
 
     async def _fake_start_all(self: Any) -> tuple[list[Any], list[Any]]:
-        # Simulate a manager that discovered 1 resource — but the tool
-        # still must NOT auto-register; the @mention preprocessor owns the
-        # resource surface now.
+        # Simulate a manager that discovered 1 resource — Agent must still
+        # only expose it via ``mcp_manager``, never as a tool.
         self._resources[("s", "doc://a")] = _fake_resource("doc://a", name="a")
         return [], []
 
@@ -409,8 +332,8 @@ async def test_agent_aconnect_does_not_auto_register_resource_tool(
     )
     try:
         await agent.aconnect()
-        # Tool stays OUT of the registry / available map — the @mention
-        # preprocessor is the supported surface as of v0.10.x.
+        # No resource-reader tool is ever exposed — the @mention
+        # preprocessor is the only supported surface.
         assert "mcp_read_resource" not in agent._available_tools
         # Manager is still reachable for the preprocessor to query.
         assert agent.mcp_manager is not None
@@ -418,15 +341,3 @@ async def test_agent_aconnect_does_not_auto_register_resource_tool(
     finally:
         # B3: live MCP manager inside async loop → must use aclose().
         await agent.aclose()
-
-
-def test_deprecated_tool_metadata_marks_flag() -> None:
-    # Defensive: SDK filters (e.g. `show me only non-deprecated tools`)
-    # should be able to check this flag without reaching into the tool's
-    # module-private constants.
-    async def _noop_reader(uri: str) -> dict[str, Any]:
-        return {"uri": uri, "server": "x", "contents": []}
-
-    tool = MCPReadResourceTool(resource_reader=_noop_reader)
-    assert tool.aura_metadata is not None
-    assert "deprecated" in tool.aura_metadata.capability_flags

@@ -21,7 +21,7 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from aura.capabilities.skills_runtime.loader import activate_conditional_skills_for_paths
+from aura.infrastructure.skills.loader import activate_conditional_skills_for_paths
 from aura.schemas.events import ToolCallCompleted
 from tests.conftest import FakeChatModel, FakeTurn
 from tests.integration.conftest import build_integration_agent, drain
@@ -296,7 +296,7 @@ async def test_conditional_skill_activation_promotes_to_registry(
 
     # First Agent: conditional skill is stashed in the module bucket, not
     # the registry.
-    from aura.capabilities.skills_runtime.loader import get_conditional_skills
+    from aura.infrastructure.skills.loader import get_conditional_skills
 
     agent1, _ = build_integration_agent(
         tmp_path,

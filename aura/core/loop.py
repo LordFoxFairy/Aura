@@ -22,15 +22,15 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
 
-from aura.capabilities.tools.registry import ToolRegistry
+from aura.application.compact import Compactor, MicrocompactPolicy, apply_microcompact
+from aura.application.hooks import HookChain
+from aura.application.memory.context import Context
+from aura.application.permission.decision import Decision
 from aura.config.schema import RetryConfig
-from aura.core.abort import AbortController, AbortException, current_abort_signal
-from aura.core.compact import Compactor, MicrocompactPolicy, apply_microcompact
-from aura.core.hooks import HookChain
-from aura.core.memory.context import Context
-from aura.core.permissions.decision import Decision
-from aura.core.persistence import journal
-from aura.core.retry import with_retry
+from aura.domain.abort import AbortController, AbortException, current_abort_signal
+from aura.domain.tool_registry import ToolRegistry
+from aura.infrastructure.persistence import journal
+from aura.infrastructure.retry import with_retry
 from aura.schemas.events import (
     AgentEvent,
     AssistantDelta,
@@ -68,7 +68,7 @@ _AUTO_ALLOW_REASONS: frozenset[str] = frozenset(
 # ``AgentLoop(batch_timeout_sec=...)``; default 60.0s; ``<= 0`` disables.
 # Resolved once in ``AgentLoop.__init__`` so an env flip mid-session does
 # NOT race against the outer wait — mirrors the ``subagent_timeout`` pattern
-# in :mod:`aura.core.tasks.run`.
+# in :mod:`aura.application.tasks.run`.
 _BATCH_TIMEOUT_ENV_VAR = "AURA_BATCH_TIMEOUT_SEC"
 _DEFAULT_BATCH_TIMEOUT_SEC: float = 60.0
 

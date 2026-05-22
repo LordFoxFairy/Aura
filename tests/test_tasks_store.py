@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from aura.core.tasks.store import TasksStore
-from aura.core.tasks.types import TaskRecord
+from aura.application.tasks.store import TasksStore
+from aura.domain.task import TaskRecord
 
 
 def test_create_record_and_list() -> None:

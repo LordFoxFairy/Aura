@@ -9,13 +9,13 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.capabilities.skills_runtime.command import install_skill_allow_rules
-from aura.capabilities.skills_runtime.errors import format_missing_args_error
-from aura.capabilities.skills_runtime.loader import render_skill_body
-from aura.capabilities.skills_runtime.registry import SkillRegistry
-from aura.capabilities.skills_runtime.restrict import install_restrict_lease
-from aura.capabilities.skills_runtime.types import Skill
-from aura.core.permissions.session import SessionRuleSet
+from aura.domain.permission.session import SessionRuleSet
+from aura.infrastructure.skills.command import install_skill_allow_rules
+from aura.infrastructure.skills.errors import format_missing_args_error
+from aura.infrastructure.skills.loader import render_skill_body
+from aura.infrastructure.skills.registry import SkillRegistry
+from aura.infrastructure.skills.restrict import install_restrict_lease
+from aura.infrastructure.skills.types import Skill
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolError, ToolMetadata
 
@@ -138,7 +138,7 @@ class SkillTool(BaseTool):
         loop_state = self._loop_state_provider()
         if loop_state is not None:
             install_restrict_lease(skill, loop_state)
-        from aura.core.persistence import journal
+        from aura.infrastructure.persistence import journal
 
         journal.write(
             "skill_invoked",

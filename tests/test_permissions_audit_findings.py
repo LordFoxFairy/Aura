@@ -12,14 +12,14 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.config.schema import AuraConfigError
-from aura.core.hooks import HookChain
-from aura.core.hooks.permission import (
+from aura.application.hooks import HookChain
+from aura.application.hooks.permission import (
     AskerResponse,
     make_permission_hook,
 )
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet, SessionRuleSet
+from aura.config.schema import AuraConfigError
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.schemas.permissions import Ask, Outcome
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
@@ -245,7 +245,7 @@ async def test_f_04_005_plan_mode_blocks_web_search(tmp_path: Path) -> None:
 
 
 def test_f_04_005_plan_mode_read_tools_excludes_outbound() -> None:
-    from aura.core.hooks.permission import _PLAN_MODE_READ_TOOLS
+    from aura.application.hooks.permission import _PLAN_MODE_READ_TOOLS
 
     assert "web_fetch" not in _PLAN_MODE_READ_TOOLS
     assert "web_search" not in _PLAN_MODE_READ_TOOLS
@@ -271,7 +271,7 @@ async def test_f_04_015_disable_bypass_clamps_runtime_bypass(
     def _capture(event: str, /, **fields: Any) -> None:
         events.append((event, fields))
 
-    from aura.core.persistence import journal as journal_mod
+    from aura.infrastructure.persistence import journal as journal_mod
 
     monkeypatch.setattr(journal_mod, "write", _capture)
 
@@ -315,7 +315,7 @@ async def test_f_04_015_disable_bypass_warning_is_one_shot(
     def _capture(event: str, /, **fields: Any) -> None:
         events.append((event, fields))
 
-    from aura.core.persistence import journal as journal_mod
+    from aura.infrastructure.persistence import journal as journal_mod
 
     monkeypatch.setattr(journal_mod, "write", _capture)
 
@@ -368,7 +368,7 @@ async def test_f_04_015_disable_bypass_false_lets_bypass_through(
 
 
 def test_f_04_020_safety_exempt_overlaps_ssh_raises(tmp_path: Path) -> None:
-    from aura.core.permissions.store import load
+    from aura.infrastructure.permission_store import load
 
     settings = tmp_path / ".aura" / "settings.json"
     settings.parent.mkdir()
@@ -385,7 +385,7 @@ def test_f_04_020_safety_exempt_overlaps_ssh_raises(tmp_path: Path) -> None:
 
 
 def test_f_04_020_safety_exempt_overlaps_git_raises(tmp_path: Path) -> None:
-    from aura.core.permissions.store import load
+    from aura.infrastructure.permission_store import load
 
     settings = tmp_path / ".aura" / "settings.json"
     settings.parent.mkdir()
@@ -399,7 +399,7 @@ def test_f_04_020_safety_exempt_overlaps_git_raises(tmp_path: Path) -> None:
 
 
 def test_f_04_020_safety_exempt_overlaps_etc_raises(tmp_path: Path) -> None:
-    from aura.core.permissions.store import load
+    from aura.infrastructure.permission_store import load
 
     settings = tmp_path / ".aura" / "settings.json"
     settings.parent.mkdir()
@@ -412,7 +412,7 @@ def test_f_04_020_safety_exempt_overlaps_etc_raises(tmp_path: Path) -> None:
 
 
 def test_f_04_020_safety_exempt_overlaps_bashrc_raises(tmp_path: Path) -> None:
-    from aura.core.permissions.store import load
+    from aura.infrastructure.permission_store import load
 
     settings = tmp_path / ".aura" / "settings.json"
     settings.parent.mkdir()
@@ -426,7 +426,7 @@ def test_f_04_020_safety_exempt_overlaps_bashrc_raises(tmp_path: Path) -> None:
 
 def test_f_04_020_safety_exempt_unrelated_path_allowed(tmp_path: Path) -> None:
     """Non-overlapping safety_exempt entries continue to load normally."""
-    from aura.core.permissions.store import load
+    from aura.infrastructure.permission_store import load
 
     settings = tmp_path / ".aura" / "settings.json"
     settings.parent.mkdir()
@@ -442,7 +442,7 @@ def test_f_04_020_safety_exempt_unrelated_path_allowed(tmp_path: Path) -> None:
 def test_f_04_020_safety_exempt_local_file_attribution(tmp_path: Path) -> None:
     """When the offending pattern lives in settings.local.json the
     error message must point at THAT file, not settings.json."""
-    from aura.core.permissions.store import load
+    from aura.infrastructure.permission_store import load
 
     aura_dir = tmp_path / ".aura"
     aura_dir.mkdir()

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.permissions.mode import Mode
+    from aura.domain.permission.mode import Mode
     from aura.schemas.permissions import PermissionsConfig
 
 
@@ -76,7 +76,10 @@ def _make_parser() -> argparse.ArgumentParser:
         "--scope",
         choices=["global", "project"],
         default="global",
-        help="layer to write to: 'global' (~/.aura/mcp_servers.json) or 'project' (<cwd>/.aura/mcp_servers.json)",
+        help=(
+            "layer to write to: 'global' (~/.aura/mcp_servers.json) or "
+            "'project' (<cwd>/.aura/mcp_servers.json)"
+        ),
     )
     mcp_add.add_argument(
         "--env", "-e",
@@ -102,6 +105,23 @@ def _make_parser() -> argparse.ArgumentParser:
         default="auto",
         help="layer to remove from; 'auto' targets whichever currently owns the name",
     )
+
+    # ``teammate`` — subprocess entry point spawned by the pane backend and
+    # RemoteAgentTask. Communication with the leader is exclusively via the
+    # on-disk JSONL mailbox under ``<storage-root>/teams/<team-id>/``; argv
+    # carries only what the subprocess needs to wire its own Agent.
+    teammate = subparsers.add_parser(
+        "teammate",
+        help="run an Aura teammate inside a subprocess (pane/remote backends)",
+        description="Subprocess entrypoint for pane- and remote-backed teammates.",
+    )
+    teammate.add_argument("--team-id", required=True)
+    teammate.add_argument("--member", required=True)
+    teammate.add_argument("--storage-root", required=True)
+    teammate.add_argument("--agent-type", default="general-purpose")
+    teammate.add_argument("--model", default=None)
+    teammate.add_argument("--system-prompt", default=None)
+    teammate.add_argument("--seed-prompt", default=None)
 
     return parser
 
@@ -141,7 +161,7 @@ def _warn_plaintext_api_keys(
 
 def _fail_startup(console: Console, exc: BaseException) -> int:
     from aura.core import journal
-    from aura.errors import AuraError
+    from aura.domain.errors import AuraError
 
     if isinstance(exc, AuraError):
         journal.write("startup_failed", reason=type(exc).__name__, detail=str(exc))
@@ -160,6 +180,30 @@ def _split_dashdash(argv: list[str]) -> tuple[list[str], list[str]]:
     return argv[:idx], argv[idx + 1 :]
 
 
+def run_as_teammate(args: argparse.Namespace) -> int:
+    """Drive ``run_teammate_main`` for the ``teammate`` subcommand.
+
+    The heavy chain (config loader, agent builder, persistence) is
+    imported lazily so the parent ``aura`` invocation stays light.
+    """
+    from aura.application.teams.runtime import run_teammate_main
+
+    try:
+        return asyncio.run(
+            run_teammate_main(
+                team_id=args.team_id,
+                member_name=args.member,
+                storage_root=args.storage_root,
+                agent_type=args.agent_type,
+                model_name=args.model,
+                system_prompt=args.system_prompt,
+                seed_prompt=args.seed_prompt,
+            ),
+        )
+    except KeyboardInterrupt:
+        return 130
+
+
 def main() -> int:
     _force_utf8_streams()
     parser = _make_parser()
@@ -175,28 +219,31 @@ def main() -> int:
 
         return handle_mcp(args)
 
+    if args.subcommand == "teammate":
+        return run_as_teammate(args)
+
     from pathlib import Path
 
     from rich.console import Console
 
+    from aura.application.hooks import HookChain
+    from aura.application.hooks.logging import wrap_with_event_logger
+    from aura.application.hooks.permission import make_permission_hook
     from aura.config.loader import load_config
     from aura.config.schema import AuraConfigError
     from aura.core import journal
     from aura.core.agent import build_agent
-    from aura.core.hooks import HookChain
-    from aura.core.hooks.logging import wrap_with_event_logger
-    from aura.core.hooks.permission import make_permission_hook
-    from aura.core.permissions import store
-    from aura.core.permissions.defaults import DEFAULT_ALLOW_RULES
-    from aura.core.permissions.safety import (
+    from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
+    from aura.domain.permission.safety import (
         DEFAULT_PROTECTED_READS,
         DEFAULT_PROTECTED_WRITES,
         SafetyPolicy,
     )
-    from aura.core.permissions.session import RuleSet, SessionRuleSet
-    from cli.permission import make_cli_asker, print_bypass_banner
+    from aura.domain.permission.session import RuleSet, SessionRuleSet
+    from aura.infrastructure import permission_store as store
+    from cli._permission_asker import make_cli_asker, print_bypass_banner
+    from cli._user_asker import make_cli_user_asker
     from cli.repl import run_repl_async
-    from cli.user_question import make_cli_user_asker
 
     console = Console()
 
@@ -316,7 +363,7 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             console.print(f"[yellow]mcp connect error (continuing): {exc}[/yellow]")
             journal.write("mcp_connect_cli_error", error=str(exc))
-        from aura.core.hooks.file_watcher import FileWatcher, default_watch_paths
+        from aura.application.hooks.file_watcher import FileWatcher, default_watch_paths
         watcher = FileWatcher(
             paths=default_watch_paths(Path.cwd()),
             chain=agent._hooks,

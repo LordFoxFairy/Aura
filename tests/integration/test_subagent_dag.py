@@ -25,7 +25,7 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from aura.core.tasks.store import TasksStore
+from aura.application.tasks.store import TasksStore
 from tests.conftest import FakeChatModel, FakeTurn
 from tests.integration.conftest import build_integration_agent, drain
 

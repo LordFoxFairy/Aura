@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from aura.core.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
+from aura.application.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
 
 
 def test_summary_system_contains_text_only_guard() -> None:

@@ -1,4 +1,4 @@
-"""Tests for aura.core.memory.context: 4-layer assembly and progressive state."""
+"""Tests for aura.application.memory.context: 4-layer assembly and progressive state."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ from langchain_core.messages import (
     SystemMessage,
 )
 
-from aura.capabilities.skills_runtime.types import Skill
-from aura.core.memory.context import Context, NestedFragment, _ReadRecord
-from aura.core.memory.context import _render_todos_body as render_todos_body
-from aura.core.memory.rules import Rule, RulesBundle
-from aura.core.tasks.types import TaskNotification
+from aura.application.memory.context import Context, NestedFragment, _ReadRecord
+from aura.application.memory.context import _render_todos_body as render_todos_body
+from aura.application.memory.rules import Rule, RulesBundle
+from aura.domain.task import TaskNotification
+from aura.infrastructure.skills.types import Skill
 from aura.schemas.state import ReadCarryover, ReadRecord
 from aura.schemas.todos import TodoItem
 

@@ -11,8 +11,8 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from aura.application.compact import CompactionTrigger
 from aura.config.schema import AuraConfig, CompactConfig
-from aura.core.compact import CompactionTrigger
 
 # ---------------------------------------------------------------------------
 # CompactionTrigger enum

@@ -12,23 +12,23 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aura.capabilities.commands import (
+from aura.application.commands import (
     Command,
     CommandRegistry,
     CommandResult,
     CommandSource,
 )
-from aura.capabilities.commands.builtin import (
+from aura.application.commands.builtin import (
     ClearCommand,
     ExitCommand,
     HelpCommand,
     ModelCommand,
 )
-from aura.capabilities.commands.registry import CommandRegistry as CapabilityCommandRegistry
+from aura.application.commands.registry import CommandRegistry as CapabilityCommandRegistry
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.llm import UnknownModelSpecError
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.llm import UnknownModelSpecError
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
 if TYPE_CHECKING:
@@ -81,7 +81,7 @@ class _StubCommand:
 
 def test_core_command_registry_facade_points_at_capabilities_module() -> None:
     assert CommandRegistry is CapabilityCommandRegistry
-    assert CommandRegistry.__module__ == "aura.capabilities.commands.registry"
+    assert CommandRegistry.__module__ == "aura.application.commands.registry"
 
 
 # ---------------------------------------------------------------------------

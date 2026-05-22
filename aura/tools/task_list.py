@@ -1,10 +1,4 @@
-"""task_list — enumerate recent subagent tasks with status counts.
-
-Complements ``/tasks`` (which is for humans) with a structured-data
-version the LLM can call. Returns a tiny summary per task + a counts
-dict so the model can reason about the fleet without polling task_get
-on every id.
-"""
+"""task_list — enumerate recent tasks with status counts."""
 
 from __future__ import annotations
 
@@ -13,8 +7,8 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
-from aura.core.tasks.store import TasksStore
-from aura.core.tasks.types import TaskKind, TaskRecord, TaskStatus
+from aura.application.tasks.store import TasksStore
+from aura.domain.task import TaskKind, TaskRecord, TaskStatus
 from aura.schemas.tool import ToolMetadata
 
 _StatusFilter = Literal["all", "running", "completed", "failed", "cancelled"]
@@ -24,17 +18,11 @@ _KindFilter = Literal["all", "subagent", "shell", "teammate"]
 class TaskListParams(BaseModel):
     status: _StatusFilter = Field(
         default="all",
-        description=(
-            "Filter returned tasks to one lifecycle state, or 'all' for "
-            "every record."
-        ),
+        description="Filter to one lifecycle state, or 'all'.",
     )
     kind: _KindFilter = Field(
         default="all",
-        description=(
-            "Filter by task kind: 'subagent' (task_create), 'shell' "
-            "(bash_background), 'teammate' (team member), or 'all' for all."
-        ),
+        description="Filter by task kind ('subagent', 'shell', 'teammate', or 'all').",
     )
     limit: int = Field(
         default=20, ge=1, le=200,
@@ -67,8 +55,6 @@ _ALL_STATUSES: tuple[TaskStatus, ...] = (
 
 
 class TaskList(BaseTool):
-    """Return a newest-first window of TaskRecords plus status counts."""
-
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     name: str = "task_list"
@@ -111,9 +97,7 @@ class TaskList(BaseTool):
         kind: _KindFilter,
         limit: int,
     ) -> dict[str, Any]:
-        # Counts are over the FULL fleet regardless of filter — the user
-        # asked "show me the failed ones", and also wants the running
-        # count to know if anything is still in flight.
+        # Counts span the full fleet so callers see overall state even when filtering.
         all_records = self.store.list()
         counts = {
             s: sum(1 for r in all_records if r.status == s)

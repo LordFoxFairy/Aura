@@ -18,11 +18,11 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatResult
 
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.run import run_task
+from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.run import run_task
-from aura.core.tasks.store import TasksStore
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.tool import ToolError
 from aura.tools.task_stop import TaskStop
 from tests.conftest import FakeChatModel

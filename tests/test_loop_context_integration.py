@@ -10,12 +10,12 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.capabilities.tools.registry import ToolRegistry
-from aura.core.hooks import HookChain
+from aura.application.hooks import HookChain
+from aura.application.memory.context import Context
+from aura.application.memory.rules import Rule, RulesBundle
+from aura.application.permission.decision import Decision
 from aura.core.loop import AgentLoop
-from aura.core.memory.context import Context
-from aura.core.memory.rules import Rule, RulesBundle
-from aura.core.permissions.decision import Decision
+from aura.domain.tool_registry import ToolRegistry
 from aura.schemas.permissions import Outcome, Replace
 from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool

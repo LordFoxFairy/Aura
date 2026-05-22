@@ -8,14 +8,8 @@ from typing import get_args
 
 from rich.console import Console
 
-from aura.adapters.protocol.wire import (
-    agent_state_to_wire,
-    event_to_wire,
-    permission_request_to_wire,
-    task_notification_to_wire,
-)
-from aura.core.tasks.types import TaskNotification
-from aura.domain.protocol.events import (
+from aura.domain.task import TaskNotification
+from aura.infrastructure.wire.event_dto import (
     AssistantDeltaEvent,
     CompactEvent,
     ErrorEvent,
@@ -29,6 +23,12 @@ from aura.domain.protocol.events import (
     ToolCallStartedEvent,
     UnknownEvent,
     WireEvent,
+)
+from aura.infrastructure.wire.wire import (
+    agent_state_to_wire,
+    event_to_wire,
+    permission_request_to_wire,
+    task_notification_to_wire,
 )
 from aura.schemas.events import (
     AgentEvent,
@@ -66,7 +66,7 @@ def test_wire_event_is_explicit_union_of_protocol_families() -> None:
 
 
 def test_event_to_wire_preserves_desktop_event_shapes() -> None:
-    assert event_to_wire.__module__ == "aura.adapters.protocol.wire"
+    assert event_to_wire.__module__ == "aura.infrastructure.wire.wire"
     assert event_to_wire(AssistantDelta("hi")) == {
         "event": "assistant_delta",
         "text": "hi",

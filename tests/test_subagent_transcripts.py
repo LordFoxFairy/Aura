@@ -27,11 +27,11 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.run import run_task
+from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
-from aura.core.persistence.storage import SessionStorage, TranscriptMeta
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.run import run_task
-from aura.core.tasks.store import TasksStore
+from aura.infrastructure.persistence.storage import SessionStorage, TranscriptMeta
 from tests.conftest import FakeChatModel, FakeTurn
 
 

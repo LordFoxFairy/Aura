@@ -1,4 +1,4 @@
-"""Hook-level tests for aura.core.hooks.bash_safety.make_bash_safety_hook.
+"""Hook-level tests for aura.application.hooks.bash_safety.make_bash_safety_hook.
 
 Pre-tool closure that short-circuits bash commands hitting the Tier A
 hard-floor safety rules. Factory takes no context; hook is stateless.
@@ -13,8 +13,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from aura.core.hooks.bash_safety import make_bash_safety_hook
-from aura.core.persistence import journal as journal_module
+from aura.application.hooks.bash_safety import make_bash_safety_hook
+from aura.infrastructure.persistence import journal as journal_module
 from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
 from aura.tools.base import build_tool

@@ -11,7 +11,7 @@ from rich.console import Console
 
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
 from cli.repl import run_repl_async
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -265,7 +265,7 @@ def test_welcome_banner_animated_path_runs_in_real_tty(
         "from cli.repl import _print_welcome\n"
         "from aura.core.agent import Agent\n"
         "from aura.config.schema import AuraConfig\n"
-        "from aura.core.persistence.storage import SessionStorage\n"
+        "from aura.infrastructure.persistence.storage import SessionStorage\n"
         "from tests.conftest import FakeChatModel\n"
         "cfg = AuraConfig.model_validate({\n"
         "    'providers': [{'name': 'openai', 'protocol': 'openai'}],\n"

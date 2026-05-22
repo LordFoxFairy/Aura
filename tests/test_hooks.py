@@ -1,4 +1,4 @@
-"""Tests for aura.core.hooks.HookChain."""
+"""Tests for aura.application.hooks.HookChain."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks import HookChain
-from aura.core.permissions.decision import Decision
-from aura.core.permissions.rule import Rule
+from aura.application.hooks import HookChain
+from aura.application.permission.decision import Decision
+from aura.domain.permission.rule import Rule
 from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
@@ -253,7 +253,7 @@ async def test_pre_tool_per_hook_decision_journaled(tmp_path: Any) -> None:
     journal event — audit readers can reconstruct the full chain."""
     import json
 
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
 
     deny = _deny("safety_blocked")
     allow = _allow("mode_bypass")
@@ -302,7 +302,7 @@ async def test_pre_tool_per_hook_decision_journaled_for_block_replace(
     """
     import json
 
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
     from aura.schemas.tool import ToolResult
 
     sc = ToolResult(ok=False, error="canned")
@@ -349,7 +349,7 @@ async def test_pre_tool_allow_outcomes_not_journaled(tmp_path: Any) -> None:
     """
     import json
 
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
 
     async def allow_hook_1(
         *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object

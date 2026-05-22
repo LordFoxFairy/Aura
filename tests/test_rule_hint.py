@@ -1,4 +1,4 @@
-"""Tests for ``aura.core.permissions.rule_hint.derive_rule_hint`` — spec §8.2.
+"""Tests for ``aura.application.permission.rule_hint.derive_rule_hint`` — spec §8.2.
 
 ``derive_rule_hint`` returns the most specific pattern rule the CLI can show
 on prompt option 2, or ``None`` when the tool/args can't support a pattern
@@ -11,9 +11,9 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from aura.core.permissions.matchers import exact_match_on, path_prefix_on
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.rule_hint import derive_rule_hint
+from aura.application.permission.rule_hint import derive_rule_hint
+from aura.domain.permission.matchers import exact_match_on, path_prefix_on
+from aura.domain.permission.rule import Rule
 from aura.tools.base import build_tool
 
 

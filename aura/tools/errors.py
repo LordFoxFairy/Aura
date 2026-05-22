@@ -1,20 +1,8 @@
-"""Shared tool-error hint table.
-
-Lives here (rather than in ``cli.render``) because BOTH the renderer
-(visual panel for the user) AND the loop's ToolMessage builder (text the
-MODEL sees) need to consult it. Keeping the table in ``cli`` would mean
-the loop depends on ``cli`` — a layering inversion.
-
-The table is substring-keyed: first hit wins, so more-specific phrases
-go BEFORE shorter prefixes. Matching is case-insensitive on the lowercased
-error text.
-"""
+"""Shared tool-error hint table; first substring match wins."""
 
 from __future__ import annotations
 
-# Order matters: first substring hit wins. Put the more-specific messages
-# BEFORE shorter ones that would otherwise prefix-match. Mirrors the
-# behaviour contract documented on the old ``render._hint_for_error``.
+# Specific phrases before shorter prefixes — first match wins.
 _ERROR_HINTS: list[tuple[str, str]] = [
     ("ripgrep",
      "install ripgrep — brew install ripgrep  (or the platform equivalent)"),
@@ -47,13 +35,6 @@ _ERROR_HINTS: list[tuple[str, str]] = [
 
 
 def hint_for_error(tool_name: str, error: str) -> str | None:
-    """Return an actionable hint for ``error``, or ``None``.
-
-    First substring-match wins. ``tool_name`` is accepted for future
-    per-tool routing; currently unused. ``None`` means no hint applies —
-    callers should omit the hint line entirely rather than pad with
-    generic filler.
-    """
     _ = tool_name
     haystack = error.lower()
     for needle, hint in _ERROR_HINTS:

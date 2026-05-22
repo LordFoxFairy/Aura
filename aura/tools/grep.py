@@ -9,7 +9,7 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, model_validator
 
-from aura.core.permissions.matchers import exact_match_on
+from aura.domain.permission.matchers import exact_match_on
 from aura.schemas.tool import ToolError, ToolMetadata
 
 OutputMode = Literal["content", "files_with_matches", "count"]

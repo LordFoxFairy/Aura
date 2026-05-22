@@ -7,8 +7,8 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
-from aura.core.tasks.store import TasksStore
-from aura.core.tasks.types import TaskRecord
+from aura.application.tasks.store import TasksStore
+from aura.domain.task import TaskRecord
 from aura.schemas.tool import ToolError, ToolMetadata
 
 
@@ -43,12 +43,7 @@ def _serialize(rec: TaskRecord, *, include_messages: bool) -> dict[str, Any]:
         "parent_id": rec.parent_id,
         "description": rec.description,
         "kind": rec.kind,
-        # Round 7R — surface the resolved spec so the parent's polling
-        # loop can reason about which model the child ran on (cheap
-        # tier vs. main vs. external override).
         "model_spec": rec.model_spec,
-        # Round 1A / 6L — agent_type for subagents (None for shell);
-        # mirrored as a string so JSON tool results round-trip cleanly.
         "agent_type": rec.agent_type or "general-purpose",
         "status": rec.status,
         "started_at": rec.started_at,
@@ -57,9 +52,6 @@ def _serialize(rec: TaskRecord, *, include_messages: bool) -> dict[str, Any]:
         "duration_seconds": duration,
         "final_result": rec.final_result,
         "error": rec.error,
-        # Round 4F — on-disk transcript path (None when run_task wasn't
-        # given a ``transcript_storage`` or when flush failed). Stringified
-        # to keep the payload JSON-safe.
         "transcript_path": (
             str(rec.transcript_path) if rec.transcript_path is not None else None
         ),
@@ -68,9 +60,7 @@ def _serialize(rec: TaskRecord, *, include_messages: bool) -> dict[str, Any]:
             "token_count": rec.progress.token_count,
             "line_count": rec.progress.line_count,
             "last_activity_at": rec.progress.last_activity_at,
-            # Copy — caller should not be able to mutate the live ring.
             "recent_activities": list(rec.progress.recent_activities),
-            # Round 7QS — token breakdown + summary visibility.
             "input_tokens": rec.progress.input_tokens,
             "output_tokens": rec.progress.output_tokens,
             "latest_summary": rec.progress.latest_summary,
@@ -83,8 +73,6 @@ def _serialize(rec: TaskRecord, *, include_messages: bool) -> dict[str, Any]:
 
 
 class TaskGet(BaseTool):
-    """Return a full snapshot of a subagent's TaskRecord."""
-
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     name: str = "task_get"

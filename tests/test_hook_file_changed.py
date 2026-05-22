@@ -17,9 +17,9 @@ from typing import Any
 
 import pytest
 
-from aura.core.hooks import HookChain
-from aura.core.hooks.auto_reload import make_aura_md_reload_hook
-from aura.core.hooks.file_watcher import FileWatcher
+from aura.application.hooks import HookChain
+from aura.application.hooks.auto_reload import make_aura_md_reload_hook
+from aura.application.hooks.file_watcher import FileWatcher
 from aura.schemas.state import LoopState
 
 # Use a tight polling interval so the tests don't drag — the watcher's
@@ -158,13 +158,13 @@ async def test_aura_md_reload_consumer_refreshes_primary_memory(
     """
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
-    from aura.core.persistence.storage import SessionStorage
+    from aura.infrastructure.persistence.storage import SessionStorage
 
     monkeypatch.chdir(tmp_path)
     fake_home = tmp_path / "_home"
     fake_home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: fake_home)
-    from aura.core.memory import project_memory, rules
+    from aura.application.memory import project_memory, rules
     project_memory.clear_cache()
     rules.clear_cache()
 

@@ -10,7 +10,7 @@ Two helpers shared across the tier:
   FakeChatModel + in-memory storage and lets the caller override tools,
   permission mode, hooks, and the question asker. Returns ``(agent, model)``.
 
-- :class:`ScriptedAsker` — deterministic stand-in for the CLI ``QuestionAsker``.
+- :class:`ScriptedAsker` — deterministic stand-in for the CLI ``UserAsker``.
   Pop from a queue or reply with a sticky default; records every invocation
   so tests can assert on order / count / per-question content.
 
@@ -31,13 +31,13 @@ from typing import Any
 import pytest
 from langchain_core.tools import BaseTool
 
-from aura.capabilities.skills_runtime.loader import clear_conditional_state
+from aura.application.hooks import HookChain
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.hooks import HookChain
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.skills.loader import clear_conditional_state
 from aura.schemas.events import AgentEvent
-from aura.tools.ask_user import QuestionAsker
+from aura.tools.ask_user import FormQuestionDict, UserAsker
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -89,7 +89,7 @@ def build_integration_agent(
     available_tools: dict[str, BaseTool] | None = None,
     hooks: HookChain | None = None,
     mode: str = "default",
-    question_asker: QuestionAsker | None = None,
+    question_asker: UserAsker | None = None,
     cwd_for_skills: Path | None = None,
 ) -> tuple[Agent, FakeChatModel]:
     """Build a real ``Agent`` wired to a scripted FakeChatModel.
@@ -138,20 +138,23 @@ async def drain(agent: Agent, prompt: str) -> list[AgentEvent | dict[str, Any]]:
 class AskerCall:
     """One recorded invocation of a scripted asker."""
 
-    question: str
-    options: list[str] | None
-    default: str | None
+    questions: list[FormQuestionDict]
     started_at: float
     finished_at: float
 
 
 class ScriptedAsker:
-    """Test double for :data:`QuestionAsker`.
+    """Test double for :data:`UserAsker`.
 
-    Call signature matches the real asker — ``(question, options, default) -> str``.
+    Call signature matches the real asker —
+    ``(questions: list[FormQuestionDict]) -> dict[str, str]``. The default
+    answer is applied uniformly to every question in the batch (matching
+    the most common test shape: a single yes/no question).
+
     Configure via:
 
-    - :meth:`queue_response` — pop from a FIFO queue per call.
+    - :meth:`queue_response` — pop a single per-question answer from a FIFO
+      queue (applied to every question in the next batch).
     - :meth:`set_default` — fallback when the queue is empty.
     - :meth:`set_delay` — simulate "user takes 100ms to answer" so mutex
       serialization is observable in tests.
@@ -164,7 +167,7 @@ class ScriptedAsker:
         self._queue: deque[str] = deque()
         self._default: str = default
         self._delay: float = 0.0
-        self._custom: Callable[[str, list[str] | None, str | None], str] | None = None
+        self._custom: Callable[[list[FormQuestionDict]], dict[str, str]] | None = None
         self.calls: list[AskerCall] = []
 
     def queue_response(self, answer: str) -> None:
@@ -177,36 +180,30 @@ class ScriptedAsker:
         self._delay = seconds
 
     def set_custom(
-        self, fn: Callable[[str, list[str] | None, str | None], str]
+        self, fn: Callable[[list[FormQuestionDict]], dict[str, str]],
     ) -> None:
         self._custom = fn
 
     async def __call__(
-        self,
-        question: str,
-        options: list[str] | None,
-        default: str | None,
-    ) -> str:
+        self, questions: list[FormQuestionDict],
+    ) -> dict[str, str]:
         started = time.monotonic()
         if self._delay > 0:
             await asyncio.sleep(self._delay)
         if self._custom is not None:
-            answer = self._custom(question, options, default)
-        elif self._queue:
-            answer = self._queue.popleft()
+            answers = self._custom(questions)
         else:
-            answer = self._default
+            answer = self._queue.popleft() if self._queue else self._default
+            answers = {q.get("question", ""): answer for q in questions}
         finished = time.monotonic()
         self.calls.append(
             AskerCall(
-                question=question,
-                options=list(options) if options else None,
-                default=default,
+                questions=[dict(q) for q in questions],  # type: ignore[misc]
                 started_at=started,
                 finished_at=finished,
             )
         )
-        return answer
+        return answers
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +212,7 @@ class ScriptedAsker:
 
 
 class ScriptedPermissionAsker:
-    """Test double for :class:`aura.core.hooks.permission.PermissionAsker`.
+    """Test double for :class:`aura.application.hooks.permission.PermissionAsker`.
 
     Returns an :class:`AskerResponse` per call — queue per-tool responses
     or install a sticky default. Records ``calls`` like :class:`ScriptedAsker`

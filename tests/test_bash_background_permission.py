@@ -30,12 +30,12 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import BaseModel
 
+from aura.application.hooks.bash_safety import make_bash_safety_hook
+from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.hooks.bash_safety import make_bash_safety_hook
-from aura.core.persistence import journal as journal_module
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.store import TasksStore
+from aura.infrastructure.persistence import journal as journal_module
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.bash_background import BashBackground

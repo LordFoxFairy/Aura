@@ -1,7 +1,7 @@
-"""Headless NDJSON wrapper for the shared desktop session service.
+"""Headless SSE wrapper for the shared desktop session service.
 
 This module is desktop-specific only at the stdio boundary: it reads NDJSON
-requests from stdin, writes NDJSON events to stdout, and delegates session
+requests from stdin, writes SSE-framed events to stdout, and delegates session
 behavior to ``desktop.host.session_service``. It intentionally preserves a few
 legacy helper names for tests while the runtime ownership has moved.
 """
@@ -9,17 +9,17 @@ legacy helper names for tests while the runtime ownership has moved.
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
-from aura.adapters.protocol.wire import agent_state_to_wire, event_to_wire
+from aura.application.hooks.permission import make_permission_hook
 from aura.config.loader import load_config
 from aura.core.agent import Agent
-from aura.core.hooks.permission import make_permission_hook
-from aura.core.llm import make_model_for_spec
-from aura.core.permissions import store as perm_store
+from aura.infrastructure import permission_store as perm_store
+from aura.infrastructure.llm import make_model_for_spec
+from aura.infrastructure.wire.stream import encode_sse
+from aura.infrastructure.wire.wire import agent_state_to_wire, event_to_wire
 from desktop.host import session_service
 
 
@@ -31,8 +31,8 @@ class IpcAsker(session_service.IpcAsker):
 
 
 def _emit(payload: dict[str, Any]) -> None:
-    """Write one NDJSON line to stdout + flush."""
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    """Write one SSE frame to stdout + flush."""
+    sys.stdout.write(encode_sse(cast(Any, payload)))
     sys.stdout.flush()
 
 

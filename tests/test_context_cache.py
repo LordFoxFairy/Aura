@@ -23,10 +23,10 @@ from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 from pydantic import ConfigDict
 
-from aura.capabilities.skills_runtime.types import Skill
-from aura.core.memory.context import Context
-from aura.core.memory.rules import Rule, RulesBundle
-from aura.core.persistence import journal
+from aura.application.memory.context import Context
+from aura.application.memory.rules import Rule, RulesBundle
+from aura.infrastructure.persistence import journal
+from aura.infrastructure.skills.types import Skill
 
 
 class _AnthropicLikeModel(BaseChatModel):

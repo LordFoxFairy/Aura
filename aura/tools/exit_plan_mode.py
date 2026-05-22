@@ -9,7 +9,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from aura.schemas.tool import ToolError, ToolMetadata
-from aura.tools.ask_user import QuestionAsker
+from aura.tools.ask_user import FormQuestionDict, UserAsker
 from aura.tools.enter_plan_mode import ModeGetter, ModeSetter
 
 # bypass / plan are not valid exit targets.
@@ -17,10 +17,8 @@ ExitTarget = Literal["default", "accept_edits"]
 
 PriorModeGetter = Callable[[], str | None]
 
-_APPROVAL_PROMPT = "Exit plan mode and accept this plan?"
-# Default "No" so a stray Enter is a fail-safe denial.
-_APPROVAL_OPTIONS = ["Yes", "No"]
-_APPROVAL_DEFAULT = "No"
+_APPROVAL_QUESTION = "Exit plan mode and accept this plan?"
+_APPROVAL_HEADER = "Approve plan"
 
 
 class ExitPlanModeParams(BaseModel):
@@ -46,8 +44,16 @@ def _preview(args: dict[str, Any]) -> str:
     return f"exit plan -> {target}: {head[:40]}"
 
 
-def _render_prompt(plan: str) -> str:
-    return f"{_APPROVAL_PROMPT}\n\n{plan}"
+def _build_question(plan: str) -> FormQuestionDict:
+    return {
+        "question": f"{_APPROVAL_QUESTION}\n\n{plan}",
+        "header": _APPROVAL_HEADER,
+        "multi_select": False,
+        "options": [
+            {"label": "Yes", "description": "Exit plan mode and proceed."},
+            {"label": "No", "description": "Stay in plan mode; revise the plan."},
+        ],
+    }
 
 
 class ExitPlanMode(BaseTool):
@@ -73,7 +79,7 @@ class ExitPlanMode(BaseTool):
     )
     _set_mode: ModeSetter = PrivateAttr()
     _get_mode: ModeGetter = PrivateAttr()
-    _asker: QuestionAsker = PrivateAttr()
+    _asker: UserAsker = PrivateAttr()
     _get_prior_mode: PriorModeGetter | None = PrivateAttr(default=None)
 
     def __init__(
@@ -81,7 +87,7 @@ class ExitPlanMode(BaseTool):
         *,
         mode_setter: ModeSetter,
         mode_getter: ModeGetter,
-        asker: QuestionAsker,
+        asker: UserAsker,
         get_prior_mode: PriorModeGetter | None = None,
         **kwargs: Any,
     ) -> None:
@@ -115,10 +121,10 @@ class ExitPlanMode(BaseTool):
                 f"exit_plan_mode called from mode {previous!r}; "
                 "only valid when currently in 'plan' mode"
             )
-        answer = await self._asker(
-            _render_prompt(plan), _APPROVAL_OPTIONS, _APPROVAL_DEFAULT,
-        )
+        question = _build_question(plan)
+        answers = await self._asker([question])
         # Empty / cancel maps to denial (fail-safe).
+        answer = answers.get(question["question"], "")
         if answer.strip().lower() != "yes":
             raise ToolError(
                 "user rejected the plan; staying in plan mode — "

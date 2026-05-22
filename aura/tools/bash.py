@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from aura.core.permissions.matchers import exact_match_on
+from aura.domain.permission.matchers import exact_match_on
 from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
 from aura.tools.base import Tool
 from aura.tools.progress import get_progress_callback
@@ -41,7 +41,7 @@ def _preview(args: dict[str, Any]) -> str:
     return f"command: {args.get('command', '')}"
 
 
-# Kept in sync with cli.permission_bash._DANGEROUS_PATTERNS.
+# Pattern set used by ``bash_safety`` to flag destructive shell commands.
 _DANGEROUS_COMMAND_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:^|[;&|\s])rm\s+(?:-[a-zA-Z]*[rRf][a-zA-Z]*)"),
     re.compile(r"(?:^|[;&|\s])sudo\b"),

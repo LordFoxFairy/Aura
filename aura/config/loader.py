@@ -10,11 +10,10 @@ from typing import Any
 from pydantic import ValidationError
 
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core.persistence import journal
+from aura.infrastructure.persistence import journal
 
 
 def _read_json(path: Path, source: str) -> dict[str, Any]:
-    """Read a JSON file and return its dict. Wraps parse errors as AuraConfigError."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)

@@ -1,10 +1,11 @@
 //! Aura desktop — Rust backend.
 //!
 //! Spawns ``python -m desktop.host.headless`` as a child process, streams
-//! line-delimited JSON events from its stdout into Tauri events the
-//! frontend subscribes to via ``listen("aura-event", ...)``. User
-//! prompts come down via the ``send_prompt`` command which writes one
-//! NDJSON request per call to the child's stdin.
+//! SSE-framed events from its stdout into Tauri events the frontend
+//! subscribes to via ``listen("aura-event", ...)``. User prompts come
+//! down via the ``send_prompt`` command which writes one NDJSON request
+//! per call to the child's stdin (request channel stays NDJSON; only
+//! the event stream is SSE).
 //!
 //! Single-tenant: one Aura subprocess per app instance. Restart the
 //! app for a fresh agent. Multi-session UX is Phase 2.
@@ -159,22 +160,32 @@ async fn spawn_aura(app: AppHandle) -> Result<AuraProcess, String> {
     let stdout = child.stdout.take().ok_or("child stdout missing")?;
     let stderr = child.stderr.take().ok_or("child stderr missing")?;
 
-    // Stream stdout: one NDJSON event per line → Tauri event "aura-event".
+    // Stream stdout: SSE frames ("event: aura\ndata: <json>\n\n") →
+    // one Tauri "aura-event" per frame. Accumulate the data line(s) of
+    // each frame until a blank-line delimiter, then strip the
+    // ``data: `` prefix and parse the JSON payload. ``event:``,
+    // ``id:``, ``retry:`` lines are ignored — we only use ``data:``.
     let app_clone = app.clone();
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
+        let mut data_buf = String::new();
         while let Ok(Some(line)) = reader.next_line().await {
             if line.is_empty() {
+                if data_buf.is_empty() {
+                    continue;
+                }
+                let payload: serde_json::Value = serde_json::from_str(&data_buf)
+                    .unwrap_or_else(|_| {
+                        serde_json::json!({"event": "raw", "line": data_buf.clone()})
+                    });
+                let _ = app_clone.emit("aura-event", payload);
+                data_buf.clear();
                 continue;
             }
-            // Parse so the frontend can pattern-match on ``event`` field.
-            // On parse failure, surface the raw line as a generic info
-            // event rather than dropping silently.
-            let payload: serde_json::Value = serde_json::from_str(&line)
-                .unwrap_or_else(|_| {
-                    serde_json::json!({"event": "raw", "line": line})
-                });
-            let _ = app_clone.emit("aura-event", payload);
+            if let Some(rest) = line.strip_prefix("data:") {
+                data_buf.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+            }
+            // event:, id:, retry: and any other field lines are dropped.
         }
         let _ = app_clone.emit(
             "aura-event",

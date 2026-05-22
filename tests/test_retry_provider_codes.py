@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from aura.core.retry import _is_retriable
+from aura.infrastructure.retry import _is_retriable
 
 
 class TestProviderTransientCodes:

@@ -85,7 +85,7 @@ def test_plaintext_api_key_writes_journal_event(tmp_path: Path) -> None:
     from rich.console import Console
 
     from aura.config.loader import load_config
-    from aura.core.persistence import journal
+    from aura.infrastructure.persistence import journal
     from cli.__main__ import _warn_plaintext_api_keys
 
     config_path = tmp_path / "config.json"
@@ -246,7 +246,7 @@ def test_main_wires_allow_deny_and_ask_rules_into_permission_layers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aura.core.hooks import HookChain
+    from aura.application.hooks import HookChain
     from cli.__main__ import main
 
     user_aura_dir = tmp_path / ".aura"
@@ -313,9 +313,9 @@ def test_main_wires_allow_deny_and_ask_rules_into_permission_layers(
     async def fake_repl(*_args: object, **_kwargs: object) -> None:
         return None
 
+    import aura.application.hooks.file_watcher as watcher_mod
+    import aura.application.hooks.permission as permission_mod
     import aura.core.agent as agent_mod
-    import aura.core.hooks.file_watcher as watcher_mod
-    import aura.core.hooks.permission as permission_mod
     import cli.repl as repl_mod
 
     monkeypatch.chdir(project_dir)

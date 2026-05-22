@@ -1,34 +1,34 @@
 """Core agent loop, state, registry, hooks, and built-in hook factories."""
 
-from aura.capabilities.tools.registry import ToolRegistry
-from aura.core.agent import Agent, build_agent
-from aura.core.hooks import (
+from aura.application.hooks import (
     HookChain,
     PostModelHook,
     PostToolHook,
     PreModelHook,
     PreToolHook,
 )
-from aura.core.hooks.budget import (
+from aura.application.hooks.budget import (
     default_hooks,
     make_size_budget_hook,
     make_usage_tracking_hook,
 )
-from aura.core.hooks.permission import (
+from aura.application.hooks.permission import (
     AskerResponse,
     PermissionAsker,
     make_permission_hook,
 )
-from aura.core.llm import (
+from aura.application.permission.denials import PermissionDenial
+from aura.core.agent import Agent, build_agent
+from aura.core.loop import AgentLoop, ToolStep
+from aura.domain.errors import AuraError
+from aura.domain.tool_registry import ToolRegistry
+from aura.infrastructure.llm import (
     MissingCredentialError,
     MissingProviderDependencyError,
     UnknownModelSpecError,
 )
-from aura.core.loop import AgentLoop, ToolStep
-from aura.core.permissions.denials import PermissionDenial
-from aura.core.persistence import journal
-from aura.core.persistence.storage import SessionStorage
-from aura.errors import AuraError
+from aura.infrastructure.persistence import journal
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.events import (
     AgentEvent,
     AssistantDelta,

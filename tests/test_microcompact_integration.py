@@ -1,6 +1,6 @@
 """Integration tests for the microcompact layer (v0.12 G2 — T4 + T5 + T6).
 
-Covers the wiring between the pure-function ``aura.core.compact.microcompact``
+Covers the wiring between the pure-function ``aura.application.compact.microcompact``
 surface and the turn loop / Agent constructor:
 
 - ``Agent(...)`` rejects misconfigurations at construction (keep_recent >=
@@ -36,11 +36,11 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
+from aura.application.compact import MICROCOMPACT_CLEAR_MARKER
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core.agent import Agent
-from aura.core.compact import MICROCOMPACT_CLEAR_MARKER
-from aura.core.persistence import journal
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence import journal
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 # ---------------------------------------------------------------------------

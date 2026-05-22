@@ -18,13 +18,13 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.hooks.permission import (
+from aura.application.hooks.permission import (
     AskerResponse,
     make_permission_hook,
 )
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet, SessionRuleSet
-from aura.core.permissions.store import (
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.infrastructure.permission_store import (
     load,
     load_ask_ruleset,
     load_deny_ruleset,
@@ -91,7 +91,7 @@ def journal_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
     def _capture(event: str, /, **fields: Any) -> None:
         events.append((event, fields))
 
-    from aura.core.persistence import journal as journal_mod
+    from aura.infrastructure.persistence import journal as journal_mod
 
     monkeypatch.setattr(journal_mod, "write", _capture)
     return events
@@ -235,7 +235,7 @@ async def test_deny_rule_blocks_under_default_mode(
     tmp_path: Path,
 ) -> None:
     """Baseline: a deny rule blocks even the simplest call."""
-    from aura.core.permissions.matchers import exact_match_on
+    from aura.domain.permission.matchers import exact_match_on
 
     deny_rules = RuleSet(rules=(
         Rule(tool="bash", content="rm -rf /tmp/x", kind="deny"),
@@ -272,7 +272,7 @@ async def test_deny_rule_blocks_even_under_bypass(
     """F-04-001 + F-04-006: deny rules are bypass-immune. ``mode=bypass``
     is the user's "skip the prompt UX" consent, not a license to run a
     forever-forbidden command."""
-    from aura.core.permissions.matchers import exact_match_on
+    from aura.domain.permission.matchers import exact_match_on
 
     deny_rules = RuleSet(rules=(
         Rule(tool="bash", content="rm -rf /tmp/x", kind="deny"),
@@ -302,7 +302,7 @@ async def test_deny_overrides_allow_when_both_match(
     tmp_path: Path,
 ) -> None:
     """``deny > allow``. If the same pattern is in both lists, deny wins."""
-    from aura.core.permissions.matchers import exact_match_on
+    from aura.domain.permission.matchers import exact_match_on
 
     pattern = "rm -rf /tmp/x"
     allow_rules = RuleSet(rules=(
@@ -334,7 +334,7 @@ async def test_journal_records_rule_pattern_and_kind_for_deny(
 ) -> None:
     """``permission_decision`` event surfaces the matched rule string +
     its kind so audit consumers can filter without re-parsing."""
-    from aura.core.permissions.matchers import exact_match_on
+    from aura.domain.permission.matchers import exact_match_on
 
     deny_rule = Rule(tool="bash", content="rm -rf /tmp/x", kind="deny")
     hook = make_permission_hook(
@@ -365,7 +365,7 @@ async def test_ask_rule_forces_prompt_when_allow_rule_would_match(
 ) -> None:
     """``ask > allow``. A sibling allow rule that would have auto-allowed
     is overridden — the asker is consulted instead."""
-    from aura.core.permissions.matchers import exact_match_on
+    from aura.domain.permission.matchers import exact_match_on
 
     pattern = "git push origin main"
     allow_rules = RuleSet(rules=(
@@ -399,7 +399,7 @@ async def test_ask_rule_forces_prompt_even_after_session_allow(
 ) -> None:
     """The user said "always" once → session has the rule. A sibling ask
     rule pattern still forces every subsequent call to re-prompt."""
-    from aura.core.permissions.matchers import exact_match_on
+    from aura.domain.permission.matchers import exact_match_on
 
     pattern = "git push origin main"
     session = SessionRuleSet()
@@ -430,7 +430,7 @@ async def test_ask_rule_bypasses_per_turn_dedup_cache(
     """The dedup cache silences repeat prompts within a turn for non-ask
     paths. Ask rules MUST bypass the cache — the contract is "always
     prompt", and that includes within a turn."""
-    from aura.core.permissions.matchers import exact_match_on
+    from aura.domain.permission.matchers import exact_match_on
 
     pattern = "git push origin main"
     ask_rules = RuleSet(rules=(
@@ -460,7 +460,7 @@ async def test_ask_rule_emits_audit_event(
     """A ``permission_ask_rule_forced`` journal event records the rule
     pattern that promoted the call to the prompt path — audit consumers
     can see WHY a previously allow-ruled tool started asking again."""
-    from aura.core.permissions.matchers import exact_match_on
+    from aura.domain.permission.matchers import exact_match_on
 
     ask_rule = Rule(tool="bash", content="git push origin main", kind="ask")
     spy = _SpyAsker(response=AskerResponse(choice="accept"))
@@ -492,7 +492,7 @@ async def test_deny_overrides_ask_when_both_match(
 ) -> None:
     """``deny > ask``. Even if the same pattern is on the ask list, deny
     must win — the call is hard-blocked, not prompted."""
-    from aura.core.permissions.matchers import exact_match_on
+    from aura.domain.permission.matchers import exact_match_on
 
     pattern = "rm -rf /tmp/x"
     deny_rules = RuleSet(rules=(
@@ -525,7 +525,7 @@ async def test_no_deny_no_ask_falls_through_to_allow_path(
 ) -> None:
     """Sanity: when neither deny nor ask matches, the existing allow
     pipeline is unchanged."""
-    from aura.core.permissions.matchers import exact_match_on
+    from aura.domain.permission.matchers import exact_match_on
 
     allow_rules = RuleSet(rules=(
         Rule(tool="bash", content="ls -la", kind="allow"),
@@ -557,7 +557,7 @@ async def test_e2e_settings_json_deny_rule_blocks_call(
     tmp_path: Path,
 ) -> None:
     """Settings.json -> load_deny_ruleset -> hook produces rule_deny."""
-    from aura.core.permissions.matchers import exact_match_on
+    from aura.domain.permission.matchers import exact_match_on
 
     settings = tmp_path / ".aura" / "settings.json"
     settings.parent.mkdir()

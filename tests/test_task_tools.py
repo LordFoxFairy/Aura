@@ -22,14 +22,14 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
 
-from aura.capabilities.skills_runtime.registry import SkillRegistry
-from aura.capabilities.skills_runtime.types import Skill
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.run import run_task
+from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.run import run_task
-from aura.core.tasks.store import TasksStore
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.skills.registry import SkillRegistry
+from aura.infrastructure.skills.types import Skill
 from aura.schemas.tool import ToolError
 from aura.tools.task_create import TaskCreate
 from aura.tools.task_output import TaskOutput

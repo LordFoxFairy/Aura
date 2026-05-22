@@ -11,12 +11,12 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from aura.capabilities.commands.builtin import ContextCommand
-from aura.capabilities.commands.registry import CommandRegistry
-from aura.capabilities.skills_runtime.types import Skill
+from aura.application.commands.builtin import ContextCommand
+from aura.application.commands.registry import CommandRegistry
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.skills.types import Skill
 from tests.conftest import FakeChatModel, FakeTurn
 
 

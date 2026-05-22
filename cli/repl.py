@@ -19,10 +19,10 @@ from rich.panel import Panel
 from rich.text import Text
 
 from aura import __version__
-from aura.capabilities.commands import CommandRegistry
-from aura.capabilities.commands.registry import build_default_registry, dispatch
+from aura.application.commands import CommandRegistry
+from aura.application.commands.registry import build_default_registry, dispatch
 from aura.core.agent import Agent
-from aura.core.persistence import journal
+from aura.infrastructure.persistence import journal
 from cli.completion import SlashCommandCompleter, resolve_history_path
 from cli.render import Renderer
 

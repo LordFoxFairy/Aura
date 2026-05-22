@@ -34,11 +34,11 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
+from aura.application.compact import CompactResult
+from aura.application.compact.compactor import Compactor
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.compact import CompactResult
-from aura.core.compact.compactor import Compactor
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 # ---------------------------------------------------------------------------

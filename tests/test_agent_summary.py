@@ -8,7 +8,7 @@ Pins the contract:
 - ``interval_sec=0`` (or env override to 0) disables the loop entirely.
 - Cancellation / terminal transition stops the loop cleanly.
 - The summary model factory is the SAME shape ``web_fetch`` uses
-  (:func:`aura.core.llm.make_summary_model_factory`) — when no
+  (:func:`aura.infrastructure.llm.make_summary_model_factory`) — when no
   ``summary_spec`` is configured, the factory falls back to the main
   model. When configured, the factory yields the cheap-tier instance.
 """
@@ -23,17 +23,17 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from aura.config.schema import AuraConfig
-from aura.core import llm
-from aura.core.persistence.storage import SessionStorage
-from aura.core.services.agent_summary import (
+from aura.application.services.agent_summary import (
     AgentSummarizer,
     _resolve_interval,
     run_summary_loop,
 )
-from aura.core.tasks.factory import SubagentFactory
-from aura.core.tasks.run import run_task
-from aura.core.tasks.store import TasksStore
+from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.run import run_task
+from aura.application.tasks.store import TasksStore
+from aura.config.schema import AuraConfig
+from aura.infrastructure import llm
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -363,109 +363,4 @@ async def test_summary_pulled_into_terminal_record(
     assert refreshed.status == "completed"
     # At least one summary landed before terminal.
     assert refreshed.progress.latest_summary is not None
-    # Token count also landed.
     assert refreshed.progress.token_count == 15
-
-
-# ---------------------------------------------------------------------------
-# Deterministic :func:`summarize_subagent_run` (claude-code parity MVP)
-#
-# These cover the new ``aura.services.agent_summary`` module — the
-# synchronous, no-I/O digest the parent's ``task_get`` tool returns
-# instead of the full transcript. Distinct from the periodic
-# AgentSummarizer above, which runs a cheap LLM call mid-flight.
-# ---------------------------------------------------------------------------
-
-
-from aura.schemas.events import AgentEvent as _AgentEvent  # noqa: E402
-from aura.schemas.events import (  # noqa: E402
-    AssistantDelta as _AssistantDelta,
-)
-from aura.schemas.events import (  # noqa: E402
-    Final as _Final,
-)
-from aura.schemas.events import (  # noqa: E402
-    ToolCallStarted as _ToolCallStarted,
-)
-from aura.services.agent_summary import (  # noqa: E402
-    SUMMARY_CHAR_CAP,
-    summarize_subagent_run,
-)
-
-
-def _started(name: str) -> _ToolCallStarted:
-    return _ToolCallStarted(name=name, input={}, id=f"c-{name}")
-
-
-def test_deterministic_summary_includes_final_message_text() -> None:
-    events: list[_AgentEvent] = [
-        _started("grep"), _Final(message="job complete: 3 hits"),
-    ]
-    summary = summarize_subagent_run(events)
-    assert "job complete: 3 hits" in summary
-    assert "final:" in summary
-
-
-def test_deterministic_summary_includes_recent_tool_names() -> None:
-    events: list[_AgentEvent] = [
-        _started("read_file"),
-        _started("grep"),
-        _started("glob"),
-        _Final(message="done"),
-    ]
-    summary = summarize_subagent_run(events)
-    pos = [summary.find(n) for n in ("read_file", "grep", "glob")]
-    assert all(p >= 0 for p in pos)
-    assert pos == sorted(pos)
-
-
-def test_deterministic_summary_only_keeps_last_three_tools() -> None:
-    events: list[_AgentEvent] = [
-        _started("first"),
-        _started("second"),
-        _started("third"),
-        _started("fourth"),
-        _started("fifth"),
-        _Final(message="ok"),
-    ]
-    summary = summarize_subagent_run(events)
-    assert "first" not in summary
-    assert "second" not in summary
-    for tail in ("third", "fourth", "fifth"):
-        assert tail in summary
-
-
-def test_deterministic_summary_respects_char_cap() -> None:
-    events: list[_AgentEvent] = [
-        _started("bash"), _Final(message="a" * 10_000),
-    ]
-    summary = summarize_subagent_run(events)
-    assert len(summary) <= SUMMARY_CHAR_CAP
-    # Truncation marker present somewhere — either the final-msg
-    # excerpt was clipped, or the overall summary was hard-capped.
-    assert "…" in summary
-
-
-def test_deterministic_summary_handles_empty_events() -> None:
-    summary = summarize_subagent_run([])
-    assert summary.strip()
-    assert "no assistant message" in summary
-
-
-def test_deterministic_summary_appends_token_totals() -> None:
-    events: list[_AgentEvent] = [_Final(message="done")]
-    summary = summarize_subagent_run(events, input_tokens=123, output_tokens=456)
-    assert "in=123" in summary
-    assert "out=456" in summary
-
-
-def test_deterministic_summary_ignores_non_tool_non_final_events() -> None:
-    events: list[_AgentEvent] = [
-        _AssistantDelta(text="thinking…"),
-        _started("read_file"),
-        _Final(message="picked file"),
-    ]
-    summary = summarize_subagent_run(events)
-    assert "thinking" not in summary
-    assert "picked file" in summary
-    assert "read_file" in summary

@@ -1,4 +1,4 @@
-"""Tests for aura.core.memory.rules: discovery, frontmatter, glob match, cache."""
+"""Tests for aura.application.memory.rules: discovery, frontmatter, glob match, cache."""
 
 from __future__ import annotations
 
@@ -9,14 +9,14 @@ from typing import Any, cast
 
 import pytest
 
-from aura.core import journal as journal_module
-from aura.core.memory.rules import (
+from aura.application.memory.rules import (
     Rule,
     RulesBundle,
     clear_cache,
     load_rules,
     match,
 )
+from aura.core import journal as journal_module
 
 
 def _patch_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:

@@ -1,4 +1,4 @@
-"""Phase 4 Task 3 — :class:`aura.core.compact.compactor.Compactor`.
+"""Phase 4 Task 3 — :class:`aura.application.compact.compactor.Compactor`.
 
 Locks the four-method surface (microcompact / reactive / auto / manual)
 of the new first-class :class:`Compactor`, plus the per-call event
@@ -22,13 +22,13 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from aura.application.compact.compact import CompactResult
+from aura.application.compact.compactor import Compactor
+from aura.application.compact.microcompact import MicrocompactPolicy
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.compact.compact import CompactResult
-from aura.core.compact.compactor import Compactor
-from aura.core.compact.microcompact import MicrocompactPolicy
-from aura.core.persistence import journal
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence import journal
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 # ---------------------------------------------------------------------------
@@ -491,29 +491,3 @@ async def test_emitter_failure_does_not_propagate(tmp_path: Path) -> None:
     await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# AG-UI adapter mapping
-# ---------------------------------------------------------------------------
-
-
-def test_agui_adapter_maps_compact_event() -> None:
-    """AG-UI adapter wraps ``compact_event`` as
-    ``{"type": "CUSTOM", "name": "aura.compact.event", ...}``.
-    """
-    from aura.adapters.protocol.bridge import AguiAdapter
-    from aura.adapters.protocol.wire import compact_event_to_wire
-
-    adapter = AguiAdapter(run_id="rid", thread_id="tid")
-    payload = compact_event_to_wire(
-        trigger="auto",
-        tokens_before=100,
-        tokens_after=20,
-        outcome="ok",
-        duration_ms=42.0,
-    )
-    out = adapter.convert(payload)
-    assert len(out) == 1
-    assert out[0]["type"] == "CUSTOM"
-    assert out[0]["name"] == "aura.compact.event"
-    assert out[0]["value"]["trigger"] == "auto"
-    assert out[0]["value"]["outcome"] == "ok"

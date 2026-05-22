@@ -25,7 +25,7 @@ import pytest
 from aura.config.schema import AuraConfig
 from aura.core import journal
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
 
@@ -79,7 +79,7 @@ class _HangingManager:
     def status(self) -> list[Any]:
         # Agent computes servers_hanging from .status() entries whose state
         # is still "connected" at shutdown time.
-        from aura.core.mcp.manager import MCPServerStatus
+        from aura.infrastructure.mcp.manager import MCPServerStatus
 
         return [
             MCPServerStatus(

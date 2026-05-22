@@ -1,4 +1,4 @@
-"""Tests for aura.core.permissions.session — RuleSet + SessionRuleSet."""
+"""Tests for aura.domain.permission.session — RuleSet + SessionRuleSet."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.core.permissions.rule import Rule
-from aura.core.permissions.session import RuleSet, SessionRuleSet
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.tools.base import build_tool
 
 

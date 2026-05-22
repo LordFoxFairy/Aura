@@ -19,17 +19,17 @@ import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel
 
-from aura.capabilities.tools.registry import ToolRegistry
+from aura.application.hooks import HookChain
 from aura.config.schema import AuraConfig
-from aura.core.abort import (
+from aura.core.agent import Agent
+from aura.core.loop import AgentLoop
+from aura.domain.abort import (
     AbortController,
     AbortException,
     current_abort_signal,
 )
-from aura.core.agent import Agent
-from aura.core.hooks import HookChain
-from aura.core.loop import AgentLoop
-from aura.core.persistence.storage import SessionStorage
+from aura.domain.tool_registry import ToolRegistry
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.events import AgentEvent, AssistantDelta, Final
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context

@@ -25,7 +25,7 @@ from unittest.mock import MagicMock
 
 from aura.config.schema import AuraConfig, ToolsConfig
 from aura.core.agent import Agent
-from aura.core.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
 

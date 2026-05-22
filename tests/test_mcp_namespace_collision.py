@@ -2,7 +2,7 @@
 
 The invariant: an MCP tool's *registered* name always carries the
 ``mcp__<server>__`` prefix (applied by
-:func:`aura.core.mcp.adapter.add_aura_metadata`), so it can never collide
+:func:`aura.infrastructure.mcp.adapter.add_aura_metadata`), so it can never collide
 with a built-in tool. Two complementary checks guard the contract:
 
 1. No built-in tool name starts with ``mcp__`` — keeps the namespace
@@ -19,8 +19,8 @@ from typing import Any
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
-from aura.capabilities.tools.registry import ToolRegistry
-from aura.core.mcp.adapter import _MCP_PREFIX, add_aura_metadata
+from aura.domain.tool_registry import ToolRegistry
+from aura.infrastructure.mcp.adapter import _MCP_PREFIX, add_aura_metadata
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 
 

@@ -18,9 +18,9 @@ from typing import Any, cast
 
 import pytest
 
-from aura.capabilities.commands.mcp import MCPCommand
+from aura.application.commands.mcp import MCPCommand
 from aura.core.agent import Agent
-from aura.core.mcp.manager import MCPServerStatus
+from aura.infrastructure.mcp.manager import MCPServerStatus
 
 
 @dataclass
@@ -47,15 +47,21 @@ class _SpyManager:
         enable_result: str = "",
         disable_result: str = "",
         reconnect_result: str = "",
+        approve_result: str = "",
+        revoke_result: str = "",
         known_names: list[str] | None = None,
     ) -> None:
         self._statuses = statuses or []
         self.enable_calls: list[str] = []
         self.disable_calls: list[str] = []
         self.reconnect_calls: list[str] = []
+        self.approve_calls: list[str] = []
+        self.revoke_calls: list[str] = []
         self._enable_result = enable_result
         self._disable_result = disable_result
         self._reconnect_result = reconnect_result
+        self._approve_result = approve_result
+        self._revoke_result = revoke_result
         self._known = known_names or [s.name for s in self._statuses]
 
     def status(self) -> list[MCPServerStatus]:
@@ -75,6 +81,14 @@ class _SpyManager:
     async def reconnect(self, name: str) -> str:
         self.reconnect_calls.append(name)
         return self._reconnect_result or f"MCP server {name!r} reconnected"
+
+    async def approve(self, name: str) -> str:
+        self.approve_calls.append(name)
+        return self._approve_result or f"MCP server {name!r} approved"
+
+    async def revoke(self, name: str) -> str:
+        self.revoke_calls.append(name)
+        return self._revoke_result or f"MCP server {name!r} revoked"
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +274,58 @@ async def test_mcp_reconnect_without_target_is_usage_error() -> None:
     assert "usage:" in result.text.lower()
 
 
+@pytest.mark.asyncio
+async def test_mcp_approve_delegates_to_manager() -> None:
+    spy = _SpyManager(
+        statuses=[
+            MCPServerStatus(
+                name="proj_srv", transport="stdio", state="unapproved",
+                error_message=None, tool_count=0,
+                resource_count=0, prompt_count=0,
+            ),
+        ],
+        approve_result="MCP server 'proj_srv' approved",
+    )
+    agent = _FakeAgent(_mcp_manager=spy)
+    result = await MCPCommand().handle("approve proj_srv", _as_agent(agent))
+    assert spy.approve_calls == ["proj_srv"]
+    assert "approved" in result.text
+
+
+@pytest.mark.asyncio
+async def test_mcp_revoke_delegates_to_manager() -> None:
+    spy = _SpyManager(
+        statuses=[
+            MCPServerStatus(
+                name="proj_srv", transport="stdio", state="connected",
+                error_message=None, tool_count=2,
+                resource_count=0, prompt_count=0,
+            ),
+        ],
+        revoke_result="MCP server 'proj_srv' revoked",
+    )
+    agent = _FakeAgent(_mcp_manager=spy)
+    result = await MCPCommand().handle("revoke proj_srv", _as_agent(agent))
+    assert spy.revoke_calls == ["proj_srv"]
+    assert "revoked" in result.text
+
+
+@pytest.mark.asyncio
+async def test_mcp_approve_without_target_is_usage_error() -> None:
+    agent = _FakeAgent(_mcp_manager=_SpyManager(statuses=[]))
+    result = await MCPCommand().handle("approve", _as_agent(agent))
+    assert "usage:" in result.text.lower()
+    assert "approve" in result.text
+
+
+@pytest.mark.asyncio
+async def test_mcp_revoke_without_target_is_usage_error() -> None:
+    agent = _FakeAgent(_mcp_manager=_SpyManager(statuses=[]))
+    result = await MCPCommand().handle("revoke", _as_agent(agent))
+    assert "usage:" in result.text.lower()
+    assert "revoke" in result.text
+
+
 # ---------------------------------------------------------------------------
 # help + unknown subcommand
 # ---------------------------------------------------------------------------
@@ -301,7 +367,7 @@ async def test_mcp_toggle_without_manager_returns_friendly_error() -> None:
 
 def test_mcp_command_registered_in_default_registry() -> None:
     """``build_default_registry`` must include ``/mcp``."""
-    from aura.capabilities.commands.registry import build_default_registry
+    from aura.application.commands.registry import build_default_registry
 
     reg = build_default_registry()
     names = [c.name for c in reg.list()]
@@ -309,7 +375,7 @@ def test_mcp_command_registered_in_default_registry() -> None:
 
 
 def test_mcp_command_owned_by_capabilities_module() -> None:
-    assert MCPCommand.__module__ == "aura.capabilities.commands.mcp"
+    assert MCPCommand.__module__ == "aura.application.commands.mcp"
 
 
 def test_mcp_command_has_expected_surface() -> None:

@@ -36,15 +36,15 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from aura.application.hooks import HookChain
+from aura.application.hooks.bash_safety import make_bash_safety_hook
+from aura.application.hooks.permission import AskerResponse, make_permission_hook
+from aura.application.permission.decision import Decision
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.hooks import HookChain
-from aura.core.hooks.bash_safety import make_bash_safety_hook
-from aura.core.hooks.permission import AskerResponse, make_permission_hook
-from aura.core.permissions import store as perm_store
-from aura.core.permissions.decision import Decision
-from aura.core.permissions.session import SessionRuleSet
-from aura.core.persistence.storage import SessionStorage
+from aura.domain.permission.session import SessionRuleSet
+from aura.infrastructure import permission_store as perm_store
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.events import ToolCallCompleted
 from aura.schemas.permissions import Allow, Block, Outcome, Replace
 from aura.schemas.state import LoopState

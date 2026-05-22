@@ -1,4 +1,4 @@
-"""Tests for aura.core.memory.project_memory."""
+"""Tests for aura.application.memory.project_memory."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Any, cast
 
 import pytest
 
-from aura.core.memory.project_memory import (
+from aura.application.memory.project_memory import (
     clear_cache,
     load_project_memory,
     read_with_imports,

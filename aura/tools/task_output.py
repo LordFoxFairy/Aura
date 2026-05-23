@@ -61,7 +61,7 @@ class TaskOutput(BaseTool):
         "task. Default: instant snapshot. Set wait=True to block until the "
         "task reaches a terminal state (timeout-bounded; default 60s)."
     )
-    args_schema: type[BaseModel] = TaskOutputParams
+    args_schema: type[BaseModel] = TaskOutputParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=True,
         is_destructive=False,
@@ -131,7 +131,7 @@ class TaskOutput(BaseTool):
                 await t
 
         rec = self.store.get(task_id)
-        if rec is None:  # pragma: no cover — defensive; record can't disappear
+        if rec is None:  # pragma: no cover — store never deletes records, re-fetch is total
             raise ToolError(f"unknown task_id: {task_id!r}")
 
         if abort is not None and abort.aborted:

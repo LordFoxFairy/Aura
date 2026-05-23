@@ -1,8 +1,6 @@
-"""Team memory: secret-scrubbing redaction.
+"""Secret-scrubbing redactor for team-member message bodies.
 
-The redactor is wired into :class:`TeamManager` so every text body that
-crosses a member boundary is scrubbed before it can be persisted or
-relayed. Conservative — false positives are OK, false negatives are not.
+Conservative: false positives are OK, false negatives are not.
 """
 
 from __future__ import annotations
@@ -37,12 +35,6 @@ REDACTION_MARKER = "[REDACTED]"
 
 
 def redact_secrets(text: str) -> str:
-    """Replace well-known secret shapes in ``text`` with ``[REDACTED]``.
-
-    Handles AWS / Anthropic / OpenAI / GCP / GitHub credentials, generic
-    long alnum/base64 blobs, and ``KEY=VALUE`` lines where the key looks
-    credential-ish. Idempotent on already-redacted input.
-    """
     if not text or not text.strip():
         return text
     # Env-style lines first so the value isn't eaten by the generic pattern.

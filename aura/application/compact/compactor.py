@@ -1,4 +1,4 @@
-"""First-class Compactor — one named object, four trigger entry points."""
+"""Compactor: one object, four trigger entry points (microcompact/reactive/auto/manual)."""
 
 from __future__ import annotations
 
@@ -29,13 +29,6 @@ EventEmitter = Callable[[dict[str, Any]], None]
 
 
 class Compactor:
-    """Four async methods, one trigger each: ``microcompact`` / ``reactive``
-    / ``auto`` / ``manual``.
-
-    Stateless; per-session counters live on
-    :attr:`LoopSlots.consecutive_compact_failures` (frozen — mutated via
-    :func:`dataclasses.replace`).
-    """
 
     def __init__(
         self,
@@ -109,7 +102,7 @@ class Compactor:
         slots: LoopSlots,  # noqa: ARG002
         trigger: CompactionTrigger = CompactionTrigger.reactive,
     ) -> CompactResult:
-        """Full summary compaction on context-overflow. Refreshes ``history`` in place."""
+        """Context-overflow compaction; refreshes ``history`` in place."""
         before = self._agent.state.total_tokens_used
         started = time.monotonic()
         try:
@@ -141,8 +134,8 @@ class Compactor:
         model: str,  # noqa: ARG002
         trigger: CompactionTrigger = CompactionTrigger.auto,
     ) -> CompactResult | None:
-        """Post-turn threshold check + run. ``None`` = no work / breaker open."""
-        threshold = self._agent._effective_auto_compact_threshold()
+        """Post-turn threshold-driven run; ``None`` = no work / circuit breaker open."""
+        threshold = self._agent.effective_auto_compact_threshold()
         before = self._agent.state.total_tokens_used
         started = time.monotonic()
         if threshold <= 0:
@@ -157,7 +150,7 @@ class Compactor:
         used = before
         used_estimator = used == 0
         if used_estimator:
-            used = self._agent._estimate_history_tokens(history)
+            used = self._agent.estimate_history_tokens(history)
         if used <= threshold:
             self._emit_event(
                 trigger=trigger,
@@ -233,7 +226,7 @@ class Compactor:
         slots: LoopSlots,  # noqa: ARG002
         trigger: CompactionTrigger = CompactionTrigger.manual,
     ) -> CompactResult:
-        """User-invoked ``/compact``. Bypasses the circuit breaker by spec."""
+        """User-invoked ``/compact``; bypasses the circuit breaker by spec."""
         before = self._agent.state.total_tokens_used
         started = time.monotonic()
         try:

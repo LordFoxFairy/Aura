@@ -82,7 +82,7 @@ class SkillCommand:
         # keeps working but the copy carries the substituted text.
         invoked = dataclasses.replace(self._skill, body=rendered_body)
         self._agent.record_skill_invocation(invoked)
-        install_skill_allow_rules(self._skill, self._agent._session_rules)
+        install_skill_allow_rules(self._skill, self._agent.session_rules)
         install_restrict_lease(self._skill, self._agent.state)
         journal.write(
             "skill_invoked",

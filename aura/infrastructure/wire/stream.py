@@ -19,11 +19,9 @@ async def stream_agent_wire(
 ) -> AsyncIterator[WireEvent]:
     """Run ``agent.astream`` and yield Aura wire events.
 
-    Ordering contract: any pre-turn coordination buffer drains FIRST so
-    cross-turn leftovers attribute to the turn they arrived in; per-event
-    coordination drains follow each astream yield; ``aura_state`` is the
-    final wire event of the turn, emitted after every event astream
-    produced (including post-final auto-compact events).
+    Invariant: pre-turn coordination drains first, per-event coordination
+    drains after each astream yield, ``aura_state`` is always the final
+    event of the turn.
     """
     turn_start = clock()
     for payload in _drain_coordination_events(agent):
@@ -65,8 +63,7 @@ def _drain_coordination_events(agent: Any) -> list[WireEvent]:
 
 
 def _is_skipped_no_op_compact(payload: WireEvent) -> bool:
-    # Skipped microcompact / auto checks fire 1-3x per turn with no
-    # state delta — useful in the journal, pure noise on the wire.
+    # Skipped no-delta compacts: journal-useful, wire-noise.
     if payload.get("event") != "compact_event":
         return False
     if payload.get("outcome") != "skipped":

@@ -1,9 +1,4 @@
-"""Safety check — direction-aware path matching with journaled failures.
-
-Pure value objects (``SafetyPolicy``, ``DEFAULT_SAFETY``,
-``DEFAULT_PROTECTED_*``) live in ``aura.domain.permission.safety``; this
-module owns the I/O-bearing matcher.
-"""
+"""Safety check — direction-aware path matching with journaled failures."""
 
 from __future__ import annotations
 
@@ -23,15 +18,12 @@ def is_protected(
     *,
     is_write: bool,
 ) -> bool:
-    """True iff ``path`` is blocked by the direction-appropriate list.
+    """True iff ``path`` is blocked; matches both absolute and resolved forms
+    so symlink hops and ``/etc`` vs ``/private/etc`` rewrites are caught.
 
-    Matches against BOTH the absolute (symlink-preserving) path and the
-    resolved (symlink-followed) path — catches a symlink into a
-    protected dir AND macOS ``/etc`` vs ``/private/etc`` rewrites.
-
-    ``policy.exempt`` overrides in both directions. Any exception during
-    pathspec compile or path resolution returns False and journals the
-    error: a broken safety check must never crash the agent.
+    Invariants: ``policy.exempt`` overrides in both directions; any internal
+    exception is journaled and returns False — a broken safety check must
+    never crash the agent.
     """
     try:
         candidates = _candidate_paths(path)
@@ -48,7 +40,7 @@ def is_protected(
     except Exception as exc:  # noqa: BLE001 — safety must never crash the agent
         journal.write(
             "safety_check_error",
-            path=str(path) if path is not None else None,
+            path=str(path),
             is_write=is_write,
             detail=f"{type(exc).__name__}: {exc}",
         )
@@ -56,10 +48,6 @@ def is_protected(
 
 
 def _candidate_paths(path: Any) -> list[str]:
-    """Up to two strings — absolute (no symlink resolve) and resolved.
-
-    Returns ``[]`` for garbage input so the caller short-circuits.
-    """
     if isinstance(path, Path):
         candidate = path
     elif isinstance(path, str):

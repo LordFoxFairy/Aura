@@ -1,22 +1,4 @@
-"""``/team enter / leave / view / teammate`` UX commands — V14 surface.
-
-Covers:
-
-- ``enter`` stamps ``state.slots.active_team`` and short-errors
-  on unknown teams.
-- ``leave`` clears the slot (and detaches the leader if joined).
-- ``view`` returns a snapshot for the active team or an explicit name,
-  and errors clearly when neither is set.
-- ``teammate`` reads the last 50 transcript lines from the team's
-  on-disk transcript and rejects unknown member names.
-- ``Agent.clear_session`` resets the active-team pointer (the slot
-  lives on ``LoopState.slots.active_team`` which ``clear_session``
-  rebinds to ``None`` via ``dataclasses.replace``).
-
-Tests bypass the runtime by passing ``runtime_runner=_no_runtime`` to
-the manager so adding members never actually spawns a background loop —
-the only thing we exercise here is the slash-command + snapshot path.
-"""
+"""``/team enter|leave|view|teammate`` UX commands and active-team slot handling."""
 
 from __future__ import annotations
 
@@ -47,10 +29,7 @@ def _stub_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _agent(tmp_path: Path) -> Agent:
-    # ``teams.enabled=True`` is required from v0.18 onwards — the gate
-    # (claude-code parity with isAgentSwarmsEnabled()) defaults to False
-    # and would make ``Agent.join_team`` raise. These tests exercise the
-    # /team enter|leave|view|teammate surface and need the gate open.
+    # ``teams.enabled=True`` opens the gate so /team subcommands run.
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},

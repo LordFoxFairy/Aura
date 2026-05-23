@@ -396,12 +396,12 @@ async def test_unapproved_server_visible_via_mcp_list(
     mgr = MCPManager([cfg], project_server_names={"proj_srv"})
 
     # Build a minimal duck-type for the slash command's ``Agent`` arg —
-    # MCPCommand only reads ``_mcp_manager``.
+    # MCPCommand only reads ``mcp_manager``.
     class _FakeAgent:
-        _mcp_manager: Any
+        mcp_manager: Any
 
     fake_agent = _FakeAgent()
-    fake_agent._mcp_manager = mgr
+    fake_agent.mcp_manager = mgr
 
     cmd = MCPCommand()
     result = await cmd.handle("", cast(Any, fake_agent))
@@ -552,10 +552,10 @@ async def test_reload_via_slash_command_picks_up_disk_changes(
     mcp_store.save([cfg_a, cfg_b], scope="global")
 
     class _FakeAgent:
-        _mcp_manager: Any
+        mcp_manager: Any
 
     fake_agent = _FakeAgent()
-    fake_agent._mcp_manager = mgr
+    fake_agent.mcp_manager = mgr
 
     cmd = MCPCommand()
     result = await cmd.handle("reload", cast(Any, fake_agent))

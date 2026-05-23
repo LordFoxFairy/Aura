@@ -1,11 +1,4 @@
-"""F-0910-011 — bundled (managed-layer) skills shipped with Aura.
-
-Decision: ship 3 real bundled skills (verify / simplify / code-review)
-as code-defined bundled content. At runtime they are materialized into a
-dedicated hidden root under ``~/.aura/plugins/.../skills`` so the active skill
-catalogue is skill-centric and detached from package layout.
-``include_bundled=True`` opts in.
-"""
+"""Bundled (managed-layer) skills: verify / simplify / code-review under opt-in."""
 
 from __future__ import annotations
 
@@ -73,9 +66,7 @@ def test_bundled_skills_load_from_hidden_global_skills_root(tmp_path: Path) -> N
 
 
 def test_bundled_skills_first_writer_wins_over_user(tmp_path: Path) -> None:
-    """First-writer-wins (claude-code parity) — bundled loads first so a
-    user skill of the same name can NOT shadow it. This matches how the
-    user layer wins over the project layer below it: outer wins."""
+    """First-writer-wins: bundled loads first so a user skill cannot shadow it."""
     home = tmp_path / "home"
     cwd = tmp_path / "proj"
     cwd.mkdir()

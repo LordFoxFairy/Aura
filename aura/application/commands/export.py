@@ -1,10 +1,4 @@
-"""/export — dump the current session transcript to a file.
-
-Formats: ``md`` (default; per-turn sections with fenced tool blocks) or
-``json`` (LangChain message array in a metadata envelope). Reads from
-``Agent._storage.load(session_id)`` — never touches live loop state.
-IO failures surface as an error CommandResult rather than crashing the REPL.
-"""
+"""``/export`` dump transcript (``md``/``json``); reads ``storage.load``; IO errors -> result."""
 
 from __future__ import annotations
 
@@ -90,16 +84,7 @@ class ExportCommand:
 
 
 def _parse_args(arg: str) -> tuple[str | None, Format | None]:
-    """Split ``arg`` into (path, explicit-format).
-
-    Supported shapes:
-        ""                        -> (None, None)
-        "path"                    -> ("path", None)
-        "--format md"             -> (None, "md")
-        "--format json"           -> (None, "json")
-        "path --format json"      -> ("path", "json")
-        "--format md path"        -> ("path", "md")
-    """
+    """Split ``arg`` into (path, format); ``--format`` may appear before or after the path."""
     tokens = arg.split()
     path: str | None = None
     fmt: Format | None = None
@@ -129,10 +114,7 @@ def _parse_args(arg: str) -> tuple[str | None, Format | None]:
 def _resolve_target(
     path_arg: str | None, fmt_arg: Format | None,
 ) -> tuple[Path, Format, str]:
-    """Resolve ``(path, format, note)`` from user input.
-
-    ``note`` is an extension-fallback hint appended to the success message.
-    """
+    """Resolve ``(path, format, note)``; ``note`` is an extension-fallback hint or ``""``."""
     timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
     note = ""
 
@@ -212,8 +194,7 @@ def _render_markdown(agent: Agent, messages: list[BaseMessage]) -> str:
             turn_no += 1
             lines += [f"## Turn {turn_no} (user)", "", _content_as_str(m.content), ""]
         elif isinstance(m, AIMessage):
-            # Assistant before the first HumanMessage (e.g. after a compact
-            # summary) groups under turn 0 rather than raising.
+            # Post-compact assistant-before-first-human groups under turn 0 instead of raising.
             lines += [f"## Turn {turn_no} (assistant)", ""]
             content = _content_as_str(m.content).strip()
             if content:

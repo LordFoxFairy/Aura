@@ -1,4 +1,4 @@
-"""Capabilities-owned tool registry abstraction."""
+"""Name-keyed tool registry with metadata contract."""
 
 from __future__ import annotations
 
@@ -11,11 +11,10 @@ from aura.schemas.tool import ToolMetadata
 
 
 class ToolRegistryError(AuraError):
-    """Raised when a tool fails the registry's contract checks."""
+    pass
 
 
 def _require_aura_metadata(tool: BaseTool) -> None:
-    """Reject tools that don't carry a typed ``aura_metadata: ToolMetadata``."""
     aura_meta = getattr(tool, "aura_metadata", None)
     if not isinstance(aura_meta, ToolMetadata):
         raise ToolRegistryError(
@@ -27,8 +26,6 @@ def _require_aura_metadata(tool: BaseTool) -> None:
 
 
 class ToolRegistry(dict[str, BaseTool]):
-    """`dict[tool.name, tool]` with dedup-on-construction."""
-
     def __init__(self, tools: Iterable[BaseTool] = ()) -> None:
         super().__init__()
         for t in tools:

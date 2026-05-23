@@ -37,8 +37,7 @@ _DEFAULT_STYLE: Style = Style.from_dict({
 
 
 class PickerItem(Protocol):
-    # Property form lets frozen dataclasses satisfy the protocol (mypy
-    # treats Protocol attributes as settable otherwise).
+    # Property form so frozen dataclasses satisfy the protocol under mypy.
     @property
     def label(self) -> str: ...
 

@@ -34,10 +34,7 @@ def _members(agent: Agent) -> list[TeammateMember]:
 
 
 def _agent(tmp_path: Path, *, teams_enabled: bool = True) -> Agent:
-    # ``teams.enabled=True`` is required from v0.18 onwards — the gate
-    # (claude-code parity with isAgentSwarmsEnabled()) defaults to False
-    # and would make ``Agent.join_team`` raise. These slash-dispatch tests
-    # need the gate open so /team verbs reach their handlers.
+    # ``teams.enabled=True`` opens the gate so /team verbs reach handlers.
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
@@ -108,10 +105,7 @@ async def test_team_unknown_subcommand(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_dispatch_team_through_registry(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    # v0.18+ teams gate (claude-code parity with isAgentSwarmsEnabled()):
-    # ``TeamCommand`` is only registered with the default registry when
-    # the agent's config has ``teams.enabled=True``. Pass the agent so
-    # the gate sees an opt-in config.
+    # ``TeamCommand`` only registers when the agent's config opts in.
     r = build_default_registry(agent)
     result = await dispatch("/team", agent, r)
     assert result.handled is True
@@ -127,11 +121,6 @@ async def test_team_delete_clears_team(tmp_path: Path) -> None:
     result = await cmd.handle("delete", agent)
     assert "deleted" in result.text
     assert agent.team is None
-
-
-# ---------------------------------------------------------------------------
-# /team add --backend <kind> CLI flag (v0.18.x)
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture

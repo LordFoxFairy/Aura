@@ -29,7 +29,7 @@ class WriteFile(Tool):
         "Create or overwrite a UTF-8 text file. "
         "Missing parent directories are created automatically."
     )
-    args_schema: type[BaseModel] = WriteFileParams
+    args_schema: type[BaseModel] = WriteFileParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
         is_destructive=True,

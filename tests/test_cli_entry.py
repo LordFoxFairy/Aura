@@ -285,6 +285,7 @@ def test_main_wires_allow_deny_and_ask_rules_into_permission_layers(
         mode = "default"
         state = object()
         _hooks = HookChain()
+        hooks = _hooks
 
         async def aconnect(self) -> None:
             return None

@@ -1,11 +1,4 @@
-"""``/stats`` — show token usage.
-
-Modes: bare (current session via ``state.slots.token_stats``), ``7d``
-(last week via ``turn_usage`` journal replay), ``all`` (full replay).
-The journal path resolves from ``journal._path`` (live) →
-``agent.config.log.path`` (configured default). Missing files yield an
-empty aggregate with a helpful hint rather than an error.
-"""
+"""``/stats`` token usage; bare = session slot, ``7d``/``all`` = journal replay; missing -> hint."""
 
 from __future__ import annotations
 
@@ -23,7 +16,6 @@ if TYPE_CHECKING:
 
 
 def _fmt(n: int) -> str:
-    """Render ``n`` with thousands separators."""
     return f"{n:,}"
 
 
@@ -154,11 +146,7 @@ class StatsCommand:
 
 
 def _safe_int(value: object) -> int:
-    """Coerce a journal field to int; fall back to 0 on type drift.
-
-    ``bool`` is rejected explicitly so a misshapen ``true`` doesn't silently
-    become 1.
-    """
+    """Coerce to int; bool rejected so a misshapen ``true`` doesn't become 1."""
     if isinstance(value, bool):
         return 0
     if isinstance(value, (int, float)):
@@ -174,7 +162,7 @@ def _resolve_journal_path(agent: Agent) -> Path | None:
     if isinstance(live, Path):
         return live
     cfg = agent.config
-    if cfg is None:
+    if cfg is None:  # pyright: ignore[reportUnnecessaryComparison]  # tests stub agent with config=None to exercise no-config path
         return None
     raw_path = cfg.log.path
     if not raw_path.strip():
@@ -208,11 +196,7 @@ def _render_history_table(
     total_turns: int,
     label: str,
 ) -> str:
-    """Render per-model aggregates as an aligned plain-text table.
-
-    ASCII (not rich.Table) — ``aura/core/**`` is UI-framework-free; the
-    REPL view renderer wraps the string in a rich.Panel.
-    """
+    """Aligned ASCII (not rich.Table) — ``aura/core/**`` is UI-framework-free."""
     headers = ("Model", "Turns", "Input", "Output", "Cache read", "Total")
     rows = sorted(
         per_model.items(),

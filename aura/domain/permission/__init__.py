@@ -1,4 +1,4 @@
-"""Permission domain — pure value objects (rules, sets, modes, defaults)."""
+"""Permission value objects: rules, sets, modes, defaults."""
 
 from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
 from aura.domain.permission.mode import DEFAULT_MODE, Mode

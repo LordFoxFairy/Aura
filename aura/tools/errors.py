@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-# Specific phrases before shorter prefixes — first match wins.
 _ERROR_HINTS: list[tuple[str, str]] = [
     ("ripgrep",
      "install ripgrep — brew install ripgrep  (or the platform equivalent)"),

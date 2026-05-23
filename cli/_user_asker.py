@@ -1,10 +1,4 @@
-"""CLI implementation of ``ask_user_question``'s ``UserAsker``.
-
-Thin shim over :func:`cli.forms.render_form`: the unified widget already
-renders 1..4 questions with options, descriptions, previews, and free-text
-input. Cancellation (Esc / Ctrl+C) maps to empty answers so the LLM always
-receives a well-typed result.
-"""
+"""CLI ``UserAsker`` — thin shim over the unified form widget."""
 
 from __future__ import annotations
 
@@ -20,8 +14,6 @@ def make_cli_user_asker(
     *,
     timeout: float | None = None,  # noqa: ARG001 — render_form does not currently honor a timeout
 ) -> UserAsker:
-    """Return an async ``UserAsker`` backed by the unified form widget."""
-
     async def _ask(questions: list[FormQuestionDict]) -> dict[str, str]:
         try:
             return await render_form(list(questions))

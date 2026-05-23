@@ -117,7 +117,7 @@ class ContextCommand:
             "files": 0,
             "other": 0,
         }
-        for msg in agent._context.build([]):
+        for msg in agent.context.build([]):
             content = getattr(msg, "content", "")
             if not isinstance(content, str):
                 content = str(content)

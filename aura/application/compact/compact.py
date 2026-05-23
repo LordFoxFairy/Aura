@@ -1,12 +1,4 @@
-"""Conversation compaction — summarize old history, preserve session state.
-
-Flow:
-  1. Short history (< KEEP_LAST_N_TURNS * 2) → no-op.
-  2. Split into ``to_summarize`` + ``preserved_tail``.
-  3. Run single-turn text-only summary; tool calls discarded.
-  4. Rebuild history = ``[<session-summary>, recent_files, skills, tasks, *tail]``.
-  5. Clear discovery caches; preserve genuine session state.
-"""
+"""Summary compaction: rebuild = [<session-summary>, recent_files, skills, tasks, *tail]."""
 
 from __future__ import annotations
 
@@ -16,13 +8,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from aura.application.compact.constants import KEEP_LAST_N_TURNS
 from aura.application.compact.microcompact import MicrocompactPolicy, apply_microcompact
 from aura.application.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
 from aura.application.memory import project_memory, rules
-from aura.application.memory.context import _ReadRecord
+from aura.application.memory.context import ReadRecord
 from aura.domain.tokens import estimate_text_tokens
 from aura.infrastructure.persistence import journal
 
@@ -40,16 +32,12 @@ class CompactResult:
 
 
 def _build_recent_file_messages(
-    read_records: dict[Path, _ReadRecord],
+    read_records: dict[Path, ReadRecord],
     *,
     max_files_to_restore: int,
     max_tokens_per_file: int,
 ) -> list[HumanMessage]:
-    """Render <recent-file> messages for the most-recently-read FULL reads.
-
-    Partial reads are skipped (incomplete view confuses more than omitting).
-    Unreadable files (deleted post-read) are silently dropped.
-    """
+    """Render <recent-file> for FULL reads; partial reads omitted (incomplete view misleads)."""
     ranked = sorted(
         read_records.items(), key=lambda kv: kv[1].mtime, reverse=True,
     )
@@ -80,7 +68,6 @@ _MAX_TOKENS_PER_SKILL_BODY = 5_000
 def _build_skill_reinjection_messages(
     invoked_skills: Sequence[object],
 ) -> list[HumanMessage]:
-    """Render one ``<skill-active>`` message per preserved invoked skill."""
     max_chars = _MAX_TOKENS_PER_SKILL_BODY * 4
     out: list[HumanMessage] = []
     for skill in invoked_skills:
@@ -99,7 +86,7 @@ def _build_skill_reinjection_messages(
 
 
 def _build_active_task_messages(agent: Agent) -> list[HumanMessage]:
-    """Surface still-running / un-observed subagent tasks across compact."""
+    """Surface still-running / un-observed subagent tasks across the compact boundary."""
     store = getattr(agent, "_tasks_store", None)
     if store is None:
         return []
@@ -127,8 +114,6 @@ def _build_active_task_messages(agent: Agent) -> list[HumanMessage]:
 
 @dataclass(frozen=True)
 class SummaryCaps:
-    """Char caps applied while serializing history into the summary prompt."""
-
     max_summary_message_chars: int = 6_000
     max_summary_tool_args_chars: int = 2_000
     fallback_summary_char_limit: int = 12_000
@@ -199,12 +184,11 @@ def _summary_turn_estimated_tokens(
 
 
 def estimate_compact_summary_tokens(messages: list[BaseMessage]) -> int:
-    """Ballpark estimate of the manual compact summary prompt for ``/context``."""
     return _summary_turn_estimated_tokens(messages)
 
 
 def compact_summary_messages(agent: Agent, history: list[BaseMessage]) -> list[BaseMessage]:
-    """Return the view the summary turn should see (stored history stays raw)."""
+    """View the summary turn sees; stored history stays raw."""
     policy = _microcompact_policy_for_agent(agent)
     if policy is None:
         return list(history)
@@ -241,7 +225,6 @@ def _split_for_summary_budget(
 
 
 async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> CompactResult:
-    """Execute a compaction cycle on ``agent``."""
     before_tokens = agent.state.total_tokens_used
     history = agent.storage.load(agent.session_id)
 
@@ -268,15 +251,15 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
 
     summary_caps = _summary_caps_from_agent(agent)
     summary_text = await _run_summary_turn_with_retry(
-        agent._model,
+        agent.model,
         to_summarize,
         max_prompt_tokens=_compact_summary_prompt_budget(agent),
         caps=summary_caps,
     )
 
-    old_ctx = agent._context
-    preserved_read_records = dict(old_ctx._read_records)
-    preserved_invoked_skills = list(old_ctx._invoked_skills)
+    old_ctx = agent.context
+    preserved_read_records = dict(old_ctx.read_records)
+    preserved_invoked_skills = list(old_ctx.invoked_skills)
 
     compact_cfg = agent.config.compact
     recent_file_msgs = _build_recent_file_messages(
@@ -298,17 +281,13 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
         *preserved_tail,
     ]
 
-    # Reload memory + rules so a future :meth:`Agent._build_context` (e.g. on
-    # next clear_session / aura_md_reload) starts from fresh-on-disk values;
-    # ``new_ctx = old_ctx.fresh()`` deliberately preserves the OLD constructor
-    # state for THIS post-compact context (the summary already encoded it).
+    # Reload disk state for future rebuilds; THIS Context keeps old state (summary encoded it).
     project_memory.clear_cache(agent.cwd)
     rules.clear_cache(agent.cwd)
-    agent._primary_memory = project_memory.load_project_memory(agent.cwd)
-    agent._rules = rules.load_rules(agent.cwd)
+    agent.reload_memory_and_rules()
 
     new_ctx = old_ctx.fresh()
-    new_ctx._read_records = preserved_read_records
+    new_ctx.bind_read_records(preserved_read_records)
 
     agent.apply_compaction(
         new_history=new_history,
@@ -379,7 +358,7 @@ async def _run_summary_turn_with_retry(
     max_prompt_tokens: int = _MAX_COMPACT_SUMMARY_PROMPT_TOKENS,
     caps: SummaryCaps = _DEFAULT_SUMMARY_CAPS,
 ) -> str:
-    """Summarize history, splitting recursively when the provider rejects size."""
+    """Summarize; split recursively when the provider rejects prompt size."""
     chunks = _split_for_summary_budget(
         list(to_summarize),
         max_prompt_tokens=max_prompt_tokens,
@@ -486,13 +465,10 @@ async def _run_summary_turn(
     *,
     caps: SummaryCaps = _DEFAULT_SUMMARY_CAPS,
 ) -> str:
-    """Invoke ``model`` once with SUMMARY_SYSTEM + serialized history (raw, no tools)."""
     serialized = _serialize_history(to_summarize, caps=caps)
     messages: list[BaseMessage] = [
         SystemMessage(content=SUMMARY_SYSTEM),
         HumanMessage(content=SUMMARY_USER_PREFIX + serialized),
     ]
     ai = await model.ainvoke(messages)
-    if isinstance(ai, AIMessage):
-        return str(ai.content) if ai.content else ""
-    return str(getattr(ai, "content", ai))
+    return str(ai.content) if ai.content else ""

@@ -1,4 +1,4 @@
-"""Rule containers — immutable ``RuleSet`` + mutable ``SessionRuleSet``."""
+"""Immutable RuleSet + mutable SessionRuleSet (session-scope "always" answers)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from aura.domain.permission.rule import Rule
 
 @dataclass(frozen=True)
 class RuleSet:
-    """Immutable ordered list of allow-rules; first-match-wins."""
+    # First-match-wins over the ordered rules tuple.
 
     rules: tuple[Rule, ...] = ()
 
@@ -26,11 +26,7 @@ class RuleSet:
 
 @dataclass
 class SessionRuleSet:
-    """Mutable in-memory ruleset for ``always`` session-scope answers.
-
-    ``add()`` is idempotent on ``Rule`` equality. ``rules()`` returns a
-    tuple snapshot so callers can't mutate the backing store.
-    """
+    # add() is idempotent on Rule equality; rules() returns a tuple snapshot.
 
     _rules: list[Rule] = field(default_factory=list)
 

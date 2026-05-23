@@ -1,8 +1,4 @@
-"""项目记忆加载器。
-
-三层 walk-up 发现（User / Project / Local），`@imports` 预展开（深度上限
-5、环检测、代码围栏感知），按 resolved cwd memoize，session 内可 clear。
-"""
+"""Project memory loader — User / Project walk-up / Local layers with `@imports` expansion."""
 
 from __future__ import annotations
 
@@ -17,13 +13,12 @@ _MAX_IMPORT_DEPTH = 5
 
 _DEFAULT_BYTE_CAP = 25_000
 
-# 仅这些扩展名允许通过 `@imports` 注入 — 防止误把二进制 / 不透明文件灌进 prompt
-# (audit F-03-008)。
+# Whitelist guards against pulling binary / opaque files into the prompt.
 _TEXT_IMPORT_EXTS = frozenset(
     {".md", ".txt", ".py", ".json", ".yaml", ".yml", ".toml", ".sh", ".cfg", ".ini"}
 )
 
-# Aura 单 event-loop 运行，无并发写入；因此缓存无需加锁。
+# Single event-loop — no concurrent writes, no lock needed.
 _primary_cache: dict[tuple[Path, Path | None], str] = {}
 
 
@@ -33,29 +28,13 @@ def load_project_memory(
     force_reload: bool = False,
     auto_memory_dir: Path | None = None,
 ) -> str:
-    """按 User / Project(outer→inner) / Local(outer→inner) 顺序拼接项目记忆。
-
-    文件间与层间统一以单空行分隔；缺失 / 目录占位 / 权限拒绝 —— 一律静默跳过。
-    读到的文件同时展开 `@imports`。
-    以 resolved cwd 为 key 进入 `_primary_cache`；`force_reload=True` 旁路缓存并覆盖。
-
-    F-03-004 — auto-memory layer. When ``auto_memory_dir`` is supplied
-    (typically ``Storage.memory_dir(cwd=...)``), the loader appends the
-    directory's ``MEMORY.md`` index after the User / Project / Local
-    chain. The model writes its own ``MEMORY.md`` + per-memory files
-    via the existing ``write_file`` tool — no new pipeline. ``None``
-    (default) preserves the legacy three-layer chain for callers that
-    don't have a Storage handle. Imports are expanded just like the
-    other layers, so ``MEMORY.md`` can ``@`` into per-entry files.
-    """
+    """Concat User → Project(outer→inner) → Local(outer→inner) → auto-memory `MEMORY.md`."""
     resolved = cwd.resolve()
     cache_key = (resolved, auto_memory_dir.resolve() if auto_memory_dir else None)
     if not force_reload and cache_key in _primary_cache:
         return _primary_cache[cache_key]
 
-    # F-03-006: stop walking at the git root if `cwd` is in a repo. Falls
-    # back to filesystem root when `git` is missing or `cwd` isn't tracked,
-    # preserving the legacy behaviour for non-git trees.
+    # Stop walking at git root when in a repo; otherwise walk to filesystem root.
     git_root = _detect_git_root(resolved)
     ancestors = _ancestors_capped(resolved, git_root)
 
@@ -89,24 +68,16 @@ def load_project_memory(
 
 
 def clear_cache(cwd: Path | None = None) -> None:
-    """清 `_primary_cache`：无参清空全部；有参清指定 resolved cwd 的所有变体。
-
-    Cache keys are ``(resolved_cwd, auto_memory_dir | None)`` since the
-    F-03-004 auto-memory layer participates in the key. Clearing by cwd
-    drops every entry whose first key component matches.
-    """
     if cwd is None:
         _primary_cache.clear()
         return
+    # Cache key is (resolved_cwd, auto_memory_dir | None) — drop every variant.
     target = cwd.resolve()
     for key in [k for k in _primary_cache if k[0] == target]:
         _primary_cache.pop(key, None)
 
 
 def _detect_git_root(cwd: Path) -> Path | None:
-    """F-03-006 helper: probe `git rev-parse --show-toplevel`. Tolerant of
-    missing git (`FileNotFoundError`), non-repos (non-zero rc), and slow
-    filesystems (2s timeout)."""
     try:
         proc = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
@@ -130,11 +101,7 @@ def _detect_git_root(cwd: Path) -> Path | None:
 
 
 def _ancestors_capped(resolved_cwd: Path, git_root: Path | None) -> list[Path]:
-    """Inclusive walk from outermost-allowed ancestor down to `resolved_cwd`.
-
-    When `git_root` is provided, the walk stops at it (inclusive); otherwise
-    it falls back to filesystem root, mirroring the legacy behaviour.
-    """
+    """Inclusive outer→inner walk, capped at `git_root` when present, else fs root."""
     if git_root is None:
         return [*reversed(list(resolved_cwd.parents)), resolved_cwd]
     chain: list[Path] = [resolved_cwd]
@@ -142,7 +109,7 @@ def _ancestors_capped(resolved_cwd: Path, git_root: Path | None) -> list[Path]:
     while current != git_root:
         parent = current.parent
         if parent == current:
-            # `cwd` 不在 `git_root` 之下（罕见的边界）—— 退化到 fs-root walk
+            # cwd is not under git_root — degrade to fs-root walk.
             return [*reversed(list(resolved_cwd.parents)), resolved_cwd]
         chain.append(parent)
         if parent == git_root:
@@ -153,7 +120,6 @@ def _ancestors_capped(resolved_cwd: Path, git_root: Path | None) -> list[Path]:
 
 
 def _read_raw(path: Path, *, byte_cap: int = _DEFAULT_BYTE_CAP) -> str | None:
-    # is_file() 同时挡掉 "不存在" 与 "是目录" 两种情况
     if not path.is_file():
         return None
     try:
@@ -161,8 +127,7 @@ def _read_raw(path: Path, *, byte_cap: int = _DEFAULT_BYTE_CAP) -> str | None:
     except OSError:
         return None
     if len(data) > byte_cap:
-        # F-03-007: 对超出 byte_cap 的 memory 文件追加 WARNING marker；
-        # 截断后追加文本以引导用户拆文件。
+        # WARNING marker is model-facing — guides user to split the file.
         head = data[:byte_cap].decode("utf-8", errors="replace")
         return head + (
             f"\nWARNING: this file is {len(data)} bytes (limit: {byte_cap}). "
@@ -172,10 +137,7 @@ def _read_raw(path: Path, *, byte_cap: int = _DEFAULT_BYTE_CAP) -> str | None:
 
 
 def read_with_imports(path: Path) -> str | None:
-    """读单个文件并展开 `@imports`；缺失 / 目录 / 权限拒绝 → None。
-
-    公共 API：供 Context 的子目录按需加载路径复用同一套 `@imports` 解析。
-    """
+    """Read one file and expand `@imports` recursively; missing / dir / perm-denied → None."""
     raw = _read_raw(path)
     if raw is None:
         return None
@@ -187,17 +149,13 @@ def read_with_imports(path: Path) -> str | None:
 
 
 def _expand(text: str, source: Path, *, visited: frozenset[Path], depth: int) -> str:
-    """展开 `text` 中的 `@imports`：
-    - `source` 是该文本所在已解析文件路径（其 parent 为相对路径基准）。
-    - `visited` 沿递归链传递，用于环检测（drop 即可，不抛）。
-    - `depth` 为当前文件在递归链中的深度（根文件=0）；子文件深度 >= 5 时丢弃。
-    """
+    """Recursive `@imports` expansion with code-fence awareness, cycle drop, depth cap."""
     out: list[str] = []
     in_fence = False
     base_dir = source.parent
 
     for line in text.splitlines(keepends=True):
-        # 判断围栏切换：首三字符为三反引号（column-0，无前导空白）
+        # Fence toggle only on column-0 triple-backtick (no leading whitespace).
         stripped_end = line.rstrip()
         if stripped_end[:3] == "```":
             in_fence = not in_fence
@@ -208,10 +166,10 @@ def _expand(text: str, source: Path, *, visited: frozenset[Path], depth: int) ->
             target = _parse_import(stripped_end)
             if target is not None:
                 if depth + 1 >= _MAX_IMPORT_DEPTH:
-                    continue  # 超深度静默丢弃
+                    continue
                 resolved_target = _resolve_import(target, base_dir)
                 if resolved_target is None or resolved_target in visited:
-                    continue  # 缺失/目录/权限/环 —— 静默丢弃
+                    continue
                 child_raw = _read_raw(resolved_target)
                 if child_raw is None:
                     continue
@@ -221,10 +179,8 @@ def _expand(text: str, source: Path, *, visited: frozenset[Path], depth: int) ->
                     visited=visited | {resolved_target},
                     depth=depth + 1,
                 )
-                # 被替换的 `@path` 行自身（含换行）完全消失，
-                # 子内容按其原样注入；若子内容不以换行结尾，保留原状（下一行紧跟）。
                 out.append(expanded)
-                # 若原 `@path` 行带换行而 expanded 不含末尾换行，补一个以分隔后续行。
+                # Preserve line break between `@path` line and following content.
                 if line.endswith(("\n", "\r")) and not expanded.endswith(("\n", "\r")):
                     out.append("\n")
                 continue
@@ -235,32 +191,21 @@ def _expand(text: str, source: Path, *, visited: frozenset[Path], depth: int) ->
 
 
 def _parse_import(stripped_line: str) -> str | None:
-    """若一行形如 `^@<path>$`（rstrip 后），返回路径串；否则 None。
-
-    `stripped_line` 由调用方 `rstrip()` 得到；前导空白不识别为 import —— 与代码
-    围栏检测对齐，避免缩进内的 `@` 被误吃。
-    """
+    # Leading whitespace doesn't count — aligns with fence detection.
     if len(stripped_line) < 2 or not stripped_line.startswith("@"):
         return None
     return stripped_line[1:]
 
 
 def _resolve_import(raw: str, base_dir: Path) -> Path | None:
-    """把 `@<raw>` 解析为 resolved Path；若目标为目录/不存在/扩展名不在白名单则 None。
-
-    F-03-008: 仅允许 `_TEXT_IMPORT_EXTS` 中的扩展名穿过 `@imports`，避免随手
-    `@./binary.exe` 把不透明字节灌进 prompt。被拒绝的尝试发一条 journal 事件。
-    """
     if raw.startswith("~/"):
-        # 走 Path.home() 而非 os.path.expanduser —— 后者读 $HOME env，
-        # 测试无法通过 monkeypatch Path.home 覆盖。
+        # Path.home() (not os.path.expanduser) so tests can monkeypatch.
         candidate = Path.home() / raw[2:]
     elif raw == "~":
         candidate = Path.home()
     elif raw.startswith("/"):
         candidate = Path(raw)
     else:
-        # `./x` 与 `x` 均相对于 importing file 的 parent
         candidate = base_dir / raw
     try:
         resolved = candidate.resolve()

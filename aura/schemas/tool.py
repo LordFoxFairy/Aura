@@ -1,4 +1,4 @@
-"""Tool execution protocol — ToolResult / ToolError / ToolMetadata."""
+"""Tool execution protocol: ToolResult / ToolError / ToolMetadata."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def resolve_is_destructive(
     metadata: dict[str, Any] | None,
     args: dict[str, Any],
 ) -> bool:
-    # Classifier exceptions fail-safe to True (ambiguous ≙ destructive).
+    # Ambiguous ≙ destructive: classifier failures fail-safe to True.
     return _resolve_flag(metadata, "is_destructive", args, fail_safe=True)
 
 
@@ -92,6 +92,6 @@ def _resolve_flag(
     if callable(raw):
         try:
             return bool(raw(args))
-        except Exception:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
+        except Exception:  # noqa: BLE001  # classifier must never crash the gate
             return fail_safe
     return bool(raw)

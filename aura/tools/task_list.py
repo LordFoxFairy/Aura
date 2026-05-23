@@ -64,7 +64,7 @@ class TaskList(BaseTool):
         "kind='subagent'/'shell'/'teammate' to filter by task kind; default "
         "'all' returns everything. limit caps the window (default 20)."
     )
-    args_schema: type[BaseModel] = TaskListParams
+    args_schema: type[BaseModel] = TaskListParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=True,
         is_destructive=False,
@@ -97,7 +97,7 @@ class TaskList(BaseTool):
         kind: _KindFilter,
         limit: int,
     ) -> dict[str, Any]:
-        # Counts span the full fleet so callers see overall state even when filtering.
+        # Counts span the full fleet so a filtered view still surfaces overall state.
         all_records = self.store.list()
         counts = {
             s: sum(1 for r in all_records if r.status == s)

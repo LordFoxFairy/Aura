@@ -1,13 +1,14 @@
 """Persistent session storage — sqlite3 index + JSONL transcripts.
 
-Layout (v3, per-project nested):
+Layout (v3, per-project nested)::
+
     <storage_root>/
       projects/<encoded-cwd>/<session-id>.jsonl
       projects/<encoded-cwd>/<session-id>/subagents/agent-<task>.jsonl
       index.sqlite
       teams/<team_id>/...
 
-``<encoded-cwd>`` rewrites each ``/`` as ``-`` (claude-code parity).
+``<encoded-cwd>`` rewrites each ``/`` as ``-``.
 """
 
 from __future__ import annotations
@@ -71,8 +72,7 @@ class SessionStorage:
     def __init__(self, path: Path, *, cwd: Path | None = None) -> None:
         self._path = path
         self._in_memory: bool = str(path) == ":memory:"
-        # cwd captured at construction so a later os.chdir() can't silently
-        # rebucket sessions mid-flight.
+        # Pin cwd at construction so a later os.chdir() can't silently rebucket sessions.
         self._default_cwd: Path = (
             cwd if cwd is not None else Path.cwd()
         ).resolve()
@@ -85,12 +85,7 @@ class SessionStorage:
 
     @property
     def path(self) -> Path:
-        """Sqlite index file path; subprocess wiring uses ``path.parent``."""
         return self._path
-
-    # ------------------------------------------------------------------
-    # v3 path API.
-    # ------------------------------------------------------------------
 
     def _projects_dir(self) -> Path:
         return self._path.parent / "projects"
@@ -108,7 +103,7 @@ class SessionStorage:
         return self._project_dir(cwd) / f"{session_id}.jsonl"
 
     def memory_dir(self, *, cwd: Path | None = None) -> Path:
-        """Per-project auto-memory directory; not created until first write."""
+        # Lazy: not created until first write.
         return self._project_dir(cwd) / "memory"
 
     def session_dir(
@@ -127,6 +122,7 @@ class SessionStorage:
         """``parent_session_id=None`` falls back to the flat ad-hoc bucket."""
         self._validate_task_id(task_id)
         if parent_session_id is None:
+
             return (
                 self._path.parent / "subagents" / f"agent-{task_id}.jsonl"
             )
@@ -149,10 +145,6 @@ class SessionStorage:
             cwd=cwd,
         )
         return transcript.with_suffix(".meta.json")
-
-    # ------------------------------------------------------------------
-    # Index helpers.
-    # ------------------------------------------------------------------
 
     def _index_path(self) -> Path:
         return self._path.parent / "index.sqlite"
@@ -206,10 +198,6 @@ class SessionStorage:
         finally:
             idx.close()
 
-    # ------------------------------------------------------------------
-    # Connection lifecycle.
-    # ------------------------------------------------------------------
-
     def close(self) -> None:
         self._conn.close()
 
@@ -227,15 +215,8 @@ class SessionStorage:
         if not task_id or "/" in task_id or ".." in task_id:
             raise ValueError(f"invalid task_id: {task_id!r}")
 
-    # ------------------------------------------------------------------
-    # Append / load / save.
-    # ------------------------------------------------------------------
-
     def append(self, session_id: str, message: BaseMessage) -> None:
-        """Append one envelope line + refresh the index row.
-
-        ``:memory:`` storage mirrors into the in-process table only.
-        """
+        """Append one envelope line + refresh the index; ``:memory:`` skips disk."""
         self._validate_session_id(session_id)
         if self._in_memory:
             cur = self._conn.cursor()
@@ -289,7 +270,7 @@ class SessionStorage:
         return path
 
     def list_subagent_transcripts(self) -> list[TranscriptMeta]:
-        """Enumerate persisted subagent transcripts, newest first, deduped."""
+        """Enumerate persisted subagent transcripts, newest first, deduped by task_id."""
         by_task: dict[str, TranscriptMeta] = {}
 
         def _consume(p: Path) -> None:
@@ -378,7 +359,7 @@ class SessionStorage:
         return []
 
     def save(self, session_id: str, messages: list[BaseMessage]) -> None:
-        """Save full history. Prefix-extension is appended; otherwise rewrite atomically."""
+        """Save full history; prefix-extension appends in place, divergence rewrites atomically."""
         self._validate_session_id(session_id)
         journal.write(
             "storage_save", session=session_id, count=len(messages),
@@ -456,7 +437,7 @@ class SessionStorage:
         return out
 
     def load(self, session_id: str) -> list[BaseMessage]:
-        """Load messages: v3 JSONL on disk, falling back to the in-process table."""
+        """Load messages; falls back to the in-process table when JSONL is empty/absent."""
         self._validate_session_id(session_id)
         cur = self._conn.cursor()
         jsonl_path = self.session_jsonl_path(session_id)
@@ -496,12 +477,8 @@ class SessionStorage:
             finally:
                 idx.close()
 
-    # ------------------------------------------------------------------
-    # Resume + enumeration.
-    # ------------------------------------------------------------------
-
     def list_sessions(self, *, limit: int = 20) -> list[SessionMeta]:
-        """Recent sessions newest-first. Falls back to in-process table for ``:memory:``."""
+        """Recent sessions newest-first; ``:memory:`` falls back to the in-process table."""
         index_path = self._index_path()
         out: list[SessionMeta] = []
         if index_path.exists():

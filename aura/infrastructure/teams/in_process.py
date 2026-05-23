@@ -1,19 +1,11 @@
-"""InProcessBackend — wraps :func:`run_teammate` in an asyncio task.
+"""InProcessBackend — wraps :func:`run_teammate` in an asyncio task on the leader's loop.
 
-This is the original Aura behaviour, preserved bit-for-bit. The leader's
-event loop owns the teammate task; cancellation cascades naturally
-through the leader's :class:`~aura.domain.abort.AbortController` chain.
+Lifecycle map::
 
-Lifecycle map:
-
-==========================  ========================================
-Manager call                Backend translation
-==========================  ========================================
-``add_member`` / ``spawn``  ``asyncio.create_task(run_teammate(...))``
-``aremove_member`` graceful ``stop_event.set()`` + wait for task done
-``remove_member`` force     ``abort.abort()`` + ``task.cancel()``
-``cleanup_session_teams``   ``force_kill`` then ``rm -rf <team_dir>``
-==========================  ========================================
+    add_member / spawn        → asyncio.create_task(run_teammate(...))
+    aremove_member graceful   → stop_event.set() + await task
+    remove_member force       → abort.abort() + task.cancel()
+    cleanup_session_teams     → force_kill then rm -rf <team_dir>
 """
 
 from __future__ import annotations
@@ -37,24 +29,14 @@ if TYPE_CHECKING:
 
 @dataclass
 class InProcessHandle(BackendHandle):
-    """Handle wrapping the asyncio.Task running ``run_teammate``.
-
-    ``stop_event`` and ``abort`` are the same instances installed on the
-    runtime — graceful shutdown sets the event; force-kill aborts and
-    cancels the task directly.
-    """
-
     task: asyncio.Task[None]
+    # Same instances installed on the runtime — graceful sets the event, force aborts.
     stop_event: asyncio.Event
     abort: AbortController
     pane_id: str | None = None  # always None for in-process
 
     async def shutdown(self, *, timeout_sec: float = 5.0) -> bool:
-        """Cooperative stop: fire ``stop_event``, await task.
-
-        Returns ``True`` on natural exit within ``timeout_sec``;
-        ``False`` after force-cancelling on timeout. Idempotent.
-        """
+        """Cooperative stop; returns True on natural exit, False after force-cancel on timeout."""
         if self.task.done():
             return True
         self.stop_event.set()
@@ -70,7 +52,6 @@ class InProcessHandle(BackendHandle):
             return self.task.done()
 
     async def force_kill(self) -> None:
-        """Abort + cancel; safe on already-completed tasks."""
         if not self.abort.aborted:
             with contextlib.suppress(Exception):
                 self.abort.abort("force_kill")
@@ -84,13 +65,6 @@ class InProcessHandle(BackendHandle):
 
 
 class InProcessBackend:
-    """Singleton in-process backend.
-
-    Stateless — the spawn args carry every piece of context the runtime
-    needs. The manager holds one shared instance via
-    :func:`~aura.infrastructure.teams.registry.get_backend`.
-    """
-
     backend_type: BackendType = "in_process"
 
     async def spawn(
@@ -106,13 +80,7 @@ class InProcessBackend:
         seed_prompt: str | None,
         notifier: MailboxNotifier | None = None,
     ) -> InProcessHandle:
-        """Schedule ``run_teammate`` and return a wired-up handle.
-
-        Async to match the :class:`TeammateBackend` Protocol; performs
-        no I/O so the coroutine completes synchronously the moment
-        the event loop steps it. Sync callers should use
-        :meth:`spawn_sync` to avoid the await ceremony.
-        """
+        # Async only to satisfy the Protocol; no I/O happens here.
         return self.spawn_sync(
             team_id=team_id,
             member=member,
@@ -138,19 +106,8 @@ class InProcessBackend:
         seed_prompt: str | None,
         notifier: MailboxNotifier | None = None,
     ) -> InProcessHandle:
-        """Synchronous spawn — wraps ``asyncio.create_task`` directly.
-
-        Used by :meth:`TeamManager.add_member` (sync entry) so we don't
-        have to drive an async-no-op coroutine from inside an already-
-        running event loop. Same return shape as :meth:`spawn`.
-
-        ``notifier`` is the manager-owned wake-up channel; the runtime
-        falls back to filesystem-poll when ``None`` (used by unit tests
-        that drive the backend directly).
-        """
-        # ``manager`` is unused here — the runtime reaches the manager
-        # back through ``agent.team`` if it needs to confirm shutdown.
-        # Accepting it keeps the Protocol uniform across backends.
+        """Synchronous variant for sync callers; ``notifier=None`` falls back to filesystem-poll."""
+        # Accepted for Protocol uniformity; the runtime reaches the manager via agent.team.
         del manager
         task: asyncio.Task[None] = asyncio.create_task(
             run_teammate(

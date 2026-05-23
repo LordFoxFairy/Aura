@@ -1,32 +1,9 @@
-"""PaneBackend — teammate runs as a subprocess inside a tmux pane.
-
-Implements claude-code's pane backend (``utils/swarm/teamHelpers.ts``):
-
-1. ``tmux split-window -h -P -F '#{pane_id}'`` to allocate a new pane;
-   capture its ID.
-2. ``tmux send-keys -t <pane_id> 'python -m cli teammate --team-id ...
-   --member ... --storage-root ...' Enter`` to start the teammate
-   subprocess inside that pane.
-3. The subprocess loads its own :class:`~aura.core.agent.Agent`, builds a
-   :class:`~aura.application.teams.mailbox.Mailbox`, and runs the same
-   ``run_teammate`` loop — communication with the leader stays via the
-   filesystem-rooted JSONL mailbox + ``.seen`` cursor that already works
-   cross-process.
+"""PaneBackend — teammate runs as a ``python -m cli teammate`` subprocess inside a tmux pane.
 
 Shutdown contract:
 
-- Graceful: post a ``shutdown_request`` to the teammate's inbox via the
-  manager. The runtime picks it up at its next mailbox poll, emits
-  ``shutdown_response`` to the leader, and exits. We then run
-  ``tmux kill-pane -t <pane_id>`` to reclaim the visual real-estate.
-- Force-kill: skip the wait; ``tmux kill-pane`` directly. The pane's
-  shell receives SIGHUP, the Python subprocess gets SIGTERM, and the
-  on-disk state stays consistent because every mailbox write is atomic.
-
-We invoke ``tmux`` via :func:`subprocess.run` with a 5-second timeout —
-no extra dependency, no third-party libtmux abstraction. Errors raise
-:class:`PaneBackendError` so the manager can surface them as a
-:class:`~aura.application.teams.manager.TeamError`.
+- graceful: post ``shutdown_request`` to the inbox, await ``shutdown_response``, kill pane
+- force: ``tmux kill-pane`` directly; mailbox writes are atomic so on-disk state stays consistent
 """
 
 from __future__ import annotations
@@ -62,19 +39,14 @@ _TMUX_TIMEOUT_SEC: float = 5.0
 
 
 class PaneBackendError(RuntimeError):
-    """Raised when a tmux command fails or the environment lacks tmux."""
+    pass
 
 
 def _run_tmux(args: list[str]) -> str:
-    """Run ``tmux <args>`` and return stripped stdout.
-
-    Raises :class:`PaneBackendError` on non-zero exit, missing binary,
-    or timeout. Stdout/stderr are captured so the diagnostic message
-    surfaces cleanly through the manager's :class:`TeamError` path.
-    """
+    """Run ``tmux <args>`` and return stripped stdout; raises on non-zero / missing / timeout."""
     cmd = ["tmux", *args]
     try:
-        proc = subprocess.run(  # noqa: S603 — fixed binary, validated args.
+        proc = subprocess.run(  # noqa: S603  # fixed binary, callers pass validated args
             cmd,
             capture_output=True,
             text=True,
@@ -97,12 +69,6 @@ def _run_tmux(args: list[str]) -> str:
 
 
 def _pane_alive(pane_id: str) -> bool:
-    """Return ``True`` iff ``pane_id`` exists in the current tmux server.
-
-    Implemented with ``tmux list-panes -a -F '#{pane_id}'`` and a
-    membership check; cheap (single IPC) and survives a server restart
-    by simply reporting "no" (the pane is, in fact, gone).
-    """
     try:
         out = _run_tmux(["list-panes", "-a", "-F", "#{pane_id}"])
     except PaneBackendError:
@@ -112,48 +78,30 @@ def _pane_alive(pane_id: str) -> bool:
 
 @dataclass
 class PaneHandle(BackendHandle):
-    """Handle for a teammate running inside a tmux pane.
-
-    ``manager`` is held by reference so :meth:`shutdown` can post a
-    ``shutdown_request`` through the same code path the in-process
-    backend uses. ``stop_event`` mirrors the in-process API for
-    interface compatibility; the subprocess does NOT see this event
-    directly (it lives in a different memory space) but we still
-    fire it so any in-leader observers (tests, future hooks) match
-    the in-process behaviour.
-    """
-
     pane_id: str | None
     member_name: str
+    # Held to post shutdown_request through the same code path the in-process backend uses.
     manager: TeamManager
+    # Subprocess can't see this event directly; we still fire it so in-leader observers stay parity.
     stop_event: asyncio.Event
     abort: AbortController
 
     async def shutdown(self, *, timeout_sec: float = 5.0) -> bool:
-        """Cooperative stop via mailbox shutdown_request, then kill the pane.
-
-        Returns ``True`` when the teammate emitted a matching
-        ``shutdown_response`` on the leader's inbox within
-        ``timeout_sec`` (i.e. the subprocess exited cleanly);
-        ``False`` when the wait timed out and we force-killed.
-        """
+        """Cooperative stop via mailbox; True on clean ack within timeout, else force-kill."""
         if self.pane_id is None or not _pane_alive(self.pane_id):
             return True
-        # Snapshot leader-mailbox baseline BEFORE posting the request so
-        # we don't false-positive on a stale ack from a previous run.
+        # Snapshot baseline BEFORE posting so a stale ack from a previous run can't false-positive.
         team = self.manager.team
         if team is None:
             await self.force_kill()
             return False
-        from aura.application.teams.mailbox import Mailbox  # local import; cycle-safe.
-        # test reaches into private state by design
-        mailbox = Mailbox(self.manager._storage, team.team_id)  # noqa: SLF001
+        # Local import dodges the application↔infrastructure cycle.
+        from aura.application.teams.mailbox import Mailbox  # noqa: PLC0415
+        mailbox = Mailbox(self.manager.storage, team.team_id)
         baseline = {m.msg_id for m in mailbox.read_all(TEAM_LEADER_NAME)}
-        # Post shutdown_request via the manager's internal poster so the
-        # message is observed by the same journal events the in-process
-        # path emits (parity for /tasks + observability).
+        # Reuse the manager's poster so journal events match the in-process path (/tasks parity).
         with contextlib.suppress(Exception):
-            self.manager._post(  # noqa: SLF001  # test reaches into private state by design
+            self.manager.post_message(
                 TeamMessage(
                     msg_id=uuid.uuid4().hex,
                     sender=TEAM_LEADER_NAME,
@@ -163,9 +111,7 @@ class PaneHandle(BackendHandle):
                 ),
             )
         self.stop_event.set()
-        # Off-thread poll, mirroring the in-process aremove_member path.
-        # Same 50ms cadence as the manager's internal waiter so the
-        # combined latency is bounded by the runtime's mailbox poll.
+        # 50ms cadence matches the manager's internal waiter — bounds total latency by mailbox poll.
         acked = await asyncio.to_thread(
             self._wait_for_ack, mailbox, baseline, timeout_sec,
         )
@@ -173,16 +119,10 @@ class PaneHandle(BackendHandle):
         return acked
 
     def _wait_for_ack(self, mailbox: object, baseline: set[str], timeout: float) -> bool:
-        """Block until a matching shutdown_response lands or timeout.
-
-        Inbox-poll only — pane runs the teammate as a subprocess so we
-        can't share an asyncio.Future with the leader's manager; the
-        on-disk JSONL is the IPC channel.
-        """
-        import time as _time
+        # JSONL on disk is the IPC channel — the subprocess can't share an asyncio.Future.
+        import time as _time  # noqa: PLC0415  # keep ad-hoc poll local
         deadline = _time.monotonic() + timeout
         while _time.monotonic() < deadline:
-            # test sets attribute mypy can't see
             for msg in mailbox.read_all(TEAM_LEADER_NAME):  # type: ignore[attr-defined]
                 if msg.msg_id in baseline:
                     continue
@@ -195,7 +135,6 @@ class PaneHandle(BackendHandle):
         return False
 
     async def force_kill(self) -> None:
-        """Kill the pane immediately; abort the controller for parity."""
         if not self.abort.aborted:
             with contextlib.suppress(Exception):
                 self.abort.abort("pane_force_kill")
@@ -209,7 +148,7 @@ class PaneHandle(BackendHandle):
                 _run_tmux, ["kill-pane", "-t", self.pane_id],
             )
         except PaneBackendError as exc:
-            # Pane may already be gone — that's a success state for us.
+            # Pane already gone is a success state — still journal for forensics.
             journal.write(
                 "team_pane_kill_error",
                 pane_id=self.pane_id,
@@ -223,14 +162,6 @@ class PaneHandle(BackendHandle):
 
 
 class PaneBackend:
-    """Singleton pane backend.
-
-    Construction does NOT validate the environment — the registry runs
-    :func:`~aura.infrastructure.teams.detection.pane_backend_available`
-    before handing the singleton out. ``spawn`` re-checks defensively
-    so a programmatic instantiation surfaces the same error path.
-    """
-
     backend_type: BackendType = "pane"
 
     async def spawn(
@@ -246,20 +177,9 @@ class PaneBackend:
         seed_prompt: str | None,
         notifier: MailboxNotifier | None = None,
     ) -> PaneHandle:
-        """Split a pane and start the teammate subprocess inside it.
-
-        ``agent`` is unused here — the subprocess builds its own Agent
-        from the storage root. We accept it to match the Protocol so
-        the manager can dispatch uniformly. ``seed_prompt`` is forwarded
-        to the subprocess via ``--seed-prompt`` and consumed there.
-
-        ``notifier`` is ignored — the subprocess runs in a separate
-        Python process and cannot share an asyncio queue with the
-        leader; the pane backend wakes via the JSONL poll inside the
-        subprocess's own runtime.
-        """
-        del agent  # subprocess builds its own
-        del notifier  # cross-process; signals can't span loops
+        """Split a pane, start the teammate subprocess; ``seed_prompt`` forwarded via CLI flag."""
+        del agent  # subprocess builds its own Agent
+        del notifier  # cross-process — asyncio queues can't span Python processes
         if not pane_backend_available():
             raise PaneBackendError(
                 "pane backend requires tmux on PATH and an active tmux "
@@ -273,10 +193,7 @@ class PaneBackend:
             raise PaneBackendError(
                 "tmux split-window returned no pane_id",
             )
-        # Persist the pane_id onto the member BEFORE we launch the
-        # subprocess so a crash between split + send-keys still leaves
-        # config.json with a recoverable handle. Pydantic models are
-        # mutable in-place; the manager will _persist() right after.
+        # Persist pane_id BEFORE send-keys so a crash mid-spawn still leaves a recoverable handle.
         member.tmux_pane_id = pane_id
         cmd = self._build_subprocess_command(
             team_id=team_id,
@@ -284,9 +201,7 @@ class PaneBackend:
             storage=storage,
             seed_prompt=seed_prompt,
         )
-        # send-keys with " Enter" submits the line in the pane's shell.
-        # Quoting via shlex.join is critical: paths or seed prompts may
-        # contain spaces, and tmux passes the literal string to the shell.
+        # shlex.join is required — tmux passes the literal string to the shell, spaces would split.
         await asyncio.to_thread(
             _run_tmux,
             ["send-keys", "-t", pane_id, shlex.join(cmd), "Enter"],
@@ -313,13 +228,7 @@ class PaneBackend:
         storage: SessionStorage,
         seed_prompt: str | None,
     ) -> list[str]:
-        """Build the ``python -m cli teammate ...`` argv.
-
-        Uses ``sys.executable`` so the spawned subprocess inherits the
-        same interpreter (venv + aura installed). ``storage_root`` is
-        the on-disk parent of the leader's storage path so the teammate
-        finds the same teams/ directory layout.
-        """
+        # sys.executable so the subprocess inherits the same venv (aura installed).
         storage_root = _resolve_storage_root(storage)
         argv = [
             sys.executable,
@@ -341,7 +250,6 @@ class PaneBackend:
 
 
 def _resolve_storage_root(storage: SessionStorage) -> str:
-    """Return the dir containing index.sqlite; ``:memory:`` falls back to ``~/.aura``."""
     db_path = storage.path
     if str(db_path) == ":memory:":
         return os.path.expanduser("~/.aura")

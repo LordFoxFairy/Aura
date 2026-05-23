@@ -1,10 +1,4 @@
-"""Headless SSE wrapper for the shared desktop session service.
-
-This module is desktop-specific only at the stdio boundary: it reads NDJSON
-requests from stdin, writes SSE-framed events to stdout, and delegates session
-behavior to ``desktop.host.session_service``. It intentionally preserves a few
-legacy helper names for tests while the runtime ownership has moved.
-"""
+"""Headless SSE wrapper around ``desktop.host.session_service``."""
 
 from __future__ import annotations
 
@@ -24,30 +18,24 @@ from desktop.host import session_service
 
 
 class IpcAsker(session_service.IpcAsker):
-    """Legacy zero-arg wrapper over the shared session-service asker."""
-
     def __init__(self) -> None:
         super().__init__(emit=_emit)
 
 
 def _emit(payload: dict[str, Any]) -> None:
-    """Write one SSE frame to stdout + flush."""
     sys.stdout.write(encode_sse(cast(Any, payload)))
     sys.stdout.flush()
 
 
 def _event_to_dict(event: Any) -> dict[str, Any]:
-    """Compatibility wrapper for the shared Aura wire serializer."""
     return dict(event_to_wire(event))
 
 
 def _build_aura_state(agent: Any, last_turn_seconds: float) -> dict[str, Any]:
-    """Compatibility wrapper for the shared Aura state serializer."""
     return dict(agent_state_to_wire(agent, last_turn_seconds))
 
 
 def _feed_permission_response(asker: IpcAsker, payload: dict[str, Any]) -> bool:
-    """Legacy local wrapper over the shared feed helper."""
     return session_service.feed_permission_response(
         asker=asker,
         payload=payload,
@@ -73,10 +61,7 @@ async def _run() -> int:
 
 
 def main() -> int:
-    """Entry point — bootstrap the shared session driver over stdio."""
-    # ``exited`` is owned solely by ``run_session_driver``'s finally; KeyboardInterrupt
-    # cancels the running task which still unwinds that finally, so a second emit here
-    # would duplicate the wire event.
+    # ``exited`` is emitted by run_session_driver's finally; do not re-emit here.
     try:
         return asyncio.run(_run())
     except KeyboardInterrupt:

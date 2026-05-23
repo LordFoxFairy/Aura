@@ -1,10 +1,4 @@
-"""Derive the most specific ``Rule`` the CLI can propose on prompt option 2.
-
-A precise rule is derivable iff the tool's ``rule_matcher`` exposes a
-``.key`` attribute (matchers.py convention) AND ``args[key]`` is a
-non-empty string. Returns ``None`` otherwise; the CLI then falls back to
-tool-wide + session persistence.
-"""
+"""Derive the most specific Rule the CLI can propose on prompt option 2."""
 
 from __future__ import annotations
 

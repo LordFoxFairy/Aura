@@ -1,15 +1,4 @@
-"""ask_user_question tool — LLM asks the user 1..4 clarifying questions mid-turn.
-
-Schema mirrors claude-code's ``AskUserQuestion``: a list of structured questions
-with header chips, option lists (with descriptions + preview text), and an
-optional free-text fallback. The injected ``UserAsker`` renders the form (via
-``cli.forms.render_form`` in production) and returns ``{question_text: answer}``;
-the tool flattens that into a single string the LLM consumes.
-
-The tool is NOT ``is_concurrency_safe``: the user has exactly one attention
-stream, so the loop must never batch two ``ask_user_question`` calls under
-``asyncio.gather``.
-"""
+"""ask_user_question — LLM asks the user 1-4 structured clarifying questions mid-turn."""
 
 from __future__ import annotations
 
@@ -36,9 +25,6 @@ class FormQuestionDict(TypedDict, total=False):
     free_text_placeholder: str | None
 
 
-# Async callable the tool delegates to. CLI provides a prompt_toolkit-backed
-# implementation; tests / SDK callers provide their own. Returns a mapping of
-# ``question_text -> answer_string`` matching the renderer's contract.
 UserAsker = Callable[[list[FormQuestionDict]], Awaitable[dict[str, str]]]
 
 
@@ -65,11 +51,6 @@ class AskUserQuestionParams(BaseModel):
 
 
 def _format_answers(answers: dict[str, str]) -> str:
-    """Render ``{question: answer}`` into the LLM-facing summary string.
-
-    Matches claude-code's ``mapToolResultToToolResultBlockParam``: a single
-    sentence the model can quote when summarizing what the user picked.
-    """
     pairs = ", ".join(f'"{q}"="{a}"' for q, a in answers.items())
     return (
         f"User has answered your questions: {pairs}. "
@@ -98,9 +79,7 @@ def _question_to_dict(q: FormQuestion) -> FormQuestionDict:
 
 
 class AskUserQuestion(BaseTool):
-    # ``UserAsker`` is a bare Callable alias — not a pydantic model — so
-    # pydantic needs permission to store it on the instance without trying to
-    # validate its internals. Same rationale as TodoWrite's ``LoopState`` slot.
+    # arbitrary_types_allowed: UserAsker is a bare Callable alias, not a pydantic model.
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     name: str = "ask_user_question"
@@ -111,10 +90,8 @@ class AskUserQuestion(BaseTool):
         "should make on your own judgment. Answers come back as a single "
         "summary string in the tool result."
     )
-    args_schema: type[BaseModel] = AskUserQuestionParams
-    # No rule_matcher / args_preview: this tool is auto-allowed via
-    # DEFAULT_ALLOW_RULES (prompting the user before letting the LLM prompt
-    # the user would be nonsense). See aura/core/permissions/defaults.py.
+    args_schema: type[BaseModel] = AskUserQuestionParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
+    # Auto-allowed: prompting before letting the LLM prompt would be nonsense.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
         is_destructive=False,
@@ -126,9 +103,6 @@ class AskUserQuestion(BaseTool):
     asker: UserAsker
 
     def _run(self, questions: list[dict[str, Any]]) -> dict[str, Any]:
-        # BaseTool marks ``_run`` abstract; we cannot ask the user from a sync
-        # context (the CLI asker awaits a prompt_toolkit Application). Force
-        # callers through the async path — the agent loop always uses ainvoke.
         raise NotImplementedError("ask_user_question is async-only; use ainvoke")
 
     async def _arun(self, questions: list[dict[str, Any]]) -> dict[str, Any]:

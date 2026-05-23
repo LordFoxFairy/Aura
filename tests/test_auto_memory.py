@@ -1,16 +1,4 @@
-"""F-03-004 — auto-memory pipeline.
-
-The model owns memory writes through the existing ``write_file`` /
-``read_file`` tools. Aura's role is:
-
-1. expose a per-project memory directory via ``Storage.memory_dir(cwd=...)``
-2. tell the model the convention via the system-prompt's ``# auto memory``
-   section (rendered when ``auto_memory_dir`` is supplied)
-3. load ``MEMORY.md`` from that directory as part of project memory so
-   future sessions see what the model previously saved
-
-These tests pin all three contracts.
-"""
+"""Auto-memory wiring: per-project dir, system-prompt section, MEMORY.md load."""
 
 from __future__ import annotations
 
@@ -136,12 +124,7 @@ def test_system_prompt_omits_memory_section_when_dir_is_none(
 def test_system_prompt_includes_memory_section_when_dir_supplied(
     tmp_path: Path,
 ) -> None:
-    """When wired with a memory dir, the prompt explains the convention.
-
-    The exact dir path lands in the prompt so the model knows where to
-    write — claude-code parity (its own auto-memory section names the
-    target directory verbatim).
-    """
+    """When wired with a memory dir, the prompt names the dir verbatim."""
     mem = tmp_path / "memory"
     prompt = build_system_prompt(cwd=tmp_path, auto_memory_dir=mem)
     assert "# auto memory" in prompt

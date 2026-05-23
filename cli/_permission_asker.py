@@ -1,11 +1,4 @@
-"""CLI ``PermissionAsker`` — translates tool prompts into form questions.
-
-Renders permission prompts through the unified :func:`cli.forms.render_form`
-widget so the permission asker, the user-question asker, and any future form
-share one keymap and one style sheet. Per-tool-family option labels follow
-claude-code: bash gets a command-prefix install, write gets a directory
-install, every other tool gets a tool-wide install.
-"""
+"""CLI ``PermissionAsker`` — renders permission prompts via the unified form widget."""
 
 from __future__ import annotations
 
@@ -33,6 +26,7 @@ _FEEDBACK_PLACEHOLDER = "Press Enter to skip, or type a note for the model…"
 # Stable labels for choice mapping; UI strings come from per-family option lists.
 _ALLOW_ONCE = "Allow once"
 _DENY = "Deny"
+
 
 
 def _bash_options(command: str) -> list[FormOptionDict]:
@@ -82,7 +76,6 @@ def _generic_options() -> list[FormOptionDict]:
 def _build_questions(
     tool: BaseTool, args: dict[str, Any],
 ) -> list[FormQuestionDict]:
-    """Return the form questions to render for this tool call."""
     if tool.name in _BASH_TOOLS:
         header = "Allow bash?"
         options = _bash_options(str(args.get("command", "") or ""))
@@ -115,11 +108,7 @@ def _translate(
     args: dict[str, Any],
     feedback: str,
 ) -> AskerResponse:
-    """Map a chosen option label to an :class:`AskerResponse`.
-
-    Bash "prefix" and write "dir" choices fall back to a tool-wide session rule
-    when the matcher can't derive a precise pattern (e.g. empty command).
-    """
+    # Bash prefix / write dir fall back to tool-wide session rule when no pattern derives.
     if label == _ALLOW_ONCE:
         return AskerResponse(choice="accept", feedback=feedback)
     if label == _DENY:
@@ -161,8 +150,6 @@ def make_cli_asker(
     *,
     timeout: float | None = None,  # noqa: ARG001 — render_form does not currently honor a timeout
 ) -> PermissionAsker:
-    """Return a ``PermissionAsker`` backed by the unified form widget."""
-
     async def _ask(
         *,
         tool: BaseTool,
@@ -188,7 +175,6 @@ def make_cli_asker(
 
 
 def print_bypass_banner(console: Console) -> None:
-    """Print the bypass-mode startup warning (spec §8.5)."""
     console.print(
         "[bold red]⚠  PERMISSION CHECKS DISABLED — "
         "all tool calls will run without asking[/bold red]",

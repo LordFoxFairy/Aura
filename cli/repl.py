@@ -29,48 +29,29 @@ from cli.render import Renderer
 InputFn = Callable[[str], Awaitable[str]]
 
 
-#: Order used by the shift+tab mode-cycle keybinding. ``bypass`` is
-#: deliberately absent — it's dangerous (allow-everything) and can only
-#: be enabled via ``--bypass-permissions`` at CLI startup, never mid-session.
+#: Shift+tab cycle — ``bypass`` excluded; only --bypass-permissions can enable it.
 _MODE_CYCLE: tuple[str, ...] = ("default", "accept_edits", "plan")
 
 
-#: Window during which a second Ctrl+C is treated as "confirm exit".
-#: Mirrors claude-code's ``DOUBLE_PRESS_TIMEOUT_MS = 800`` in
-#: ``src/hooks/useDoublePress.ts`` — fast enough that accidental double-
-#: presses don't exit, slow enough that intentional double-taps succeed.
+#: Window for the second Ctrl+C to confirm exit — tuned to reject accidental double-taps.
 _CTRL_C_DOUBLE_PRESS_SECONDS: float = 0.8
 
 
 class _CtrlCState:
-    """Shared mutable state for the Ctrl+C double-press handler.
-
-    Tracks the wall-clock time of the last bare Ctrl+C so the *second*
-    press within :data:`_CTRL_C_DOUBLE_PRESS_SECONDS` can escalate to
-    exit. One instance is allocated per REPL session (or per test
-    binding) and shared with the c-c keybinding via closure.
-    """
-
     __slots__ = ("last_press_at",)
 
     def __init__(self) -> None:
-        # Seconds since epoch. 0.0 means "no prior press", so the first
-        # comparison against ``now - last_press_at > window`` always
-        # treats the initial press as "first".
+        # 0.0 sentinel makes the first press always look "stale" to hint_active.
         self.last_press_at: float = 0.0
 
     def hint_active(self, now: float) -> bool:
-        """True iff the prior Ctrl+C landed within the double-press window."""
         return (
             self.last_press_at > 0.0
             and (now - self.last_press_at) <= _CTRL_C_DOUBLE_PRESS_SECONDS
         )
 
 
-#: Startup tips rotated on each welcome banner render. Kept as a stable
-#: module-level tuple so tests can assert membership without pulling in
-#: the random pick. Only mention features that exist today — adding dead
-#: tips teaches the user wrong reflexes. Order is not meaningful.
+#: Tips rotated on the welcome banner — must only reference shipped features.
 _STARTUP_TIPS: tuple[str, ...] = (
     "shift+tab cycles permission modes (default → accept_edits → plan)",
     "esc resets permission mode to default",
@@ -86,12 +67,7 @@ _STARTUP_TIPS: tuple[str, ...] = (
 
 
 def _cycle_mode(current: str) -> str:
-    """Advance ``current`` one step through :data:`_MODE_CYCLE`.
-
-    If ``current`` is not in the cycle (e.g. ``"bypass"``), returns it
-    unchanged — callers should check and short-circuit so the user sees
-    a clear message instead of an unexpected mode flip.
-    """
+    # Modes outside the cycle (e.g. ``bypass``) pass through unchanged.
     if current not in _MODE_CYCLE:
         return current
     idx = _MODE_CYCLE.index(current)
@@ -103,30 +79,8 @@ def _build_mode_key_bindings(
     console: Console | None,
     ctrl_c_state: _CtrlCState | None = None,
 ) -> KeyBindings:
-    """Build a KeyBindings carrying Aura's prompt-level bindings.
-
-    Bindings:
-
-    - ``s-tab`` → cycle permission mode (default → accept_edits → plan);
-      under bypass it's a silent no-op (bypass is sticky).
-    - ``escape`` → reset mode to default. **Non-eager** so the ESC prefix
-      of meta-key sequences (Alt/Meta+Enter arrives as ESC then CR) is
-      still available for the bindings below.
-    - ``escape, enter`` and ``c-j`` → insert literal ``\\n``. Together
-      these cover Alt/Meta+Enter on macOS Terminal.app + iTerm2 plus the
-      Shift+Enter→Ctrl+J remap many Linux terminals expose.
-    - ``c-c`` → three-state handler (claude-code parity with
-      ``useExitOnCtrlCD.ts`` + ``useDoublePress.ts``):
-      buffer non-empty → clear; bare first press → arm the
-      double-press window; bare second press within
-      :data:`_CTRL_C_DOUBLE_PRESS_SECONDS` → raise ``KeyboardInterrupt``.
-
-    Plain Enter keeps its pt default "accept-line"; we deliberately do
-    NOT set ``multiline=True`` on the session. ``console`` is reserved
-    in the signature for future bindings that need out-of-band output.
-    """
     kb = KeyBindings()
-    del console  # reserved in signature for future bindings; see docstring.
+    del console  # reserved for future bindings.
     state = ctrl_c_state if ctrl_c_state is not None else _CtrlCState()
 
     @kb.add("s-tab")
@@ -140,7 +94,6 @@ def _build_mode_key_bindings(
     @kb.add("escape")
     def _(event: Any) -> None:
         # Non-eager so meta-key sequences (escape, enter) still match.
-        # Bypass mode is sticky for the whole session by design.
         if agent.mode == "bypass" or agent.mode == "default":
             return
         agent.set_mode("default")
@@ -156,22 +109,17 @@ def _build_mode_key_bindings(
 
     @kb.add("c-c")
     def _(event: Any) -> None:
-        """Claude-code-style Ctrl+C: clear / arm / exit (no data loss)."""
+        # Three-state: text → clear; bare first → arm; bare second within window → exit.
         buffer = event.current_buffer
         now = time.monotonic()
         if buffer.text:
-            # Case 1: text present → discard it. Don't reset the
-            # double-press timer — clearing input IS a deliberate
-            # use of Ctrl+C, not a bid to exit.
             buffer.reset()
             event.app.invalidate()
             return
         if state.hint_active(now):
-            # Case 3: second bare Ctrl+C within the window → EXIT.
             state.last_press_at = 0.0
             event.app.exit(exception=KeyboardInterrupt())
             return
-        # Case 2: first bare Ctrl+C — arm the double-press window.
         state.last_press_at = now
         event.app.invalidate()
 
@@ -183,19 +131,7 @@ def _build_prompt_session(
     agent: Agent | None = None,
     console: Console | None = None,
 ) -> PromptSession[str]:
-    """Construct a PromptSession wired with history and slash-completion.
-
-    - ``FileHistory`` at ``~/.aura/history`` → up-arrow cycles across sessions.
-    - ``search_ignore_case=True`` → Ctrl+R reverse search, case-insensitive.
-    - ``SlashCommandCompleter`` with a live registry getter → Skill / MCP
-      commands registered after PromptSession construction still complete.
-    - ``complete_while_typing=True`` → menu pops the moment the user types
-      ``/`` (the completer filters by leading slash so prose never triggers).
-
-    ``agent=None`` skips installing Aura-specific keybindings (mode cycle /
-    Ctrl+C double-press) — keeps the function usable in tests that only
-    exercise history + completion wiring.
-    """
+    # ``agent=None`` skips Aura-specific bindings so history+completion tests can reuse this.
     history = FileHistory(str(resolve_history_path()))
     completer = SlashCommandCompleter(lambda: registry)
     key_bindings = (
@@ -236,16 +172,10 @@ async def run_repl_async(
     renderer = Renderer(_console)
     registry = build_default_registry(agent=agent)
 
-    # Wall-clock duration of the most recent turn. Kept in a single-element
-    # list so a future status-line surface can sample it without changing
-    # the closure shape; today only the post-turn "done · 1.2s" line reads it.
+    # Single-element list so a future status-line can sample without changing closure shape.
     last_turn_seconds: list[float] = [0.0]
 
-    # Resolution order for the input function:
-    # 1. Explicit ``input_fn`` override (tests / non-interactive callers).
-    # 2. If stdin is a TTY, build a PromptSession (history, completion, Ctrl+R).
-    # 3. Otherwise fall back to plain ``input()`` so piped / dumb terminals
-    #    don't hang waiting on a prompt_toolkit renderer they can't drive.
+    # Non-TTY paths fall back to plain input() — pt renderer can't drive a dumb terminal.
     if input_fn is not None:
         _input: InputFn = input_fn
     elif sys.stdin.isatty():
@@ -261,9 +191,7 @@ async def run_repl_async(
 
     _print_welcome(agent, _console)
 
-    # In bypass mode the startup banner scrolls off after a few turns;
-    # encode bypass into the prompt string so every line reminds the user
-    # they're in "allow-everything" mode.
+    # Encode bypass into the prompt so every line reminds the user it's allow-everything.
     prompt_str = "\x1b[31maura[!bypass]>\x1b[0m " if bypass else "aura> "
 
     while True:
@@ -274,9 +202,7 @@ async def run_repl_async(
             _console.print()
             return
 
-        # Empty / whitespace-only input: reprompt silently. Sending an empty
-        # HumanMessage to the model always 400s (providers reject empty user
-        # turns), so it's a pure UX nuisance to round-trip it.
+        # Providers 400 on empty HumanMessage — re-prompt instead of round-tripping.
         if not line.strip():
             continue
 
@@ -293,8 +219,6 @@ async def run_repl_async(
                 journal.write("repl_exit", reason="slash_exit")
                 return
             if result.kind == "view":
-                # Modal-style display: wrap text in a framed panel and
-                # block until the user hits Enter.
                 _render_view(_console, result.text)
                 continue
             if result.text:
@@ -305,12 +229,7 @@ async def run_repl_async(
             last_turn_seconds[0] = await _run_turn(
                 agent, line, renderer, _console,
             )
-        except Exception as exc:  # noqa: BLE001 — REPL resilience
-            # Don't catch BaseException: KeyboardInterrupt/SystemExit/
-            # CancelledError must still propagate up to main() so the
-            # whole process can exit cleanly. But a network hiccup, an
-            # LLM client bug, or a provider 500 should NOT tear down the
-            # user's interactive session.
+        except Exception as exc:  # noqa: BLE001 — REPL resilience; BaseException still propagates.
             journal.write(
                 "turn_failed",
                 detail=f"{type(exc).__name__}: {exc}",
@@ -319,50 +238,30 @@ async def run_repl_async(
                 f"[red]turn failed: {type(exc).__name__}: {exc}[/red]"
             )
 
-        # Post-turn status checkpoint — a single dim "done · 1.2s" line.
         _print_post_turn_status(agent, _console, last_turn_seconds[0])
-
-        # V14 — when the user has /team-entered a team, print a thin
-        # status line between prompts so the active context stays visible.
         _print_active_team_status(agent, _console)
 
         if verbose:
             _print_verbose_summary(agent, _console)
 
 
-#: Frame set for the leading glyph on the welcome banner. Palindromic so the
-#: animation bounces rather than resets. Matches claude-code's darwin spinner
-#: glyph family (``src/components/Spinner/utils.ts::getDefaultCharacters``)
-#: for visual continuity between startup banner and any future in-turn
-#: animation that wants the same vocabulary.
+#: Palindromic so the welcome animation bounces rather than resets.
 _BANNER_SPINNER_FRAMES: tuple[str, ...] = (
     "·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢",
 )
-#: Total on-screen time for the welcome animation.
 _BANNER_ANIMATION_SECONDS: float = 1.2
 _BANNER_FRAME_INTERVAL: float = 0.12
-#: The glyph the banner SETTLES on after animation — the ``✱`` matches the
-#: wordmark we've shipped since v0.1 and renders cleanly in every terminal.
 _BANNER_SETTLE_GLYPH: str = "✱"
 
 
 def _render_view(console: Console, text: str) -> None:
-    """Render a ``kind="view"`` command output as a modal-style panel.
-
-    Wraps ``text`` in a dim-bordered :class:`rich.panel.Panel`, then blocks
-    on ``console.input`` until the user hits Enter (or Ctrl+C / Ctrl+D —
-    both dismiss silently). Empty ``text`` is valid: commands that already
-    emitted their own output still want the "press Enter" pause.
-    """
     stripped = text.strip("\n")
     if stripped:
         console.print(Panel(stripped, border_style="dim", padding=(0, 1)))
     try:
         console.input("[dim](press Enter to continue) [/dim]")
     except (EOFError, KeyboardInterrupt, OSError):
-        # Silent dismiss — Ctrl+C / Ctrl+D should not crash the REPL.
-        # ``OSError``: pytest capture wraps stdin with a reader that
-        # raises on read during non-interactive runs.
+        # OSError covers pytest's capturing stdin that raises on non-interactive runs.
         console.print()
 
 
@@ -391,13 +290,7 @@ def _render_welcome_panel(agent: Agent, glyph: str) -> Panel:
 
 
 def _print_welcome(agent: Agent, console: Console) -> None:
-    """Print the startup welcome panel.
-
-    The leading glyph animates through a spinner-style frame set for a
-    brief window after launch, then settles on ``✱``. Non-TTY callers
-    (``console.is_terminal == False``) short-circuit the animation and
-    print the settled banner directly so StringIO tests still pass.
-    """
+    # Non-TTY callers short-circuit the spinner animation.
     if not console.is_terminal:
         console.print(_render_welcome_panel(agent, _BANNER_SETTLE_GLYPH))
         return
@@ -419,7 +312,6 @@ def _print_welcome(agent: Agent, console: Console) -> None:
             _time.sleep(_BANNER_FRAME_INTERVAL)
             frame = _BANNER_SPINNER_FRAMES[i % len(_BANNER_SPINNER_FRAMES)]
             live.update(_render_welcome_panel(agent, frame))
-        # Final settle frame: wordmark ✱.
         _time.sleep(_BANNER_FRAME_INTERVAL)
         live.update(_render_welcome_panel(agent, _BANNER_SETTLE_GLYPH))
 
@@ -436,11 +328,7 @@ def _print_verbose_summary(agent: Agent, console: Console) -> None:
 def _print_post_turn_status(
     agent: Agent, console: Console, last_turn_seconds: float = 0.0,
 ) -> None:
-    """Print a minimal turn-end checkpoint in the scrollback.
-
-    Shape: a single dim line, ``done`` + elapsed time. Nothing else.
-    """
-    del agent  # reserved — future per-agent decorations
+    del agent  # reserved for future per-agent decorations
     text = Text("done", style="dim")
     if last_turn_seconds > 0:
         if last_turn_seconds < 60:
@@ -452,7 +340,6 @@ def _print_post_turn_status(
 
 
 def _print_active_team_status(agent: Agent, console: Console) -> None:
-    """Print a one-line ``· in team: <name> ·`` reminder when active."""
     active_id = agent.state.slots.active_team
     if not active_id:
         return
@@ -468,21 +355,12 @@ def _print_active_team_status(agent: Agent, console: Console) -> None:
 async def _run_turn(
     agent: Agent, prompt: str, renderer: Renderer, console: Console,
 ) -> float:
-    """Run one turn end-to-end; return its wall-clock duration in seconds.
-
-    The renderer's normal event stream is the sole feedback surface —
-    no spinner, no attachments preprocessing, no bottom toolbar.
-    Cancel / KeyboardInterrupt mid-stream cleanly cancels the underlying
-    astream task without surfacing a traceback to the REPL loop.
-    """
-    del console  # reserved — future per-turn console hooks
+    del console  # reserved for future per-turn console hooks
 
     async def _stream() -> None:
         async for event in agent.astream(prompt):
+            # Wire-format compact dicts are silent for the CLI renderer (dataclass-only).
             if isinstance(event, dict):
-                # Phase 4 Task 4 — wire-format compact events flow
-                # alongside typed AgentEvent. The CLI renderer is
-                # dataclass-only; compact lifecycle is silent here.
                 continue
             renderer.on_event(event)
         renderer.finish()

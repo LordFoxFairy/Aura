@@ -1,4 +1,4 @@
-"""Tests for aura.core.agent.Agent and build_agent."""
+"""Agent and ``build_agent`` contracts."""
 
 from __future__ import annotations
 
@@ -85,18 +85,7 @@ async def test_astream_yields_final_and_persists_on_success(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_astream_persists_user_turn_on_cancellation(tmp_path: Path) -> None:
-    """G1 contract: the user's HumanMessage persists BEFORE the model call.
-
-    Earlier contract (pre-G1) was "cancellation never persists" so the
-    post-turn save was the only persistence site. That lost the user's
-    input on Ctrl-C / kill mid-stream and broke ``resume`` semantics
-    (claude-code's QueryEngine saves the transcript pre-invoke; Aura
-    audit B2/G1 closed the gap). Now: cancellation preserves prior
-    history + the user's new turn, so the next session-resume sees
-    exactly what the user typed. The assistant response does NOT land
-    (the turn never reached a model reply), which is the correct
-    per-claude-code semantics for an interrupted round.
-    """
+    """Cancellation persists the user turn but not an assistant reply."""
     storage = _storage(tmp_path)
     prior: list[BaseMessage] = [HumanMessage(content="prev"), AIMessage(content="prior")]
     storage.save("default", prior)
@@ -290,14 +279,7 @@ def test_unknown_tool_name_in_config_raises_AuraConfigError(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_state_turn_count_resets_per_astream_call(tmp_path: Path) -> None:
-    """F-01-003 / Bug 2 — turn_count is per-user-turn, not lifetime.
-
-    Pre-fix this asserted accumulation; the per-Agent-lifetime counter
-    silently shrunk the per-prompt budget after every prior astream
-    call so a long prior session would pre-trip max_turns. Now
-    ``Agent.astream`` zeroes the counter at entry, matching claude-code's
-    local ``turnCount = 1`` initialisation.
-    """
+    """``turn_count`` is per-astream-call so prior turns don't shrink the budget."""
     agent = _agent(
         tmp_path,
         turns=[
@@ -1122,9 +1104,7 @@ async def test_agent_skills_loaded_at_init_from_cwd_and_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _chdir(monkeypatch, tmp_path)
-    # Two layers: user-layer skill in fake HOME, project-layer skill in cwd.
-    # Directory-per-skill layout (claude-code v2.1.88 compatible) — plain
-    # .md files at the top of .aura/skills/ are no longer loaded.
+    # Two layers (user / project), dir-per-skill only — top-level .md ignored.
     home = tmp_path / "_fake_home"
     (home / ".aura" / "skills" / "user-skill").mkdir(parents=True, exist_ok=True)
     (home / ".aura" / "skills" / "user-skill" / "SKILL.md").write_text(
@@ -1139,9 +1119,7 @@ async def test_agent_skills_loaded_at_init_from_cwd_and_home(
 
     agent = _agent(tmp_path, turns=[])
     names = {s.name for s in agent._skill_registry.list()}
-    # Bundled skills (verify / simplify / code-review) load alongside user
-    # + project layers in v0.18.x (F-0910-011). Assert user/project layers
-    # land in the registry; bundled set is fixed and orthogonal.
+    # Bundled set is fixed and orthogonal to user/project layers.
     assert {"user-skill", "proj-skill"} <= names
     assert {"verify", "simplify", "code-review"} <= names
     await agent.aclose()

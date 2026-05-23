@@ -1,8 +1,4 @@
-"""Async retry with exponential backoff + jitter for transient LLM errors.
-
-Wraps one awaitable (the ``model.ainvoke`` site in :class:`AgentLoop`).
-Tool retries are intentionally excluded.
-"""
+"""Async exponential-backoff retry for transient LLM errors at the ``ainvoke`` site."""
 
 from __future__ import annotations
 
@@ -15,7 +11,7 @@ from aura.infrastructure.persistence import journal
 
 T = TypeVar("T")
 
-# Matched by class name (no SDK imports). Covers openai + anthropic.
+# Class-name match — no SDK imports needed; covers openai + anthropic.
 _RETRIABLE_CLASS_NAMES: frozenset[str] = frozenset({
     "RateLimitError",
     "ServiceUnavailableError",
@@ -25,8 +21,7 @@ _RETRIABLE_CLASS_NAMES: frozenset[str] = frozenset({
     "ConflictError",
 })
 
-# Takes precedence over substring matching — an auth error message can
-# include "timeout" ("request timed out waiting for authentication").
+# Wins over substring match — auth errors may contain "timeout" in their prose.
 _NON_RETRIABLE_CLASS_NAMES: frozenset[str] = frozenset({
     "AuthenticationError",
     "BadRequestError",
@@ -42,7 +37,7 @@ _RETRIABLE_SUBSTRINGS: tuple[str, ...] = (
     "502",
     "503",
     "504",
-    "509",  # DashScope server overloaded
+    "509",  # DashScope overloaded
     "timeout",
     "connection",
     "overloaded",
@@ -52,15 +47,13 @@ _RETRIABLE_SUBSTRINGS: tuple[str, ...] = (
     "service unavailable",
 )
 
-# Substring-match on rendered exception text — catches localized SDK
-# messages where prose is translated but the code field stays stable.
+# Catches localized SDK prose where text is translated but the code field is stable.
 _RETRIABLE_CODES: tuple[str, ...] = (
     "1001",  # GLM system busy
     "1002",  # GLM rate limit
-    "1003",  # DashScope throttled (1261 is overflow, NOT retriable)
+    "1003",  # DashScope throttled — note 1261 is overflow, NOT retriable
 )
 
-# Tight permanent-failure list — wins over retriable matches.
 _NON_RETRIABLE_SUBSTRINGS: tuple[str, ...] = (
     "invalid api key",
     "invalid_api_key",
@@ -74,7 +67,6 @@ _NON_RETRIABLE_SUBSTRINGS: tuple[str, ...] = (
 
 
 def _is_retriable(exc: BaseException) -> bool:
-    """CancelledError never retries → deny-list → allow-list → msg-deny → msg-allow → False."""
     if isinstance(exc, asyncio.CancelledError):
         return False
     cls_name = type(exc).__name__
@@ -82,7 +74,7 @@ def _is_retriable(exc: BaseException) -> bool:
         return False
     if cls_name in _RETRIABLE_CLASS_NAMES:
         return True
-    # Surround with spaces so " 401 " matches at boundaries.
+    # Pad with spaces so " 401 " hits at word boundaries, not inside other digits.
     raw = str(exc)
     msg = f" {raw.lower()} "
     if any(sub in msg for sub in _NON_RETRIABLE_SUBSTRINGS):
@@ -95,12 +87,11 @@ def _is_retriable(exc: BaseException) -> bool:
     return False
 
 
-# Even "wait 2 hours" is capped at 5 min so a misbehaving server can't park forever.
+# Cap "wait N hours" hints so a misbehaving server can't park the agent forever.
 _RETRY_AFTER_MAX_S: float = 300.0
 
 
 def _extract_retry_after(exc: BaseException) -> float | None:
-    """Server-suggested delay (seconds) from ``Retry-After`` header or SDK fields."""
     response = getattr(exc, "response", None)
     headers = getattr(response, "headers", None)
     if headers is not None:
@@ -133,7 +124,6 @@ def _extract_retry_after(exc: BaseException) -> float | None:
 def _compute_delay(
     attempt: int, *, base: float, cap: float, jitter: bool,
 ) -> float:
-    """Exponential backoff. ``attempt`` is 0-indexed; jitter adds ≤0.5s noise."""
     delay: float = base * (2 ** attempt)
     if jitter:
         delay += random.uniform(0, 0.5)
@@ -149,11 +139,7 @@ async def with_retry(
     jitter: bool = True,
     retriable: Callable[[BaseException], bool] = _is_retriable,
 ) -> T:
-    """Call ``fn()`` with backoff on transient errors.
-
-    Cancellation always propagates. Non-retriable errors propagate
-    immediately. ``max_attempts=1`` disables retries.
-    """
+    """Call ``fn()`` with backoff; cancellation propagates, ``max_attempts=1`` disables retries."""
     if max_attempts < 1:
         raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
 
@@ -185,7 +171,6 @@ async def with_retry(
                 reason=type(exc).__name__,
                 retry_after_source="header" if header_wait is not None else "backoff",
             )
-            # asyncio.sleep raises CancelledError on task cancel — propagate.
             await asyncio.sleep(wait)
 
     assert last_exc is not None

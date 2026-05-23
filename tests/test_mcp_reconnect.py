@@ -1,22 +1,4 @@
-"""Tests for MCPManager's auto-reconnect + per-op timeout resilience layers.
-
-These scenarios exercise the two gaps closed by the D-audit bundle:
-
-- **Auto-reconnect** (gap #1): remote-transport disconnects schedule an
-  exponential-backoff retry loop (1s, 2s, 4s, 8s, 16s — capped at 60s,
-  max 5 attempts) that mirrors ``useManageMCPConnections.ts`` in
-  claude-code v2.1.88. Stdio servers intentionally skip the retry path —
-  a dead subprocess is user-visible and backoff won't heal it.
-
-- **Per-op timeout** (gap #4): client-facing MCP calls run under
-  :func:`asyncio.wait_for`; a stalled server surfaces a descriptive
-  :class:`RuntimeError` instead of wedging the agent loop.
-
-All tests monkeypatch ``asyncio.sleep`` where backoff pauses would
-otherwise slow the suite, and patch ``MultiServerMCPClient`` to avoid
-spinning real transports. See ``test_mcp_manager.py`` for the
-happy-path coverage these build on.
-"""
+"""MCPManager auto-reconnect (exponential backoff) and per-op timeout."""
 
 from __future__ import annotations
 

@@ -1,14 +1,4 @@
-"""系统提示组装 —— 身份 + 环境。工具通过 bind_tools 注入；记忆由 Context 处理。
-
-Round 3A-extended ``<env>`` block: working dir + platform + Python +
-date and (when discoverable) git branch and dirty/clean state. The
-git probe is best-effort: a 1-second wall-clock timeout, no shell
-spawn beyond ``git status --porcelain=v1 -b``, fail-open silently
-when ``git`` is missing or the directory isn't a repo. Knowledge-
-cutoff hints are indexed by model spec via :data:`KNOWLEDGE_CUTOFFS`
-— callers pass ``model_spec=`` to surface the right line; unknown
-specs simply omit the line.
-"""
+"""Identity + `<env>` block for the SystemMessage."""
 
 from __future__ import annotations
 
@@ -17,11 +7,6 @@ import platform
 import subprocess
 from pathlib import Path
 
-#: Knowledge-cutoff lookup keyed by model spec / family. Lookups try
-#: an exact match first, then progressively shorter prefixes — so
-#: ``anthropic:claude-opus-4-7`` resolves via the ``claude-opus-4-7``
-#: row even when the provider tag is included. Values are ``YYYY-MM``
-#: strings; absence of an entry means "don't render the line".
 KNOWLEDGE_CUTOFFS: dict[str, str] = {
     "claude-opus-4-7": "2026-01",
     "claude-opus-4-6": "2025-09",
@@ -33,9 +18,7 @@ KNOWLEDGE_CUTOFFS: dict[str, str] = {
     "gpt-5": "2025-09",
 }
 
-#: Wall-clock cap for the git status probe. The block must not
-#: bottleneck startup on a slow / network-mounted repo, so anything
-#: that runs >1s is treated as "unavailable" and the line is omitted.
+# Slow / network-mounted repos must not bottleneck startup.
 _GIT_TIMEOUT_SECONDS: float = 1.0
 
 
@@ -58,16 +41,6 @@ def build_system_prompt(
 
 
 def _auto_memory_section(memory_dir: Path) -> str:
-    """F-03-004 — explain the auto-memory convention to the model.
-
-    The model reads + writes memory files via the existing ``write_file``
-    / ``read_file`` tools; this prompt section names the directory and
-    conventions so the model knows where to put a recall and what types
-    of memory to capture. Mirrors claude-code's auto-memory instructions
-    almost verbatim — the file layout (one .md per memory + a top-level
-    ``MEMORY.md`` index) is identical so users moving between the two
-    have a uniform mental model.
-    """
     return (
         "# auto memory\n\n"
         f"You have a persistent, file-based memory system at `{memory_dir}/`. "
@@ -162,31 +135,17 @@ def _environment_section(
 
 
 def _lookup_cutoff(model_spec: str) -> str | None:
-    """Resolve ``model_spec`` to a knowledge-cutoff hint or ``None``.
-
-    Tries an exact match, then strips a leading provider tag
-    (``"anthropic:"``, ``"openai:"``, …), then drops trailing version
-    suffixes one-by-one. Mirrors the lookup pattern claude-code uses
-    for its own banner — robust against ``provider:family-variant``
-    naming without exploding the table.
-    """
     if not model_spec:
         return None
     direct = KNOWLEDGE_CUTOFFS.get(model_spec)
     if direct:
         return direct
+    # Strip leading "provider:" tag (e.g. "anthropic:claude-opus-4-7").
     tail = model_spec.split(":", 1)[-1]
     return KNOWLEDGE_CUTOFFS.get(tail)
 
 
 def _git_status_line(cwd: Path) -> str | None:
-    """Probe ``git status --porcelain=v1 -b`` and render a single line.
-
-    Returns a string like ``"git: main (clean)"`` or ``"git: main (dirty)"``
-    when the probe succeeds; ``None`` otherwise (no git, not a repo,
-    timeout, OS error). Stderr is squashed — this is best-effort
-    metadata, not a primary tool path.
-    """
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain=v1", "-b"],
@@ -206,8 +165,7 @@ def _git_status_line(cwd: Path) -> str | None:
     branch = "?"
     first = lines[0]
     if first.startswith("## "):
-        # Possible forms: "## main", "## main...origin/main",
-        # "## HEAD (no branch)".
+        # Forms: "## main", "## main...origin/main", "## HEAD (no branch)".
         branch_part = first[3:].split("...", 1)[0].strip()
         if branch_part:
             branch = branch_part

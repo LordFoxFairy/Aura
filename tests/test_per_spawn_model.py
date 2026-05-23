@@ -1,18 +1,4 @@
-"""Per-spawn model override (axis 18 — claude-code parity).
-
-These tests pin the contract that ``task_create(model="...")`` overrides
-the parent's inherited model for THIS subagent only, and that
-``model=None`` (the default) inherits the parent. The TaskRecord
-remembers the resolved spec so ``task_get`` / ``task_list`` can show
-which model the child actually ran on.
-
-Strategy: stub ``llm._load_class`` so ``make_model_for_spec`` returns a
-recognisable shim instead of hitting a real SDK. The tests assert the
-spec string was routed correctly + the TaskRecord persists it. The
-existing model_factory injection path (FakeChatModel) is exercised
-elsewhere; here we deliberately use the resolve path so we can observe
-which spec was passed in.
-"""
+"""``task_create(model=...)`` overrides this subagent's model; ``None`` inherits."""
 
 from __future__ import annotations
 

@@ -1,10 +1,4 @@
-"""``/team`` slash commands — team lifecycle + view UX from the REPL.
-
-One slash command dispatches on the first whitespace-delimited token
-(verb-based form). Active team pointer lives on
-``state.slots.active_team`` (stored as a slug, not a display name);
-``Agent.clear_session`` resets it.
-"""
+"""``/team`` REPL surface; ``state.slots.active_team`` holds the slug; ``clear_session`` resets."""
 
 from __future__ import annotations
 
@@ -28,7 +22,6 @@ if TYPE_CHECKING:
 
 
 def _set_active_team(agent: Agent, team_id: str | None) -> None:
-    """Single writer onto :attr:`LoopState.slots.active_team`."""
     agent.state.slots = dataclasses.replace(
         agent.state.slots, active_team=team_id,
     )
@@ -68,21 +61,16 @@ Recipients: a member name, the literal 'leader', or 'broadcast'.
 
 _TEAMMATE_TAIL_CAP: int = 50
 
-# Must stay in sync with :data:`BackendType`; we validate here so a typo
-# surfaces a friendly hint instead of bouncing through ``BackendUnavailable``.
+# Mirrors :data:`BackendType`; local check hints on typo before BackendUnavailable would raise.
 _VALID_BACKENDS: tuple[str, ...] = ("in_process", "pane")
 
 
 class _AddUsageError(ValueError):
-    """Pre-manager usage error from :func:`_parse_add_args`."""
+    pass
 
 
 def _parse_add_args(rest: str) -> tuple[list[str], BackendType]:
-    """Split ``/team add`` args into ``(positional, backend_type)``.
-
-    ``--backend <kind>`` may appear anywhere; positional args keep their
-    original ``name [agent_type] [model]`` order.
-    """
+    """Split ``/team add`` args; ``--backend <kind>`` may appear anywhere, positional order kept."""
     tokens = rest.split()
     backend_type: BackendType = "in_process"
     positional: list[str] = []
@@ -110,16 +98,15 @@ def _parse_add_args(rest: str) -> tuple[list[str], BackendType]:
 
 
 def _ensure_manager(agent: Agent) -> TeamManager | None:
-    """Return the agent's TeamManager, creating one on first call."""
     existing = getattr(agent, "_team_manager", None)
     if existing is not None:
         return existing  # type: ignore[no-any-return]  # fake returns Any from __dict__
     mgr = TeamManager(
         leader=agent,
         storage=agent.storage,
-        factory=agent._subagent_factory,
-        running_aborts=agent._running_aborts,
-        tasks_store=agent._tasks_store,
+        factory=agent.subagent_factory,
+        running_aborts=agent.running_aborts,
+        tasks_store=agent.tasks_store,
     )
     agent._team_manager = mgr  # type: ignore[attr-defined]  # test sets attribute mypy can't see
     return mgr
@@ -128,11 +115,7 @@ def _ensure_manager(agent: Agent) -> TeamManager | None:
 def _resolve_team_id(
     *, name: str, manager: TeamManager, agent: Agent,
 ) -> str | None:
-    """Resolve a user-typed team handle to its stored slug.
-
-    Precedence: live team match first → exact slug on disk → display name
-    on disk (the last hits ``config.json`` only when both prior checks miss).
-    """
+    """Resolve handle to slug; precedence: live team -> disk slug -> disk display name."""
     live = manager.team
     if live is not None and (name == live.team_id or name == live.name):
         return live.team_id
@@ -154,10 +137,7 @@ def _resolve_team_id(
 
 
 def _format_age(now: float, then: float | None) -> str:
-    """Return a compact "X ago" string (``Ns`` / ``Nm`` / ``Nh`` / ``Nd``).
-
-    ``None`` yields ``"-"`` so the caller can table-align.
-    """
+    """Compact ``Ns``/``Nm``/``Nh``/``Nd`` ago; ``None`` -> ``"-"`` for table alignment."""
     if then is None:
         return "-"
     delta = max(0.0, now - then)
@@ -171,12 +151,7 @@ def _format_age(now: float, then: float | None) -> str:
 
 
 def _render_view(snap: TeamViewSnapshot) -> str:
-    """Plain-text render of a :class:`TeamViewSnapshot`.
-
-    Members table → recent messages → stats summary → footer hint. Plain
-    text (not rich.Table) keeps the REPL's view renderer free of escape
-    juggling; fixed column widths stay stable across name lengths.
-    """
+    """Plain-text TeamViewSnapshot; fixed-width columns avoid view-renderer escape juggling."""
     now = time.time()
     lines: list[str] = []
     lines.append(f"team: {snap.name} (id={snap.team_id})")
@@ -226,12 +201,7 @@ def _render_view(snap: TeamViewSnapshot) -> str:
 def _render_teammate(
     *, member: str, team_id: str, lines: list[str], cap: int,
 ) -> str:
-    """Render up to ``cap`` tail lines of ``member``'s transcript.
-
-    Transcript line shape: ``<unix-ts> <EventName> [Final body...]``.
-    Malformed lines pass through verbatim — this is a debug surface,
-    not the source of truth.
-    """
+    """Render up to ``cap`` tail lines; malformed lines pass through (debug surface)."""
     out: list[str] = []
     out.append(f"transcript: {member} (team={team_id})")
     out.append(f"showing last {len(lines)} of {cap} max")
@@ -264,7 +234,6 @@ def _render_teammate(
 def _read_transcript_tail(
     storage: SessionStorage, team_id: str, member: str, cap: int,
 ) -> list[str]:
-    """Return the last ``cap`` lines of ``member``'s transcript, or ``[]``."""
     path = storage.team_transcript_path(team_id, member)
     if not path.exists():
         return []
@@ -277,8 +246,6 @@ def _read_transcript_tail(
 
 
 class TeamCommand:
-    """``/team`` — one slash entry, dispatch by subcommand verb."""
-
     name = "/team"
     description = (
         "team lifecycle (create/list/enter/leave/view/teammate/"
@@ -406,8 +373,7 @@ class TeamCommand:
             tid = mgr.team.team_id
             mgr.delete_team()
             agent.leave_team()
-            # Drop the active-team pointer; otherwise the next render hits
-            # "team not found" on a slot pointing at a deleted folder.
+            # Drop active-team slot or next render hits "team not found" on a deleted folder.
             _set_active_team(agent, None)
             return f"team {tid!r} deleted", "print"
         return f"unknown subcommand {verb!r} — try /team help", "print"
@@ -415,12 +381,7 @@ class TeamCommand:
     async def _enter(
         self, agent: Agent, mgr: TeamManager, rest: str,
     ) -> tuple[str, str]:
-        """Set the named team as the REPL's active team.
-
-        Auto-joins the leader only when the resolved team is the manager's
-        live team. Off-record teams set the pointer + hint that ``/team
-        create`` is needed before ``/team add`` / ``send`` work.
-        """
+        """Auto-join only when resolved team is the live one; off-record just sets pointer."""
         if not rest:
             return "usage: /team enter <name>", "print"
         team_id = _resolve_team_id(name=rest, manager=mgr, agent=agent)
@@ -440,7 +401,6 @@ class TeamCommand:
         return f"entered team {rest!r} (id={team_id}){joined_msg}", "print"
 
     def _leave(self, agent: Agent, mgr: TeamManager) -> tuple[str, str]:
-        """Clear the active-team pointer and detach the leader."""
         prev = agent.state.slots.active_team
         _set_active_team(agent, None)
         joined = agent.team is not None
@@ -454,7 +414,6 @@ class TeamCommand:
     def _view(
         self, agent: Agent, mgr: TeamManager, rest: str,
     ) -> tuple[str, str]:
-        """Render a TeamViewSnapshot. ``rest`` overrides the active-team slot."""
         if rest:
             target_team_id = _resolve_team_id(name=rest, manager=mgr, agent=agent)
             if target_team_id is None:
@@ -472,7 +431,6 @@ class TeamCommand:
     def _teammate(
         self, agent: Agent, mgr: TeamManager, rest: str,
     ) -> tuple[str, str]:
-        """Render the last ``_TEAMMATE_TAIL_CAP`` transcript entries for ``rest``."""
         if not rest:
             return "usage: /team teammate <member>", "print"
         member = rest.split()[0]

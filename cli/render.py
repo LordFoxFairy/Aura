@@ -16,7 +16,6 @@ from rich.text import Text
 from aura.schemas.events import (
     AgentEvent,
     AssistantDelta,
-    Final,
     PermissionAudit,
     ToolCallCompleted,
     ToolCallProgress,
@@ -124,21 +123,19 @@ class Renderer:
                     if total_lines > _FOLD_THRESHOLD:
                         _render_folded(self._console, fold_text)
             return
-        if isinstance(event, Final):
-            if self._pending_tool is not None:
-                self._flush_pending_tool_as_running()
-            reason = getattr(event, "reason", "natural")
-            if reason == "aborted":
-                self._console.print(Text(" cancelled by user", style="dim"))
-            elif reason == "max_turns":
-                self._console.print(Text(" max turns reached", style="dim"))
-            elif reason == "length_recovery_exhausted":
-                self._console.print(Text(
-                    " ⚠ output truncated by max_output_tokens after 3 retries"
-                    " — try /retry",
-                    style="yellow",
-                ))
-            return
+        if self._pending_tool is not None:
+            self._flush_pending_tool_as_running()
+        reason = event.reason
+        if reason == "aborted":
+            self._console.print(Text(" cancelled by user", style="dim"))
+        elif reason == "max_turns":
+            self._console.print(Text(" max turns reached", style="dim"))
+        elif reason == "length_recovery_exhausted":
+            self._console.print(Text(
+                " ⚠ output truncated by max_output_tokens after 3 retries"
+                " — try /retry",
+                style="yellow",
+            ))
 
     def finish(self) -> None:
         self._flush_pending()

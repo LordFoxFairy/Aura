@@ -1,15 +1,8 @@
 """Permission PreToolHook — gates every tool call (spec §5).
 
-Decision order, short-circuits at first match:
-  0. restrict-tools lease — whitelist override fires first.
-  0.5 deny rules — bypass-immune.
-  1. mode=bypass → allow.
-  2. Safety — path tools w/ ``args["path"]``.
-  3. mode=plan → dry-run deny unless tool is in plan-mode allow-list.
-  4. mode=accept_edits → auto-allow edit-family tools.
-  4.5 ask rules — force prompt.
-  5. Rule match — project then session.
-  6. Ask — per-turn dedup, then user.
+Decision order (short-circuit at first match): restrict-tools lease → deny rules →
+mode=bypass → safety → mode=plan → mode=accept_edits → ask rules → rule match
+(project then session) → ask (per-turn dedup, then user).
 """
 
 from __future__ import annotations

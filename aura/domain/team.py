@@ -1,10 +1,4 @@
-"""Pydantic models for team state.
-
-``TeamRecord`` is the on-disk source of truth (``config.json``);
-``TeammateMember`` describes one teammate; ``TeamMessage`` is one mailbox
-JSONL line. Bodies cap at 4 KB so the POSIX append stays within the
-write(2) atomicity floor across kernels.
-"""
+"""Team state models. Body cap = 4 KB to stay under POSIX write(2) atomicity."""
 
 from __future__ import annotations
 
@@ -20,14 +14,11 @@ BROADCAST_RECIPIENT: str = "broadcast"
 
 TeamMessageKind = Literal["text", "shutdown_request", "shutdown_response"]
 
-# ``"in_process"`` = asyncio task on the leader's loop;
-# ``"pane"`` = subprocess inside a tmux pane (requires $TMUX + tmux on PATH).
+# in_process = asyncio task on leader loop; pane = tmux subprocess.
 BackendType = Literal["in_process", "pane"]
 
 
 class TeammateMember(BaseModel):
-    """One member entry inside :class:`TeamRecord`."""
-
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=64)
@@ -37,18 +28,13 @@ class TeammateMember(BaseModel):
     created_at: float = Field(default_factory=time.time)
     is_active: bool = True
     backend_type: BackendType = "in_process"
-    # Populated by the pane backend at spawn (``%<int>`` from tmux);
-    # ``None`` for in-process members.
+    # %<int> from tmux for pane backend; None for in_process.
     tmux_pane_id: str | None = None
 
 
 class TeamRecord(BaseModel):
-    """Top-level on-disk state for one team.
-
-    ``cwd`` is captured at create time so a teammate spawned later
-    resolves memory / rules from the same root the leader saw at creation.
-    """
-
+    # cwd captured at create-time so later-spawned teammates resolve memory
+    # and rules from the same root the leader saw.
     model_config = ConfigDict(extra="forbid")
 
     team_id: str = Field(min_length=1, max_length=64)
@@ -60,12 +46,7 @@ class TeamRecord(BaseModel):
 
 
 class TeamMessage(BaseModel):
-    """One mailbox JSONL line.
-
-    ``msg_id`` uniquely identifies the message in the ``.seen`` cursor.
-    ``recipient`` may be ``"broadcast"``; the manager fans that out at send.
-    """
-
+    # recipient="broadcast" is fanned out by the manager at send time.
     model_config = ConfigDict(extra="forbid")
 
     msg_id: str

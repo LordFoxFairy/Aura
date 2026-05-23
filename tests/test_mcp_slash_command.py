@@ -1,6 +1,6 @@
 """Tests for the ``/mcp`` slash command — in-REPL MCP control surface.
 
-Uses a lightweight ``_FakeAgent`` holding only the ``_mcp_manager`` slot,
+Uses a lightweight ``_FakeAgent`` holding only the ``mcp_manager`` slot,
 which is all :class:`MCPCommand` touches. This avoids spinning up the full
 Agent rig (storage, LLM fake, context builder) for what is pure command-
 dispatch + plain-text formatting logic.
@@ -25,14 +25,14 @@ from aura.infrastructure.mcp.manager import MCPServerStatus
 
 @dataclass
 class _FakeAgent:
-    """Minimal stand-in — MCPCommand only reads ``_mcp_manager``."""
+    """Minimal stand-in — MCPCommand only reads ``mcp_manager``."""
 
-    _mcp_manager: Any
+    mcp_manager: Any
 
 
 def _as_agent(fake: _FakeAgent) -> Agent:
     """Cast helper — MCPCommand's handle() is typed as ``Agent`` but only
-    touches ``_mcp_manager``, so duck-typing is safe at runtime.
+    touches ``mcp_manager``, so duck-typing is safe at runtime.
     """
     return cast(Agent, fake)
 
@@ -93,7 +93,7 @@ class _SpyManager:
 
 @pytest.mark.asyncio
 async def test_mcp_empty_manager_prints_placeholder() -> None:
-    agent = _FakeAgent(_mcp_manager=_SpyManager(statuses=[]))
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=[]))
     result = await MCPCommand().handle("", _as_agent(agent))
     assert result.handled is True
     assert result.kind == "print"
@@ -105,7 +105,7 @@ async def test_mcp_list_with_no_manager_attached() -> None:
     # When no MCP is configured the agent has no manager at all — the
     # /mcp list view must still render, with the same placeholder as an
     # empty-configured manager.
-    agent = _FakeAgent(_mcp_manager=None)
+    agent = _FakeAgent(mcp_manager=None)
     result = await MCPCommand().handle("list", _as_agent(agent))
     assert result.handled is True
     assert "(no MCP servers configured)" in result.text
@@ -133,7 +133,7 @@ async def test_mcp_list_renders_table_with_connected_and_disabled_rows() -> None
             prompt_count=0,
         ),
     ]
-    agent = _FakeAgent(_mcp_manager=_SpyManager(statuses=statuses))
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=statuses))
     result = await MCPCommand().handle("", _as_agent(agent))
     lines = result.text.splitlines()
     # Header row present.
@@ -164,7 +164,7 @@ async def test_mcp_list_error_row_surfaces_error_message() -> None:
             prompt_count=0,
         ),
     ]
-    agent = _FakeAgent(_mcp_manager=_SpyManager(statuses=statuses))
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=statuses))
     result = await MCPCommand().handle("list", _as_agent(agent))
     assert "broken" in result.text
     assert "error: RuntimeError: cannot spawn child" in result.text
@@ -182,7 +182,7 @@ async def test_mcp_enable_delegates_to_manager_and_surfaces_result() -> None:
         ],
         enable_result="MCP server 'github' enabled and connected",
     )
-    agent = _FakeAgent(_mcp_manager=spy)
+    agent = _FakeAgent(mcp_manager=spy)
     result = await MCPCommand().handle("enable github", _as_agent(agent))
     assert spy.enable_calls == ["github"]
     assert "connected" in result.text
@@ -199,7 +199,7 @@ async def test_mcp_disable_delegates_to_manager() -> None:
             ),
         ],
     )
-    agent = _FakeAgent(_mcp_manager=spy)
+    agent = _FakeAgent(mcp_manager=spy)
     result = await MCPCommand().handle("disable github", _as_agent(agent))
     assert spy.disable_calls == ["github"]
     assert "disabled" in result.text
@@ -216,7 +216,7 @@ async def test_mcp_reconnect_delegates_to_manager() -> None:
             ),
         ],
     )
-    agent = _FakeAgent(_mcp_manager=spy)
+    agent = _FakeAgent(mcp_manager=spy)
     result = await MCPCommand().handle("reconnect github", _as_agent(agent))
     assert spy.reconnect_calls == ["github"]
     assert "reconnected" in result.text
@@ -234,7 +234,7 @@ async def test_mcp_enable_unknown_surfaces_manager_error() -> None:
         ],
         enable_result="no MCP server named 'nonexistent'; known: ['github']",
     )
-    agent = _FakeAgent(_mcp_manager=spy)
+    agent = _FakeAgent(mcp_manager=spy)
     result = await MCPCommand().handle("enable nonexistent", _as_agent(agent))
     assert "no MCP server named" in result.text
     assert "nonexistent" in result.text
@@ -243,7 +243,7 @@ async def test_mcp_enable_unknown_surfaces_manager_error() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_enable_without_target_is_usage_error() -> None:
-    agent = _FakeAgent(_mcp_manager=_SpyManager(statuses=[]))
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=[]))
     result = await MCPCommand().handle("enable", _as_agent(agent))
     assert result.kind == "print"
     assert "usage:" in result.text.lower()
@@ -252,14 +252,14 @@ async def test_mcp_enable_without_target_is_usage_error() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_disable_without_target_is_usage_error() -> None:
-    agent = _FakeAgent(_mcp_manager=_SpyManager(statuses=[]))
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=[]))
     result = await MCPCommand().handle("disable", _as_agent(agent))
     assert "usage:" in result.text.lower()
 
 
 @pytest.mark.asyncio
 async def test_mcp_reconnect_without_target_is_usage_error() -> None:
-    agent = _FakeAgent(_mcp_manager=_SpyManager(statuses=[]))
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=[]))
     result = await MCPCommand().handle("reconnect", _as_agent(agent))
     assert "usage:" in result.text.lower()
 
@@ -276,7 +276,7 @@ async def test_mcp_approve_delegates_to_manager() -> None:
         ],
         approve_result="MCP server 'proj_srv' approved",
     )
-    agent = _FakeAgent(_mcp_manager=spy)
+    agent = _FakeAgent(mcp_manager=spy)
     result = await MCPCommand().handle("approve proj_srv", _as_agent(agent))
     assert spy.approve_calls == ["proj_srv"]
     assert "approved" in result.text
@@ -294,7 +294,7 @@ async def test_mcp_revoke_delegates_to_manager() -> None:
         ],
         revoke_result="MCP server 'proj_srv' revoked",
     )
-    agent = _FakeAgent(_mcp_manager=spy)
+    agent = _FakeAgent(mcp_manager=spy)
     result = await MCPCommand().handle("revoke proj_srv", _as_agent(agent))
     assert spy.revoke_calls == ["proj_srv"]
     assert "revoked" in result.text
@@ -302,7 +302,7 @@ async def test_mcp_revoke_delegates_to_manager() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_approve_without_target_is_usage_error() -> None:
-    agent = _FakeAgent(_mcp_manager=_SpyManager(statuses=[]))
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=[]))
     result = await MCPCommand().handle("approve", _as_agent(agent))
     assert "usage:" in result.text.lower()
     assert "approve" in result.text
@@ -310,7 +310,7 @@ async def test_mcp_approve_without_target_is_usage_error() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_revoke_without_target_is_usage_error() -> None:
-    agent = _FakeAgent(_mcp_manager=_SpyManager(statuses=[]))
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=[]))
     result = await MCPCommand().handle("revoke", _as_agent(agent))
     assert "usage:" in result.text.lower()
     assert "revoke" in result.text
@@ -318,7 +318,7 @@ async def test_mcp_revoke_without_target_is_usage_error() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_help_lists_subcommands() -> None:
-    agent = _FakeAgent(_mcp_manager=None)
+    agent = _FakeAgent(mcp_manager=None)
     result = await MCPCommand().handle("help", _as_agent(agent))
     for sub in ("list", "enable", "disable", "reconnect", "help"):
         assert sub in result.text, f"missing subcommand {sub!r} in /mcp help"
@@ -326,7 +326,7 @@ async def test_mcp_help_lists_subcommands() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_unknown_subcommand_lists_valid_options() -> None:
-    agent = _FakeAgent(_mcp_manager=None)
+    agent = _FakeAgent(mcp_manager=None)
     result = await MCPCommand().handle("nope", _as_agent(agent))
     assert "unknown" in result.text.lower()
     assert "'nope'" in result.text
@@ -339,7 +339,7 @@ async def test_mcp_unknown_subcommand_lists_valid_options() -> None:
 async def test_mcp_toggle_without_manager_returns_friendly_error() -> None:
     # enable/disable/reconnect require a manager — without one they must
     # print a friendly message (no AttributeError or traceback).
-    agent = _FakeAgent(_mcp_manager=None)
+    agent = _FakeAgent(mcp_manager=None)
     result = await MCPCommand().handle("enable foo", _as_agent(agent))
     assert result.handled is True
     assert "no mcp manager" in result.text.lower()

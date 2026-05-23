@@ -1,20 +1,4 @@
-"""Subprocess tests for ``aura mcp {add,list,remove}``.
-
-These tests spawn the real ``aura`` binary (via ``uv run`` when
-available, falling back to ``python -m cli.__main__``). Each test
-sets ``HOME`` to a ``tmp_path`` so the store writes to an isolated
-location and the developer's real ``~/.aura/mcp_servers.json`` is never
-touched.
-
-The suite covers:
-- empty-store list shows the "no servers" message
-- add → list round-trip
-- duplicate add is rejected with exit 1 + actionable stderr
-- remove removes and list shows empty again
-- remove of a non-existent name is exit 1
-- ``aura --version`` still works (argparse subparser wiring preserved
-  the existing global-flag path)
-"""
+"""Subprocess tests for ``aura mcp {add,list,remove}`` against an isolated HOME."""
 
 from __future__ import annotations
 
@@ -128,7 +112,7 @@ def test_add_then_list_round_trip(
 def test_add_default_transport_is_stdio(
     aura_binary: Sequence[str], tmp_path: Path,
 ) -> None:
-    # Omitting --transport must default to stdio (claude-code parity).
+    # Omitting --transport must default to stdio.
     add = _run(
         aura_binary,
         ["mcp", "add", "defaults", "--", "cmd", "arg1", "arg2"],
@@ -407,8 +391,7 @@ def test_mcp_add_duplicate_in_same_scope_rejected(
 def test_mcp_add_same_name_across_scopes_allowed(
     aura_binary: Sequence[str], sandbox: tuple[Path, Path],
 ) -> None:
-    # Claude-code parity: the layers are independent. Adding the same
-    # name in both scopes is the primary override mechanism.
+    # Scopes are independent; same name in both is the override mechanism.
     home, project = sandbox
     g = _run_in(
         aura_binary,

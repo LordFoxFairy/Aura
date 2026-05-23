@@ -16,8 +16,8 @@ if TYPE_CHECKING:
     from aura.application.permission.denials import PermissionDenial as Denial
     from aura.infrastructure.skills.types import Skill
 else:
-    # Runtime fallbacks so pydantic field-type introspection on LoopState
-    # resolves without dragging the real modules into aura.schemas.
+    # Runtime aliases so pydantic field-type introspection resolves without
+    # dragging the real modules into aura.schemas at import time.
     Denial = Any
     Decision = Any
     Skill = Any
@@ -67,12 +67,12 @@ class ReadCarryover:
     generated_at_turn: int
 
     def __post_init__(self) -> None:
-        # object.__setattr__ is the only way to rebind on a frozen dataclass.
         if not isinstance(self.records, MappingProxyType):
             normalized = {
                 path.expanduser().resolve(strict=False): record
                 for path, record in self.records.items()
             }
+            # object.__setattr__: only way to rebind a frozen dataclass field.
             object.__setattr__(self, "records", MappingProxyType(normalized))
 
     def is_fresh(self, path: Path) -> bool:
@@ -111,7 +111,6 @@ class LoopState:
     slots: LoopSlots = field(default_factory=LoopSlots)
 
     def reset(self) -> None:
-        # In-place mutation — AgentLoop holds the same reference; slots
-        # are owned by individual writers and not reset here.
+        # In-place: AgentLoop holds the same ref; slots are owned by writers.
         self.turn_count = 0
         self.total_tokens_used = 0

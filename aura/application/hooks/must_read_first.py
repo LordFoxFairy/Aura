@@ -1,17 +1,7 @@
-"""Must-read-first gate for ``edit_file`` / ``write_file`` / ``bash``.
+"""Must-read-first gate: mutation requires prior session read + matching (mtime, size).
 
-Before a file is mutated, it MUST have been read this session AND not
-drifted since (mtime+size fingerprint). Subagent inheritance: parent
-``ReadCarryover`` becomes private ``_ReadRecord`` entries; staleness
-is re-checked at hook fire time.
-
-Scope:
-  - ``edit_file`` is always gated; ``old_str=""`` + non-existent path
-    bypasses for new-file creation.
-  - ``write_file`` is gated only when the target already exists.
-  - ``bash`` is gated on detected mutation idioms (``sed -i``, output
-    redirects, ``tee``). Subshell/eval obfuscation slips past — that
-    gap is shared with the F-04-003 classifier.
+Scope: edit_file always; write_file only if target exists; bash on detected mutation
+idioms (sed -i, redirects, tee). Subshell/eval obfuscation slips past (shared gap).
 """
 
 from __future__ import annotations
@@ -51,7 +41,7 @@ def _last_non_option_token(tokens: list[str]) -> str | None:
 
 
 def _extract_bash_mutation_targets(command: str) -> list[str]:
-    """Return paths the bash command appears to mutate (empty = pass)."""
+    """Paths the bash command appears to mutate; empty list = no detected mutation."""
     targets: list[str] = []
     for segment in _SEGMENT_SPLIT.split(command):
         try:
@@ -61,7 +51,6 @@ def _extract_bash_mutation_targets(command: str) -> list[str]:
         if not tokens:
             continue
 
-        # sed -i / sed --in-place
         for i, tok in enumerate(tokens):
             if tok == "sed" or tok.endswith("/sed"):
                 rest = tokens[i + 1:]
@@ -71,7 +60,6 @@ def _extract_bash_mutation_targets(command: str) -> list[str]:
                         targets.append(last)
                 break
 
-        # tee <file> / tee -a <file>
         for i, tok in enumerate(tokens):
             if tok == "tee" or tok.endswith("/tee"):
                 rest = tokens[i + 1:]
@@ -80,7 +68,6 @@ def _extract_bash_mutation_targets(command: str) -> list[str]:
                     targets.append(last)
                 break
 
-        # > / >> / fd-prefixed redirects
         for i, tok in enumerate(tokens):
             if tok in (">", ">>"):
                 if i + 1 >= len(tokens):
@@ -142,7 +129,7 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
         *,
         tool: BaseTool,
         args: dict[str, Any],
-        state: LoopState,
+        state: LoopState,  # noqa: ARG001  # Protocol kw arg; unused
         **_: Any,
     ) -> Allow | Replace:
         if tool.name not in ("edit_file", "write_file", "bash"):
@@ -194,12 +181,11 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
             return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         if tool.name == "edit_file":
-            # New-file creation via empty old_str + missing path bypasses.
+            # New-file creation bypass: empty old_str + missing path.
             if args.get("old_str") == "" and not resolved.exists():
                 return Allow(decision=Decision(allow=True, reason="mode_bypass"))
-        else:  # write_file
-            if not resolved.exists():
-                return Allow(decision=Decision(allow=True, reason="mode_bypass"))
+        elif not resolved.exists():
+            return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
         status = context.read_status(resolved)
         if status == "fresh":

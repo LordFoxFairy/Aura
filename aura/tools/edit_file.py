@@ -45,7 +45,7 @@ class EditFile(Tool):
         "replace_all=True) and replaces it with new_str. Fails loudly on 0 or "
         "ambiguous matches."
     )
-    args_schema: type[BaseModel] = EditFileParams
+    args_schema: type[BaseModel] = EditFileParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
         is_destructive=True,
@@ -94,8 +94,7 @@ class EditFile(Tool):
         except UnicodeDecodeError as exc:
             raise ToolError(f"not UTF-8: {exc}") from exc
 
-        # Mixed CRLF + bare-LF: preserve as-is; normalizing would corrupt
-        # the surviving bare-LF lines on write.
+        # Mixed CRLF + bare-LF: preserve as-is — normalizing would corrupt the bare-LF lines.
         crlf_count = raw.count("\r\n")
         bare_lf_count = raw.count("\n") - crlf_count
         has_bare_cr_only = "\r" in raw and "\n" not in raw

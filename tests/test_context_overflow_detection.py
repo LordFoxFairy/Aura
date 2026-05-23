@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from aura.core.agent import _is_context_overflow
+from aura.core.agent import is_context_overflow
 
 
 class TestKnownPhrasings:
@@ -37,7 +37,7 @@ class TestKnownPhrasings:
         "max_tokens exceeded by 5000",
     ])
     def test_phrase_matches(self, msg: str) -> None:
-        assert _is_context_overflow(RuntimeError(msg)) is True, msg
+        assert is_context_overflow(RuntimeError(msg)) is True, msg
 
 
 class TestStructuredCodeMatching:
@@ -50,11 +50,11 @@ class TestStructuredCodeMatching:
             "Error code: 400 - {'error': {'code': '1261', "
             "'message': 'limit excedido en chino', 'param': None}}"
         )
-        assert _is_context_overflow(RuntimeError(msg)) is True
+        assert is_context_overflow(RuntimeError(msg)) is True
 
     def test_dashscope_1261_double_quote(self) -> None:
         msg = 'Error code: 400 - {"error": {"code": "1261", "message": "x"}}'
-        assert _is_context_overflow(RuntimeError(msg)) is True
+        assert is_context_overflow(RuntimeError(msg)) is True
 
 
 class TestNegatives:
@@ -72,4 +72,4 @@ class TestNegatives:
         "",
     ])
     def test_negative(self, msg: str) -> None:
-        assert _is_context_overflow(RuntimeError(msg)) is False, msg
+        assert is_context_overflow(RuntimeError(msg)) is False, msg

@@ -242,7 +242,7 @@ class WebFetch(Tool):
         "if larger. SSRF-guarded. 15-min in-process cache (keyed by "
         "url+prompt). No auth / cookies."
     )
-    args_schema: type[BaseModel] = WebFetchParams
+    args_schema: type[BaseModel] = WebFetchParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     # NOT is_read_only — fetching exfils request data over the network.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,

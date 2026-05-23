@@ -32,7 +32,7 @@ class FormQuestion(TypedDict, total=False):
 
 
 class FormCancelled(Exception):
-    """Raised when the user cancels the form via Esc / Ctrl-C."""
+    pass
 
 
 @dataclass
@@ -278,13 +278,7 @@ def _build_layout(state: _FormState, side_by_side: bool) -> Layout:
 
 
 async def render_form(questions: list[FormQuestion]) -> dict[str, str]:
-    """Render 1..4 questions via prompt_toolkit; return {question_text: answer}.
-
-    Layout: a single pt ``Application`` advances through questions
-    one-at-a-time, mutating ``_FormState.index`` on Enter. The preview
-    pane is laid out side-by-side when any option declares a preview;
-    otherwise the layout is vertical only.
-    """
+    """Render 1..4 questions via prompt_toolkit; return ``{question_text: answer}``."""
     state = _FormState(
         questions=list(questions),
         per_question=[_QuestionState() for _ in questions],

@@ -1,9 +1,4 @@
-"""/tasks, /task-get, /task-stop — subagent lifecycle slash commands.
-
-Human-facing surface over the same TasksStore the LLM polls via
-``task_get`` / ``task_list`` / ``task_stop``. ``short_id`` (first 8 hex
-chars) is what we show; full id also accepted for prefix disambig.
-"""
+"""Human surface for ``/tasks``, ``/task-get``, ``/task-stop``; ``short_id`` (8 hex), prefix ok."""
 
 from __future__ import annotations
 
@@ -25,7 +20,7 @@ def _resolve(agent: Agent, arg: str) -> TaskRecord | None:
     arg = arg.strip()
     if not arg:
         return None
-    store = agent._tasks_store
+    store = agent.tasks_store
     rec = store.get(arg)
     if rec is not None:
         return rec
@@ -41,7 +36,7 @@ class TasksCommand:
     argument_hint: str | None = None
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
-        records = agent._tasks_store.list()
+        records = agent.tasks_store.list()
         if not records:
             return CommandResult(handled=True, kind="print", text="(no tasks)")
         records = sorted(records, key=lambda r: -r.started_at)[:20]
@@ -131,9 +126,9 @@ class TaskStopCommand:
                     "nothing to stop"
                 ),
             )
-        handle = agent._running_tasks.get(rec.id)
+        handle = agent.running_tasks.get(rec.id)
         if handle is None or handle.done():
-            agent._tasks_store.mark_cancelled(rec.id)
+            agent.tasks_store.mark_cancelled(rec.id)
             return CommandResult(
                 handled=True, kind="print",
                 text=f"task {rec.id[:_SHORT_ID]} cancelled",
@@ -146,7 +141,7 @@ class TaskStopCommand:
         except asyncio.CancelledError:
             pass
         except TimeoutError:
-            agent._tasks_store.mark_cancelled(rec.id)
+            agent.tasks_store.mark_cancelled(rec.id)
         return CommandResult(
             handled=True, kind="print",
             text=f"task {rec.id[:_SHORT_ID]} cancelled",

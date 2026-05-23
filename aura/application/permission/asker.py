@@ -12,13 +12,6 @@ from aura.domain.permission.rule import Rule
 
 @dataclass(frozen=True)
 class AskerResponse:
-    """Asker reply.
-
-    ``choice == "always"`` iff ``rule is not None``. ``feedback`` is the
-    free-text note from Tab-to-amend; appended to ``user_deny`` errors so
-    the LLM sees why the user said no.
-    """
-
     choice: Literal["accept", "always", "deny"]
     scope: Literal["project", "session"] = "session"
     rule: Rule | None = None
@@ -35,8 +28,6 @@ class AskerResponse:
 
 @runtime_checkable
 class PermissionAsker(Protocol):
-    """Async oracle returning a user choice for one tool call."""
-
     async def __call__(
         self,
         *,

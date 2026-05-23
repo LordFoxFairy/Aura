@@ -29,10 +29,7 @@ from tests.conftest import FakeChatModel, FakeTurn
 
 
 def _cfg() -> AuraConfig:
-    # ``teams.enabled=True`` from v0.18 — the gate (claude-code parity
-    # with isAgentSwarmsEnabled()) defaults to False; without this flag,
-    # spawning a teammate Agent via SubagentFactory would call
-    # ``join_team`` which now raises when teams are disabled.
+    # Without ``teams.enabled=True`` the spawned teammate's ``join_team`` raises.
     return AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
@@ -544,13 +541,7 @@ def test_send_unknown_recipient_errors(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_remove_member_aborts_controller(tmp_path: Path) -> None:
-    """Force-removing a member fires its AbortController so cascade triggers cleanup.
-
-    Phase A.1: ``remove_member(force=True)`` keeps the synchronous
-    abort semantics; the non-force path schedules an async waiter that
-    only aborts after the shutdown_response timeout. The test pins the
-    sync-abort contract for the force path.
-    """
+    """``remove_member(force=True)`` synchronously aborts the member's controller."""
     captured: dict[str, AbortController] = {}
 
     async def capture_runner(**kwargs: Any) -> None:

@@ -1,21 +1,12 @@
-"""Safety policy value objects — paths that bypass rules entirely.
+"""Safety-protected path lists; matching lives in application.permission.safety.
 
-Two lists, two directions:
+Two invariants:
+  - WRITES fires on is_destructive=True tools (.git/, .aura/, rc files, /etc).
+  - READS is narrower (secret-content paths); .git/ and .aura/ are absent on
+    purpose so legitimate reads are not blocked.
 
-- **writes** (``DEFAULT_PROTECTED_WRITES``): blast-radius list. Fires on
-  tools with ``is_destructive=True``. Includes ``.git/``, ``.aura/``,
-  shell rc files, ``/etc``.
-- **reads** (``DEFAULT_PROTECTED_READS``): narrower — paths whose
-  contents are secrets. Fires on ANY tool with a resolvable path arg.
-  ``.git/`` and ``.aura/`` are absent on purpose (legitimate reads).
-
-``.git/`` paths use ``**/.git/**`` so pathspec matches a ``.git/``
-directory at any depth. Both bare-dir (``**/.git``) and ``/**`` shapes
-are required because pathspec's ``**/X/**`` matches FILES INSIDE X/,
-not X itself.
-
-The matching function ``is_protected`` lives in
-``aura.application.permission.safety`` because it journals errors.
+Both bare-dir (**/.git) and (**/.git/**) globs are required because pathspec
+matches files INSIDE X/, not X itself.
 """
 
 from __future__ import annotations

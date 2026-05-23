@@ -1,36 +1,4 @@
-"""TasksStore — in-memory keyed store for :class:`TaskRecord`.
-
-Single-process, single-event-loop. No cross-process sharing (subagents
-always run inside the parent's event loop), so a plain dict is sufficient.
-
-Round 4F adds two cross-cutting bits:
-
-- **Lazy terminal events**: per-task :class:`asyncio.Event` allocated on
-  first :meth:`terminal_event` lookup. ``task_output(wait=True)`` parks
-  on these so a parent can block on a child's terminal transition
-  without polling. ``_LazyEvent`` defers Event construction until we're
-  inside a running event loop — constructing one at ``store.create``
-  time would bind the Event to the wrong loop in tests that recycle
-  loops between cases.
-
-- **Terminal listener registry**: callables fired AFTER a record reaches
-  a terminal state. Agent.__init__ registers a listener that pushes a
-  :class:`TaskNotification` onto its ``_pending_notifications`` queue
-  so the next :meth:`Context.build` can render it as a
-  ``<task-notification>`` block.
-
-Round 7QS adds:
-
-- :meth:`record_token_usage` — accumulates per-invoke usage_metadata
-  from the child's post_model hook.
-- :meth:`update_summary` — overwrites the rolling summary text the
-  AgentSummarizer writes every interval.
-
-Round 4F transcript wiring:
-
-- :meth:`set_transcript_path` — ``run_task`` calls this after the JSONL
-  flush succeeds so ``task_get`` can surface the on-disk location.
-"""
+"""In-memory keyed store for :class:`TaskRecord`."""
 
 from __future__ import annotations
 
@@ -43,38 +11,23 @@ from pathlib import Path
 from langchain_core.messages import BaseMessage
 
 from aura.domain.task import (
-    _SHELL_RECENT_ACTIVITIES_CAP,
+    SHELL_RECENT_ACTIVITIES_CAP,
     TaskKind,
     TaskNotification,
     TaskRecord,
     TaskStatus,
-    _append_recent,
+    append_recent,
 )
 from aura.infrastructure.persistence import journal
 
 
 class _LazyEvent:
-    """asyncio.Event proxy that defers loop binding until first use.
-
-    ``asyncio.Event`` ties itself to the event loop active at construction
-    time. Building one in ``store.create`` (which usually runs synchronously
-    on import / fixture setup) would bind it to a loop that may not be
-    the same loop as the eventual ``await event.wait()`` consumer. We
-    sidestep by building the real Event lazily on the first ``.wait()`` /
-    ``.set()`` call and pre-marking ``_pre_set=True`` for tasks that
-    became terminal before any consumer parked on the event (race fix:
-    a parent calling ``task_output(wait=True)`` after the child already
-    completed must short-circuit instead of hanging forever on a
-    fresh, never-set Event).
-    """
+    """Event proxy that defers loop binding until first ``wait`` / ``set``."""
 
     __slots__ = ("_event", "_pre_set")
 
     def __init__(self) -> None:
         self._event: asyncio.Event | None = None
-        # ``_pre_set`` carries the "should this Event already be set when
-        # we lazily build it" sentinel. Flipped by :meth:`set` when no
-        # real Event has been built yet; honored by :meth:`_ensure`.
         self._pre_set: bool = False
 
     def _ensure(self) -> asyncio.Event:
@@ -99,28 +52,17 @@ class _LazyEvent:
         await self._ensure().wait()
 
 
-# A terminal listener gets the full TaskRecord so it can read every
-# field it needs (description, status, final_result, error, ...). Sync
-# callable on purpose — listeners run inside ``mark_*`` methods which
-# may be called from outside an event loop in tests; making the
-# contract sync keeps every call site compatible.
+# Sync on purpose: fired from ``mark_*`` which may run outside an event loop.
 TerminalListener = Callable[[TaskRecord], None]
 StartedListener = Callable[[TaskRecord], None]
-# Carries the activity string so listeners skip a progress re-read.
 ActivityListener = Callable[[TaskRecord, str], None]
 
 
 class TasksStore:
     def __init__(self) -> None:
         self._records: dict[str, TaskRecord] = {}
-        # Lazy per-task terminal events for ``task_output(wait=True)``.
         self._terminal_events: dict[str, _LazyEvent] = {}
-        # Terminal listeners — fired AFTER a record reaches terminal
-        # state. Each listener gets the full TaskRecord; exceptions are
-        # caught + journaled so a buggy listener can't strand the
-        # mark_* call.
         self._terminal_listeners: list[TerminalListener] = []
-        # Live progress channels — same exception-swallow contract.
         self._started_listeners: list[StartedListener] = []
         self._activity_listeners: list[ActivityListener] = []
 
@@ -163,26 +105,18 @@ class TasksStore:
         if kind is not None:
             records = [r for r in records if r.kind == kind]
         if limit is not None:
-            # Newest-first slice — matches /tasks ordering so callers
-            # sharing this list (e.g. task_list tool) don't have to resort.
+            # Newest-first slice matches /tasks ordering.
             records = sorted(records, key=lambda r: -r.started_at)[:limit]
         return records
 
     def record_activity(self, task_id: str, activity: str) -> None:
-        """Note a child-agent tool event on the task's progress record.
-
-        Called from :func:`run_task` as the subagent streams
-        ``ToolCallStarted`` events. Tight contract: bump ``tool_count``,
-        push onto the bounded ``recent_activities`` ring, update
-        ``last_activity_at``. No-op for unknown task_ids so a racing
-        cancel can't KeyError here.
-        """
+        """Note a child-agent tool event on the task's progress record."""
         rec = self._records.get(task_id)
         if rec is None:
             return
         rec.progress.tool_count += 1
         rec.progress.last_activity_at = time.time()
-        _append_recent(rec.progress, activity)
+        append_recent(rec.progress, activity)
         for listener in list(self._activity_listeners):
             try:
                 listener(rec, activity)
@@ -194,12 +128,7 @@ class TasksStore:
                 )
 
     def record_started(self, task_id: str) -> None:
-        """Fire ``started_listeners`` for a freshly-running task.
-
-        Idempotent at the listener layer (callers fire once per task);
-        no-op for unknown task_ids so a racing cancel between create +
-        run cannot KeyError.
-        """
+        """Fire ``started_listeners`` for a freshly-running task."""
         rec = self._records.get(task_id)
         if rec is None:
             return
@@ -214,53 +143,34 @@ class TasksStore:
                 )
 
     def record_activity_note(self, task_id: str, activity: str) -> None:
-        """Note non-tool task activity without bumping ``tool_count``.
-
-        Teammate runtimes and other long-lived tasks can be active without
-        starting a tool. This updates ``last_activity_at`` and the recent
-        activity ring while preserving the stricter meaning of ``tool_count``.
-        """
+        """Note non-tool activity; preserves the stricter ``tool_count`` semantics."""
         rec = self._records.get(task_id)
         if rec is None:
             return
         rec.progress.last_activity_at = time.time()
-        _append_recent(rec.progress, activity)
+        append_recent(rec.progress, activity)
 
     def record_shell_line(self, task_id: str, line: str) -> None:
-        """Append a shell output line to the task's progress ring.
-
-        Bumps ``line_count`` + ``last_activity_at``; bounds
-        ``recent_activities`` at :data:`_SHELL_RECENT_ACTIVITIES_CAP`.
-        No-op for unknown ids (matches ``record_activity`` semantics).
-        """
+        """Append a shell output line; bumps ``line_count`` and bounds the ring."""
         rec = self._records.get(task_id)
         if rec is None:
             return
         rec.progress.line_count += 1
         rec.progress.last_activity_at = time.time()
-        _append_recent(rec.progress, line, cap=_SHELL_RECENT_ACTIVITIES_CAP)
+        append_recent(rec.progress, line, cap=SHELL_RECENT_ACTIVITIES_CAP)
 
     def record_shell_marker(self, task_id: str, marker: str) -> None:
-        """Append a non-counting marker (e.g. ``"[stalled?]"``) to the ring.
-
-        Unlike :meth:`record_shell_line`, this does NOT bump ``line_count``
-        or ``last_activity_at`` — stall detection uses ``last_activity_at``
-        to decide when to fire, and bumping it would defeat the detector.
-        """
+        """Append a marker without touching ``last_activity_at`` (stall detector reads it)."""
         rec = self._records.get(task_id)
         if rec is None:
             return
-        _append_recent(rec.progress, marker, cap=_SHELL_RECENT_ACTIVITIES_CAP)
+        append_recent(rec.progress, marker, cap=SHELL_RECENT_ACTIVITIES_CAP)
 
     def append_message(self, task_id: str, msg: BaseMessage) -> None:
         rec = self._records.get(task_id)
         if rec is None:
             return
         rec.messages.append(msg)
-
-    # ------------------------------------------------------------------
-    # Round 7QS — token usage + summary
-    # ------------------------------------------------------------------
 
     def record_token_usage(
         self,
@@ -269,14 +179,7 @@ class TasksStore:
         input_tokens: int,
         output_tokens: int,
     ) -> None:
-        """Add ``input_tokens`` / ``output_tokens`` to the task's progress.
-
-        Negative values clamp to 0 (defensive — a malformed usage payload
-        from a misconfigured provider must NOT subtract the running
-        total). No-op for unknown task_ids so a racing cancel cleanup
-        between the post_model hook firing and the record being
-        looked up doesn't KeyError.
-        """
+        """Add ``input_tokens`` / ``output_tokens`` to progress; clamps negatives to 0."""
         rec = self._records.get(task_id)
         if rec is None:
             return
@@ -284,21 +187,12 @@ class TasksStore:
         out_t = max(0, int(output_tokens))
         rec.progress.input_tokens += in_t
         rec.progress.output_tokens += out_t
-        # Keep ``token_count`` in sync — it's the LLM-facing aggregate
-        # number consumed by ``task_get`` / ``task_list``.
         rec.progress.token_count = (
             rec.progress.input_tokens + rec.progress.output_tokens
         )
 
     def update_summary(self, task_id: str, summary: str) -> None:
-        """Overwrite ``progress.latest_summary`` and stamp the timestamp.
-
-        Called by the :class:`AgentSummarizer` loop on every interval
-        tick. Empty summaries are kept (the summarizer already filters
-        whitespace), but ``None`` is rejected — use
-        ``progress.latest_summary = None`` directly if a caller ever
-        needs to clear it (no current site does).
-        """
+        """Overwrite ``progress.latest_summary`` and stamp the timestamp."""
         rec = self._records.get(task_id)
         if rec is None:
             return
@@ -306,12 +200,7 @@ class TasksStore:
         rec.progress.summary_updated_at = time.time()
 
     def mark_observed(self, task_id: str) -> float | None:
-        """Stamp when a terminal task's result is first observed.
-
-        Only LLM-facing retrieval tools should call this. Running tasks
-        return ``None`` and are left untouched; terminal tasks preserve the
-        first timestamp so repeated reads are stable.
-        """
+        """Stamp when a terminal task's result is first observed; stable on repeated reads."""
         rec = self._records.get(task_id)
         if rec is None or rec.status == "running":
             return None
@@ -319,64 +208,35 @@ class TasksStore:
             rec.observed_at = time.time()
         return rec.observed_at
 
-    # ------------------------------------------------------------------
-    # Round 4F — transcript path + lazy terminal event + listener registry
-    # ------------------------------------------------------------------
-
     def set_transcript_path(self, task_id: str, path: Path) -> None:
-        """Pin the on-disk JSONL transcript location on the record.
-
-        Called by :func:`run_task` after the transcript flush succeeds
-        — the path is what ``task_get`` returns so the parent (or the
-        operator scrolling ``/transcripts``) can find a child's history
-        on disk after the parent process has restarted.
-        """
+        """Pin the on-disk JSONL transcript location on the record."""
         rec = self._records.get(task_id)
         if rec is None:
             return
         rec.transcript_path = path
 
     def terminal_event(self, task_id: str) -> _LazyEvent:
-        """Per-task lazy terminal event.
-
-        Allocated on first lookup. If the record is ALREADY in a
-        terminal state at lookup time, the returned event is pre-set so
-        a consumer that calls ``await store.terminal_event(...).wait()``
-        right after observing the state short-circuits instead of
-        hanging forever.
-        """
+        """Per-task lazy terminal event; pre-set if the record is already terminal."""
         ev = self._terminal_events.get(task_id)
         if ev is None:
             ev = _LazyEvent()
             self._terminal_events[task_id] = ev
             rec = self._records.get(task_id)
             if rec is not None and rec.status != "running":
-                # Race fix: record went terminal before any consumer
-                # asked for the event. Pre-set so the next ``await wait()``
-                # returns immediately.
                 ev.set()
         return ev
 
     def add_terminal_listener(self, callback: TerminalListener) -> None:
-        """Register a sync callback to fire on every terminal transition.
-
-        Listeners are called AFTER the record's ``status`` /
-        ``final_result`` / ``error`` / ``finished_at`` are set, so they
-        observe a fully-built terminal record. Exceptions are journaled
-        and swallowed — a buggy listener must NOT strand the mark_*
-        call.
-        """
+        """Register a sync callback fired AFTER the record's terminal fields are set."""
         self._terminal_listeners.append(callback)
 
     def remove_terminal_listener(self, callback: TerminalListener) -> None:
-        """Unregister a previously-registered listener; no-op if absent."""
         try:
             self._terminal_listeners.remove(callback)
         except ValueError:
             return
 
     def add_started_listener(self, callback: StartedListener) -> None:
-        """Register a sync callback fired once per :meth:`record_started`."""
         self._started_listeners.append(callback)
 
     def remove_started_listener(self, callback: StartedListener) -> None:
@@ -386,7 +246,6 @@ class TasksStore:
             return
 
     def add_activity_listener(self, callback: ActivityListener) -> None:
-        """Register a sync callback fired on each :meth:`record_activity`."""
         self._activity_listeners.append(callback)
 
     def remove_activity_listener(self, callback: ActivityListener) -> None:
@@ -396,19 +255,12 @@ class TasksStore:
             return
 
     def _fire_terminal(self, rec: TaskRecord) -> None:
-        """Common terminal-fanout: trigger event + dispatch listeners.
-
-        Called by every ``mark_*`` terminal method. Listener exceptions
-        caught + journaled so one bad listener can't poison the rest.
-        """
+        """Trigger the terminal event and dispatch listeners; exceptions journaled."""
         ev = self._terminal_events.get(rec.id)
         if ev is not None:
             ev.set()
         else:
-            # No consumer ever called ``terminal_event`` for this task
-            # — eagerly create + pre-set so a LATER consumer that comes
-            # in after the terminal mark still short-circuits. Cheap:
-            # _LazyEvent is two slots and defers the real Event build.
+            # Pre-set so a later consumer asking after the terminal mark short-circuits.
             placeholder = _LazyEvent()
             placeholder.set()
             self._terminal_events[rec.id] = placeholder
@@ -455,10 +307,7 @@ class TasksStore:
         self._fire_terminal(rec)
 
 
-# Type re-export so ``from aura.application.tasks.store import TaskNotification``
-# remains a stable import path even though TaskNotification's home is
-# ``types.py``. Several CLI / Context.build call sites historically
-# imported from store; keep both addresses live.
+# Re-exported so ``from .store import TaskNotification`` stays a stable import path.
 __all__ = [
     "ActivityListener",
     "StartedListener",

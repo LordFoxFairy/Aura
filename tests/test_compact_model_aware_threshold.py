@@ -58,7 +58,7 @@ def test_agent_default_threshold_is_model_aware(tmp_path: Path) -> None:
         # which is the -1 sentinel.
     )
     expected = auto_compact_threshold_for("openai:gpt-4o-mini")
-    assert agent._effective_auto_compact_threshold() == expected
+    assert agent.effective_auto_compact_threshold() == expected
 
 
 def test_explicit_override_wins(tmp_path: Path) -> None:
@@ -68,7 +68,7 @@ def test_explicit_override_wins(tmp_path: Path) -> None:
         storage=SessionStorage(tmp_path / "a.db"),
         auto_compact_threshold=42_000,
     )
-    assert agent._effective_auto_compact_threshold() == 42_000
+    assert agent.effective_auto_compact_threshold() == 42_000
 
 
 def test_zero_threshold_still_disables(tmp_path: Path) -> None:
@@ -78,7 +78,7 @@ def test_zero_threshold_still_disables(tmp_path: Path) -> None:
         storage=SessionStorage(tmp_path / "a.db"),
         auto_compact_threshold=0,
     )
-    assert agent._effective_auto_compact_threshold() == 0
+    assert agent.effective_auto_compact_threshold() == 0
 
 
 def test_threshold_recomputes_on_switch_model(tmp_path: Path) -> None:
@@ -93,9 +93,9 @@ def test_threshold_recomputes_on_switch_model(tmp_path: Path) -> None:
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="x"))]),
         storage=SessionStorage(tmp_path / "a.db"),
     )
-    before = agent._effective_auto_compact_threshold()
+    before = agent.effective_auto_compact_threshold()
     agent._current_model_spec = "anthropic:claude-opus-4"
-    after = agent._effective_auto_compact_threshold()
+    after = agent.effective_auto_compact_threshold()
     # Different windows → different thresholds (both positive).
     assert before != after
     assert after > 0

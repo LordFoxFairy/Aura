@@ -1,16 +1,4 @@
-"""Teammate runtime — the long-lived loop that drives one teammate Agent.
-
-Spawned once by :meth:`TeamManager.add_member`; exits on ``stop_event.set()``
-(graceful) or ``abort.abort()`` (cascade from leader). Two entry points:
-
-- ``InProcessBackend.spawn`` schedules :func:`run_teammate` on the leader's
-  loop.
-- ``PaneBackend.spawn`` runs :func:`run_teammate_main` inside a subprocess.
-
-Loop: seed prompt (if any) → wait for new-message signal → ack unseen →
-on ``shutdown_request`` confirm + exit cleanly, else feed envelope-wrapped
-messages to ``Agent.astream``.
-"""
+"""Long-lived loop driving one teammate Agent against its JSONL mailbox."""
 
 from __future__ import annotations
 
@@ -34,9 +22,6 @@ if TYPE_CHECKING:
     from aura.application.tasks.store import TasksStore
     from aura.core.agent import Agent
 
-# Mailbox wait slice (s). For QueueMailboxNotifier the wait returns
-# instantly on signal so this only bounds the idle interval; for
-# FileMailboxNotifier (pane subprocess) it caps a single poll window.
 _WAIT_SLICE_SEC: float = 5.0
 
 
@@ -57,7 +42,6 @@ def _record_teammate_note(agent: Agent, activity: str) -> None:
 
 
 def _format_envelope(messages: list[TeamMessage]) -> str:
-    """Wrap each TeamMessage into ``<from-{sender}>…</from-{sender}>``."""
     return "\n\n".join(
         f"<from-{m.sender}>\n{m.body}\n</from-{m.sender}>" for m in messages
     )
@@ -72,13 +56,6 @@ async def _drive_one_turn(
     team_id: str,
     member_name: str,
 ) -> str:
-    """Run one ``Agent.astream`` pass; return the Final text.
-
-    Streams a one-line digest per event into the teammate transcript and
-    forwards tool / permission activity to the TasksStore. ``AbortException``
-    propagates with a journal entry; ``Final`` is the natural-completion
-    marker.
-    """
     final_text = ""
     transcript = storage.team_transcript_path(team_id, member_name)
     try:
@@ -120,12 +97,6 @@ async def _wait_for_message(
     stop_event: asyncio.Event,
     timeout: float,
 ) -> bool:
-    """Await ``notifier`` OR ``stop_event``; return ``True`` if a message wins.
-
-    ``asyncio.wait`` races the two so a stop set during an idle window
-    exits the loop at the next iteration without waiting out the full
-    slice. Cancellation of either pending task is suppressed.
-    """
     wait_task = asyncio.create_task(notifier.wait_new(member_name, timeout=timeout))
     stop_task = asyncio.create_task(stop_event.wait())
     try:
@@ -155,19 +126,6 @@ async def run_teammate(
     seed_prompt: str | None = None,
     notifier: MailboxNotifier | None = None,
 ) -> None:
-    """Long-lived loop: drain mailbox, run agent, repeat.
-
-    ``notifier`` decouples wake-up cadence from storage: callers pass a
-    :class:`~aura.application.teams.mailbox.QueueMailboxNotifier` for
-    in-process teammates (instant wake on signal) and let the default
-    :class:`FileMailboxNotifier` poll the JSONL for pane subprocesses.
-
-    Exit conditions: ``stop_event`` set (graceful boundary), ``abort.aborted``
-    propagates as ``AbortException``, or ``asyncio.CancelledError`` re-raises
-    after best-effort cleanup. A ``shutdown_request`` resolves the manager's
-    per-member ack future (in-process) and writes a ``shutdown_response`` to
-    the leader inbox (pane fallback) before exiting.
-    """
     mailbox = Mailbox(storage, team_id)
     if notifier is None:
         notifier = FileMailboxNotifier(mailbox)
@@ -200,15 +158,11 @@ async def run_teammate(
                 )
                 manager = getattr(agent, "team", None)
                 if manager is not None and getattr(manager, "is_active", False):
-                    # In-process: resolve the leader's per-member ack future
-                    # directly — no inbox round-trip needed.
+                    # In-process: future ack; pane subprocess: inbox round-trip.
                     confirm = getattr(manager, "confirm_shutdown", None)
                     if callable(confirm):
                         with contextlib.suppress(Exception):
                             confirm(member_name, body=shutdown.body)
-                    # Pane fallback: subprocess can't share futures with the
-                    # leader, so the manager still observes the response via
-                    # its inbox. ``send`` is idempotent w.r.t. confirm above.
                     with contextlib.suppress(Exception):
                         manager.send(
                             sender=member_name, recipient="leader",
@@ -226,9 +180,8 @@ async def run_teammate(
                 )
             except AbortException:
                 break
-            except Exception as exc:  # noqa: BLE001  # cleanup path must not propagate
-                # A single turn failure shouldn't kill the teammate;
-                # the leader can /team remove to escalate.
+            except Exception as exc:  # noqa: BLE001
+                # Per-turn failure logged but does not tear down the teammate.
                 journal.write(
                     "team_runtime_turn_failed",
                     team_id=team_id, member=member_name,
@@ -252,37 +205,21 @@ async def run_teammate_main(
     system_prompt: str | None = None,
     seed_prompt: str | None = None,
 ) -> int:
-    """Subprocess entrypoint for the pane backend.
-
-    Builds a fresh Agent rooted at ``storage_root`` and drives
-    :func:`run_teammate` against the same JSONL mailbox the leader writes
-    to. Communication is exclusively via the on-disk mailbox + ``.seen``
-    cursor — no IPC channel back to the leader.
-
-    Returns ``0`` on clean shutdown, non-zero on startup failure.
-    """
     # Lazy imports keep the in-process backend's hot path cold-start cheap.
     from pathlib import Path
 
     from aura.config.loader import load_config
     from aura.core.agent import build_agent
-    from aura.domain.team import TeammateMember as _Member
     from aura.infrastructure.persistence.storage import SessionStorage as _Storage
 
     config = load_config()
     if model_name:
-        # Override the router default so build_agent picks up the per-member spec.
         config = config.model_copy(
             update={"router": {**config.router, "default": model_name}},
         )
     storage = _Storage(Path(storage_root) / "index.sqlite")
     agent = build_agent(config, session_id=f"team-{team_id}-{member_name}")
-    # Synthesize a TeammateMember so a future caller can pass a richer
-    # record without changing this signature.
-    _ = _Member(
-        name=member_name, agent_type=agent_type,
-        model_name=model_name, system_prompt=system_prompt,
-    )
+    del agent_type, system_prompt
     stop_event = asyncio.Event()
     abort = AbortController()
     try:

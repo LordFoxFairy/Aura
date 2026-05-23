@@ -35,7 +35,7 @@ class TaskStop(BaseTool):
         "Cancel a still-running subagent task by id. Raises ToolError if "
         "the task is unknown or already in a terminal state."
     )
-    args_schema: type[BaseModel] = TaskStopParams
+    args_schema: type[BaseModel] = TaskStopParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
         is_destructive=False,
@@ -45,8 +45,7 @@ class TaskStop(BaseTool):
         timeout_sec=None,
     )
     store: TasksStore
-    # PrivateAttr — pydantic v2 deep-copies dict fields, breaking the
-    # identity-sharing contract with the owning Agent.
+    # PrivateAttr: pydantic v2 deep-copies regular dict fields, breaking identity-share with Agent.
     _running: dict[str, asyncio.Task[None]] = PrivateAttr()
     _running_shells: dict[str, asyncio.subprocess.Process] = PrivateAttr()
 

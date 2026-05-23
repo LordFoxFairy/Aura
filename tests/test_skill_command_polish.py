@@ -1,15 +1,4 @@
-"""Tests for skill-command UX polish (v0.12).
-
-Five polish items covered here (one section per item):
-
-1. ``user_invocable=False`` filter wired to slash-command registration.
-2. Slash-path errors on missing required arguments (match tool path).
-3. ``/help`` grouping by source.
-4. ``/help`` multi-line description collapse.
-5. ``skill_invoked`` journal event carries ``allowed_tools`` + ``source``
-   (Skill.layer) at invocation time (honest audit trail while runtime
-   enforcement remains deferred to v0.13).
-"""
+"""Skill-command UX polish: filters, errors, ``/help`` grouping, journal payload."""
 
 from __future__ import annotations
 
@@ -225,7 +214,7 @@ async def test_slash_path_accepts_exact_arg_count(tmp_path: Path) -> None:
 async def test_slash_path_accepts_more_args_than_declared(
     tmp_path: Path,
 ) -> None:
-    """Extra positionals beyond declared arity are ignored (claude-code parity)."""
+    """Extra positionals beyond declared arity are ignored."""
     skill = _skill("onearg", arguments=("topic",))
     agent = _agent(tmp_path)
     try:

@@ -1,4 +1,4 @@
-"""Hook protocols — pure-type contracts composed by ``HookChain``."""
+"""Hook protocols composed by HookChain."""
 
 from __future__ import annotations
 
@@ -37,11 +37,7 @@ class PostModelHook(Protocol):
 
 
 class PreToolHook(Protocol):
-    """Gate one tool call; returns an :class:`Outcome` variant.
-
-    Merge precedence (spec §3.2): first ``Block`` wins → first ``Ask``
-    wins → first ``Replace`` wins → last ``Allow`` wins.
-    """
+    # Merge precedence: first Block > first Ask > first Replace > last Allow.
 
     async def __call__(
         self,

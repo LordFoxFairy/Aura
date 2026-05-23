@@ -151,7 +151,7 @@ class Grep(BaseTool):
         "dirs (.git/.svn/.hg) are auto-excluded; lines over max_columns "
         "(default 500 chars) are elided with '[...]'."
     )
-    args_schema: type[BaseModel] = GrepParams
+    args_schema: type[BaseModel] = GrepParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=True,
         is_destructive=False,

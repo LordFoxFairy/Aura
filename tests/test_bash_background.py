@@ -23,7 +23,7 @@ import pytest
 
 from aura.application.hooks.bash_safety import make_bash_safety_hook
 from aura.application.tasks.store import TasksStore
-from aura.domain.task import _SHELL_RECENT_ACTIVITIES_CAP
+from aura.domain.task import SHELL_RECENT_ACTIVITIES_CAP
 from aura.schemas.state import LoopState
 from aura.schemas.tool import ToolResult
 from aura.tools.bash_background import BashBackground
@@ -221,7 +221,7 @@ async def test_progress_ring_bounded_at_shell_cap() -> None:
     rec = await _wait_for_terminal(store, task_id, timeout=15.0)
     assert rec.status == "completed"
     # Ring is bounded to 20 entries. line_count tracks the monotonic total.
-    assert len(rec.progress.recent_activities) <= _SHELL_RECENT_ACTIVITIES_CAP
+    assert len(rec.progress.recent_activities) <= SHELL_RECENT_ACTIVITIES_CAP
     assert rec.progress.line_count >= 40
 
 

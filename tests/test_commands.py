@@ -1,11 +1,4 @@
-"""Tests for the cli.commands façade.
-
-Exercises the public surface (``build_default_registry`` + async
-``dispatch``) end-to-end — mechanics of the underlying registry and each
-built-in command are covered in ``test_command_registry.py``. These tests
-are the regression guard against anyone breaking the façade import path
-or its wiring of the four default commands.
-"""
+"""End-to-end checks for the ``cli.commands`` facade and default registry wiring."""
 
 from __future__ import annotations
 
@@ -49,10 +42,8 @@ def test_cli_build_default_registry_facade_points_at_capabilities_module() -> No
 
 
 def test_default_registry_has_builtin_set() -> None:
-    # ``/team`` is gated by ``teams.enabled`` (claude-code parity with
-    # isAgentSwarmsEnabled(), v0.18+); a no-agent registry build cannot
-    # consult a config and the safe default is off, so ``/team`` is
-    # absent here. See test_teams_feature_flag.py for the gate-on path.
+    # ``/team`` is gated by ``teams.enabled``; no-agent build can't read
+    # config so the safe default is off — see test_teams_feature_flag.py.
     r = build_default_registry()
     names = {c.name for c in r.list()}
     assert names == {

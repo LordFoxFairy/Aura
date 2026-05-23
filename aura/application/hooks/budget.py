@@ -1,4 +1,4 @@
-"""Size-budget post-tool hook + usage-tracking post-model hook."""
+"""Size-budget (post-tool) + token-usage (post-model) hooks."""
 
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ def make_size_budget_hook(
     async def _hook(
         *,
         tool: BaseTool,
-        args: dict[str, Any],
+        args: dict[str, Any],  # noqa: ARG001  # Protocol kw arg; unused
         result: ToolResult,
-        state: LoopState,
+        state: LoopState,  # noqa: ARG001  # Protocol kw arg; unused
         **_: Any,
     ) -> ToolResult:
         if not result.ok or result.output is None:
@@ -57,7 +57,7 @@ def make_size_budget_hook(
 
 
 def _extract_token_usage(ai_message: AIMessage) -> dict[str, int]:
-    """Pull per-turn input/output/cache-read counts; degrade to 0 on miss."""
+    """Per-turn input/output/cache-read counts; missing fields degrade to 0."""
     out = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
 
     usage = getattr(ai_message, "usage_metadata", None) or {}
@@ -95,8 +95,7 @@ def make_usage_tracking_hook() -> PostModelHook:
                 state.total_tokens_used += total
 
         per_turn = _extract_token_usage(ai_message)
-        # Char-estimator fallback for providers without usage_metadata
-        # (DashScope, some Ollama). Keeps the status bar realistic.
+        # Char-estimator fallback for providers without usage_metadata (DashScope, some Ollama).
         if per_turn["input_tokens"] == 0 and per_turn["output_tokens"] == 0:
             per_turn["input_tokens"] = sum(estimate_message_tokens(msg) for msg in history)
             ai_content = getattr(ai_message, "content", "")

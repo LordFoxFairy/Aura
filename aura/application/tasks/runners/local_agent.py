@@ -1,17 +1,4 @@
-"""LocalAgentTask — in-process child Agent runner, fire-and-forget.
-
-Translates claude-code's ``tasks/LocalAgentTask`` into Python. The
-runner owns one child :class:`~aura.core.agent.Agent` instance,
-drives a single prompt through ``astream``, and writes the terminal
-outcome onto the :class:`~aura.application.tasks.store.TasksStore` record.
-Fire-and-forget: the runner schedules itself via
-``asyncio.create_task`` and the parent never awaits the resulting
-asyncio.Task directly — cancellation flows through :meth:`abort`.
-
-This module owns the bulk of subagent lifecycle plumbing (transcript
-flush, metadata flush, periodic summary, token observer) so the
-``run.py`` driver can stay thin and route between runner topologies.
-"""
+"""In-process child Agent runner; fire-and-forget, cancellation via :meth:`abort`."""
 
 from __future__ import annotations
 
@@ -22,7 +9,7 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from langchain_core.messages import AIMessage, BaseMessage
 
@@ -36,10 +23,7 @@ if TYPE_CHECKING:
     from aura.application.tasks.factory import SubagentFactory
 
 
-# 5 minute defense-in-depth ceiling. Matches the spirit of claude-code's
-# AbortController contract — a stuck child must never block the parent
-# forever. Env override + sub-zero escape hatch kept for operators
-# running specialised long jobs.
+# 5 minute defense-in-depth ceiling; ``AURA_SUBAGENT_TIMEOUT_SEC<=0`` disables.
 DEFAULT_SUBAGENT_TIMEOUT_SEC: float = 300.0
 _TIMEOUT_ENV_VAR = "AURA_SUBAGENT_TIMEOUT_SEC"
 
@@ -47,11 +31,8 @@ _TIMEOUT_ENV_VAR = "AURA_SUBAGENT_TIMEOUT_SEC"
 def resolve_timeout(override: float | None) -> float | None:
     """Pick the effective wallclock timeout (None == disabled).
 
-    Precedence: explicit override > env var > default. ``<= 0`` flows
-    through as ``None`` (no cap). Malformed env values journal + fall
-    through to the default rather than raising — we're in a
-    fire-and-forget path and stranding the TaskRecord in ``running``
-    would be worse than ignoring a typo.
+    Precedence: explicit override > env var > default. ``<= 0`` flows through as ``None``.
+    Malformed env values journal + fall through to the default.
     """
     if override is not None:
         return override if override > 0 else None
@@ -71,12 +52,7 @@ def resolve_timeout(override: float | None) -> float | None:
 
 
 def make_token_observer(store: TasksStore, task_id: str) -> Any:
-    """Build a post_model hook that forwards usage_metadata into the store.
-
-    The hook is forgiving: missing ``usage_metadata`` (FakeChatModel et
-    al.) is a no-op; an exception from the observer journals + returns
-    so the child's astream keeps going.
-    """
+    """post_model hook forwarding ``usage_metadata`` into the store; failures journaled."""
     async def _observe(
         *,
         ai_message: AIMessage,
@@ -121,12 +97,12 @@ def flush_transcript(
             return None
         cwd_arg: Path | None = Path(cwd) if cwd else None
         parent_arg: str | None = parent_session_id or None
-        path: Path = register(
+        path = cast(Path, register(
             task_id,
             messages,
             parent_session_id=parent_arg,
             cwd=cwd_arg,
-        )
+        ))
         store.set_transcript_path(task_id, path)
         return path
     except Exception as exc:  # noqa: BLE001  # persistence failure is non-fatal best-effort
@@ -146,13 +122,7 @@ def maybe_cleanup_completed_transcript(
     parent_session_id: str,
     cwd: str,
 ) -> None:
-    """Delete a successfully-completed subagent's transcript + meta files.
-
-    Opt-in via ``ToolsConfig.cleanup_completed_subagent_transcripts``;
-    default is False (claude-code parity — files stay so /resume +
-    post-mortem inspection still work). Only success calls this;
-    failed / cancelled / timeout transcripts always survive.
-    """
+    """Delete a completed subagent's transcript + meta files (opt-in; failures survive)."""
     try:
         if not agent.config.tools.cleanup_completed_subagent_transcripts:
             return
@@ -162,9 +132,9 @@ def maybe_cleanup_completed_transcript(
             path_fn = getattr(transcript_storage, fn_name, None)
             if not callable(path_fn):
                 continue
-            target: Path = path_fn(
+            target = cast(Path, path_fn(
                 task_id, parent_session_id=parent_arg, cwd=cwd_arg,
-            )
+            ))
             try:
                 target.unlink(missing_ok=True)
             except OSError as exc:
@@ -286,15 +256,7 @@ def load_child_messages(
 
 
 class LocalAgentTask:
-    """In-process subagent runner — one prompt, one terminal outcome.
-
-    Use via :meth:`start` to schedule the asyncio task, :meth:`abort` to
-    cancel it, and :meth:`wait_for_terminal` to await its natural
-    completion. The runner publishes terminal state onto the
-    :class:`TasksStore` so external listeners (parent Agent's task
-    notifications) see the same record regardless of which runner
-    topology was used.
-    """
+    """In-process subagent runner — one prompt, one terminal outcome."""
 
     def __init__(
         self,
@@ -319,10 +281,7 @@ class LocalAgentTask:
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> asyncio.Task[None]:
-        """Schedule the runner coroutine; return the handle.
-
-        Idempotent — a second ``start()`` returns the existing handle.
-        """
+        """Schedule the runner coroutine; idempotent."""
         if self._task is None:
             self._task = asyncio.create_task(
                 self._run(),
@@ -343,7 +302,7 @@ class LocalAgentTask:
             self._task.cancel()
 
     async def _run(self) -> None:
-        await _run_local_agent(
+        await run_local_agent(
             store=self._store,
             factory=self._factory,
             task_id=self._task_id,
@@ -355,7 +314,7 @@ class LocalAgentTask:
         )
 
 
-async def _run_local_agent(
+async def run_local_agent(
     *,
     store: TasksStore,
     factory: SubagentFactory,
@@ -366,22 +325,14 @@ async def _run_local_agent(
     parent_session_id: str | None,
     cwd: str | None,
 ) -> None:
-    """Body of the local-agent run.
-
-    Kept as a module-level function (not an instance method) so the
-    legacy ``run_task`` thin wrapper in :mod:`aura.application.tasks.run` can
-    call it directly without instantiating :class:`LocalAgentTask` —
-    preserves existing callers that scheduled ``asyncio.create_task(
-    run_task(...))`` without a class wrapper.
-    """
+    """Body of the local-agent run; module-level so :func:`run_task` calls it directly."""
     record = store.get(task_id)
     if record is None:
         return
     resolved_parent_session_id = parent_session_id or ""
     resolved_cwd = cwd or os.getcwd()
     effective_timeout = resolve_timeout(timeout_sec)
-    # F-07-005 — parent abort cascade. Watcher coroutine fires the
-    # local task's cancel when the parent's AbortController fires.
+    # Parent abort cascade: cancel the local task when the parent's Event fires.
     parent_abort = factory.abort_event
     abort_watcher: asyncio.Task[None] | None = None
     if parent_abort is not None:
@@ -405,15 +356,12 @@ async def _run_local_agent(
         agent_type=record.agent_type or "general-purpose",
         prompt_chars=len(record.prompt),
     )
-    # Frontend lifecycle event — sibling to the terminal listener.
     store.record_started(task_id)
     agent: Any = None
     final_text = ""
     summarizer: Any = None
     try:
-        # spawn() may raise on agent_type/model errors — keep it inside
-        # the try so a spawn-time failure flips the record to ``failed``
-        # rather than stranding it in ``running``.
+        # spawn() inside the try: spawn-time failure must flip the record to ``failed``.
         try:
             agent = factory.spawn(
                 record.prompt,
@@ -431,7 +379,6 @@ async def _run_local_agent(
             else:
                 raise
         agent.hooks.post_model.append(make_token_observer(store, task_id))
-        # Round 7QS — periodic summary (cheap-model digest tick).
         from aura.application.services.agent_summary import AgentSummarizer
         from aura.infrastructure import llm as _llm_mod
 
@@ -439,9 +386,6 @@ async def _run_local_agent(
             _llm_mod, "make_summary_model_factory", None,
         )
         if _make_summary_factory is not None:
-            # AuraConfig has no ``web_fetch`` field today; ``summary_spec=None``
-            # matches the prior best-effort getattr chain (child shares parent's
-            # config so reading from either is equivalent).
             summary_factory = _make_summary_factory(
                 agent.config, agent.model, summary_spec=None,
             )

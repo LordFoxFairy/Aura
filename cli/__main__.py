@@ -88,8 +88,7 @@ def _make_parser() -> argparse.ArgumentParser:
         metavar="KEY=VALUE",
         help="environment variable for stdio transport (repeatable)",
     )
-    # command_args is populated by _split_dashdash before argparse runs;
-    # argparse.REMAINDER can't coexist with intermixed --transport / --env.
+    # argparse.REMAINDER can't intermix with --transport/--env; populated by _split_dashdash.
     mcp_add.set_defaults(command_args=[])
 
     mcp_sub.add_parser(
@@ -106,10 +105,7 @@ def _make_parser() -> argparse.ArgumentParser:
         help="layer to remove from; 'auto' targets whichever currently owns the name",
     )
 
-    # ``teammate`` — subprocess entry point spawned by the pane backend.
-    # Communication with the leader is exclusively via the on-disk JSONL
-    # mailbox under ``<storage-root>/teams/<team-id>/``; argv carries only
-    # what the subprocess needs to wire its own Agent.
+    # Teammates talk to the leader via on-disk JSONL mailbox; argv only seeds Agent.
     teammate = subparsers.add_parser(
         "teammate",
         help="run an Aura teammate inside a subprocess (pane backend)",
@@ -145,8 +141,7 @@ def _bypass_refused_message() -> str:
 def _warn_plaintext_api_keys(
     config: AuraConfig, console: Console, *, verbose: bool = False,
 ) -> None:
-    # Always journal; print only under --verbose so operators who tune out
-    # the warning still leave an audit trail.
+    # Always journal so audit trail survives even when --verbose suppresses the print.
     from aura.core import journal
 
     for provider in config.providers:
@@ -181,11 +176,7 @@ def _split_dashdash(argv: list[str]) -> tuple[list[str], list[str]]:
 
 
 def run_as_teammate(args: argparse.Namespace) -> int:
-    """Drive ``run_teammate_main`` for the ``teammate`` subcommand.
-
-    The heavy chain (config loader, agent builder, persistence) is
-    imported lazily so the parent ``aura`` invocation stays light.
-    """
+    # Lazy import keeps the parent ``aura`` invocation light.
     from aura.application.teams.runtime import run_teammate_main
 
     try:
@@ -289,8 +280,7 @@ def main() -> int:
             ask_rules = store.load_ask_ruleset(project_root)
         except AuraConfigError as exc:
             return _fail_startup(console, exc)
-        # User rules first so audit attributes decisions to their rules,
-        # not the default backstop.
+        # User rules first so audit credits them, not the default backstop.
         ruleset = RuleSet(rules=disk_rules.rules + DEFAULT_ALLOW_RULES)
         safety_policy = SafetyPolicy(
             protected_writes=DEFAULT_PROTECTED_WRITES,
@@ -311,8 +301,7 @@ def main() -> int:
             journal.write("permission_bypass_active")
         session = SessionRuleSet()
         asker = make_cli_asker(timeout=perm_cfg.prompt_timeout_sec)
-        # Forward-ref cell so the permission hook reads Agent.mode live
-        # (shift+tab and plan-mode toggles mutate it mid-session).
+        # Forward-ref cell — hook reads Agent.mode live so shift+tab toggles propagate.
         _agent_cell: list[Agent | None] = [None]
 
         def _live_mode() -> Mode:
@@ -366,7 +355,7 @@ def main() -> int:
         from aura.application.hooks.file_watcher import FileWatcher, default_watch_paths
         watcher = FileWatcher(
             paths=default_watch_paths(Path.cwd()),
-            chain=agent._hooks,
+            chain=agent.hooks,
             state=agent.state,
         )
         try:

@@ -1,16 +1,4 @@
-"""Provider-specific context-window lookups.
-
-Bug pin: a user session showed ``40.2k/512k [█░░░░░░░░░] 8%`` on the status
-bar while the actual prompt overflowed the model's real max — Aura was
-returning the 512k UNKNOWN-model default for ``deepseek:glm-5``, lying by
-4× to the operator. The default was lowered to 128k AND the table now
-explicitly enumerates the common DeepSeek / GLM / Qwen / Kimi families.
-
-Each parametrize entry below pins ONE family→window mapping the user
-counts on; if a future refactor accidentally drops it, this suite catches
-the regression. The list is exhaustive enough that adding a new family
-forces a corresponding test row — that's the contract.
-"""
+"""Provider-specific context-window lookups; each row pins one family mapping."""
 
 from __future__ import annotations
 
@@ -74,10 +62,7 @@ class TestKnownFamilies:
 class TestUnknownDefault:
 
     def test_unknown_model_falls_back_to_safe_default(self) -> None:
-        """Default is now 128k (claude-code parity) — over-stated default
-        was a real bug because the status bar lied to operators on common
-        Chinese models.
-        """
+        """Unknown spec → 128k (over-stated defaults lie to the status bar)."""
         assert get_context_window("totally-unknown-model-spec-2099") == 128_000
 
     def test_default_constant_is_128k(self) -> None:

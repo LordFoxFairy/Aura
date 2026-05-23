@@ -1,11 +1,4 @@
-"""Backend registry — singleton lookup keyed by :data:`BackendType`.
-
-Mirrors claude-code's ``backends/registry.ts`` pattern: a single
-``get_backend(backend_type)`` entry point that returns the matching
-strategy, with an environment guard for the pane backend so a misrouted
-``add_member(backend_type="pane")`` outside tmux fails fast with a clear
-message instead of half-spawning.
-"""
+"""Backend registry — ``get_backend(backend_type)`` with env-gated pane construction."""
 
 from __future__ import annotations
 
@@ -21,29 +14,17 @@ if TYPE_CHECKING:
 
 
 class BackendUnavailable(RuntimeError):
-    """Raised when a requested backend can't run in this environment.
-
-    The manager catches this and surfaces it as a TeamError, so the
-    caller sees a clear "you asked for the pane backend, but you're
-    not inside tmux" rather than a stray RuntimeError.
-    """
+    pass
 
 
-# Module-level singletons — lazy-initialized on first lookup. Stateless
-# backends, so concurrent first-lookups racing is harmless (the second
-# init is just discarded).
+# Stateless backends — a race during first lookup just discards the loser's init.
 _in_process_singleton: InProcessBackend | None = None
 _pane_singleton: PaneBackend | None = None
 
 
 def get_backend(backend_type: BackendType) -> TeammateBackend:
-    """Return the singleton backend for ``backend_type``.
-
-    Raises :class:`BackendUnavailable` for ``"pane"`` when the
-    environment lacks tmux (no ``$TMUX`` or no binary on PATH). The
-    in-process backend is always available.
-    """
-    global _in_process_singleton, _pane_singleton  # noqa: PLW0603 — module-scope cache; lazy init needs global rebind
+    """Return the singleton backend; ``"pane"`` raises when ``$TMUX`` or the binary is missing."""
+    global _in_process_singleton, _pane_singleton  # noqa: PLW0603  # lazy init needs module-scope rebind
     if backend_type == "in_process":
         if _in_process_singleton is None:
             _in_process_singleton = InProcessBackend()
@@ -57,8 +38,6 @@ def get_backend(backend_type: BackendType) -> TeammateBackend:
         if _pane_singleton is None:
             _pane_singleton = PaneBackend()
         return _pane_singleton
-    # Future backend types (e.g. iterm2 split, ssh) plug in here. Until
-    # then a Literal-violating value is a programmer error.
     raise BackendUnavailable(f"unknown backend_type: {backend_type!r}")
 
 

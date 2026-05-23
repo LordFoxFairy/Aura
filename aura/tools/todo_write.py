@@ -19,7 +19,6 @@ class TodoWriteParams(BaseModel):
 
     @model_validator(mode="after")
     def _ensure_single_in_progress(self) -> TodoWriteParams:
-        # At most one in_progress; zero is fine.
         n = sum(1 for t in self.todos if t.status == "in_progress")
         if n > 1:
             raise ValueError(
@@ -42,7 +41,7 @@ class TodoWrite(BaseTool):
         "complete items. Keep exactly one item in_progress when actively "
         "working; mark completed the moment an item is done."
     )
-    args_schema: type[BaseModel] = TodoWriteParams
+    args_schema: type[BaseModel] = TodoWriteParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
         is_destructive=False,
@@ -54,7 +53,7 @@ class TodoWrite(BaseTool):
     state: LoopState
 
     def _run(self, todos: list[TodoItem]) -> dict[str, Any]:
-        # Preserve list identity (LoopSlots is frozen but the list is mutable).
+        # In-place mutation: LoopSlots is frozen but the todos list is shared by reference.
         self.state.slots.todos.clear()
         self.state.slots.todos.extend(todos)
         return {"message": "Todos updated."}

@@ -41,7 +41,6 @@ def _preview(args: dict[str, Any]) -> str:
     return f"command: {args.get('command', '')}"
 
 
-# Pattern set used by ``bash_safety`` to flag destructive shell commands.
 _DANGEROUS_COMMAND_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:^|[;&|\s])rm\s+(?:-[a-zA-Z]*[rRf][a-zA-Z]*)"),
     re.compile(r"(?:^|[;&|\s])sudo\b"),
@@ -76,7 +75,7 @@ _DANGEROUS_COMMAND_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
-def _is_bash_destructive(args: dict[str, Any]) -> bool:
+def is_bash_destructive(args: dict[str, Any]) -> bool:
     command = args.get("command", "")
     if not isinstance(command, str) or not command:
         return False
@@ -162,8 +161,7 @@ async def _shutdown(proc: Process, grace: float = _SHUTDOWN_GRACE) -> None:
 
 
 async def _drain_pipes(proc: Process) -> None:
-    # Drains and closes the transport on the current loop so GC doesn't
-    # finalize it after the loop has shut down.
+    # Close transport on the current loop so GC doesn't finalize it after loop shutdown.
     async def _read_eof(stream: asyncio.StreamReader | None) -> None:
         if stream is None:
             return
@@ -195,10 +193,10 @@ class Bash(Tool):
         "(True when the child was terminated for dumping more than the per-stream "
         "100 MB hard ceiling into Python memory)."
     )
-    args_schema: type[BaseModel] = BashParams
+    args_schema: type[BaseModel] = BashParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
-        is_destructive=_is_bash_destructive,
+        is_destructive=is_bash_destructive,
         is_concurrency_safe=False,
         rule_matcher=exact_match_on("command"),
         args_preview=_preview,
@@ -220,8 +218,7 @@ class Bash(Tool):
     async def _arun(
         self, command: str, timeout: int = _DEFAULT_TIMEOUT
     ) -> dict[str, Any]:
-        # New session/group so Ctrl-C from agent TTY doesn't propagate and
-        # _shutdown can killpg the whole group.
+        # New session/group: isolate Ctrl-C from agent TTY and enable killpg of the whole group.
         spawn_kwargs: dict[str, Any] = {}
         if sys.platform == "win32":
             spawn_kwargs["creationflags"] = getattr(
@@ -245,8 +242,7 @@ class Bash(Tool):
         stderr_task = asyncio.create_task(
             _stream_capped(proc.stderr, proc, "stderr"),
         )
-        # Hold the gather-future locally so wait_for's cancel path doesn't
-        # leave its exception unretrieved.
+        # Local ref so wait_for's cancel path doesn't leave the gather's exception unretrieved.
         gather_fut = asyncio.gather(stdout_task, stderr_task)
 
         async def _cleanup() -> None:

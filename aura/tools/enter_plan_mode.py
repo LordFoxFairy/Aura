@@ -41,7 +41,7 @@ class EnterPlanMode(BaseTool):
         "can gather context. Use this when the user asks you to plan before "
         "executing. Call exit_plan_mode when the plan is ready to execute."
     )
-    args_schema: type[BaseModel] = EnterPlanModeParams
+    args_schema: type[BaseModel] = EnterPlanModeParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
         is_destructive=False,
@@ -70,7 +70,7 @@ class EnterPlanMode(BaseTool):
     def _run(self, plan: str) -> dict[str, Any]:
         previous = self._get_mode()
         if previous == "plan":
-            # Re-enter must not overwrite the saved prior mode.
+            # Re-enter is a no-op so the saved prior mode survives for exit_plan_mode to restore.
             return {
                 "previous_mode": previous,
                 "new_mode": "plan",

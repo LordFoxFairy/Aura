@@ -22,10 +22,7 @@ from tests.conftest import FakeChatModel, FakeTurn
 
 
 def _cfg() -> AuraConfig:
-    # ``teams.enabled=True`` from v0.18 — without it, the spawned
-    # teammate Agent's ``join_team`` (called inside SubagentFactory.spawn
-    # for add_member) raises because the gate (claude-code parity with
-    # isAgentSwarmsEnabled()) defaults to False.
+    # Without ``teams.enabled=True`` the spawned teammate's ``join_team`` raises.
     return AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},

@@ -64,7 +64,7 @@ class TaskCreate(BaseTool):
         "immediately — use task_output(task_id) to fetch progress / result. "
         "The subagent runs in the background; your turn continues."
     )
-    args_schema: type[BaseModel] = TaskCreateParams
+    args_schema: type[BaseModel] = TaskCreateParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
         is_destructive=False,
@@ -75,8 +75,7 @@ class TaskCreate(BaseTool):
     )
     store: TasksStore
     factory: SubagentFactory
-    # PrivateAttr — pydantic v2 deep-copies dict fields, breaking the
-    # identity-sharing contract with the owning Agent.
+    # PrivateAttr: pydantic v2 deep-copies regular dict fields, breaking identity-share with Agent.
     _running: dict[str, asyncio.Task[None]] = PrivateAttr()
     _transcript_storage: SessionStorage | None = PrivateAttr(default=None)
 
@@ -113,7 +112,7 @@ class TaskCreate(BaseTool):
         agent_type: str = "general-purpose",
         model: str | None = None,
     ) -> dict[str, Any]:
-        # Validate before touching the store so a typo doesn't leave an orphan.
+        # Validate before store insert so a bad agent_type can't leave an orphan record.
         try:
             get_agent_def(agent_type)
         except ValueError as exc:

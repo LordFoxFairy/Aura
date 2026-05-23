@@ -1,24 +1,4 @@
-"""TEAMS feature gate — claude-code parity with ``isAgentSwarmsEnabled()``.
-
-The teams (multi-agent swarm) subsystem is dormant by default. This
-module pins the four behavioural guarantees of the gate:
-
-1. With the default config (``teams.enabled=False``), the
-   ``/team`` slash command is NOT registered with the default REPL
-   command registry — invisible to ``/help`` and tab completion.
-2. With ``teams.enabled=True`` the same registry call DOES register
-   the ``TeamCommand`` — opt-in symmetry.
-3. With the gate off, ``Agent.join_team`` raises ``RuntimeError``
-   pointing at the config flag — programmatic API mirrors the
-   slash-command surface.
-4. The default ``ToolsConfig.enabled`` allowlist never carries
-   ``send_message`` — that tool is auto-enabled inside ``join_team``,
-   not ``__init__``. With the gate off this auto-enable is a no-op,
-   so a default-built registry has no ``send_message``.
-5. With the gate on, the auto-enable round-trip works end-to-end:
-   join_team registers ``send_message``, the registry sees it, and
-   the loop's bound model carries the new schema.
-"""
+"""Teams feature gate: ``/team``, ``join_team``, and ``send_message`` opt-in semantics."""
 
 from __future__ import annotations
 
@@ -109,12 +89,7 @@ def test_teams_disabled_send_message_not_in_default_registry(
 def test_teams_enabled_send_message_auto_enabled_on_join(
     tmp_path: Path,
 ) -> None:
-    """With the gate open, ``join_team`` registers ``send_message``.
-
-    Pins the Phase A.1 contract end-to-end under the gate: leader is
-    not yet in a team → tool absent; leader joins → tool present
-    (registry + loop's bound model in sync).
-    """
+    """With the gate open, ``join_team`` registers ``send_message`` end-to-end."""
     agent = _agent(tmp_path, teams_enabled=True)
     assert "send_message" not in agent._registry
     agent.join_team(manager=_stub_manager())
@@ -124,12 +99,6 @@ def test_teams_enabled_send_message_auto_enabled_on_join(
 
 
 def test_teams_disabled_build_default_registry_without_agent_omits_team_command() -> None:
-    """No-agent registry build: gate defaults to off (claude-code-aligned).
-
-    ``build_default_registry()`` with ``agent=None`` cannot consult a
-    config, so the safe default (matching the ``teams.enabled=False``
-    shipping default) is to skip ``TeamCommand``. Callers that need
-    the gated command must pass an Agent built with the gate open.
-    """
+    """No-agent registry build can't read config; safe default omits ``/team``."""
     registry = build_default_registry()
     assert "/team" not in {c.name for c in registry.list()}

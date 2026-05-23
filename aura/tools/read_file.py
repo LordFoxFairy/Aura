@@ -16,7 +16,6 @@ _MAX_BYTES = 1024 * 1024
 _TOKEN_BUDGET = 25_000
 _CHARS_PER_TOKEN_HEURISTIC = 4
 
-# Interactive / pseudo-file / kernel-memory paths the tool always refuses.
 _BLOCKED_DEVICE_PATHS: frozenset[str] = frozenset({
     "/dev/stdin",
     "/dev/tty",
@@ -100,7 +99,7 @@ class ReadFile(Tool):
         "optional offset/limit. Files exceeding 1 MB are head-truncated to "
         "the cap with partial=True and truncated_at_bytes set."
     )
-    args_schema: type[BaseModel] = ReadFileParams
+    args_schema: type[BaseModel] = ReadFileParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=True,
         is_destructive=False,

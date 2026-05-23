@@ -78,7 +78,7 @@ class Glob(BaseTool):
         "recursively). Returns paths sorted newest-first by default. Inside a git "
         "repo, .gitignored and untracked files are excluded automatically."
     )
-    args_schema: type[BaseModel] = GlobParams
+    args_schema: type[BaseModel] = GlobParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=True,
         is_destructive=False,

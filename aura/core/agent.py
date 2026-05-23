@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -65,54 +65,31 @@ from aura.schemas.tool import ToolError
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 from aura.tools.ask_user import FormQuestionDict, UserAsker
 
-# Substring signatures that identify provider-level "context length exceeded"
-# errors. We match on stringified message — not exception type — so we don't
-# have to import openai / anthropic SDK types and so custom/wrapper models
-# keep working. Lowercased at compare time; covers OpenAI, Anthropic,
-# Google, Aliyun DashScope, Ollama variants. Add new entries when a
-# provider surfaces a novel phrasing — bug-watch the journal for
-# ``llm_invoke_failed`` events whose error doesn't trigger reactive compact.
+# Match on stringified message so provider SDK types stay out of imports.
 _CONTEXT_OVERFLOW_PHRASES: tuple[str, ...] = (
-    # OpenAI / OpenAI-compatible.
     "context length",
     "context_length_exceeded",
     "maximum context",
-    # Anthropic.
     "prompt is too long",
-    # Aliyun DashScope (the OpenAI-compat endpoint surfaces this exact
-    # phrasing for both 1261 and the bare-text variants Qwen returns).
     "prompt exceeds max length",
     "input too long",
     "exceeds max length",
-    # Google Gemini.
     "request payload size exceeds",
-    # Generic — last-resort matchers.
     "too many tokens",
     "max_tokens exceeded",
 )
 
-# Aliyun DashScope error codes that map to "context too long". Code-level
-# detection complements phrase matching: even when the SDK localizes the
-# message into another language, the structured code field stays stable.
+# Structured codes survive SDK message localisation; phrase match would miss.
 _CONTEXT_OVERFLOW_CODES: tuple[str, ...] = (
-    "1261",  # DashScope: "Prompt exceeds max length"
+    "1261",
 )
 
 
-def _is_context_overflow(exc: BaseException) -> bool:
-    """True iff ``exc``'s message matches a known context-overflow signature.
-
-    Checks both the lowercased error text (cheap substring match against
-    :data:`_CONTEXT_OVERFLOW_PHRASES`) and the structured error code
-    field (``'code': '1261'`` style — DashScope and similar surfaces).
-    """
+def is_context_overflow(exc: BaseException) -> bool:
+    """True iff ``exc`` matches a known provider context-overflow signature."""
     msg = str(exc).lower()
     if any(phrase in msg for phrase in _CONTEXT_OVERFLOW_PHRASES):
         return True
-    # Fallback: structured code in the rendered exception. DashScope's
-    # OpenAI-compat client renders ``Error code: 400 - {'error':
-    # {'code': '1261', ...}}`` so the literal ``'code': '1261'`` substring
-    # is stable across SDK locales.
     for code in _CONTEXT_OVERFLOW_CODES:
         if f"'code': '{code}'" in msg or f'"code": "{code}"' in msg:
             return True
@@ -122,10 +99,7 @@ def _is_context_overflow(exc: BaseException) -> bool:
 async def _unavailable_question_asker(
     _questions: list[FormQuestionDict],
 ) -> dict[str, str]:
-    # Registered when no ``question_asker`` was injected (e.g. SDK caller
-    # drives astream without a REPL). The tool stays visible to the LLM —
-    # invoking it surfaces this error as a ToolError in the tool result,
-    # not a crash, so the model can pivot.
+    # Surfaced as ToolError so a missing REPL doesn't crash the loop.
     raise ToolError(
         "ask_user_question is unavailable: no CLI asker was injected. "
         "Run aura through the CLI, or pass question_asker=... to "
@@ -162,8 +136,7 @@ class Agent:
     ) -> None:
         self._config = config
         self._model = model
-        # Live model spec — ``switch_model`` mutates this; ``config.router``
-        # stays immutable so /clear restarts from the configured default.
+        # switch_model mutates the live spec; config.router stays immutable.
         self._current_model_spec = config.router.get("default", "")
         self._session_runtime = SessionRuntime(
             storage=storage,
@@ -188,8 +161,7 @@ class Agent:
                 ),
             )
         self._mode = mode
-        # prePlanMode — enter_plan_mode stashes the prior mode so
-        # exit_plan_mode can restore it instead of always landing on default.
+        # enter_plan_mode stashes the prior mode for exit_plan_mode to restore.
         self._prior_mode: str | None = None
         self._auto_compact_threshold = auto_compact_threshold
         if (
@@ -210,7 +182,6 @@ class Agent:
         self._microcompact_trigger_pairs = microcompact_trigger_pairs
         self._microcompact_keep_recent = microcompact_keep_recent
         self._cwd = Path.cwd()
-        # Live abort controller for the running astream call; cleared on exit.
         self._current_abort: AbortController | None = None
 
         self._init_subagents(
@@ -222,7 +193,7 @@ class Agent:
         )
         self._init_tools(question_asker=question_asker, available_tools=available_tools)
 
-        # system_prompt_suffix — stashed so clear_session can rebuild identically.
+        # Stashed so clear_session can rebuild the prompt identically.
         self._system_prompt_suffix = system_prompt_suffix
         self._auto_memory_dir = self._storage.memory_dir(cwd=self._cwd)
         self._system_prompt = (
@@ -238,14 +209,12 @@ class Agent:
             auto_memory_dir=self._auto_memory_dir,
         )
         self._rules = rules.load_rules(self._cwd)
-        # carryover only flows into the FIRST Context — /clear and /compact
-        # build fresh Contexts and must not resurrect a parent's read fingerprints.
+        # carryover only flows into the FIRST Context; /clear and /compact
+        # build fresh Contexts so a parent's read fingerprints don't resurrect.
         self._context = self._build_context(carryover=carryover)
 
         self._init_hooks()
 
-        # Buffer drained by astream between loop yields so AG-UI consumers
-        # see compact lifecycle events interleaved with the regular stream.
         self._pending_compact_events: list[dict[str, Any]] = []
         self._loop = self._build_loop()
         self._mcp_runtime = McpRuntime(
@@ -253,16 +222,13 @@ class Agent:
             mcp_overrides_builtin=self._config.tools.mcp_overrides_builtin,
             manager_factory=lambda configs: MCPManager(configs),
         )
-        # Computed before the first turn so the status bar has an anchor on
-        # providers (deepseek, etc.) where cache_read_input_tokens always returns 0.
+        # Anchor for providers that always return 0 cache_read_input_tokens.
         self._pinned_tokens_estimate = self._estimate_pinned_tokens()
         from aura.config.schema import ToolsConfig as _ShippedToolsConfig
         self._user_pinned_tools_allowlist_value = (
             list(self._config.tools.enabled)
             != list(_ShippedToolsConfig().enabled)
         )
-        # web_fetch summary-model factory — best-effort wiring; symbols may
-        # not yet exist on every llm module variant.
         try:
             from aura.infrastructure import llm as _llm_mod
             from aura.tools import web_fetch as _wf_mod
@@ -281,8 +247,7 @@ class Agent:
         ask_ruleset: RuleSet | None,
         safety: SafetyPolicy | None,
     ) -> None:
-        # Skills load once at construction; pre_loaded_skills (subagent path)
-        # bypasses the disk scan so children inherit the parent's exact set.
+        # Subagent path injects skills directly so children inherit the parent set.
         if pre_loaded_skills is not None:
             self._skill_registry = pre_loaded_skills
         else:
@@ -291,7 +256,7 @@ class Agent:
             )
         self._tasks_store = TasksStore()
         # parent_mode_provider closes over self so mid-session mode changes
-        # (shift+tab, enter_plan_mode) are visible to every spawn.
+        # are visible to every spawn.
         self._subagent_factory = SubagentFactory(
             parent_config=self._config,
             parent_model_spec=self._config.router.get("default", ""),
@@ -308,11 +273,10 @@ class Agent:
             parent_model=self._model,
             parent_session_id=self._session_id,
         )
-        # Wrap spawn so each child gets a registered AbortController in
-        # _running_aborts — a single user Ctrl+C cascades to the whole tree.
+        # Each child registers an AbortController so a single Ctrl+C cascades.
         original_spawn = self._subagent_factory.spawn
 
-        def _spawn_with_abort(*args, **kwargs):  # type: ignore[no-untyped-def]
+        def _spawn_with_abort(*args, **kwargs):  # type: ignore[no-untyped-def]  # variadic spawn signature varies across SubagentFactory revisions
             task_id = kwargs.get("task_id")
             try:
                 child = original_spawn(*args, **kwargs)
@@ -325,16 +289,14 @@ class Agent:
             controller = AbortController()
             key = task_id if task_id is not None else child.session_id
             self._running_aborts[key] = controller
-            # Stamp on the child so its astream picks the controller up
-            # directly, bypassing the "create my own" branch.
             object.__setattr__(child, "_inherited_abort", controller)
             return child
 
-        self._subagent_factory.spawn = _spawn_with_abort  # type: ignore[method-assign]
+        self._subagent_factory.spawn = _spawn_with_abort  # type: ignore[method-assign]  # intentional method replacement on a per-Agent factory instance
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._running_shells: dict[str, asyncio.subprocess.Process] = {}
         self._running_aborts: dict[str, AbortController] = {}
-        # Typed loose to avoid a circular import on TeamManager.
+        # Typed loose so TeamManager doesn't trigger a circular import.
         self._team: object | None = None
         self._team_member_name: str | None = None
 
@@ -400,8 +362,7 @@ class Agent:
         question_asker: UserAsker | None,
         available_tools: dict[str, BaseTool] | None,
     ) -> None:
-        # Stateless built-ins come from shared singletons; stateful ones are
-        # instantiated per-Agent so each gets its own dependencies.
+        # Stateful tools instantiate per-Agent; stateless ones reuse singletons.
         self._available_tools = (
             dict(available_tools) if available_tools is not None else dict(BUILTIN_TOOLS)
         )
@@ -417,7 +378,7 @@ class Agent:
         )
         for factory in STATEFUL_TOOL_FACTORIES:
             self._available_tools[factory.name] = factory.build(tool_runtime)
-        # Residual stateful tools whose closures need Agent-bound methods.
+        # Closures below need Agent-bound methods so they can't use ToolRuntime.
         self._available_tools["task_output"] = BUILTIN_STATEFUL_TOOLS[
             "task_output"
         ](store=self._tasks_store)
@@ -467,20 +428,17 @@ class Agent:
         self._registry = ToolRegistry(tools)
 
     def _init_hooks(self) -> None:
-        # bash_safety at pre_tool[0] — precedes any caller-supplied permission
-        # hook because safety is orthogonal to allow/deny/ask rules. Bypass
-        # mode intentionally skips it (operator opt-in). Tracked as a field
-        # so clear_session can re-insert it at position 0 idempotently.
+        # bash_safety anchors at pre_tool[0] — safety is orthogonal to
+        # allow/deny/ask, and tracking it as a field lets clear_session
+        # re-insert it idempotently.
         self._bash_safety_hook = make_bash_safety_hook(
             mode_provider=lambda: cast("Mode", self._mode),
         )
         self._hooks.pre_tool.insert(0, self._bash_safety_hook)
-        # Appended AFTER caller hooks so a user-denied tool doesn't also
-        # surface a missing-read complaint.
+        # Appended last so a denied tool doesn't also raise missing-read.
         self._must_read_first_hook = make_must_read_first_hook(self._context)
         self._hooks.pre_tool.append(self._must_read_first_hook)
-        # Lazy import — auto_reload imports Agent for type-checking, so
-        # importing it at module load time would create a cycle.
+        # auto_reload imports Agent — defer to break the cycle.
         from aura.application.hooks.auto_reload import (
             make_aura_md_reload_hook,
             make_cwd_rules_reload_hook,
@@ -495,26 +453,8 @@ class Agent:
         attachments: list[HumanMessage] | None = None,
         abort: AbortController | None = None,
     ) -> AsyncIterator[AgentEvent | dict[str, Any]]:
-        # Persistence order (matches claude-code QueryEngine.ts:431+451):
-        #   1. Build history with attachments + user HumanMessage,
-        #   2. ``storage.save`` BEFORE any model.ainvoke call,
-        #   3. Run the turn; on success save again (tool results + assistant).
-        # Why: if the model call crashes / the process is killed / the user
-        # Ctrl-C's mid-stream, the user's input is ALREADY on disk. The next
-        # session-resume sees the interrupted turn, not a black hole. Closes
-        # the B2/G1 audit gap against claude-code.
-        #
-        # ``attachments``: optional HumanMessages to prepend BEFORE the user's
-        # HumanMessage. CLI-layer @mention preprocessing (cli.attachments)
-        # builds ``<mcp-resource>`` envelopes that land here. Persisted with
-        # the user turn so reactive-compact (and any retry) can read them
-        # from history without re-injection.
-        #
-        # The session_scope context routes every journal.write made on this
-        # task — including ones emitted deep inside the loop / tools — to the
-        # per-session JSONL file. contextvars propagate across ``await`` and
-        # ``async for`` on the same task, so nested awaits inherit the scope
-        # automatically.
+        # Persist the user turn before any ainvoke so a mid-stream crash
+        # leaves resumable history instead of a black hole.
         ctx = (
             journal.session_scope(self._session_log_path)
             if self._session_log_path is not None
@@ -527,27 +467,17 @@ class Agent:
                 prompt_preview=prompt[:200],
             )
             history = self._storage.load(self._session_id)
-            # F-05-004 user-turn rollback boundary: snapshot the
-            # pre-attachment length so a cancel BEFORE any AIMessage
-            # can pop the unanswered user turn off persisted history.
+            # Snapshot for rollback: cancel before any AIMessage pops the user turn.
             history_len_before_user_turn = len(history)
             if attachments:
                 history.extend(attachments)
             history.append(HumanMessage(content=prompt))
             self._storage.save(self._session_id, history)
 
-            # F-01-003 / Bug 2 fix #1 — reset per-astream turn budget so
-            # ``max_turns`` is per-user-turn, not per-Agent-lifetime
-            # (claude-code parity: ``turnCount = 1`` initialised at
-            # every ``query`` entry). Without this, a long prior
-            # session pre-trips the cap on every fresh user prompt.
+            # max_turns is per-user-turn, not per-Agent-lifetime.
             self._state.turn_count = 0
 
-            # F-01-001 abort plumbing. Precedence:
-            # 1. Explicit ``abort=`` kwarg (callers like teams runtime).
-            # 2. ``_inherited_abort`` stamped by the parent's
-            #    ``_subagent_factory.spawn`` wrapper (F-07-005 cascade).
-            # 3. A fresh controller we own ourselves.
+            # Abort precedence: explicit kwarg > inherited from parent > own.
             inherited = getattr(self, "_inherited_abort", None)
             local_abort = (
                 abort
@@ -556,10 +486,6 @@ class Agent:
             )
             self._current_abort = local_abort
             self._partial_assistant_text = ""
-            # Phase 4 Task 4 — flush any compact events buffered from a
-            # PRIOR turn (e.g. /compact between astream calls would have
-            # appended via ``Compactor.manual``'s emitter). Most turns
-            # find this empty.
             self._pending_compact_events.clear()
 
             saw_ai_message = False
@@ -570,19 +496,9 @@ class Agent:
                     ):
                         if isinstance(event, AssistantDelta):
                             self._partial_assistant_text += event.text
-                        # Drain compact events buffered by the Compactor
-                        # during ``_invoke_model`` (microcompact runs
-                        # before every ainvoke; reactive runs on
-                        # context-overflow). Yield each as a wire-format
-                        # dict — typed AgentEvent consumers
-                        # ``isinstance``-check past it; transport adapters
-                        # forward it verbatim.
                         while self._pending_compact_events:
                             yield self._pending_compact_events.pop(0)
                         yield event
-                    # Final drain inside the success path so a microcompact
-                    # that fired on the last ainvoke (with no following
-                    # event) still surfaces.
                     while self._pending_compact_events:
                         yield self._pending_compact_events.pop(0)
                     saw_ai_message = any(
@@ -603,49 +519,28 @@ class Agent:
                         is_abort=is_abort,
                         had_ai=saw_ai_message,
                     )
-                    # F-05-003 partial assistant text — flush whatever
-                    # streamed before the abort so the user sees it.
                     if self._partial_assistant_text:
                         yield AssistantDelta(text=self._partial_assistant_text)
                         self._partial_assistant_text = ""
                     if is_abort:
-                        # F-05-004 rollback: when no AIMessage landed,
-                        # the user's HumanMessage is unanswered — drop
-                        # it so the next astream sees a clean slate.
+                        # No AIMessage landed → drop the unanswered user turn.
                         if not saw_ai_message:
                             del history[history_len_before_user_turn:]
                         self._storage.save(self._session_id, history)
-                        # Cascade to children — single Ctrl+C tears
-                        # the whole subagent / teammate tree down.
                         await self._cascade_abort_to_children(
                             local_abort.reason or "parent_aborted",
                         )
                         yield Final(message="(cancelled)", reason="aborted")
-                        # Subagent path: when this Agent inherited an
-                        # abort controller from a parent (i.e. WE are
-                        # a subagent), re-raise the original exception
-                        # so the surrounding ``run_task`` flips the
-                        # TaskRecord to a terminal status (cancelled
-                        # / failed) instead of marking ``completed``.
-                        # Top-level agents (no inheritance) swallow
-                        # the abort — they already yielded the Final
-                        # so the caller's iteration ends cleanly.
+                        # Subagents re-raise so run_task sees a terminal status.
                         if isinstance(exc, asyncio.CancelledError):
                             raise
                         if getattr(self, "_inherited_abort", None) is not None:
                             raise
                         return
-                    # Pure CancelledError — preserve legacy behaviour.
                     yield Final(message="(cancelled)")
                     raise
             finally:
                 self._current_abort = None
-            # F-01-012 — reactive recompact lives INSIDE AgentLoop now
-            # (turn_count + per-turn audit state survive the recompact).
-            # The Agent simply hands a callback into the loop via
-            # ``_build_loop``; on context-overflow, the loop calls back,
-            # we compact + reload ``history`` in place, and the SAME
-            # turn retries. No outer try/retry block here.
             self._storage.save(self._session_id, history)
             journal.write(
                 "astream_end",
@@ -653,37 +548,18 @@ class Agent:
                 history_len=len(history),
                 total_tokens=self._state.total_tokens_used,
             )
-            # Auto-compact post-turn. Deliberately AFTER save + astream_end
-            # so the summary turn sees a stable, already-persisted history
-            # and we don't interleave compact I/O with the caller's yield
-            # stream. Phase 1 §3.3: routed through the Compactor Protocol
-            # so threshold check, circuit breaker, and run_compact all live
-            # on one named call site. The adapter mirrors the pre-Phase-1
-            # journal events exactly; behavior is unchanged.
+            # Auto-compact runs after the stream ends to avoid interleaving
+            # compact I/O with the caller's yield loop.
             await self._compactor.auto(
                 history,
                 self._state.slots,
                 model=self._current_model_spec,
             )
-            # Phase 4 Task 4 — drain compact events emitted by ``auto``
-            # so the AG-UI / wire transport sees the post-turn lifecycle
-            # event. Skipped events (threshold not crossed, breaker
-            # tripped) still emit a ``"skipped"`` outcome dict here.
             while self._pending_compact_events:
                 yield self._pending_compact_events.pop(0)
 
     def switch_model(self, spec: str) -> None:
-        """Swap the live model. Raises ``AuraConfigError`` on failure.
-
-        Resolves ``spec`` (router alias or ``provider:model``), constructs a
-        fresh LangChain model, and rebuilds the loop so subsequent turns use
-        it. Tools / hooks / context / history are untouched — the ongoing
-        conversation continues with the new model seeing the same state.
-
-        ``config.router["default"]`` stays unchanged by design: it's the
-        boot-time config, not the live spec. The live spec lives on
-        ``self._current_model_spec``.
-        """
+        """Swap the live model and rebuild the loop; config.router stays put."""
         old_spec = self._current_model_spec
         journal.write("model_switch_attempt", old_spec=old_spec, new_spec=spec)
         provider, model_name = llm.resolve(spec, cfg=self._config)
@@ -699,26 +575,11 @@ class Agent:
         )
 
     def _capture_prior_mode(self, mode: str) -> None:
-        """Stash the pre-plan mode for the companion exit_plan_mode to read.
-
-        Invoked ONLY by the ``enter_plan_mode`` tool via its injected
-        ``save_prior_mode`` closure — no other code path writes this
-        attribute. Single writer guarantees the prior-mode value is
-        exactly "the mode the user was in when they first entered plan
-        on this session" and never an intermediate state.
-        """
+        """Stash the pre-plan mode so exit_plan_mode restores it correctly."""
         self._prior_mode = mode
 
-    # ------------------------------------------------------------------
-    # Phase 1 Task 13 — SessionRuntime forwards
-    #
-    # The session lifecycle / persistence / streaming-buffer state lives
-    # on :class:`SessionRuntime` (see ``aura/core/runtime/session.py``).
-    # These property forwards preserve the historical attribute names
-    # (``self._storage`` / ``self._session_id`` / etc.) so the wide tail
-    # of internal call sites — tests, command handlers, compact, hooks,
-    # auto_reload — keeps working without a sweep.
-    # ------------------------------------------------------------------
+    # SessionRuntime owns lifecycle state; these forwards preserve the
+    # historical attribute names for the broad tail of internal callers.
 
     @property
     def _storage(self) -> SessionStorage:
@@ -730,11 +591,8 @@ class Agent:
 
     @_session_id.setter
     def _session_id(self, value: str) -> None:
-        # ``resume_session`` is the only legitimate writer (the runtime's
-        # :meth:`resume` flips it as part of the resume contract).
-        # Direct re-assignment is preserved for parity with the pre-Phase-1
-        # surface in case a test fixture flips it manually.
-        self._session_runtime._session_id = value
+        # resume_session is the legitimate writer; setter preserved for tests.
+        self._session_runtime.session_id = value
 
     @property
     def _session_log_path(self) -> Path | None:
@@ -745,47 +603,31 @@ class Agent:
         return self._session_runtime.session_rules
 
     @property
+    def session_rules(self) -> SessionRuleSet | None:
+        """Public alias for :attr:`_session_rules` — callers outside Agent use this."""
+        return self._session_runtime.session_rules
+
+    @property
     def _partial_assistant_text(self) -> str:
         return self._session_runtime.partial_assistant_text
 
     @_partial_assistant_text.setter
     def _partial_assistant_text(self, value: str) -> None:
-        # Used by astream's reset (``= ""``) and the abort flush path.
-        # The runtime's :meth:`reset_partial_assistant_text` handles the
-        # empty-string case explicitly; for any other rebind we go through
-        # the underlying field so the ``+=`` accumulator path still works
-        # via the property descriptor.
-        self._session_runtime._partial_assistant_text = value
+        self._session_runtime.partial_assistant_text = value
 
     @property
     def _pending_notifications(self) -> list[TaskNotification]:
-        # Returning the live list is intentional — call sites use
-        # ``.append`` and ``.clear`` directly, and the runtime IS the
-        # single source of truth for the queue.
-        return self._session_runtime._pending_notifications
+        # Live list — callers .append / .clear directly on the runtime's queue.
+        return self._session_runtime.pending_notifications_live
 
     def clear_session(self) -> None:
-        # Phase 1 Task 13: lifecycle (storage.clear, session_rules drop,
-        # buffers + queue + SessionStart re-arm) lives on the runtime.
-        # Agent retains ownership of LoopState slot resets, hook chain
-        # rewiring, memory/rules cache invalidation, and Context/Loop
-        # rebuild — those need model + hook + skill wiring outside the
-        # session lifecycle scope.
+        # SessionRuntime owns lifecycle (storage.clear, session_rules drop,
+        # buffers, SessionStart re-arm). Agent owns LoopState slots, hook
+        # rewiring, memory/rules cache invalidation, Context/Loop rebuild.
         self._session_runtime.clear()
         self._state.reset()
-        # ``LoopState.reset`` only zeros the counters; slots live across
-        # sessions for legitimate carry-over (token-stats etc.) and are
-        # explicitly reset here per slot, by their owners. Clear the G5
-        # denials list in place so ``Agent.last_turn_denials()`` returns
-        # ``()`` immediately after /clear.
         self._state.slots.turn_denials.clear()
-        # Clear the typed ``state.slots.todos`` list in place so /clear
-        # starts the next session with no stale plan items.
         self._state.slots.todos.clear()
-        # Per-slot resets — scratchpad state that must reset on /clear.
-        # Mutable lists/dicts mutate in place; scalars + the buddy state
-        # rebind via ``dataclasses.replace`` (LoopSlots is frozen at the
-        # attribute level).
         from aura.schemas.state import BuddyState as _BuddyState
         self._state.slots.perm_dedup_cache.clear()
         self._state.slots.invoked_skills.clear()
@@ -797,13 +639,7 @@ class Agent:
             consecutive_compact_failures=0,
             buddy=_BuddyState(),
         )
-        # Drop any captured prior mode — /clear starts a fresh session so
-        # a leftover "accept_edits" from a previous plan cycle shouldn't
-        # bleed into the next one.
         self._prior_mode = None
-        # /clear 语义：同时 invalidate memory/rules caches + 重建 Context。
-        # progressive 状态（nested fragments / matched rules）随新实例自然清空 ——
-        # 不做原地 reset，避免遗漏字段。
         project_memory.clear_cache(self._cwd)
         rules.clear_cache(self._cwd)
         self._primary_memory = project_memory.load_project_memory(
@@ -813,9 +649,7 @@ class Agent:
         self._rules = rules.load_rules(self._cwd)
         self._context = self._build_context()
         self._swap_must_read_first_hook()
-        # Re-anchor bash safety at pre_tool[0]. The hook is stateless so we
-        # could skip this, but the swap keeps the invariant "safety is first"
-        # independent of any future list mutations in clear_session.
+        # Re-anchor bash safety so "safety is first" survives future mutations.
         self._hooks.pre_tool.remove(self._bash_safety_hook)
         self._bash_safety_hook = make_bash_safety_hook(
             mode_provider=lambda: cast("Mode", self._mode),
@@ -824,14 +658,11 @@ class Agent:
         self._loop = self._build_loop()
         journal.write("session_cleared", session=self._session_id)
 
-    def _effective_auto_compact_threshold(self) -> int:
+    def effective_auto_compact_threshold(self) -> int:
         """Resolve the live auto-compact threshold.
 
-        F-0910-001: ``-1`` means "derive from the live model's context
-        window". An explicit positive override (constructor kwarg) wins
-        over the model-aware computation; ``0`` keeps disabling the
-        feature entirely. Recomputed every call so ``switch_model`` is
-        honored without re-wiring.
+        ``-1`` derives from the live model's context window; ``0`` disables;
+        positive values override. Recomputed so switch_model is honoured.
         """
         if self._auto_compact_threshold == -1:
             return auto_compact_threshold_for(self._current_model_spec)
@@ -840,13 +671,7 @@ class Agent:
     async def compact(
         self, *, source: Literal["manual", "auto", "reactive"] = "manual",
     ) -> CompactResult:
-        """Summarize old history, preserve session state, rebuild Context.
-
-        Entry point for ``/compact`` and (future) auto-compact. The heavy
-        lifting lives in :func:`aura.application.compact.run_compact`; this method
-        exists so callers have a stable surface and so the skill/command
-        layer doesn't need to reach into the compact module directly.
-        """
+        """Summarize old history, preserve session state, rebuild Context."""
         return await run_compact(self, source=source)
 
     def apply_aura_md_reload(self) -> None:
@@ -872,67 +697,51 @@ class Agent:
         preserved_skills: list[Skill],
     ) -> None:
         """Persist post-compact history and swap to ``new_context``."""
-        # Slot mutation BEFORE storage so a crash during save still leaves
-        # ``state.slots`` consistent with what the next loop will see.
+        # Slot mutation precedes save so a crash leaves state.slots consistent.
         self._state.slots.preserved_invoked_skills[:] = list(preserved_skills)
         self._storage.save(self._session_id, new_history)
         self._context = new_context
         self._swap_must_read_first_hook()
         self._loop = self._build_loop()
 
+    def reload_memory_and_rules(self) -> None:
+        """Re-read AURA.md + rules from disk into Agent state.
+
+        Compact reloads BEFORE rebuilding Context so the new Context picks
+        up disk edits made during the prior turn.
+        """
+        self._primary_memory = project_memory.load_project_memory(self._cwd)
+        self._rules = rules.load_rules(self._cwd)
+
     def _swap_must_read_first_hook(self) -> None:
-        # Idempotent on first-construction races where the old hook isn't
-        # in the chain yet — happens on test fixtures that swap _hooks.
+        # Idempotent: test fixtures that swap _hooks may not have the hook yet.
         if self._must_read_first_hook in self._hooks.pre_tool:
             self._hooks.pre_tool.remove(self._must_read_first_hook)
         self._must_read_first_hook = make_must_read_first_hook(self._context)
         self._hooks.pre_tool.append(self._must_read_first_hook)
 
     def record_skill_invocation(self, skill: Skill) -> None:
-        """Proxy to Context — appends ``skill`` to the invoked list.
-
-        Exposed on Agent so that :class:`SkillCommand` (which is constructed
-        with an Agent, not a Context) doesn't need to reach into a private
-        attribute.
-        """
+        """Append ``skill`` to Context's invoked list."""
         self._context.record_skill_invocation(skill)
-
-    # ------------------------------------------------------------------
-    # F-01-001 / F-05-003 abort + partial-text plumbing
-    # ------------------------------------------------------------------
 
     @property
     def current_abort(self) -> AbortController | None:
-        """The live :class:`AbortController` for the running astream call.
-
-        ``None`` between turns. Tests / Ctrl+C handlers fire
-        ``abort.abort(reason)`` against whatever is in flight without
-        having to thread the controller through every layer.
-        """
+        """Live AbortController for the running astream call, or None."""
         return self._current_abort
 
     @property
     def cwd(self) -> Path:
-        """The Agent's logical working directory. Read-only — mutate via
-        :meth:`set_cwd` so :class:`CwdChangedHook` consumers fire."""
+        """Logical working directory; mutate via :meth:`set_cwd`."""
         return self._cwd
 
     @property
     def team(self) -> object | None:
-        """The :class:`TeamManager` this Agent is bound to, or ``None``.
-
-        Typed loose to avoid an import cycle. Callers cast at the use
-        site when they need TeamManager methods.
-        """
+        """Bound TeamManager (loose-typed to dodge an import cycle)."""
         return self._team
 
     @property
     def pending_notifications(self) -> tuple[TaskNotification, ...]:
-        """Snapshot of queued :class:`TaskNotification` records.
-
-        Read-only tuple. :meth:`_drain_task_notifications` is the
-        write/clear endpoint used by Context.build.
-        """
+        """Read-only snapshot of queued TaskNotification records."""
         return self._session_runtime.pending_notifications
 
     @property
@@ -946,58 +755,39 @@ class Agent:
         return tuple(events)
 
     def buffer_partial_assistant_text(self, text: str) -> None:
-        """Append ``text`` to the partial-assistant buffer.
-
-        Producer hook for streaming renderers / tests so an abort
-        before the final AIMessage still surfaces partial reasoning.
-        Reset on every new astream call.
-        """
+        """Append ``text`` so an abort still surfaces partial reasoning."""
         self._session_runtime.buffer_partial_assistant_text(text)
 
     def _enqueue_task_notification(self, notif: TaskNotification) -> None:
-        """External producer hook — append ``notif`` to the queue.
-
-        Unbounded at the queue level — the build-time renderer caps the
-        emitted block at 5 entries (FIFO) and collapses the tail to a
-        ``(N more earlier)`` line, so the parent's prompt envelope stays
-        compact while the queue itself preserves order.
-        """
         self._session_runtime.enqueue_task_notification(notif)
 
     def _drain_task_notifications(self) -> list[TaskNotification]:
-        """Pop every queued notification and return them, oldest first."""
         return self._session_runtime.drain_task_notifications()
 
     def _enqueue_protocol_event(self, event: WireEvent) -> None:
-        """Append one coordination wire event for external transport drains."""
         self._session_runtime.enqueue_protocol_event(event)
 
     def drain_protocol_events(self) -> list[WireEvent]:
-        """Pop every queued coordination wire event and return them, oldest first."""
+        """Pop queued coordination wire events, oldest first."""
         drained = self._session_runtime.drain_protocol_events()
         team = self._team
         if team is not None:
             drain_team_events = getattr(team, "drain_protocol_events", None)
             if callable(drain_team_events):
-                drained.extend(cast("list[WireEvent]", list(drain_team_events())))
+                team_events = cast("list[WireEvent]", drain_team_events())
+                drained.extend(team_events)
         return drained
 
     async def _cascade_abort_to_children(self, reason: str) -> None:
         """Fire every controller in :attr:`_running_aborts`.
 
-        Idempotent — already-aborted controllers skip silently.
-        Yields once after the fan-out so each child watchdog gets a
-        scheduler tick to observe the flipped event before the
-        parent's astream finally clause unwinds.
+        Yields a scheduler tick so child watchdogs observe the signal
+        before astream's finally clause unwinds.
         """
         for controller in list(self._running_aborts.values()):
             if not controller.aborted:
                 controller.abort(reason)
         await asyncio.sleep(0)
-
-    # ------------------------------------------------------------------
-    # Round 6L: team membership
-    # ------------------------------------------------------------------
 
     def join_team(
         self,
@@ -1005,24 +795,11 @@ class Agent:
         manager: object,
         member_name: str | None = None,
     ) -> None:
-        """Bind this Agent to a :class:`TeamManager`.
-
-        Stamps ``_team`` (+ optional ``_team_member_name``) and
-        auto-enables ``send_message`` when the user has not pinned a
-        custom ``tools.enabled`` allowlist. Idempotent on the same
-        manager / member name.
-
-        Raises ``RuntimeError`` when the teams feature gate
-        (``teams.enabled``) is False — claude-code parity with
-        ``isAgentSwarmsEnabled()``. The caller should set
-        ``teams.enabled=true`` in ``.aura/config.json`` to opt in.
-        """
+        """Bind to a TeamManager; auto-enable send_message when allowed."""
         if not self._config.teams.enabled:
             raise RuntimeError(
                 "teams disabled — set teams.enabled=true in "
-                ".aura/config.json to enable the multi-agent swarm "
-                "subsystem (mirrors claude-code's "
-                "isAgentSwarmsEnabled() flag)"
+                ".aura/config.json to enable the multi-agent swarm subsystem"
             )
         if self._team is manager and (
             member_name is None or self._team_member_name == member_name
@@ -1034,25 +811,13 @@ class Agent:
         self._auto_enable_send_message_for_team()
 
     def leave_team(self) -> None:
-        """Unbind from the team and conditionally drop send_message.
-
-        Mirrors :meth:`join_team` — when WE auto-added send_message,
-        WE remove it; user-pinned allowlists keep their tool.
-        """
+        """Unbind and drop send_message iff we auto-added it."""
         self._team = None
         self._team_member_name = None
         self._auto_disable_send_message_for_team()
 
     def _auto_enable_send_message_for_team(self) -> None:
-        """Register ``send_message`` + rebind the loop's bound model.
-
-        Skips when the user pinned ``tools.enabled`` (their choice
-        wins) or when the tool is already in the registry (idempotent
-        on double-join). Also skips when the teams feature gate
-        (``teams.enabled``) is False — claude-code parity with
-        ``isAgentSwarmsEnabled()``: a disabled teams subsystem must
-        not grow the LLM's tool schema with an inert tool.
-        """
+        # Skip when teams is disabled, user pinned the allowlist, or already wired.
         if not self._config.teams.enabled:
             return
         if self._user_pinned_tools_allowlist_value:
@@ -1063,46 +828,29 @@ class Agent:
         send_tool = SendMessage(agent=self)
         self._registry.register(send_tool)
         self._available_tools["send_message"] = send_tool
-        self._loop._rebind_tools(self._registry.tools())
+        self._loop.rebind_tools(self._registry.tools())
 
     def _auto_disable_send_message_for_team(self) -> None:
-        """Unregister ``send_message`` if WE registered it."""
         if self._user_pinned_tools_allowlist_value:
             return
         if "send_message" not in self._registry:
             return
         self._registry.unregister("send_message")
         self._available_tools.pop("send_message", None)
-        self._loop._rebind_tools(self._registry.tools())
+        self._loop.rebind_tools(self._registry.tools())
 
     def _user_pinned_tools_allowlist(self) -> bool:
         """True iff the user supplied a custom ``tools.enabled`` value."""
         return self._user_pinned_tools_allowlist_value
 
-    # ------------------------------------------------------------------
-    # Round 3A: session resume
-    # ------------------------------------------------------------------
-
     def resume_session(self, session_id: str) -> int:
-        """Swap the live session_id; reset state to fresh-session feel.
+        """Load ``session_id`` from storage; reset state to fresh-session feel.
 
-        Loads ``session_id``'s history from storage, updates the live
-        session_id, zeroes turn_count + token usage, drops partial
-        buffers, and re-arms SessionStart so the lifecycle fires again
-        on the next astream. Raises ``KeyError`` if the requested
-        session has no rows. Returns the message count of the
-        resumed session.
-
-        Phase 1 Task 13 — the storage swap + buffer reset + log-path
-        retarget + ``session_resumed`` journal event live on the
-        :class:`SessionRuntime`. Agent retains LoopState reset (slot
-        bookkeeping for the new session).
+        Raises ``KeyError`` if the requested session has no rows. Returns
+        the message count of the resumed session.
         """
         count = self._session_runtime.resume(session_id)
         self._state.reset()
-        # Phase 1 Task 4: drop any captured denials so the resumed
-        # session opens with an empty ``last_turn_denials()`` view
-        # (parity with the pre-migration re-seed).
         self._state.slots.turn_denials.clear()
         return count
 
@@ -1128,21 +876,11 @@ class Agent:
 
     @property
     def mcp_manager(self) -> MCPManager | None:
-        """Live MCP manager, or ``None`` before/outside ``aconnect``.
-
-        Exposed for the CLI-layer ``@mention`` preprocessor (see
-        :mod:`cli.attachments`), which needs read access to the
-        resources catalogue and ``read_resource`` without reaching into a
-        private attribute. Always ``None`` when no servers are configured
-        or when ``aconnect`` hasn't run yet — the caller short-circuits on
-        that case.
-        """
+        """Live MCP manager, or ``None`` before/outside ``aconnect``."""
         return self._mcp_runtime.manager
 
-    # Phase 2 Task 8 — back-compat shims. External callers (CLI
-    # commands, tests) poke ``_mcp_manager`` / ``_mcp_commands``
-    # directly; the data lives on :class:`McpRuntime` now and the
-    # shims forward reads + writes both ways.
+    # Back-compat shims: external callers poke _mcp_manager / _mcp_commands;
+    # data lives on McpRuntime, so forward reads + writes both ways.
     @property
     def _mcp_manager(self) -> MCPManager | None:
         return self._mcp_runtime.manager
@@ -1160,45 +898,52 @@ class Agent:
         self._mcp_runtime.commands = list(value)
 
     @property
+    def mcp_commands(self) -> list[object]:
+        return self._mcp_runtime.commands
+
+    @property
+    def context(self) -> Context:
+        return self._context
+
+    @property
+    def skill_registry(self) -> SkillRegistry:
+        return self._skill_registry
+
+    @property
+    def tasks_store(self) -> TasksStore:
+        return self._tasks_store
+
+    @property
+    def running_tasks(self) -> dict[str, asyncio.Task[None]]:
+        return self._running_tasks
+
+    @property
+    def running_aborts(self) -> dict[str, AbortController]:
+        return self._running_aborts
+
+    @property
+    def subagent_factory(self) -> SubagentFactory:
+        return self._subagent_factory
+
+    @property
     def current_model(self) -> str:
-        """Live model spec — the string passed to ``switch_model`` most
-        recently, or ``config.router["default"]`` if no switch yet."""
+        """Live model spec; ``config.router["default"]`` until switch_model fires."""
         return self._current_model_spec
 
     @property
     def mode(self) -> str:
-        """Effective permission mode — one of
-        ``default`` / ``accept_edits`` / ``plan`` / ``bypass``. Read-only
-        mirror of what the CLI installed at construction. Surfaced here
-        so the bottom status bar can display the current mode without
-        re-reading the permission store each render."""
+        """Effective permission mode — default / accept_edits / plan / bypass."""
         return self._mode
 
     async def set_cwd(self, path: Path) -> None:
-        """Move the Agent's working directory and notify ``cwd_changed``.
+        """Resolve ``path``, retarget ``_cwd``, fire CwdChangedHook consumers.
 
-        V14-HOOK-CATALOG. ``path`` is resolved (so ``~`` and relative
-        forms normalize), the new value lands on ``self._cwd``, a
-        ``cwd_changed`` journal event is emitted, and every registered
-        :class:`CwdChangedHook` consumer fires with ``(old_cwd, new_cwd)``.
-        Default-shipped consumer refreshes project memory + rules from
-        the new cwd (see :func:`aura.application.hooks.auto_reload
-        .make_cwd_rules_reload_hook`).
-
-        We do NOT shell out to ``os.chdir`` here — the Agent's ``_cwd``
-        and the process's CWD are deliberately distinct (the Agent
-        owning a logical workdir is enough for memory + rules + skill
-        loading; mutating the process CWD would race against tools
-        running concurrently). External ``os.chdir`` calls are out of
-        scope by design.
+        The process CWD stays put — Agent's logical workdir is enough for
+        memory + rules + skill loading, and mutating os.cwd would race tools.
         """
         new_cwd = Path(path).expanduser().resolve()
         old_cwd = self._cwd
         if new_cwd == old_cwd:
-            # No-op — don't emit a journal event for "moved to the same
-            # place". Same defensiveness as ``set_mode`` returning
-            # without journalling on a same-mode call would have, if
-            # we'd written it that way.
             return
         self._cwd = new_cwd
         journal.write(
@@ -1212,20 +957,7 @@ class Agent:
         )
 
     def set_mode(self, mode: str) -> None:
-        """Update the current permission mode.
-
-        Valid values: ``default`` / ``accept_edits`` / ``plan`` /
-        ``bypass``. The CLI's shift+tab keybinding uses this to cycle
-        among the three non-bypass modes at runtime; ``bypass`` remains
-        settable programmatically (CLI entry point uses it) but is
-        deliberately excluded from the interactive cycle — it can only
-        be enabled via ``--bypass-permissions``.
-
-        When the Agent was constructed with ``disable_bypass=True``
-        (from ``PermissionsConfig.disable_bypass``), switching to
-        ``bypass`` raises ``AuraConfigError`` — same kill switch as the
-        CLI flag path, just at a different entry point.
-        """
+        """Update the permission mode; rejects ``bypass`` when disabled by config."""
         valid = {"default", "accept_edits", "plan", "bypass"}
         if mode not in valid:
             raise ValueError(
@@ -1245,11 +977,7 @@ class Agent:
 
     @property
     def context_window(self) -> int:
-        """Effective context window in tokens. Honors
-        ``AuraConfig.context_window`` override when set, otherwise falls
-        back to ``aura.infrastructure.llm.get_context_window`` for the current
-        model. Kept on Agent so the bottom bar has one clean place to
-        read it from rather than re-resolving on every render."""
+        """Effective context window; ``AuraConfig.context_window`` overrides."""
         if self._config.context_window is not None:
             return self._config.context_window
         from aura.infrastructure.llm import get_context_window
@@ -1257,43 +985,24 @@ class Agent:
 
     @property
     def pinned_tokens_estimate(self) -> int:
-        """Estimated size of the pinned prompt prefix in tokens.
+        """Char-count/4 approximation of the pinned prompt prefix in tokens.
 
-        Char-count / 4 approximation over: system message, project
-        memory, rules, skill catalogue, and the JSON-serialized schemas
-        of all currently-bound tools. Real
-        ``cache_read_input_tokens`` from a provider response is
-        strictly more accurate — but many providers (e.g. deepseek)
-        don't support prompt caching and always return 0, so the
-        status bar falls back to this estimate to give the operator
-        *some* anchor for the pinned channel size. Also surfaced
-        BEFORE the first turn, so the REPL opens with a meaningful
-        number instead of a zero."""
+        Anchors the status bar for providers (deepseek etc.) that always
+        return 0 cache_read_input_tokens, and gives the REPL a non-zero
+        starting figure before the first turn.
+        """
         return self._pinned_tokens_estimate
 
-    def _estimate_history_tokens(self, history: list[BaseMessage]) -> int:
-        """Char-count / 4 fallback when ``usage_metadata`` is missing.
+    def estimate_history_tokens(self, history: list[BaseMessage]) -> int:
+        """Fallback token count when ``usage_metadata`` is missing.
 
-        Bug 2 fix #2 / F-01-004. Aliyun DashScope (error 1261), some
-        Ollama builds, and a few self-hosted backends never populate
-        the LangChain usage envelope, leaving ``total_tokens_used``
-        pinned at zero — so the auto-compact trigger could never arm
-        on a runaway session.
-
-        Counts the FULL prompt the model sees per turn, not just
-        ``history``: pinned prefix (system + memory + skills + tool
-        schemas) plus the live history. Prior versions only counted
-        history, which underestimated by ~5–10k tokens on a real
-        config and let DashScope sessions overflow before the trigger
-        ever armed. The 4-chars-per-token approximation is consistent
-        in-aggregate and cheap to compute.
+        Covers the full per-turn prompt (pinned prefix + history) — counting
+        history alone underestimates by ~5–10k tokens on a real config.
         """
         history_tokens = sum(estimate_message_tokens(msg) for msg in history)
         return history_tokens + self._estimate_pinned_tokens()
 
     def _estimate_pinned_tokens(self) -> int:
-        # Build the pinned messages with an empty history — everything
-        # from Context.build that doesn't depend on live turn state.
         import json
 
         tokens = 0
@@ -1301,9 +1010,7 @@ class Agent:
             content = getattr(message, "content", "")
             if isinstance(content, str):
                 tokens += estimate_text_tokens(content)
-        # Tool schemas go into every request as a separate payload the
-        # provider also bills against the cached prefix. Approximate via
-        # name + description + JSON-serialized args schema.
+        # Tool schemas count toward the cached prefix the provider bills.
         for tool in self._registry.tools():
             tokens += estimate_text_tokens(tool.name or "")
             tokens += estimate_text_tokens(tool.description or "")
@@ -1320,7 +1027,7 @@ class Agent:
 
     @property
     def router_aliases(self) -> dict[str, str]:
-        """除 'default' 之外的别名 → 'provider:model' 映射。"""
+        """``provider:model`` mapping for every alias except ``default``."""
         return {k: v for k, v in self._config.router.items() if k != "default"}
 
     @property
@@ -1328,23 +1035,11 @@ class Agent:
         return self._session_id
 
     def last_turn_denials(self) -> tuple[PermissionDenial, ...]:
-        """Immutable view of permission denials from the most recent turn.
+        """Immutable snapshot of permission denials from the most recent turn.
 
-        Populated by the permission hook on every non-allow decision
-        (``safety_blocked`` / ``plan_mode_blocked`` / ``user_deny``).
-        Cleared at the start of each ``AgentLoop.run_turn`` so a turn
-        that denies zero tools opens with an empty tuple. Between turns
-        (after astream returns) the list holds the just-finished turn's
-        denials so SDK / plugin / UI code can inspect them without
-        parsing journal JSONL.
-
-        Returns a tuple — mutation attempts raise ``TypeError`` /
-        ``AttributeError``. The underlying list lives on
-        ``self._state.slots.turn_denials`` (Phase 1 Task 4 migration);
-        the snapshot tuple isolates the caller from a racy in-place
-        grow between turns.
-
-        Workstream G5 — ``docs/specs/2026-04-23-aura-main-channel-parity.md``.
+        Cleared at the start of each run_turn; between turns the tuple
+        reflects the just-finished turn so SDK/UI code can inspect denials
+        without parsing journal JSONL.
         """
         return tuple(self._state.slots.turn_denials)
 
@@ -1360,16 +1055,8 @@ class Agent:
             )
         else:
             policy = None
-        # Phase 4 Task 4: build a fresh :class:`Compactor` every time so
-        # a ``switch_model`` (which rebuilds the loop) gets a compactor
-        # whose microcompact policy reflects the current Agent config.
-        # Stored on ``self._compactor`` so the post-turn auto-compact
-        # site in :meth:`astream` can reach it without going through
-        # the loop. ``event_emitter`` appends each per-call wire dict to
-        # ``self._pending_compact_events``; :meth:`astream` drains that
-        # buffer between loop yields so AG-UI consumers see
-        # ``aura.compact.event`` interleaved with the regular event
-        # stream.
+        # Fresh Compactor per call so switch_model picks up the live policy;
+        # event_emitter feeds astream's drain so wire consumers see compact events.
         self._compactor = Compactor(
             agent=self,
             config=self._config.compact,
@@ -1395,14 +1082,7 @@ class Agent:
     async def _reactive_compact_callback(
         self, history: list[BaseMessage],
     ) -> None:
-        """F-01-012 — compact + reload history in place for the loop.
-
-        Called by ``AgentLoop._invoke_model`` when ``ainvoke`` raises a
-        context-overflow. Compacts (which writes the summary back to
-        storage), then refreshes the in-memory history list in place
-        so the loop's local reference sees the new state without a
-        re-assignment.
-        """
+        """Compact + refresh ``history`` in place on context-overflow."""
         await self.compact(source="reactive")
         history[:] = self._storage.load(self._session_id)
 
@@ -1423,21 +1103,12 @@ class Agent:
         )
 
     def _snapshot_read_carryover(self) -> ReadCarryover:
-        """Build a :class:`ReadCarryover` from the live Context.
-
-        Called by :class:`SubagentFactory` at each ``spawn`` to capture
-        the parent's read state for the spawned child. ``read_at_turn``
-        is filled with the parent's current turn count for every
-        record — the core's private ``_ReadRecord`` doesn't preserve
-        per-record turn, so the snapshot turn is the best-available
-        approximation (and matches ``generated_at_turn`` on the
-        carryover itself).
-        """
+        """Build a ReadCarryover from live Context for SubagentFactory spawn."""
         from aura.schemas.state import ReadRecord
 
         turn = self._state.turn_count
         records: dict[Path, ReadRecord] = {}
-        for path, rec in self._context._read_records.items():
+        for path, rec in self._context.read_records.items():
             records[path] = ReadRecord(
                 path=path,
                 mtime_at_read=rec.mtime,
@@ -1453,47 +1124,23 @@ class Agent:
     async def aconnect(self) -> None:
         """Establish MCP connections and register discovered tools.
 
-        Delegates to :meth:`McpRuntime.connect_all`; on success swaps
-        the registry contents (preserving the registry identity the
-        loop binds against) and rebinds the loop's tool list. No-op
-        with no configured servers; failures are journaled and
-        swallowed inside the runtime (graceful degradation). MCP
-        resources are exposed via :mod:`cli.attachments`'
-        ``@server:uri`` preprocessor, NOT as an LLM tool.
+        Failures are journaled and swallowed inside the runtime so MCP
+        outages degrade the session gracefully. MCP resources surface via
+        the ``@server:uri`` preprocessor in cli.attachments, not as tools.
         """
         merged = await self._mcp_runtime.connect_all(self._registry.tools())
         if merged is None:
             return
         self._mcp_runtime.replace_registry_contents(self._registry, merged)
-        self._loop._rebind_tools(self._registry.tools())
+        self._loop.rebind_tools(self._registry.tools())
 
-    # ------------------------------------------------------------------
-    # Shutdown (B3): timeout-bounded, cancel-on-timeout MCP teardown.
-    # ------------------------------------------------------------------
-    # The B3 contract (timeout under :func:`asyncio.wait_for`,
-    # cancel-on-timeout, three journal events, idempotent on repeat) now
-    # lives on :class:`McpRuntime.disconnect_all`. :meth:`aclose` below
-    # is the canonical async entry; :meth:`close` is the sync SDK/CLI
-    # wrapper that refuses fire-and-forget when there is a live manager.
     def _teardown_local_tasks(self) -> None:
-        """Cancel subagent tasks + kill lingering shell subprocesses.
-
-        Split out of ``close`` / ``aclose`` so both paths share the same
-        local-cleanup sequence. ``.cancel()`` is a request, not a join —
-        we don't await here; the event loop will deliver the
-        ``CancelledError`` next time each task is scheduled, at which
-        point run_task flips the record to cancelled.
-        """
+        """Cancel subagent tasks and SIGKILL lingering shell subprocesses."""
         for task_id, task in list(self._running_tasks.items()):
             if not task.done():
                 task.cancel()
             self._running_tasks.pop(task_id, None)
-        # Shell tasks own a real subprocess — cancelling the watcher
-        # asyncio.Task above causes it to send SIGTERM→SIGKILL in its
-        # finally. Belt-and-braces: also SIGKILL any lingering handles
-        # here in case the watcher task already completed but the
-        # subprocess is somehow still alive (shouldn't happen, but close
-        # is our last chance to not leave zombies).
+        # Watcher cancel sends SIGTERM→SIGKILL; SIGKILL here is belt-and-braces.
         for task_id, proc in list(self._running_shells.items()):
             if proc.returncode is None:
                 with contextlib.suppress(ProcessLookupError, Exception):
@@ -1501,71 +1148,39 @@ class Agent:
             self._running_shells.pop(task_id, None)
 
     async def aclose(self, *, mcp_timeout: float = 5.0) -> None:
-        """Async, timeout-bounded teardown (B3).
-
-        Sequence: cancel local tasks + SIGKILL bash subprocesses →
-        cleanup session-teams (leader only) →
-        :meth:`McpRuntime.disconnect_all` (B3 timeout contract) →
-        :meth:`SessionRuntime.close_storage` (SQLite flush).
-        """
+        """Async teardown: local tasks → team cleanup → MCP → storage."""
         self._teardown_local_tasks()
 
-        # Claude-code parity (gh-32730): rm -rf every team this session
-        # created that wasn't explicitly /team delete'd, so an orphan
-        # team dir doesn't accumulate forever. Best-effort — failures
-        # journal but don't block the rest of the teardown.
-        # CRITICAL: only the LEADER fires cleanup. Teammates (where
-        # ``_team_member_name`` is set) inherit ``_team`` from the
-        # leader's manager via ``join_team`` — calling cleanup from
-        # a teammate's aclose would cancel sibling teammates'
-        # runtimes mid-flight (the leader's set is shared).
+        # Only the leader fires team cleanup — teammates share the leader's
+        # set and would cancel siblings mid-flight.
         if self._team is not None and self._team_member_name is None:
-            cleanup = getattr(self._team, "cleanup_session_teams", None)
-            if callable(cleanup):
+            cleanup = cast(
+                "Callable[[], Awaitable[None]] | None",
+                getattr(self._team, "cleanup_session_teams", None),
+            )
+            if cleanup is not None:
                 with contextlib.suppress(Exception):
                     await cleanup()
 
-        # Phase 2 Task 8 — MCP teardown delegates to McpRuntime.
-        # Same B3 contract: timeout-bounded, cancel-on-timeout, three
-        # journal events (``mcp_close_timeout`` / ``mcp_close_error`` /
-        # ``mcp_stopped``), idempotent on repeat.
         await self._mcp_runtime.disconnect_all(
             session_id=self._session_id,
             timeout_sec=mcp_timeout,
         )
 
-        # Phase 1 Task 13 — storage close lives on SessionRuntime so
-        # other lifecycle exit points (future graceful-shutdown hooks)
-        # can route through one named call.
         self._session_runtime.close_storage()
 
     def close(self, *, mcp_timeout: float = 5.0) -> None:
-        """Sync teardown — thin wrapper around :meth:`aclose`.
-
-        No active loop → ``asyncio.run(self.aclose(...))`` (the
-        no-loop CLI / legacy SDK path). Active loop with no live MCP
-        manager → pure-sync cleanup in-place (matches the bare-agent
-        contract async unit tests rely on). Active loop with a live
-        manager → :class:`RuntimeError`; the caller must explicitly
-        ``await agent.aclose(...)`` to honour the B3 timeout contract.
-        """
+        """Sync teardown wrapper; refuses fire-and-forget on a live MCP manager."""
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            # No active loop — safe to run our own.
             asyncio.run(self.aclose(mcp_timeout=mcp_timeout))
             return
-        # Active loop. If nothing needs the async teardown, do the sync
-        # subset in-place — safe, matches pre-B3 behaviour for bare
-        # agents. If an MCP manager IS live, refuse: the caller must
-        # await aclose() to honour the timeout + cancel-on-timeout
-        # contract.
         if self._mcp_manager is not None:
             raise RuntimeError(
                 "Agent.close() called inside a running event loop with a "
                 "live MCP manager. Use `await agent.aclose(mcp_timeout=...)` "
-                "instead — the old fire-and-forget close path was removed "
-                "in v0.11 (B3)."
+                "instead — fire-and-forget close was removed in v0.11."
             )
         self._teardown_local_tasks()
         self._session_runtime.close_storage()
@@ -1575,9 +1190,9 @@ class Agent:
 
     async def __aexit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: object | None,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _tb: object | None,
     ) -> None:
         await self.aclose()
 
@@ -1597,7 +1212,7 @@ def build_agent(
     ask_ruleset: RuleSet | None = None,
     safety: SafetyPolicy | None = None,
 ) -> Agent:
-    # 生产便利工厂：自动解析 model + storage；Agent 构造器保持 DI 注入以便测试替换。
+    # Production convenience: resolves model + storage; Agent ctor stays DI-pure.
     provider, model_name = llm.resolve(config.router["default"], cfg=config)
     model = llm.create(provider, model_name)
     storage = SessionStorage(config.resolved_storage_path())

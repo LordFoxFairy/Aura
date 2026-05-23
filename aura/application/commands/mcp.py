@@ -46,7 +46,7 @@ class MCPCommand:
         return _unknown_subcommand(sub)
 
     async def _reload(self, agent: Agent) -> CommandResult:
-        manager = agent._mcp_manager
+        manager = agent.mcp_manager
         if manager is None:
             return CommandResult(
                 handled=True, kind="print",
@@ -61,7 +61,7 @@ class MCPCommand:
         return CommandResult(handled=True, kind="print", text=text)
 
     def _list(self, agent: Agent) -> CommandResult:
-        manager = agent._mcp_manager
+        manager = agent.mcp_manager
         statuses: list[MCPServerStatus] = [] if manager is None else manager.status()
         if not statuses:
             return CommandResult(
@@ -70,7 +70,7 @@ class MCPCommand:
         return CommandResult(handled=True, kind="view", text=_render_table(statuses))
 
     async def _toggle(self, agent: Agent, action: str, target: str) -> CommandResult:
-        manager = agent._mcp_manager
+        manager = agent.mcp_manager
         if manager is None:
             return CommandResult(
                 handled=True, kind="print",

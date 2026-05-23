@@ -1,10 +1,4 @@
-"""Unit tests for :mod:`aura.config.mcp_store`.
-
-The store is the single source of truth for user-editable MCP server
-entries. These tests lock its round-trip contract against
-:class:`aura.config.schema.MCPServerConfig` so subtle field renames or
-validator changes surface here before they break the CLI subcommands.
-"""
+"""Round-trip contract for :mod:`aura.config.mcp_store` against ``MCPServerConfig``."""
 
 from __future__ import annotations
 
@@ -295,7 +289,7 @@ def test_load_project_overrides_global_on_name_collision(
 def test_load_project_file_missing_falls_back_to_global(
     isolated_home: Path, project_dir: Path,
 ) -> None:
-    # Graceful handling of a missing project file — claude-code parity.
+    # Missing project file is silently ignored.
     mcp_store.save(
         [MCPServerConfig(name="only-global", transport="stdio", command="g")],
         scope="global",
@@ -445,8 +439,7 @@ def test_project_layer_names_picks_up_cwd(
 def test_save_scope_project_creates_parent_dir(
     isolated_home: Path, project_dir: Path,
 ) -> None:
-    # Fresh project dir — no ``.aura/`` yet. save(scope="project") must
-    # create it, matching claude-code's "add server creates the file".
+    # Fresh project dir — save(scope="project") must create ``.aura/``.
     assert not (project_dir / ".aura").exists()
     mcp_store.save(
         [MCPServerConfig(name="p", transport="stdio", command="cmd")],

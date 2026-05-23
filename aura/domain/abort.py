@@ -7,11 +7,8 @@ from contextvars import ContextVar
 
 
 class AbortException(Exception):
-    """Raised when an in-flight call hits ``AbortController.abort``.
-
-    Distinct from ``asyncio.CancelledError`` so the loop can tell self-
-    abort from runtime cancellation; both balance history.
-    """
+    # Distinct from asyncio.CancelledError so the loop can tell self-abort
+    # from runtime cancellation.
 
     def __init__(self, reason: str = "aborted") -> None:
         super().__init__(reason)
@@ -46,16 +43,12 @@ class AbortController:
         self._event.set()
 
 
+# Live AbortController for the running astream task; propagates across
+# await + asyncio.create_task. Long-running tools poll .aborted and raise
+# AbortException (or CancelledError) when it flips.
 current_abort_signal: ContextVar[AbortController | None] = ContextVar(
     "aura_abort_signal", default=None,
 )
-"""Live AbortController for the running ``astream`` task, or ``None``.
-
-Tools polling long-running work should read this once per iteration and
-raise :class:`AbortException` (or :class:`asyncio.CancelledError`) when
-``aborted`` flips. The contextvar propagates across ``await`` and child
-tasks created via ``asyncio.create_task``.
-"""
 
 
 __all__ = [

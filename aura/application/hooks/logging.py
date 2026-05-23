@@ -1,4 +1,4 @@
-"""HookChain that journals every turn-cycle event."""
+"""HookChain that journals every turn-cycle event (pre/post model + tool)."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def make_event_logger_hooks() -> HookChain:
     async def _post_model(
         *,
         ai_message: AIMessage,
-        history: list[BaseMessage],
+        history: list[BaseMessage],  # noqa: ARG001  # Protocol kw arg; unused
         state: LoopState,
         **_: Any,
     ) -> None:
@@ -65,7 +65,7 @@ def make_event_logger_hooks() -> HookChain:
     async def _post_tool(
         *,
         tool: BaseTool,
-        args: dict[str, Any],
+        args: dict[str, Any],  # noqa: ARG001  # Protocol kw arg; unused
         result: ToolResult,
         state: LoopState,
         **_: Any,
@@ -94,7 +94,7 @@ def make_event_logger_hooks() -> HookChain:
 
 
 def wrap_with_event_logger(inner: HookChain) -> HookChain:
-    """Splice the logger around *inner*: log runs first on pre_*, last on post_*."""
+    """Wrap inner so log runs first on pre_* and last on post_*."""
     log = make_event_logger_hooks()
     return HookChain(
         pre_model=[*log.pre_model, *inner.pre_model],

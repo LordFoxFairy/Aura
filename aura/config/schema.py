@@ -38,26 +38,16 @@ class ToolsConfig(BaseModel):
     cleanup_completed_subagent_transcripts: bool = Field(
         default=False,
         description=(
-            "When True, delete a subagent's transcript JSONL + meta.json "
-            "from disk after the subagent terminates with status=completed. "
-            "Failed/cancelled/timeout transcripts are always kept (debug "
-            "value). Default False matches claude-code's behavior — files "
-            "stay so /resume + post-mortem inspection work."
+            "Delete subagent transcript JSONL + meta.json after status=completed. "
+            "Failed/cancelled transcripts are always kept for post-mortem."
         ),
     )
     mcp_overrides_builtin: bool = Field(
         default=False,
         description=(
-            "Global collision policy for builtin-vs-MCP tool name clashes. "
-            "When False (default), the builtin tool wins and the MCP tool "
-            "is dropped — preserves Aura's historical behavior. When True, "
-            "the MCP tool wins and the builtin is shadowed; useful when an "
-            "operator wants to override a stock tool with an MCP server's "
-            "richer implementation. Either way, ``mcp_tool_shadowed`` "
-            "journal events are emitted with a ``winner`` field "
-            "(``\"builtin\"`` or ``\"mcp\"``) so the policy outcome is "
-            "auditable. ALL-OR-NOTHING — per-tool overrides are out of "
-            "scope until a real use case appears."
+            "Collision policy for builtin-vs-MCP tool name clashes. False: "
+            "builtin wins, MCP dropped. True: MCP wins, builtin shadowed. "
+            "Either way, mcp_tool_shadowed journal events log the winner."
         ),
     )
 
@@ -67,28 +57,21 @@ class StorageConfig(BaseModel):
 
     path: str = Field(
         default="~/.aura/sessions.db",
-        description="Path to the SQLite DB. May contain ~; expand via resolved_storage_path().",
+        description="SQLite path. May contain ~; expand via resolved_storage_path().",
     )
 
 
 class UIConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # When True (default), the renderer passes assistant text through
-    # ``rich.markdown.Markdown`` so code fences, headings, lists, bold,
-    # etc. render with styling. Set False for raw-text output (scripts
-    # that grep transcripts; terminals that mis-render box-drawing;
-    # personal preference). The heuristic still short-circuits on
-    # marker-free content, so the toggle only matters when content
-    # actually contains markdown.
-    markdown: bool = True
-
-    # When True (default), the status bar renders a deterministic pet
-    # buddy (species + mood) as a trailing fragment. Set False for a
-    # persistent opt-out; the ``AURA_NO_BUDDY=1`` env var is also
-    # honored for one-shot disabling. Pure cosmetic — the buddy has no
-    # effect on agent behavior.
-    buddy_enabled: bool = True
+    markdown: bool = Field(
+        default=True,
+        description="Render assistant text through rich.markdown.Markdown.",
+    )
+    buddy_enabled: bool = Field(
+        default=True,
+        description="Show pet buddy in the status bar (also honors AURA_NO_BUDDY=1).",
+    )
 
 
 class LogConfig(BaseModel):
@@ -99,36 +82,27 @@ class LogConfig(BaseModel):
 
 
 class WebSearchConfig(BaseModel):
-    """Backend selection for the ``web_search`` tool.
-
-    ``provider`` picks the backend; ``duckduckgo`` is the zero-config default
-    and the only backend this release supports.
-
-    ``api_key_env`` names the env var that holds the key (the key itself is
-    never stored in config). Ignored for the DuckDuckGo backend.
-
-    ``max_results`` is the default cap when the caller invokes ``web_search``
-    without an explicit ``max_results`` argument (i.e. the schema default
-    fires). An explicit argument always wins.
-    """
-
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["duckduckgo"] = "duckduckgo"
-    api_key_env: str | None = None
-    max_results: int = Field(default=5, ge=1, le=20)
+    provider: Literal["duckduckgo"] = Field(
+        default="duckduckgo",
+        description="Search backend. Only duckduckgo (zero-config) ships today.",
+    )
+    api_key_env: str | None = Field(
+        default=None,
+        description="Env var holding the API key (ignored for duckduckgo).",
+    )
+    max_results: int = Field(
+        default=5, ge=1, le=20,
+        description="Default cap when web_search omits max_results.",
+    )
 
 
 class RetryConfig(BaseModel):
-    """Retry policy for transient LLM provider errors.
+    """Retry policy wrapping the narrow model.ainvoke() in the agent loop.
 
-    Wraps the narrow ``model.ainvoke(...)`` call in the agent loop — not the
-    whole turn, and not tool invocations (those have their own semantics).
-    ``None`` on :class:`AuraConfig.retry` means "use library defaults"
-    (:func:`aura.infrastructure.retry.with_retry` bakes those in); setting any field
-    here overrides the corresponding default while the rest keep library
-    values. Bounds are defensive against footguns — ``max_attempts`` capped
-    at 10 keeps a stuck provider from holding a turn hostage for minutes.
+    Not applied to tool invocations (their own semantics). max_attempts=1
+    disables retry entirely; cap of 10 prevents stuck-provider hostage.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -139,126 +113,68 @@ class RetryConfig(BaseModel):
 
 
 class CompactConfig(BaseModel):
-    """Phase 4 §4 — tunable knobs for the compaction subsystem.
-
-    Defaults match Phase 1-3's hardcoded constants so this config block
-    is a refactor surface, not a behavior change. Operators can override
-    any field via ``~/.aura/config.json`` or ``<project>/.aura/config.json``;
-    the :class:`Compactor` class reads these values directly instead of
-    importing module-level constants from ``aura/core/compact/constants.py``.
-
-    Field semantics:
-
-    - ``auto_threshold_buffer_tokens``: subtracted from the model's context
-      window to produce the auto-compact trigger threshold. Mirrors
-      claude-code's 13k headroom (next user turn + summary scratch).
-    - ``max_files_to_restore`` / ``max_tokens_per_file``: post-compact
-      file re-injection caps. After the summary block replaces middle
-      history, we hoist the most-recently-touched FULL reads back as
-      ``<recent-file>`` HumanMessages so the model can keep working on
-      them without re-reading.
-    - ``max_summary_message_chars`` / ``max_summary_tool_args_chars``:
-      caps applied while serializing history into the summary prompt.
-      Keeps a single oversize tool result from blowing the prompt budget.
-    - ``fallback_summary_char_limit``: cap for the deterministic excerpt
-      used when even a single message is too large for the provider.
-    - ``max_summary_split_depth``: recursion bound on the summarize-split
-      retry path; prevents infinite recursion on pathological inputs.
-    - ``max_consecutive_failures``: circuit-breaker count. Three failed
-      auto-compact attempts in a row disable subsequent auto firings on
-      this Agent (manual ``/compact`` bypasses).
-    - ``microcompact_trigger_pairs`` / ``microcompact_keep_recent``:
-      pair-count trigger + keep-recent-N policy for the per-turn view
-      transform. Invariant: ``keep_recent < trigger_pairs`` so the
-      trigger can actually fire clears once crossed.
-    - ``time_based_gap_threshold_minutes``: when set, microcompact also
-      fires if the wall-clock gap since the last assistant message
-      exceeds this many minutes (long idle gaps invalidate the model's
-      cached working set anyway). ``None`` disables the time trigger.
-    """
+    """Compaction tunables. Invariant: microcompact_keep_recent < trigger_pairs."""
 
     model_config = ConfigDict(extra="forbid")
 
-    auto_threshold_buffer_tokens: int = Field(default=13_000, ge=0)
-    max_files_to_restore: int = Field(default=5, ge=0)
-    # Defaults to 5_000 to match the legacy ``MAX_TOKENS_PER_FILE`` constant
-    # in ``aura/core/compact/constants.py`` (Phase 1-3 behavior). The Phase 4
-    # spec drafted 6_000 but the actual code value was 5_000 — keeping
-    # behavior unchanged across the constant→config migration takes priority.
+    auto_threshold_buffer_tokens: int = Field(
+        default=13_000, ge=0,
+        description="Subtracted from context window to set the auto-compact threshold.",
+    )
+    max_files_to_restore: int = Field(
+        default=5, ge=0,
+        description="Cap on <recent-file> re-injects after a summary replaces history.",
+    )
     max_tokens_per_file: int = Field(default=5_000, ge=0)
-    max_summary_message_chars: int = Field(default=6_000, ge=0)
+    max_summary_message_chars: int = Field(
+        default=6_000, ge=0,
+        description="Per-message cap while serialising history into the summary prompt.",
+    )
     max_summary_tool_args_chars: int = Field(default=2_000, ge=0)
-    fallback_summary_char_limit: int = Field(default=12_000, ge=0)
+    fallback_summary_char_limit: int = Field(
+        default=12_000, ge=0,
+        description="Cap on the deterministic excerpt when no message fits the provider.",
+    )
     max_summary_split_depth: int = Field(default=12, ge=1)
-    max_consecutive_failures: int = Field(default=3, ge=1)
+    max_consecutive_failures: int = Field(
+        default=3, ge=1,
+        description="Circuit breaker: N failed auto-compacts disable further auto firings.",
+    )
     microcompact_trigger_pairs: int = Field(default=5, ge=0)
     microcompact_keep_recent: int = Field(default=3, ge=0)
-    time_based_gap_threshold_minutes: int | None = Field(default=None, ge=1)
+    time_based_gap_threshold_minutes: int | None = Field(
+        default=None, ge=1,
+        description="If set, microcompact also fires after N min of assistant idle.",
+    )
 
 
 class TeamsConfig(BaseModel):
-    """Feature gate for the teams (multi-agent swarm) subsystem.
-
-    Mirrors claude-code's ``isAgentSwarmsEnabled()`` flag (see
-    ``utils/agentSwarmsEnabled.ts`` in the upstream source). When
-    ``enabled`` is False (the default), the entire teams surface is
-    inert:
-
-    - the ``/team`` slash command is NOT registered with the REPL's
-      command registry, so it is invisible to ``/help`` and to tab
-      completion;
-    - :meth:`Agent.join_team` raises ``RuntimeError`` so any attempt
-      to enter a team via the programmatic API fails fast with a
-      pointer at the config flag;
-    - :meth:`Agent._auto_enable_send_message_for_team` early-returns,
-      so the LLM's tool schema never grows a ``send_message`` entry
-      it cannot use.
-
-    Set to True (typically in ``~/.aura/config.json`` or
-    ``<project>/.aura/config.json``) to opt into the full teams
-    surface — ``/team create``, ``/team spawn``, ``/team list``,
-    cross-teammate messaging, etc.
-    """
-
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = Field(
         default=False,
         description=(
-            "Enable the teams (multi-agent swarm) subsystem. When False "
-            "(default), /team slash commands are not registered, the "
-            "send_message tool is not registered, and Agent.join_team "
-            "is a no-op. Mirrors claude-code's isAgentSwarmsEnabled() "
-            "feature flag."
+            "Enable teams (multi-agent swarm). False: /team commands "
+            "unregistered, send_message tool absent, Agent.join_team raises."
         ),
     )
 
 
 class MCPServerConfig(BaseModel):
-    """One MCP server entry. The ``name`` namespaces tools as
-    ``mcp__<name>__<tool>`` and commands as ``/<name>__<prompt>``.
+    """One MCP server. Name namespaces tools as mcp__<name>__<tool>.
 
-    Three transports are supported, matching ``langchain-mcp-adapters``:
-
-    - ``stdio`` (default): spawn a child process; requires ``command``.
-    - ``sse``: Server-Sent Events HTTP endpoint; requires ``url``.
-    - ``streamable_http``: streamable HTTP endpoint (the successor to SSE in
-      the upstream spec); requires ``url``.
-
-    For network transports, ``headers`` is passed through verbatim — this is
-    where bearer tokens / API keys go. For ``stdio`` the ``env`` dict is used
-    instead and ``url``/``headers`` are ignored.
+    Transports (validated by _validate_transport_fields):
+      - stdio: requires command; url/headers must be unset.
+      - sse / streamable_http: requires url; command/env ignored.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     name: str
     transport: Literal["stdio", "sse", "streamable_http"] = "stdio"
-    # Populated for stdio transport; unused (and must be None) for http/sse.
     command: str | None = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
-    # Populated for sse / streamable_http; must be None for stdio.
     url: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     enabled: bool = True
@@ -305,43 +221,21 @@ class AuraConfig(BaseModel):
     log: LogConfig = Field(default_factory=LogConfig)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     web_search: WebSearchConfig | None = None
-    # Feature gate for the teams (multi-agent swarm) subsystem. Default
-    # ``enabled=False`` mirrors claude-code's ``isAgentSwarmsEnabled()``
-    # flag — the /team slash command, send_message auto-enable, and
-    # join_team programmatic entry are all dormant unless this is set
-    # to True. See :class:`TeamsConfig`.
     teams: TeamsConfig = Field(default_factory=TeamsConfig)
-    # Phase 4 §4 — compaction subsystem knobs (file caps, summary caps,
-    # circuit breaker, microcompact trigger, time-based gap). Defaults
-    # match the legacy hardcoded constants in
-    # ``aura/core/compact/constants.py`` and ``aura/core/compact/compact.py``
-    # so a fresh config preserves Phase 1-3 behavior. See
-    # :class:`CompactConfig` for per-field semantics.
     compact: CompactConfig = Field(default_factory=CompactConfig)
-    # Retry policy for transient LLM provider errors (HTTP 429 / 503 / 504,
-    # connection drops, "overloaded"). ``None`` = use library defaults from
-    # :func:`aura.infrastructure.retry.with_retry` (3 attempts, 1s base, 30s cap,
-    # jitter on). Pin ``max_attempts=1`` to disable retries entirely.
-    retry: RetryConfig | None = None
-    # Optional per-user override for the context window the status bar uses
-    # to render the live context-pressure ratio. When ``None``, Aura looks
-    # the window up by model spec via ``aura.infrastructure.llm.get_context_window``;
-    # when set, this value wins regardless of model. Useful for:
-    #  - frontier models not yet in the table that the user knows the exact
-    #    window size of
-    #  - beta / extended-context deployments (e.g. Claude 4.x with 1M
-    #    extended context enabled — the model spec is the same but the
-    #    window is 5×)
-    #  - proxies that round-trip through a different provider's tokenizer
-    # Does NOT change what the model actually accepts — only the denominator
-    # the status bar divides by.
-    context_window: int | None = Field(default=None, gt=0)
-    # NOTE: permission config does NOT live here. Providers/router/storage/log
-    # are runtime wiring; permissions are a separate concern with their own
-    # file(s) at ``.aura/settings.json`` + ``.aura/settings.local.json``,
-    # loaded by ``aura.infrastructure.permission_store.load``. Keeping them separate
-    # means each file has ONE purpose and the user knows exactly which file
-    # to edit. See spec §7.
+    retry: RetryConfig | None = Field(
+        default=None,
+        description="Retry for transient LLM errors; None = library defaults.",
+    )
+    context_window: int | None = Field(
+        default=None, gt=0,
+        description=(
+            "Override context window for the status-bar pressure ratio only "
+            "(does not change what the model accepts)."
+        ),
+    )
+    # Permission config lives in .aura/settings.json + settings.local.json,
+    # not here. Each file has ONE purpose.
 
     @model_validator(mode="after")
     def _validate_cross_refs(self) -> AuraConfig:

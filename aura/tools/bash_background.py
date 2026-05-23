@@ -14,7 +14,7 @@ from aura.application.tasks.store import TasksStore
 from aura.domain.permission.matchers import exact_match_on
 from aura.infrastructure.persistence import journal
 from aura.schemas.tool import ToolMetadata
-from aura.tools.bash import _is_bash_destructive
+from aura.tools.bash import is_bash_destructive
 
 _MAX_TIMEOUT_SECONDS = 86_400
 _DEFAULT_TIMEOUT_SECONDS = 3_600
@@ -69,10 +69,10 @@ class BashBackground(BaseTool):
         "to kill. Subject to the same safety rules as 'bash'. "
         "Default timeout 3600s; hard ceiling 86400s (24h)."
     )
-    args_schema: type[BaseModel] = BashBackgroundParams
+    args_schema: type[BaseModel] = BashBackgroundParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
-        is_destructive=_is_bash_destructive,
+        is_destructive=is_bash_destructive,
         is_concurrency_safe=False,
         rule_matcher=exact_match_on("command"),
         args_preview=_preview,

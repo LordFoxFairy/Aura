@@ -1,17 +1,4 @@
-"""Tests for ``Agent.compact`` — conversation summarization + state preservation.
-
-Covers:
-  - noop on short history
-  - summary replaces middle, preserves tail
-  - KEEP_LAST_N_TURNS preserved raw
-  - preserved state: read_records, invoked_skills, todos
-  - cleared caches: nested memory fragments, matched rules
-  - must-read-first hook swap over new Context
-  - journal event emission
-
-Model interactions are driven by FakeChatModel with a single scripted turn
-for the summary response.
-"""
+"""``Agent.compact``: history summarization plus selective state preservation."""
 
 from __future__ import annotations
 
@@ -184,8 +171,7 @@ async def test_compact_preserves_read_records(tmp_path: Path) -> None:
 
     await agent.compact(source="manual")
 
-    # After compact: new Context is in place but the fresh read fingerprint
-    # must survive — claude-code parity for the must-read-first invariant.
+    # New Context after compact, but must-read-first fingerprint survives.
     assert agent._context.read_status(target) == "fresh"
     await agent.aclose()
 
@@ -194,16 +180,7 @@ async def test_compact_preserves_read_records(tmp_path: Path) -> None:
 async def test_compact_resets_progressive_state_preserves_reads(
     tmp_path: Path,
 ) -> None:
-    """Phase 3 Task 3 — post-compact Context comes from ``fresh()``.
-
-    Progressive fields (``_invoked_skills``, ``_loaded_nested_paths``)
-    must be EMPTY on the new Context: invoked-skill bodies are surfaced
-    via ``<skill-active>`` re-injection HumanMessages in history (see
-    ``test_compact_skill_reinjection.py``), so keeping them on the new
-    Context's ``_invoked_skills`` would double-render. ``_read_records``
-    is preserved by ``fresh()`` defaults — the file is still on disk so
-    the must-read-first fingerprint remains valid.
-    """
+    """Post-compact Context preserves reads but resets progressive caches."""
     agent = _make_agent(tmp_path)
     _seed_history(agent, pairs=10)
 
@@ -541,12 +518,7 @@ async def test_compact_reinjects_top_n_recent_files_by_mtime(
 async def test_compact_honors_max_files_to_restore_config_override(
     tmp_path: Path,
 ) -> None:
-    """Phase 4 Task 2 — JSON config override on ``compact.max_files_to_restore``
-    propagates end-to-end through ``run_compact`` instead of using the legacy
-    constant default (5). Pinning ``2`` and recording 5 reads must yield
-    exactly 2 ``<recent-file>`` HumanMessages — proves the constant→config
-    migration is wired all the way to the call site.
-    """
+    """``compact.max_files_to_restore`` overrides propagate end-to-end."""
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},

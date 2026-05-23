@@ -4,7 +4,7 @@ stdio config.
 The expander itself lives in :mod:`aura.infrastructure.mcp.adapter`; the load-time
 hook lives in :mod:`aura.config.mcp_store`. We exercise both layers:
 
-- :func:`_expand_env_vars` directly for grammar correctness.
+- :func:`expand_env_vars` directly for grammar correctness.
 - :func:`mcp_store.load`-equivalent paths via on-disk JSON to confirm the
   expansion fires across ``command`` / ``args`` / ``env`` / ``headers``
   / ``url`` and the missing-var journal warning is emitted exactly once
@@ -20,19 +20,19 @@ from typing import Any
 import pytest
 
 from aura.config import mcp_store
-from aura.infrastructure.mcp.adapter import _expand_env_vars
+from aura.infrastructure.mcp.adapter import expand_env_vars
 
 
 def test_expand_passthrough_no_template(monkeypatch: pytest.MonkeyPatch) -> None:
     """A string with no ``${...}`` returns identically — fast path."""
     monkeypatch.setenv("FOO", "bar")
-    assert _expand_env_vars("plain") == "plain"
-    assert _expand_env_vars("") == ""
+    assert expand_env_vars("plain") == "plain"
+    assert expand_env_vars("") == ""
 
 
 def test_expand_simple_var_present(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MYTOK", "secret")
-    assert _expand_env_vars("Bearer ${MYTOK}") == "Bearer secret"
+    assert expand_env_vars("Bearer ${MYTOK}") == "Bearer secret"
 
 
 def test_expand_simple_var_missing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,7 +40,7 @@ def test_expand_simple_var_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     the missing log so the caller can warn once per file."""
     monkeypatch.delenv("ABSENT", raising=False)
     log: list[str] = []
-    out = _expand_env_vars("x=${ABSENT}", _missing_log=log)
+    out = expand_env_vars("x=${ABSENT}", _missing_log=log)
     assert out == "x="
     assert log == ["ABSENT"]
 
@@ -49,14 +49,14 @@ def test_expand_default_used_when_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("OPTIONAL", raising=False)
-    assert _expand_env_vars("${OPTIONAL:-fallback}") == "fallback"
+    assert expand_env_vars("${OPTIONAL:-fallback}") == "fallback"
 
 
 def test_expand_default_skipped_when_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PRESENT", "real")
-    assert _expand_env_vars("${PRESENT:-fallback}") == "real"
+    assert expand_env_vars("${PRESENT:-fallback}") == "real"
 
 
 def test_expand_default_used_when_empty(
@@ -65,7 +65,7 @@ def test_expand_default_used_when_empty(
     """Empty string in env should fall back to the default — matches
     claude-code and shell semantics for ``${VAR:-default}``."""
     monkeypatch.setenv("EMPTY", "")
-    assert _expand_env_vars("${EMPTY:-fb}") == "fb"
+    assert expand_env_vars("${EMPTY:-fb}") == "fb"
 
 
 def test_expand_multiple_in_one_string(
@@ -73,7 +73,7 @@ def test_expand_multiple_in_one_string(
 ) -> None:
     monkeypatch.setenv("A", "1")
     monkeypatch.setenv("B", "2")
-    assert _expand_env_vars("${A}+${B}=3") == "1+2=3"
+    assert expand_env_vars("${A}+${B}=3") == "1+2=3"
 
 
 def test_expand_no_recursion(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,7 +81,7 @@ def test_expand_no_recursion(monkeypatch: pytest.MonkeyPatch) -> None:
     containing ``${...}`` doesn't read another env var on use."""
     monkeypatch.setenv("OUTER", "${INNER}")
     monkeypatch.setenv("INNER", "secret")
-    assert _expand_env_vars("${OUTER}") == "${INNER}"
+    assert expand_env_vars("${OUTER}") == "${INNER}"
 
 
 def test_expand_default_with_dash_in_value(
@@ -90,7 +90,7 @@ def test_expand_default_with_dash_in_value(
     """``:-`` is the separator; later ``-`` in the default text is
     preserved verbatim."""
     monkeypatch.delenv("MISSING", raising=False)
-    assert _expand_env_vars("${MISSING:-multi-word-default}") == "multi-word-default"
+    assert expand_env_vars("${MISSING:-multi-word-default}") == "multi-word-default"
 
 
 def _write_global_store(home: Path, payload: dict[str, Any]) -> Path:

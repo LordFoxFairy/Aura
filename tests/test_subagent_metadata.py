@@ -1,30 +1,4 @@
-"""Subagent ``.meta.json`` companion writer (claude-code parity).
-
-Each persisted subagent transcript JSONL is shadowed by a sibling
-``.meta.json`` file carrying the small header an operator wants when
-scanning a session directory: agent_type, started_at, status, token
-totals — without having to load and parse the full transcript.
-
-Track A is delivering the on-disk path API
-(``SessionStorage.subagent_metadata_path(task_id, *, parent_session_id,
-cwd)``). Until A lands, the writer here defensively no-ops with a
-journal warning. These tests stub the API in via monkeypatch so they
-exercise the writer end-to-end regardless of A's landing order.
-
-Pinned behaviors:
-
-- A ``.meta.json`` file lands on every terminal branch (completed,
-  failed, cancelled, timeout).
-- The schema matches the documented contract: agent_type, task_id,
-  description, model_spec, parent_session_id, cwd, started_at,
-  ended_at, status, input_tokens, output_tokens.
-- Status echoes ``TaskRecord.status`` exactly.
-- Token totals reflect what the post_model hook recorded.
-- The write is atomic via a ``.tmp`` rename — a torn write can never
-  leave half-serialized JSON visible.
-- A storage that throws from ``subagent_metadata_path`` does NOT block
-  the agent loop; the subagent still flips to its terminal status.
-"""
+"""Subagent ``.meta.json`` companion writer: schema, atomicity, error tolerance."""
 
 from __future__ import annotations
 
@@ -41,10 +15,6 @@ from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
-
-# ----------------------------------------------------------------------
-# Helpers
-# ----------------------------------------------------------------------
 
 
 def _make_factory(
@@ -73,7 +43,7 @@ def _meta_path_for(
     parent_session_id: str | None = None,
     cwd: Path | None = None,
 ) -> Path:
-    """Resolve the on-disk meta path via Track A's storage API."""
+    """Resolve the on-disk meta path via the storage API."""
     return storage.subagent_metadata_path(
         task_id,
         parent_session_id=parent_session_id,
@@ -97,11 +67,6 @@ def _read_meta(
     assert path.exists(), f"meta file not found at {path}"
     raw: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     return raw
-
-
-# ----------------------------------------------------------------------
-# Tests — terminal branches
-# ----------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -401,15 +366,7 @@ async def test_meta_status_field_matches_record_status(
 async def test_meta_skipped_when_storage_lacks_path_api(
     tmp_path: Path,
 ) -> None:
-    """Defensive getattr path: storage missing the API → silent skip.
-
-    Track A has now landed ``subagent_metadata_path`` on
-    :class:`SessionStorage`, but the writer remains defensive (read
-    via ``getattr``) so a future stripped-down storage subclass — or
-    a regression that drops the method — still produces a working
-    subagent run with only a journal warning. We exercise that path
-    by shadowing the bound method on the instance with ``None``.
-    """
+    """Storage missing ``subagent_metadata_path`` → silent skip + journal warning."""
     storage = SessionStorage(tmp_path / "parent.db")
     # Shadow the class method on the instance. ``getattr(storage,
     # "subagent_metadata_path", None)`` returns this ``None`` rather

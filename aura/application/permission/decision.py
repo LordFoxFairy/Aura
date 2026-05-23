@@ -40,8 +40,7 @@ class Decision:
     allow: bool
     reason: DecisionReason
     rule: Rule | None = None
-    # Populated only when reason == "safety_blocked" with the path that
-    # tripped the policy. Args are not captured (may carry secrets).
+    # Populated only for safety_blocked; args omitted (may carry secrets).
     target: str | None = None
 
     def __post_init__(self) -> None:

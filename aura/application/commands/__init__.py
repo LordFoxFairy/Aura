@@ -34,7 +34,7 @@ _EXPORTS: dict[str, str] = {
     "session_label": "aura.application.commands.builtin",
 }
 
-__all__ = list(_EXPORTS)
+__all__ = list(_EXPORTS)  # pyright: ignore[reportUnsupportedDunderAll]  # lazy-load: __getattr__ resolves each name on demand from _EXPORTS
 
 
 def __getattr__(name: str) -> Any:

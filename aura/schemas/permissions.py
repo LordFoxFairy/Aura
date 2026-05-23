@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from aura.schemas.tool import ToolResult
 
 if TYPE_CHECKING:
-    # Runtime import would cycle aura.schemas → aura.application; PEP 563 keeps it lazy.
+    # Runtime import would cycle aura.schemas → aura.application.
     from aura.application.permission.decision import Decision
 
 
@@ -96,7 +96,8 @@ class Replace:
     decision: Decision
 
     def __post_init__(self) -> None:
-        if self.result is None:
+        # Defensive None check: callers can bypass the type system (tests do).
+        if self.result is None:  # pyright: ignore[reportUnnecessaryComparison]  # ToolResult is non-Optional in types, but tests construct via raw kwargs that bypass it.
             raise ValueError("Replace requires a non-None ToolResult")
         if self.decision.allow:
             raise ValueError(

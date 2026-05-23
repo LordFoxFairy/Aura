@@ -1,67 +1,17 @@
-"""SubagentFactory — build an :class:`Agent` instance per task.
+"""Build an isolated child :class:`Agent` per subagent task.
 
-Inheritance rules (matches claude-code's Task tool):
-
-- Own :class:`LoopState`, own :class:`Context`, own storage. The subagent
-  MUST NOT observe or mutate the parent's history; spawning is not
-  conversation continuation.
-- Shares the parent's :class:`AuraConfig` (providers / router) + the parent's
-  model spec, so the router alias (e.g. ``default``) resolves to the same
-  concrete model. Resolving a fresh model per subagent is deliberate — the
-  chat model classes are stateful (seen_bound_tools etc.) and sharing one
-  across agents risks cross-talk.
-- Round 7R per-spawn override: ``spawn(model_spec=...)`` swaps the
-  inherited spec for this child only. ``None`` (the default) keeps the
-  inherited parent spec; an explicit string runs through
-  :func:`llm.make_model_for_spec` so router aliases (``"haiku"``) and
-  ``provider:model`` form both resolve. Unknown specs raise
-  :class:`UnknownModelSpecError` from :meth:`validate_model_spec` — the
-  task_create tool calls this BEFORE creating a TaskRecord so a typo
-  doesn't strand an orphan record in ``running``.
-- Skills ARE inherited: the parent's pre-loaded :class:`SkillRegistry` is
-  handed through to the child's Agent constructor so the subagent has exact
-  parity with parent skill set without a redundant disk scan.
-- MCP servers ARE inherited at the config level: child's ``mcp_servers``
-  list matches parent's. Each Agent still runs its own ``aconnect`` —
-  langchain-mcp-adapters spawns a fresh session per ``get_tools`` call, so
-  parent and subagent end up with INDEPENDENT MCP connections to the same
-  servers. That's the simplest + correct-enough design.
-- Recursion guard: controlled — capped at depth 2 (claude-code parity,
-  see ``runAgent.ts``). Each :class:`SubagentFactory` carries its own
-  ``_depth`` (the depth of the agent it was constructed FOR, root = 0);
-  ``spawn`` raises :class:`ToolError` when invoked on a factory already
-  at the cap, and the spawned child's ``task_create`` is stripped from
-  its tools the moment its depth reaches the cap so the LLM doesn't
-  even see a tool it cannot use. ``task_output`` is similarly stripped
-  on capped children — without ``task_create`` it has no task to query.
-  The inspection tools ``task_get`` / ``task_list`` / ``task_stop`` ARE
-  inherited at every depth: they operate on the shared
-  :class:`TasksStore` held by the parent Agent, so a subagent can poll
-  its siblings. Each child gets its own TasksStore
-  instance in practice (spawn builds a fresh Agent, which builds a fresh
-  store), so ``task_get("sibling-id")`` from a subagent will see an empty
-  store and return ``unknown task_id`` — that's intentional: siblings
-  aren't visible across the parent/child boundary, and we don't want to
-  leak parent state into the child. Keeping the tools enabled means the
-  LLM inside the subagent doesn't hallucinate "maybe task_get exists"
-  without a way to verify.
-- Parent budget hooks are NOT inherited. Safety hooks (bash_safety +
-  must_read_first) are re-installed inside the child's ``__init__`` via
-  the same code path as the parent, so the subagent is safe even though
-  parent-authored hooks don't cross the boundary.
-- Permission IS inherited — via a freshly-built hook that reuses the
-  parent's :class:`RuleSet` + :class:`SafetyPolicy` + live mode +
-  optional deny_rules / ask_rules, but hands the child a private
-  :class:`SessionRuleSet` and a :class:`SubagentPermissionAsker` (C1,
-  parity with claude-code's ``shouldAvoidPermissionPrompts: true`` —
-  subagents have no UI so any would-be ask path silently denies).
-  Plan / accept_edits modes don't make sense on a non-interactive
-  subagent; those collapse to ``default``. ``bypass`` is the one mode
-  that *does* inherit verbatim.
-
-Storage defaults to an in-memory sqlite connection so the subagent's
-transcript doesn't pollute the parent's on-disk session DB. Tests inject a
-``storage_factory`` explicitly; production wiring uses the default.
+Invariants:
+- Recursion depth cap = :data:`_AGENT_DEPTH_CAP`; at the cap, ``task_create`` /
+  ``task_output`` are stripped from the child's tool set.
+- Fresh chat model per spawn (the chat model classes are stateful — sharing risks
+  cross-talk).
+- MCP servers inherited at config level; each child runs its own ``aconnect`` so
+  parent and child hold INDEPENDENT connections to the same servers.
+- Permission rules inherited; ``SessionRuleSet`` is private to the child so
+  approvals do NOT leak back to the parent. Plan / accept_edits collapse to
+  ``default`` (no interactive UI); ``bypass`` inherits verbatim.
+- Storage defaults to in-memory sqlite so child transcripts don't pollute the
+  parent's session DB.
 """
 
 from __future__ import annotations
@@ -102,9 +52,9 @@ class _SubagentPermissionAsker:
     async def __call__(
         self,
         *,
-        tool: BaseTool,  # noqa: ARG002 - protocol compliance
-        args: dict[str, Any],  # noqa: ARG002 - protocol compliance
-        rule_hint: Rule,  # noqa: ARG002 - protocol compliance
+        tool: BaseTool,  # noqa: ARG002  # required by PermissionAsker Protocol; noop impl ignores it
+        args: dict[str, Any],  # noqa: ARG002  # required by PermissionAsker Protocol; noop impl ignores it
+        rule_hint: Rule,  # noqa: ARG002  # required by PermissionAsker Protocol; noop impl ignores it
     ) -> AskerResponse:
         return AskerResponse(
             choice="deny",
@@ -114,31 +64,20 @@ class _SubagentPermissionAsker:
         )
 
 
-# Singleton — stateless; sharing one instance across every subagent +
-# every tool call is cheap and matches the "no I/O" contract.
 _SUBAGENT_AUTO_DENY_ASKER = _SubagentPermissionAsker()
 
-# Maximum subagent recursion depth. Root agent = 0; the first subagent it
-# spawns = 1; that subagent spawning a grandchild = 2. At the cap, the
-# child's ``task_create`` tool is stripped (no further descent) and any
-# attempt to ``factory.spawn`` from a capped factory raises ToolError.
-# Matches claude-code's controlled-recursion contract.
+# Root = 0, first child = 1, grandchild = 2. Above the cap, ``spawn`` raises.
 _AGENT_DEPTH_CAP = 2
 
 
 def _default_storage() -> SessionStorage:
-    # sqlite3.connect(":memory:") works; Path(":memory:").parent == Path(".")
-    # which already exists so the mkdir in SessionStorage is a no-op.
     return SessionStorage(Path(":memory:"))
 
 
 class SubagentFactory:
     """Create a standalone Agent for a single subagent run."""
 
-    # Class-level defaults so test subclasses that bypass ``__init__``
-    # (e.g. ``_CustomFactory`` patterns in test_task_observability)
-    # still see sane recursion / abort-cascade state. Every concrete
-    # ``__init__`` overrides these per-instance.
+    # Class-level defaults so subclasses that skip __init__ still see sane state.
     _depth: int = 0
     _parent_abort_event: asyncio.Event | None = None
 
@@ -166,38 +105,7 @@ class SubagentFactory:
         parent_model: BaseChatModel | None = None,
         parent_session_id: str | None = None,
     ) -> None:
-        # ``parent_carryover_provider`` — called at each ``spawn`` to
-        # build a typed :class:`ReadCarryover` snapshot of the parent
-        # Agent's reads. Phase 3 Task 4 replaced the previously-untyped
-        # ``parent_read_records_provider`` (which returned a raw
-        # ``dict[Path, _ReadRecord]``) with this typed channel; the
-        # carryover also carries parent ``source_session_id`` and
-        # ``generated_at_turn`` for audit / freshness messaging. Threaded
-        # through to the child's :class:`Context` as ``carryover`` so
-        # files the parent already read show up as
-        # ``read_status == "fresh"`` in the child (Workstream G8).
-        # ``None`` disables inheritance — child starts with an empty
-        # read map (legacy behavior, kept for the handful of tests that
-        # build a factory without a parent Agent reference).
-        #
-        # ``parent_ruleset`` / ``parent_safety`` / ``parent_mode_provider``
-        # (C1) — the triplet that lets ``spawn`` assemble a permission
-        # hook identical in spirit to the parent's. ``None`` on all three
-        # disables the child permission hook (legacy path for tests that
-        # build a factory without any permission wiring). ``parent_session``
-        # is NOT inherited — it's recorded here purely so a caller that
-        # wants to verify "child.session is fresh / not parent.session"
-        # has something to compare against. ``spawn`` ignores it.
-        #
-        # ``parent_deny_rules`` / ``parent_ask_rules`` (Round 3C) — the
-        # parent's deny + ask layered rulesets. Threaded into
-        # :func:`make_permission_hook` so the child enforces the SAME
-        # deny / ask matrix. ``None`` means "inherit no extra layered
-        # rules".
         self._parent_config = parent_config
-        # Parent-side DI handles. Stored so the runner can drive child
-        # lifecycle (token observer install, transcript flush, cleanup
-        # gating) without reaching into Agent privates via getattr.
         self._parent_storage = parent_storage
         self._parent_hooks = parent_hooks
         self._parent_model = parent_model
@@ -208,25 +116,19 @@ class SubagentFactory:
         self._parent_ruleset = parent_ruleset
         self._parent_safety = parent_safety
         self._parent_mode_provider = parent_mode_provider
+        # ``parent_session`` is NOT inherited; kept for "child.session is fresh" verification only.
         self._parent_session = parent_session
         self._parent_deny_rules = parent_deny_rules
         self._parent_ask_rules = parent_ask_rules
         self._model_factory = model_factory
         self._storage_factory = storage_factory or _default_storage
-        # Depth of the agent that owns THIS factory. Children spawned from it
-        # land at ``self._depth + 1``. Root Agent passes the default 0; spawn
-        # mutates the child Agent's factory to depth+1 post-construction.
+        # Depth of the agent owning THIS factory; children land at ``self._depth + 1``.
         self._depth = depth
-        # Parent's abort signal — any awaiter on this Event learns the parent
-        # asked for shutdown. ``run_task`` reads it via :meth:`abort_event`
-        # and cancels the child's astream when it fires. ``None`` keeps the
-        # legacy "no cascade" behaviour for callers that don't wire it.
         self._parent_abort_event = parent_abort_event
 
     @property
     def depth(self) -> int:
-        # ``getattr`` keeps test subclasses that skip __init__ working — they
-        # see depth=0 (root semantics) and never trip a missing-attr error.
+        # ``getattr`` for subclasses that skip __init__: they see depth=0.
         return getattr(self, "_depth", 0)
 
     @property
@@ -235,80 +137,68 @@ class SubagentFactory:
 
     @property
     def parent_config(self) -> AuraConfig:
-        """Read-only view of the parent's :class:`AuraConfig`.
-
-        Used by runners to read tools-level flags (cleanup toggles,
-        ``web_fetch.summary_model``) without reaching into the spawned
-        child Agent's private ``_config``.
-        """
         return self._parent_config
 
     @property
     def parent_model(self) -> BaseChatModel | None:
-        """Read-only view of the parent's chat model.
-
-        Runners that need to build a summarizer factory (which keys off
-        the parent model's provider/family) read it here instead of
-        peeking into a spawned child's ``_model``.
-        """
         return self._parent_model
 
     @property
     def parent_hooks(self) -> HookChain | None:
-        """Read-only view of the parent's :class:`HookChain`."""
         return self._parent_hooks
 
     @property
     def parent_storage(self) -> SessionStorage | None:
-        """Read-only view of the parent's :class:`SessionStorage`."""
         return self._parent_storage
 
     @property
     def parent_session_id(self) -> str | None:
-        """Read-only view of the parent's session id."""
         return self._parent_session_id
 
     @property
     def parent_model_spec(self) -> str:
-        """Read-only view of the inherited parent spec.
-
-        Surfaced so ``task_create`` can read the spec the child WOULD
-        run on without an override + pin it onto the TaskRecord at
-        create time. Returning the stored value (rather than re-routing
-        through ``cfg.router``) keeps the property a cheap dict get.
-        """
         return self._parent_model_spec
 
     def validate_model_spec(self, spec: str) -> None:
-        """Raise :class:`UnknownModelSpecError` if ``spec`` cannot resolve.
-
-        Called by ``task_create`` BEFORE the TaskRecord is created so a
-        typo / unknown alias / unknown provider surfaces as a clean
-        ToolError rather than stranding an orphan record in
-        ``running``. Pure validation: no side effects, no SDK
-        construction.
-        """
-        # ``llm.resolve`` is sync + does only dict lookups; no SDK
-        # touch. It raises :class:`UnknownModelSpecError` on any
-        # unknown alias / unknown provider.
+        """Raise :class:`UnknownModelSpecError` if ``spec`` cannot resolve. Pure validation."""
         llm.resolve(spec, cfg=self._parent_config)
+
+    def rebind_for_child(
+        self,
+        parent: SubagentFactory,
+        *,
+        child_depth: int,
+        child_mode_provider: Callable[[], str],
+    ) -> None:
+        """Propagate parent depth + abort/permission/model bindings into THIS factory.
+
+        Run on the child Agent's own factory right after Agent.__init__: depth, abort
+        cascade, permission ruleset, safety, model + storage factories all switch
+        from defaults to the parent's bindings so a grandchild dispatched from this
+        child sees the full chain.
+        """
+        self._depth = child_depth
+        self._parent_abort_event = parent._parent_abort_event
+        self._parent_ruleset = parent._parent_ruleset
+        self._parent_safety = parent._parent_safety
+        self._parent_mode_provider = child_mode_provider
+        self._parent_deny_rules = parent._parent_deny_rules
+        self._parent_ask_rules = parent._parent_ask_rules
+        self._model_factory = parent._model_factory
+        self._storage_factory = parent._storage_factory
 
     def spawn(
         self,
-        prompt: str,
+        prompt: str,  # noqa: ARG002  # positional API kept for caller compatibility; child reads it via TaskRecord
         allowed_tools: list[str] | None = None,
         *,
         agent_type: str = "general-purpose",
         task_id: str | None = None,
         model_spec: str | None = None,
     ) -> Agent:
-        # Import locally to avoid a circular import: Agent's module pulls in
-        # aura.tools.task_create, which pulls in this factory.
+        # Local import: Agent's module pulls in task_create which pulls in this factory.
         from aura.core.agent import Agent
 
-        # F-07-004 — controlled recursion. Depth-cap check FIRST so a capped
-        # subagent that somehow still has task_create wired (stale schema,
-        # MCP injection) gets a clear ToolError rather than silent dispatch.
         if self._depth >= _AGENT_DEPTH_CAP:
             raise ToolError(
                 f"task_create refused: subagent recursion depth cap reached "
@@ -317,18 +207,10 @@ class SubagentFactory:
             )
         child_depth = self._depth + 1
 
-        # Resolve the subagent flavor first — any unknown name raises
-        # ValueError with the valid set, which the calling tool
-        # (``task_create``) surfaces to the LLM as a ToolError.
         type_def = get_agent_def(agent_type)
 
-        # Build the effective allowlist. Layered precedence:
-        #   1. general-purpose (empty ``type_def.tools``) → inherit parent
-        #      tool set unchanged, just strip the recursion-guard tools.
-        #   2. Restricted type → intersect with parent's enabled set. If any
-        #      declared allowed-tool is missing from the parent, raise —
-        #      silently dropping would hand the subagent a broken prompt
-        #      (the suffix promises tools the child can't see).
+        # Restricted agent_type MUST raise on missing tools — silently dropping would
+        # hand the child a prompt promising tools it can't see.
         parent_enabled = list(self._parent_config.tools.enabled)
         if type_def.tools:
             missing = type_def.tools - set(parent_enabled)
@@ -343,15 +225,8 @@ class SubagentFactory:
         else:
             effective_allow = None  # inherit-all sentinel
 
-        # Clone the parent config. ``allowed_tools`` (legacy kwarg) and
-        # ``effective_allow`` (derived from agent_type) both act as narrowing
-        # filters; both must pass. MCP servers ARE inherited so the subagent
-        # has parity with parent's external tool set.
-        #
-        # Depth-cap strip: at the cap, descent stops here — the child sees
-        # neither ``task_create`` nor ``task_output`` (the latter has nothing
-        # to query without the former). Below the cap, both stay so the
-        # child can dispatch its own grandchildren.
+        # At the cap, descent stops: strip ``task_create`` (and ``task_output``,
+        # which has nothing to query without it).
         forbidden = (
             {"task_create", "task_output"}
             if child_depth >= _AGENT_DEPTH_CAP
@@ -368,20 +243,9 @@ class SubagentFactory:
         child_cfg = self._parent_config.model_copy(
             update={"tools": child_tools}
         )
-        # Per-spawn model resolution. Precedence:
-        #   1. Explicit ``model_factory`` (test injection — full bypass).
-        #   2. ``model_spec`` kwarg (Round 7R) → make_model_for_spec.
-        #   3. Inherited ``parent_model_spec`` → resolve + create.
         if self._model_factory is not None:
             model = self._model_factory()
         elif model_spec is not None:
-            # ``make_model_for_spec`` runs through llm.resolve + llm.create
-            # — same path as the parent's startup model build. Raises
-            # :class:`UnknownModelSpecError` on bad spec; propagates so
-            # the caller (run_task) marks the record failed. task_create
-            # validates BEFORE creating the record so the failure here
-            # is reserved for genuine post-create races (config swapped
-            # mid-run, etc.).
             model = llm.make_model_for_spec(model_spec, self._parent_config)
         else:
             provider, model_name = llm.resolve(
@@ -389,38 +253,12 @@ class SubagentFactory:
             )
             model = llm.create(provider, model_name)
         storage = self._storage_factory()
-        # Snapshot the parent's reads RIGHT NOW as a typed
-        # :class:`ReadCarryover`. The carryover wraps an immutable
-        # MappingProxy over the records dict so subsequent parent reads
-        # don't retroactively enter the child's view (and child
-        # ``record_read`` calls can't write back into the parent's live
-        # state). ``ReadRecord`` is frozen, so value-level sharing is
-        # harmless. None provider → None passed through → child starts
-        # empty, matching prior behavior.
         carryover: ReadCarryover | None
         if self._parent_carryover_provider is not None:
             carryover = self._parent_carryover_provider()
         else:
             carryover = None
 
-        # C1 — assemble a permission hook for the child. The child needs
-        # the parent's rules (so default-allows + user rules propagate)
-        # and the parent's safety policy (so protected paths still
-        # block), but gets a FRESH ``SessionRuleSet`` — session rules
-        # approved inside the child MUST NOT leak back to the parent —
-        # and the auto-deny asker (any would-be prompt silently denies).
-        #
-        # Mode inheritance rule: ``bypass`` rides through (if the user
-        # explicitly opted into bypass they meant it for the whole tree),
-        # ``plan`` / ``accept_edits`` collapse to ``default`` (the child
-        # has no way to exit plan mode interactively; the parent's plan
-        # gate already blocked whatever spawned this subagent if it was
-        # meant to be dry-run), and any other value maps to ``default``.
-        #
-        # If the factory was built without permission wiring (any of the
-        # three params is ``None``), skip the hook entirely — existing
-        # tests / SDK callers that never set up permissions get the
-        # legacy zero-hook behaviour.
         child_session = SessionRuleSet()
         child_hooks: HookChain | None = None
         child_mode: str = "default"
@@ -431,10 +269,7 @@ class SubagentFactory:
         ):
             parent_mode = self._parent_mode_provider()
             child_mode = "bypass" if parent_mode == "bypass" else "default"
-            # Freeze the resolved child mode into the hook's closure.
-            # Re-reading ``parent_mode_provider`` at hook fire time would
-            # let a mid-turn parent mode flip (shift+tab) bleed into the
-            # child — the parity contract says mode is decided at spawn.
+            # Freeze the mode: a mid-turn parent flip must NOT bleed into the child.
             _resolved_mode: Mode = "bypass" if parent_mode == "bypass" else "default"
             perm_hook = make_permission_hook(
                 asker=_SUBAGENT_AUTO_DENY_ASKER,
@@ -448,20 +283,8 @@ class SubagentFactory:
             )
             child_hooks = HookChain(pre_tool=[perm_hook])
 
-        # Storage race fix (audit Tier S): every subagent MUST have its own
-        # session_id. The old literal ``"subagent"`` made two concurrent
-        # children share a storage key — ``SessionStorage.save`` is
-        # DELETE-then-INSERT, so whichever child flushed last wiped the
-        # other's transcript. It also made ``session="subagent"`` in every
-        # journal event, destroying forensic traceability.
-        #
-        # Prefer the caller-supplied ``task_id`` — it ties the session to
-        # the observable :class:`TaskRecord` so ``/tasks`` + journal +
-        # storage all line up. Fallback to a short uuid for legacy callers
-        # (``factory.spawn("prompt")`` without kwargs) so the invariant
-        # "every child has a unique session" holds unconditionally.
-        # Storage layer parameterises the string safely, so no sanitization
-        # is needed on task_id.
+        # Every subagent MUST hold a unique session_id: SessionStorage.save is
+        # DELETE-then-INSERT, so concurrent children sharing a key wipe each other.
         child_session_id = (
             f"subagent-{task_id}"
             if task_id is not None
@@ -479,17 +302,12 @@ class SubagentFactory:
             carryover=carryover,
             mode=child_mode,
         )
-        # Propagate depth + abort cascade to the child's own factory.
-        # Agent.__init__ built it with default depth=0 and no abort event;
-        # mutate post-construction so a grandchild dispatched from this
-        # child knows its own depth and listens to OUR parent_abort_event.
-        child_agent._subagent_factory._depth = child_depth
-        child_agent._subagent_factory._parent_abort_event = self._parent_abort_event
-        child_agent._subagent_factory._parent_ruleset = self._parent_ruleset
-        child_agent._subagent_factory._parent_safety = self._parent_safety
-        child_agent._subagent_factory._parent_mode_provider = lambda: child_agent.mode
-        child_agent._subagent_factory._parent_deny_rules = self._parent_deny_rules
-        child_agent._subagent_factory._parent_ask_rules = self._parent_ask_rules
-        child_agent._subagent_factory._model_factory = self._model_factory
-        child_agent._subagent_factory._storage_factory = self._storage_factory
+        # Propagate depth + abort cascade to the child's own factory: Agent.__init__
+        # built it with default depth=0; mutate post-construction so a grandchild
+        # dispatched from this child knows its own depth and listens to OUR chain.
+        child_agent.subagent_factory.rebind_for_child(
+            self,
+            child_depth=child_depth,
+            child_mode_provider=lambda: child_agent.mode,
+        )
         return child_agent

@@ -54,7 +54,7 @@ class SendMessage(BaseTool):
         "their next loop iteration. Only available inside a team — outside "
         "a team this tool errors."
     )
-    args_schema: type[BaseModel] = SendMessageParams
+    args_schema: type[BaseModel] = SendMessageParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
         is_destructive=False,

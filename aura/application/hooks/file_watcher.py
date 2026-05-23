@@ -1,4 +1,4 @@
-"""Polling file watcher → :class:`FileChangedHook`."""
+"""Polling file watcher feeding FileChangedHook."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ class _Snap:
 
 
 class FileWatcher:
-    """Async polling watcher. ``start`` / ``stop`` are idempotent."""
+    """Async polling watcher; ``start`` / ``stop`` are idempotent."""
 
     def __init__(
         self,
@@ -41,7 +41,7 @@ class FileWatcher:
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
             return
-        # Take initial snapshot synchronously so the first tick has a baseline.
+        # First tick needs a baseline; snapshot sync before scheduling the poll task.
         self._snapshots = self._take_snapshot()
         self._task = asyncio.create_task(
             self._poll_loop(), name="aura-file-watcher",
@@ -91,7 +91,6 @@ class FileWatcher:
                 elif snap.mtime != prev.mtime:
                     events.append((path, "modified"))
 
-        # Files inside a watched dir that vanished between snapshots.
         for path, prev in self._snapshots.items():
             if path in new_snap:
                 continue

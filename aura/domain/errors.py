@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 class AuraError(Exception):
-    """Base class for expected, user-facing Aura errors."""
+    pass
 
 
 __all__ = ["AuraError"]

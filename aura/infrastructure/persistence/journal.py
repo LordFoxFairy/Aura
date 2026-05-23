@@ -14,8 +14,7 @@ from typing import Any
 
 _path: Path | None = None
 
-# Per-task override; asyncio.Task copies the current Context on creation
-# so child tasks inherit the parent's session scope.
+# asyncio.Task snapshots ContextVar on creation, so child tasks inherit the session scope.
 _SESSION_PATH: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
     "journal_session_path", default=None,
 )
@@ -26,7 +25,7 @@ def configure(path: Path) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        # mkdir failure on a bad path must not crash startup — degrade silently.
+        # Bad-path mkdir must never crash startup — degrade silently.
         _path = None
         print(
             f"aura: audit log disabled — cannot prepare {path.parent}: {exc}",
@@ -43,7 +42,7 @@ def reset() -> None:
 
 @contextlib.contextmanager
 def session_scope(path: Path) -> Generator[None, None, None]:
-    """Route journal writes to ``path`` within this context; nests via contextvars."""
+    """Route writes to ``path`` within this context; nests via contextvars."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:  # pragma: no cover
@@ -78,9 +77,8 @@ def write(event: str, /, **fields: Any) -> None:
         with active.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
             f.flush()
-            # tmpfs / nfs may reject fsync; suppress to keep agent running.
+            # tmpfs / nfs may reject fsync; swallow so the agent stays running.
             with contextlib.suppress(OSError, ValueError):
                 os.fsync(f.fileno())
-    except Exception:  # noqa: BLE001  # persistence failure is non-fatal best-effort
-        # Contract: audit failure must NEVER crash the agent.
+    except Exception:  # noqa: BLE001  # audit failure must never crash the agent
         pass

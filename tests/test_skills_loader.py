@@ -1,18 +1,4 @@
-"""Tests for aura.infrastructure.skills.loader.
-
-Directory-per-skill format matches claude-code v2.1.88.
-
-Covers:
-- Directory-per-skill discovery: ``<root>/.aura/skills/<name>/SKILL.md``.
-- Frontmatter parsing: name override, when_to_use, allowed-tools (list+str),
-  arguments (list+str), argument-hint, version, paths, user-invocable,
-  disable-model-invocation.
-- Layer precedence: user wins over project on name collision.
-- Walk-up: project layer collects ``.aura/skills/`` from cwd up to home exclusive.
-- Realpath dedup across symlinks.
-- Conditional skills activate lazily via ``activate_conditional_skills_for_paths``.
-- Legacy plain ``.md`` files → journal ``skill_legacy_format_detected``, NOT loaded.
-"""
+"""Skill loader: dir-per-skill discovery, frontmatter, layering, walk-up, dedup."""
 
 from __future__ import annotations
 
@@ -153,7 +139,7 @@ def test_scalar_arguments_split_on_whitespace(tmp_path: Path) -> None:
 
     reg = load_skills(cwd=cwd, home=home)
     skill = reg.list()[0]
-    # Matches claude-code's ``parseArgumentNames`` scalar-form behaviour.
+    # Scalar form: whitespace-split into ordered argument names.
     assert skill.arguments == ("foo", "bar", "baz")
 
 
@@ -495,12 +481,10 @@ def test_claude_code_skills_dir_loads(tmp_path: Path) -> None:
     home.mkdir()
     cwd = tmp_path / "proj"
     cwd.mkdir()
-    # Drop a vanilla claude-code skill under ~/.claude/skills/ — same
-    # dir-per-skill convention, frontmatter identical to what claude-code
-    # authors write.
+    # ~/.claude/skills/ uses the same dir-per-skill + frontmatter convention.
     _write(
         home / ".claude" / "skills" / "imported-skill" / "SKILL.md",
-        "---\ndescription: imported from claude-code\n---\nbody here\n",
+        "---\ndescription: imported skill\n---\nbody here\n",
     )
     reg = load_skills(cwd=cwd, home=home)
     names = {s.name for s in reg.list()}
@@ -602,8 +586,7 @@ def test_inline_cmd_in_body_emits_journal_warning(tmp_path: Path) -> None:
     try:
         _write(
             home / ".aura" / "skills" / "uses-inline-cmd" / "SKILL.md",
-            # Body references inline shell-exec syntax — claude-code would
-            # expand it, Aura renders literally + journals the mismatch.
+            # Inline ``!`cmd``` shell-exec syntax: Aura renders literally and journals.
             "---\ndescription: uses !`date`\n---\n"
             "Today's date: !`date +%Y-%m-%d`\n",
         )
@@ -805,15 +788,7 @@ def test_unsupported_frontmatter_silent_when_only_recognized_fields(
 
 
 def test_integration_claude_code_skill_full_bad_shape(tmp_path: Path) -> None:
-    """End-to-end: load a claude-code-style skill with every unsupported feature.
-
-    Asserts:
-    1. Skill still loads (one bad field doesn't break the catalogue).
-    2. ``skill_unsupported_frontmatter`` fires listing all 6 dropped fields.
-    3. ``skill_inline_cmd_unsupported`` still fires (V12-G regression check).
-    4. ``render_skill_body`` strips the inline shell-exec syntax — neither
-       ``!`date`` nor ``!`pwd`` appears literally in the rendered output.
-    """
+    """End-to-end load with every unsupported frontmatter field + inline shell-exec."""
     home = tmp_path / "home"
     home.mkdir()
     cwd = tmp_path / "proj"
@@ -861,7 +836,7 @@ def test_integration_claude_code_skill_full_bad_shape(tmp_path: Path) -> None:
         assert unsupported_events[0]["name"] == "imported"
         assert unsupported_events[0]["layer"] == "user"
 
-        # 3. ``skill_inline_cmd_unsupported`` still fires (V12-G).
+        # 3. ``skill_inline_cmd_unsupported`` still fires.
         inline_events = [
             e for e in events if e["event"] == "skill_inline_cmd_unsupported"
         ]

@@ -1,30 +1,4 @@
-"""G1 acceptance tests — user message + attachments persist BEFORE model call.
-
-Contract (matches claude-code QueryEngine.ts:431+451): ``Agent.astream``
-appends the HumanMessage (and any attachments) to history and calls
-``storage.save`` BEFORE delegating to the loop. If the model call (or the
-whole turn) crashes / is cancelled, the user's input is already on disk —
-``resume`` semantics work across a ``Ctrl-C`` or process kill.
-
-Tests here:
-
-- **AC-G1-1** — ``test_user_message_persisted_before_model_call``: when
-  ``model.ainvoke`` raises a non-overflow ConnectionError, the user turn
-  (and any attachments) is still readable from ``storage.load`` after the
-  exception propagates.
-- **AC-G1-2** — ``test_reactive_compact_retains_attachments_idempotently``:
-  reactive-compact retry does NOT re-pass ``attachments=`` (it reads them
-  from history instead); the attachment payload is byte-equivalent before
-  and after compact + retry.
-- **AC-G1-3** — covered by running the existing reactive-compact suite
-  (``tests/test_reactive_compact.py``) after the refactor: no semantic
-  drift. Spot-checked in ``test_reactive_compact_still_green_after_g1``.
-- **AC-G1-4** — ``test_cancelled_turn_persists_user_message_dogfood``:
-  real subprocess that writes a HumanMessage + hangs mid-stream, gets
-  SIGINT'd, re-loads the same session_id, and sees its user message in
-  history. Uses a subprocess (NOT StringIO / mock-only) to satisfy the
-  dogfood-before-done discipline.
-"""
+"""``Agent.astream`` persists user messages and attachments before the model call."""
 
 from __future__ import annotations
 
@@ -90,13 +64,7 @@ class _RaisingOnce(FakeChatModel):
 
 @pytest.mark.asyncio
 async def test_user_message_persisted_before_model_call(tmp_path: Path) -> None:
-    """AC-G1-1: storage.load sees the user turn even when ainvoke crashes.
-
-    The contract: ``astream`` appends the HumanMessage (+ any attachments) to
-    history and persists BEFORE handing off to the loop. A connection error
-    propagates to the caller, but the user's input is already on disk — the
-    next ``resume`` of this session sees it.
-    """
+    """``storage.load`` sees the user turn even when ainvoke crashes."""
     storage = _storage(tmp_path)
     # ``ValueError`` is a non-retriable class and its message ("bad request")
     # doesn't match any retry substring — propagates on first try. Chosen to
@@ -120,7 +88,7 @@ async def test_user_message_persisted_before_model_call(tmp_path: Path) -> None:
 
     saved = storage.load(agent.session_id)
     # History must carry: attachment envelope + user HumanMessage.
-    # Order is strict — attachments BEFORE user turn (claude-code parity).
+    # Order is strict — attachments BEFORE user turn.
     assert len(saved) == 2, (
         f"expected [attachment, user_msg] after crash; got {len(saved)} "
         f"items: {[type(m).__name__ for m in saved]}"
@@ -137,7 +105,7 @@ async def test_user_message_persisted_before_model_call(tmp_path: Path) -> None:
 async def test_user_message_persisted_before_model_call_no_attachments(
     tmp_path: Path,
 ) -> None:
-    """AC-G1-1 (plain): user-only turn also persists before ainvoke."""
+    """User-only turn also persists before ainvoke."""
     storage = _storage(tmp_path)
     # Non-retriable + no context-overflow signature → propagates unchanged.
     model = _RaisingOnce(error=ValueError("bad request: provider died"), turns=[])
@@ -197,14 +165,7 @@ class _OverflowThenOK(FakeChatModel):
 async def test_reactive_compact_retains_attachments_idempotently(
     tmp_path: Path,
 ) -> None:
-    """AC-G1-2: reactive-compact retry reads attachments from history.
-
-    The new contract: ``astream`` pre-appends attachments + user msg and
-    persists BEFORE calling the loop. On context-overflow the retry does
-    NOT pass ``attachments=`` to ``run_turn`` a second time — it loads the
-    already-persisted history (which contains the envelope) and replays.
-    Byte-equivalence is checked against the envelope content.
-    """
+    """Reactive-compact retry reads attachments from history, not the arg."""
     storage = _storage(tmp_path)
     # Seed enough prior history so compact has something to summarize.
     seed: list[BaseMessage] = []
@@ -261,8 +222,7 @@ async def test_reactive_compact_retains_attachments_idempotently(
 
 
 def test_reactive_compact_still_green_after_g1() -> None:
-    """AC-G1-3 guard: the reactive-compact test module is importable and the
-    four named tests still exist with their original signatures."""
+    """Guard: the reactive-compact module still exposes its four named tests."""
     import tests.test_reactive_compact as rc
 
     # If any of these got renamed, the suite's semantics drifted and the
@@ -371,19 +331,7 @@ def _pre_append_then_kill_driver() -> str:
 
 
 def test_cancelled_turn_persists_user_message_dogfood(tmp_path: Path) -> None:
-    """AC-G1-4: mid-stream SIGKILL still leaves the user turn on disk.
-
-    Real subprocess — not a mocked astream context manager. The driver
-    spawns astream against a model that hangs in ``_agenerate``; after
-    the pre-invoke save the driver signals the parent via a marker file.
-    Parent SIGKILLs the child. A fresh SessionStorage then reads from
-    the same DB path with the same session_id and MUST see the user
-    turn.
-
-    This is the dogfood assertion: if we regressed on persistence-order,
-    the HumanMessage wouldn't land before the hang and a fresh load
-    would return ``[]``. That's the bug G1 closes.
-    """
+    """Mid-stream SIGKILL still leaves the user turn on disk; uses a real subprocess."""
     db_path = tmp_path / "session.db"
     signal_path = tmp_path / "at_model.marker"
     driver = tmp_path / "driver.py"

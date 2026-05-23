@@ -1,4 +1,4 @@
-"""load_config() — read JSON configs with precedence and top-level shallow merge."""
+"""load_config(): read JSON configs with precedence and top-level shallow merge."""
 
 from __future__ import annotations
 
@@ -28,7 +28,6 @@ def _read_json(path: Path, source: str) -> dict[str, Any]:
 
 
 def _find_project_config(start: Path) -> Path:
-    """Return nearest ancestor ``.aura/config.json`` path, or cwd default."""
     for directory in (start, *start.parents):
         candidate = directory / ".aura" / "config.json"
         if candidate.exists():
@@ -41,16 +40,9 @@ def load_config(
     user_config: Path | None = None,
     project_config: Path | None = None,
 ) -> AuraConfig:
-    """Load and merge configuration from multiple sources.
-
-    Precedence (highest first):
-      1. $AURA_CONFIG env var path
-      2. project_config  (default: ./.aura/config.json)
-      3. user_config     (default: ~/.aura/config.json)
-      4. built-in defaults
-
-    Merge is top-level shallow replace: a later source's top-level key wholly
-    replaces an earlier source's key (no deep merge).
+    """Merge config sources. Precedence (highest first): $AURA_CONFIG env path
+    > project (./.aura/config.json) > user (~/.aura/config.json) > defaults.
+    Merge is top-level shallow replace; no deep merge.
     """
     if user_config is None:
         user_config = Path.home() / ".aura" / "config.json"

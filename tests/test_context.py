@@ -13,7 +13,13 @@ from langchain_core.messages import (
     SystemMessage,
 )
 
-from aura.application.memory.context import Context, NestedFragment, _ReadRecord
+from aura.application.memory.context import (
+    Context,
+    NestedFragment,
+)
+from aura.application.memory.context import (
+    ReadRecord as ContextReadRecord,
+)
 from aura.application.memory.context import _render_todos_body as render_todos_body
 from aura.application.memory.rules import Rule, RulesBundle
 from aura.domain.task import TaskNotification
@@ -810,7 +816,7 @@ def test_fresh_with_carryover_seeds_read_records(tmp_path: Path) -> None:
 
     assert target in new_ctx._read_records
     seeded = new_ctx._read_records[target]
-    assert isinstance(seeded, _ReadRecord)
+    assert isinstance(seeded, ContextReadRecord)
     assert seeded.mtime == stat.st_mtime
     assert seeded.size == stat.st_size
     assert seeded.partial is False

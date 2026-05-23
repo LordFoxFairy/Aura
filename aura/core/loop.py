@@ -51,27 +51,22 @@ from aura.tools.progress import (
     set_progress_callback,
 )
 
-# Canonical default session name. Shared with ``aura.core.agent`` — keep a
-# single source of truth so ``AgentLoop(session_id=)`` default and
-# ``Agent(session_id=)`` default never drift. Any string literal ``"default"``
-# elsewhere in the session_id pipeline is a bug.
+# Shared with aura.core.agent so AgentLoop and Agent defaults never drift.
 DEFAULT_SESSION = "default"
 
-# Reasons for which a permission prompt was NOT shown — the renderer surfaces
-# an "auto-allowed: <reason>" dim line after ToolCallStarted. User-prompted
-# allows/denies skip the audit (the prompt itself was the audit).
+# Auto-decisions whose dim "auto-allowed: <reason>" the renderer surfaces.
 _AUTO_ALLOW_REASONS: frozenset[str] = frozenset(
     {"rule_allow", "mode_bypass"},
 )
 
-# Resolved once in __init__ so env flip mid-session does not race the outer wait.
+# Resolved at __init__ so a mid-session env flip can't race the outer wait.
 _BATCH_TIMEOUT_ENV_VAR = "AURA_BATCH_TIMEOUT_SEC"
 _DEFAULT_BATCH_TIMEOUT_SEC: float = 60.0
 
-# Cap so a misbehaving provider that always returns length cannot loop forever.
+# Cap retries so a stuck "length" finish reason can't loop forever.
 _MAX_LENGTH_RETRY: int = 3
 
-# ``length`` = OpenAI; ``max_tokens`` = Anthropic. Lowercased before compare.
+# OpenAI → ``length``; Anthropic → ``max_tokens``. Lowercased before compare.
 _LENGTH_FINISH_REASONS: frozenset[str] = frozenset({"length", "max_tokens"})
 
 _LENGTH_RESUME_PROMPT: str = (
@@ -81,13 +76,7 @@ _LENGTH_RESUME_PROMPT: str = (
 
 
 def _length_truncated(ai: AIMessage) -> bool:
-    """Detect a length-cutoff AIMessage across provider shapes.
-
-    OpenAI surfaces ``finish_reason='length'`` inside ``response_metadata``;
-    Anthropic surfaces ``stop_reason='max_tokens'`` either at the top
-    level or inside ``response_metadata``. We probe all three and
-    case-fold so SDK-version drift doesn't silently disable recovery.
-    """
+    """True iff ``ai`` was cut short by a provider's max-output-tokens cap."""
     meta = getattr(ai, "response_metadata", None) or {}
     candidates: list[object] = [
         meta.get("finish_reason"),
@@ -101,19 +90,11 @@ def _length_truncated(ai: AIMessage) -> bool:
 
 
 def _resolve_batch_timeout(override: float | None) -> float:
-    """Pick the effective batch wallclock deadline, in seconds.
+    """Effective batch deadline in seconds; ``0.0`` disables the feature.
 
-    Precedence (highest first):
-
-    1. Explicit ``override`` kwarg to :class:`AgentLoop` — the test suite
-       injects sub-second deadlines so it can observe the cancel branch.
-    2. ``AURA_BATCH_TIMEOUT_SEC`` environment variable.
-    3. :data:`_DEFAULT_BATCH_TIMEOUT_SEC` (60s).
-
-    Returns ``0.0`` when the resolved value is ``<= 0`` — the dispatch path
-    treats "value <= 0" as "feature disabled" (parity with the ``0``
-    disables pattern used elsewhere, e.g. ``auto_compact_threshold=0``).
-    Malformed env strings fall through to the default rather than raising.
+    Precedence: ``override`` kwarg > ``AURA_BATCH_TIMEOUT_SEC`` env >
+    :data:`_DEFAULT_BATCH_TIMEOUT_SEC`. Malformed env strings fall through
+    rather than raising — the loop constructor is a hot path.
     """
     if override is not None:
         return override if override > 0 else 0.0
@@ -122,15 +103,13 @@ def _resolve_batch_timeout(override: float | None) -> float:
         try:
             parsed = float(raw)
         except ValueError:
-            # Malformed env → default. The loop constructor is a hot path;
-            # raising here would break unrelated sessions on a typo.
             return _DEFAULT_BATCH_TIMEOUT_SEC
         return parsed if parsed > 0 else 0.0
     return _DEFAULT_BATCH_TIMEOUT_SEC
 
 
-# 成功调用后需把路径反馈给 Context progressive 状态的工具 → 其 path 参数名。
-# bash（shell 语义不固定）和 web_fetch（URL 而非文件系统）刻意排除。
+# Tools whose successful invocation feeds a path back into Context state.
+# bash (shell semantics vary) and web_fetch (URLs) are deliberately excluded.
 PATH_TRIGGER_TOOLS: dict[str, str] = {
     "read_file": "path",
     "write_file": "path",
@@ -141,16 +120,11 @@ PATH_TRIGGER_TOOLS: dict[str, str] = {
 
 
 def _serialize(result: ToolResult, *, tool_name: str = "") -> str:
-    # `default=str` + `ensure_ascii=False`：遇到非 JSON-native 值
-    # （datetime / Path / bytes）降级为字符串而非抛异常。
-    # 这里抛出会导致那一条 ToolMessage 漏 append —— 破坏 tool_call.id 与
-    # ToolMessage 的严格对齐。
+    # default=str avoids exceptions on datetime/Path/bytes — a raise here
+    # would drop the ToolMessage and break tool_call.id alignment.
     if result.ok:
         return json.dumps(result.output, default=str, ensure_ascii=False)
-    # On error, append the SAME hint the UI renders so the model sees the
-    # recovery guidance in its tool-result message — not just the user.
-    # Without this, a failing grep/read/edit leaves the model guessing how
-    # to recover while a red panel blinks at the human.
+    # Embed the UI hint so the model gets the same recovery guidance.
     error = result.error or "tool failed"
     hint = hint_for_error(tool_name, error)
     if hint is not None:
@@ -164,21 +138,12 @@ class ToolStep:
     tool: BaseTool | None
     args: dict[str, object] | None
     decision: ToolResult | None
-    # Permission decision captured directly from the pre_tool hook chain's
-    # merged Outcome decision. Only populated when a permission
-    # hook is installed AND the hook ran to a Decision; None otherwise.
-    # Used to emit PermissionAudit after ToolCallStarted.
+    # Captured from pre_tool merge so the loop can emit PermissionAudit.
     permission_decision: Decision | None = None
 
 
 def partition_batches(steps: list[ToolStep]) -> list[list[ToolStep]]:
-    """将 steps 按并发安全性分批（保序，不重排）。
-
-    1. 连续的 is_concurrency_safe 且 decision=None 的 step 合并成一个并行 batch，
-       批内用 gather 一次并发执行并保序拿回结果。
-    2. 非 safe 或已被 pre_tool 短路（decision 非 None）的 step 单独成 batch。
-    3. 维持原 tool_call 顺序 —— 并发只发生在 batch 内，不跨 batch。
-    """
+    """Group ``steps`` into ordered batches; concurrency-safe runs merge."""
     batches: list[list[ToolStep]] = []
     current: list[ToolStep] = []
     for step in steps:
@@ -202,7 +167,7 @@ def partition_batches(steps: list[ToolStep]) -> list[list[ToolStep]]:
 
 class AgentLoop:
     _DEFAULT_MAX_TURNS: int | None = None
-    # One retry: a single compact didn't fit means repeated compacts won't either.
+    # One retry only: if one compact didn't fit, repeats won't either.
     _MAX_REACTIVE_COMPACT: int = 1
 
     def __init__(
@@ -231,23 +196,17 @@ class AgentLoop:
         self._session_id = session_id
         self._microcompact_policy = microcompact_policy
         self._max_turns = max_turns
-        # Raw model kept so _rebind_tools can rebind after MCP registers tools
-        # — double-binding an already-bound model is unsupported on some providers.
+        # Raw model kept so rebind_tools works — some providers reject re-bind.
         self._model = model
-        # 空 registry 跳过 bind_tools：某些 provider 对 tools=[] 行为不一致。
+        # tools=[] is inconsistent across providers; skip bind on empty.
         self._bound = model.bind_tools(registry.tools()) if len(registry) > 0 else model
-        # 0.0 sentinel = disabled; otherwise _run_batch enforces deadline regardless of size.
+        # 0.0 sentinel disables the per-batch deadline.
         self._batch_timeout_sec = _resolve_batch_timeout(batch_timeout_sec)
         self._compact_callback = compact_callback
         self._compactor = compactor
 
-    def _rebind_tools(self, tools: list[BaseTool]) -> None:
-        """Rebind the loop's model with an updated tool set.
-
-        Called by :meth:`Agent.aconnect` after MCP registers tools
-        dynamically. Empty ``tools`` falls back to the raw model (matches
-        the constructor's behaviour for an empty registry).
-        """
+    def rebind_tools(self, tools: list[BaseTool]) -> None:
+        """Rebind the loop's model with an updated tool set."""
         self._bound = self._model.bind_tools(tools) if tools else self._model
 
     @property
@@ -264,26 +223,20 @@ class AgentLoop:
         history: list[BaseMessage],
         abort: AbortController | None = None,
     ) -> AsyncIterator[AgentEvent]:
-        # Contract: caller appends + persists the user's HumanMessage BEFORE
-        # invoking — transcript ownership lives one layer up so a crash
-        # mid-turn cannot erase the user's input.
-        #
-        # Per-turn sinks reset at the turn boundary, NOT inside the while loop:
-        # multiple model rounds within the same user turn share one bucket.
-        # List identity is stable so Agent.last_turn_denials sees the same object.
+        # Caller owns the user HumanMessage append + persist so a mid-turn
+        # crash can't erase the user's input.
+        # Per-turn sinks reset at the turn boundary; list identity is stable
+        # so Agent.last_turn_denials keeps pointing at the live bucket.
         self._state.slots.turn_denials.clear()
         self._state.slots.perm_dedup_cache.clear()
-        # Install controller into contextvar so tools (and spawned subagents
-        # on the same task tree) inherit the same signal.
+        # contextvar lets tools and spawned subagents inherit the signal.
         ctx_token = None
         if abort is not None:
             ctx_token = current_abort_signal.set(abort)
         try:
             while True:
                 journal.write("turn_begin", turn=self._state.turn_count + 1)
-                # Pre-invoke abort gate: a cancellation between turns
-                # synthesises one consistent shutdown path instead of
-                # racing the next ainvoke against the contextvar.
+                # Gate between turns so cancel doesn't race the next ainvoke.
                 if abort is not None and abort.aborted:
                     self._synthesise_missing_tool_messages(history, set())
                     raise AbortException(abort.reason or "aborted")
@@ -296,8 +249,6 @@ class AgentLoop:
                         ai.response_metadata.get("finish_reason")
                         == "length_recovery_exhausted"
                     ):
-                        # Surface exhaustion as its own Final reason carrying
-                        # the partial assistant text.
                         journal.write(
                             "turn_end",
                             turn=self._state.turn_count,
@@ -315,9 +266,8 @@ class AgentLoop:
                     yield Final(message=str(ai.content))
                     return
 
-                # Mid-batch abort: synthesise one ToolMessage per unanswered
-                # tool_call_id — provider 400's on a tool_use without matching
-                # tool_result, so balance the trailing AIMessage on cancel.
+                # On cancel, synthesise one ToolMessage per unanswered call
+                # so providers don't 400 on the trailing tool_use AIMessage.
                 try:
                     async for event in self._dispatch_tool_calls(
                         ai.tool_calls, history,
@@ -361,13 +311,10 @@ class AgentLoop:
         history: list[BaseMessage],
         answered_ids: set[str],
     ) -> None:
-        """Append a synthetic ToolMessage for every unanswered tool_call_id.
+        """Pair every trailing tool_use with an "(aborted)" ToolMessage.
 
-        On cancel, every ``tool_use`` block in the trailing AIMessage
-        must be paired with a ``tool_result`` for the next provider
-        request to validate. We append ``status="error"`` ToolMessages
-        with a short "(aborted by user)" body so a subsequent astream
-        sees a balanced history. Idempotent on already-answered ids.
+        Providers reject unmatched tool_use/tool_result pairs; this keeps
+        the next astream's history valid. Idempotent on answered ids.
         """
         for msg in reversed(history):
             if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
@@ -391,13 +338,7 @@ class AgentLoop:
         history: list[BaseMessage],
         abort: AbortController | None,
     ) -> AIMessage:
-        """Race ``_invoke_model`` against ``abort.signal``.
-
-        - ``abort is None`` → passthrough (legacy / SDK call sites).
-        - Abort fires first → cancel the in-flight invoke, raise
-          :class:`AbortException` so the outer loop balances history.
-        - Invoke completes first → cancel the watcher and return.
-        """
+        """Race ``_invoke_model`` against ``abort.signal``; cancel the loser."""
         if abort is None:
             return await self._invoke_model(history)
         invoke_task: asyncio.Task[AIMessage] = asyncio.ensure_future(
@@ -426,13 +367,7 @@ class AgentLoop:
     async def _invoke_with_retry(
         self, messages: list[BaseMessage],
     ) -> AIMessage:
-        """Run ``self._bound.ainvoke(messages)`` through the retry policy.
-
-        Pulled out so the call site doesn't define a closure over a loop
-        variable (ruff B023). Wraps ONLY the SDK call — not tool dispatch,
-        not hook run, not history.append — so retries are surgical and
-        tool semantics stay untouched.
-        """
+        """Wrap just the SDK ainvoke through retry policy; tool semantics untouched."""
         async def _do_invoke() -> AIMessage:
             return await self._bound.ainvoke(messages)
 
@@ -444,12 +379,11 @@ class AgentLoop:
         )
 
     async def _invoke_model(self, history: list[BaseMessage]) -> AIMessage:
-        # turn_count 先于 pre_model hook 递增，hook 看到的是"即将开始的第 N 轮"。
+        # Bump turn_count first so pre_model hooks see "the Nth turn about to run".
         self._state.turn_count += 1
         await self._hooks.run_pre_model(history=history, state=self._state)
-        from aura.core.agent import (
-            _is_context_overflow,  # noqa: PLC0415  避免循环导入  # deferred import is intentional
-        )
+        # Deferred import breaks the agent ↔ loop cycle.
+        from aura.core.agent import is_context_overflow
 
         recompact_attempts = 0
         messages: list[BaseMessage]
@@ -466,7 +400,7 @@ class AgentLoop:
                 )
                 if (
                     not has_reactive_path
-                    or not _is_context_overflow(exc)
+                    or not is_context_overflow(exc)
                     or recompact_attempts >= self._MAX_REACTIVE_COMPACT
                 ):
                     raise
@@ -496,8 +430,8 @@ class AgentLoop:
     async def _build_view(
         self, history: list[BaseMessage],
     ) -> list[BaseMessage]:
-        # Context.build 是组装 messages 的唯一构造点；microcompact 是 view-only：
-        # stored history 保留全量，只压缩出参 messages。
+        # Context.build is the only message-assembly site; microcompact is
+        # view-only — stored history stays full, only outgoing messages shrink.
         messages = self._context.build(history)
         if self._compactor is not None:
             return await self._compactor.microcompact(
@@ -529,8 +463,7 @@ class AgentLoop:
         ai: AIMessage,
         messages: list[BaseMessage],
     ) -> AIMessage:
-        # messages 是 local view（含 microcompact）—— resume prompts append 在这里
-        # 让下一次 ainvoke 看到 partial AIMessage；最终返回的 ai 由 caller append 到 history。
+        # Resume prompts append to the local view; the caller appends final ai.
         length_retries = 0
         while length_retries < _MAX_LENGTH_RETRY and _length_truncated(ai):
             length_retries += 1
@@ -566,7 +499,7 @@ class AgentLoop:
     async def _dispatch_tool_calls(
         self, tool_calls: list[ToolCall], history: list[BaseMessage],
     ) -> AsyncIterator[AgentEvent]:
-        # plan（解析 + pre_tool hook）→ partition batches → execute：三段式分离关注点。
+        # Three stages: plan → partition batches → execute.
         steps = await self._plan_tool_calls(tool_calls)
         journal.write(
             "tool_plan_built",
@@ -587,8 +520,7 @@ class AgentLoop:
     async def _run_batch(
         self, batch: list[ToolStep], history: list[BaseMessage],
     ) -> AsyncIterator[AgentEvent]:
-        # 保序：Started 在 gather 之前同步 yield，Completed 按 batch 顺序 yield ——
-        # tool_call.id 与 ToolMessage 严格一一对齐才能让 provider 正确串联。
+        # Strict ordering: tool_call.id → ToolMessage alignment is load-bearing.
         for event in self._emit_started(batch):
             yield event
 
@@ -601,7 +533,7 @@ class AgentLoop:
         gather_task = asyncio.create_task(
             self._gather_all_with_progress(batch, progress_queue, batch_deadline),
         )
-        # gather 完成时 done_callback 推 None 哨兵，drain 据此退出，不竞争 gather.done()。
+        # Sentinel via done_callback so drain exits without polling gather.done().
         gather_task.add_done_callback(lambda _: progress_queue.put_nowait(None))
 
         abort_signal = current_abort_signal.get()
@@ -709,7 +641,7 @@ class AgentLoop:
             return _cb
 
         async def execute_one(step: ToolStep) -> ToolResult:
-            # contextvars 是 task-local：每个 step 独立设置/重置 callback。
+            # contextvars are task-local; each step owns its own set/reset.
             tool_call_id = str(step.tool_call.get("id") or "")
             token = set_progress_callback(
                 make_cb(tool_call_id, step.tool_call["name"]),
@@ -723,16 +655,15 @@ class AgentLoop:
             return list(await asyncio.gather(
                 *(execute_one(s) for s in batch),
             ))
-        # Per-step Task 便于单独取消慢任务并保留已完成结果；batch 顺序 load-bearing：
-        # 调用方 ``zip(..., strict=True)`` 依赖位置对齐。
+        # Per-step Task: cancel slow ones individually, keep finished results.
+        # Position-aligned with ``batch`` — callers use zip(..., strict=True).
         tasks: list[asyncio.Task[ToolResult]] = [
             asyncio.create_task(execute_one(s)) for s in batch
         ]
         try:
             _, pending = await asyncio.wait(tasks, timeout=batch_deadline)
         except asyncio.CancelledError:
-            # asyncio.wait 不会自动取消 waitee（与 gather 不同），需手动传播
-            # 取消信号，否则后台任务连同它们 park 的 sleep 会继续跑。
+            # asyncio.wait doesn't auto-cancel waitees (unlike gather).
             for t in tasks:
                 if not t.done():
                     t.cancel()
@@ -763,8 +694,8 @@ class AgentLoop:
                     ok=False,
                     error=f"batch timeout after {batch_deadline}s",
                 )
-                # 取消路径同样走 post_tool，保证 size-budget / logger 等
-                # consumer 看到统一的 ToolResult 形状。
+                # Cancel path still runs post_tool so all consumers see a
+                # uniform ToolResult shape.
                 final: ToolResult
                 if step.tool is not None and step.args is not None:
                     final = await self._hooks.run_post_tool(
@@ -798,8 +729,7 @@ class AgentLoop:
         abort_signal: AbortController,
         gather_task: asyncio.Task[list[ToolResult]],
     ) -> None:
-        # AbortController fire 时取消 gather_task：让 CancelledError 抛到 run_turn，
-        # 由 run_turn 用合成 ToolMessage 平衡掉孤立的 trailing AIMessage。
+        # Cancel gather so run_turn synthesises tool messages on the way out.
         await abort_signal.signal.wait()
         if not gather_task.done():
             gather_task.cancel()
@@ -815,11 +745,10 @@ class AgentLoop:
                 ))
                 continue
 
-            # 早校验：在派发前把 pydantic 错误转成 decision 短路 —— pre_tool hook
-            # 不该看到 invalid args（否则 permission/budget 基于错误假设做决策）。
+            # Validate args before pre_tool so hooks don't decide on bad input.
             raw_args = dict(tc["args"])
             schema = tool.args_schema
-            if isinstance(schema, type) and issubclass(schema, BaseModel):
+            if isinstance(schema, type) and issubclass(schema, BaseModel):  # pyright: ignore[reportUnnecessaryIsInstance]  # langchain's ArgsSchema includes non-BaseModel options (dict-form schemas); guard intentional.
                 try:
                     schema.model_validate(raw_args)
                 except ValidationError as exc:
@@ -835,7 +764,6 @@ class AgentLoop:
                 state=self._state,
                 tool_call_id=tc["id"],
             )
-            # run_pre_tool 总返回 Outcome 的四种变体之一。
             match outcome:
                 case Allow(decision=perm_decision):
                     # Hook allowed; tool will run. Carry the decision for
@@ -855,8 +783,7 @@ class AgentLoop:
                         permission_decision=perm_decision,
                     ))
                 case Ask():
-                    # Defensive：well-formed permission chain 应在 hook 里就 resolve Ask；
-                    # 漏到 loop 视为 deny。
+                    # Well-formed chains resolve Ask in the hook; any leak = deny.
                     steps.append(ToolStep(
                         tool_call=tc, tool=tool, args=raw_args,
                         decision=ToolResult(
@@ -879,7 +806,7 @@ class AgentLoop:
             return step.decision
         assert step.tool is not None
         assert step.args is not None
-        # Tools 拥有自己 timeout ladder（bash）时把 timeout_sec 设 None 避免叠加。
+        # Tools with their own timeout ladder (bash) set timeout_sec=None.
         timeout: float | None = meta_dict(step.tool).get("timeout_sec")
         try:
             if timeout is not None:
@@ -895,9 +822,9 @@ class AgentLoop:
                 output = await step.tool.ainvoke(step.args)
             result = ToolResult(ok=True, output=output)
             self._maybe_trigger_path(step, result)
-        except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
-            # ToolError 是工具作者主动抛的用户态消息（保留原文）；其余异常 type-prefix
-            # 让模型能区分编程错误与用户态错误。CancelledError 继承 BaseException 不会进来。
+        except Exception as exc:  # noqa: BLE001  # tool boundary; CancelledError inherits BaseException so it skips this clause
+            # ToolError messages stay verbatim; other types get a type prefix
+            # so the model can distinguish programmer errors from user-facing ones.
             text = str(exc) if isinstance(exc, ToolError) else f"{type(exc).__name__}: {exc}"
             result = ToolResult(ok=False, error=text)
         return await self._hooks.run_post_tool(
@@ -905,19 +832,15 @@ class AgentLoop:
         )
 
     def _maybe_trigger_path(self, step: ToolStep, result: ToolResult) -> None:
-        """成功的 path-aware tool 调用后，把路径反馈给 Context 的 progressive 状态。
+        """Feed the touched path back into Context after a successful tool run.
 
-        仅在 `_execute_step` 的成功分支（decision 为 None + ainvoke 未抛）被调用，
-        因此 `step.tool` 与 `step.args` 必非 None —— 由 `_plan_tool_calls` 保证。
-
-        `result.output` 传进来是为了拿到 read_file 返回的 `partial` 标志 ——
-        必须用工具返回值而非 args（`limit >= total_lines` 也可能是 full read）。
+        Uses ``result.output`` (not args) so read_file's ``partial`` flag is
+        honoured even when ``limit >= total_lines``.
         """
-        # narrowed by assert above; mypy keeps union
-        arg_name = PATH_TRIGGER_TOOLS.get(step.tool.name)  # type: ignore[union-attr]
+        arg_name = PATH_TRIGGER_TOOLS.get(step.tool.name)  # type: ignore[union-attr]  # narrowed by asserts in caller
         if arg_name is None:
             return
-        raw = step.args.get(arg_name)  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
+        raw = step.args.get(arg_name)  # type: ignore[union-attr]  # narrowed by asserts in caller
         if not isinstance(raw, str) or not raw:
             return
         try:
@@ -925,11 +848,8 @@ class AgentLoop:
         except OSError:
             return
         self._context.on_tool_touched_path(resolved)
-        # Must-read-first invariant: record successful read_file targets so
-        # edit_file (via make_must_read_first_hook) can verify a prior read.
-        # `partial` fallbacks to False for robustness — a custom read_file
-        # tool without the key is treated as a full read.
-        if step.tool.name == "read_file":  # type: ignore[union-attr]
+        # Record read_file targets so edit_file's must-read-first hook can verify.
+        if step.tool.name == "read_file":  # type: ignore[union-attr]  # narrowed by asserts in caller
             partial = False
             if isinstance(result.output, dict):
                 partial = bool(result.output.get("partial", False))

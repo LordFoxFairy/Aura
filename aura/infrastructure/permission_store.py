@@ -1,20 +1,12 @@
 """Permission persistence — ``./.aura/settings{,.local}.json`` load/save.
 
-Two-file layout (both optional):
+Merge invariants (load):
 
-- ``.aura/settings.json``       — shared / committed project rules.
-- ``.aura/settings.local.json`` — machine-local overrides; gitignored.
-
-Merge (``load``):
-
-- ``mode`` / ``prompt_timeout_sec`` / ``statusline`` — local wins when set.
-- ``allow`` / ``deny`` / ``ask`` / ``safety_exempt`` — concatenated,
-  project first.
-- ``disable_bypass`` — OR-together (local cannot relax a project kill switch).
-
-Unknown keys under ``permissions`` raise ``AuraConfigError`` naming the
-offending file. Top-level non-``permissions`` sections are preserved on
-write.
+- scalars (``mode`` / ``prompt_timeout_sec`` / ``statusline``) — local wins when set
+- lists (``allow`` / ``deny`` / ``ask`` / ``safety_exempt``) — concatenated, project first
+- ``disable_bypass`` — OR (local cannot relax a project kill switch)
+- unknown keys under ``permissions`` raise ``AuraConfigError`` naming the file
+- non-``permissions`` top-level sections are preserved on write
 """
 
 from __future__ import annotations
@@ -42,8 +34,6 @@ from aura.schemas.permissions import PermissionsConfig
 
 
 class PermissionStoreError(AuraError):
-    """Raised when writing settings.json fails (permissions, disk, etc)."""
-
     def __init__(self, *, source: str, detail: str) -> None:
         super().__init__(f"{source}: {detail}")
         self.source = source
@@ -98,10 +88,7 @@ def _validate(raw: dict[str, Any], source: Path) -> PermissionsConfig:
         raise AuraConfigError(source=str(source), detail=str(exc)) from exc
 
 
-# Concrete sample paths each protected pattern is intended to block.
-# A ``safety_exempt`` pattern that matches any of these is rejected at
-# load time (F-04-020) — the user would have silently disarmed a
-# built-in protection.
+# Reject safety_exempt patterns that match any of these — disarming a built-in.
 _PROTECTED_OVERLAP_SAMPLES: tuple[str, ...] = (
     "~/.ssh/id_rsa",
     "~/.ssh/config",
@@ -145,7 +132,7 @@ def _validate_safety_exempt(cfg: PermissionsConfig, source: Path) -> None:
         )
         try:
             spec = pathspec.PathSpec.from_lines("gitignore", [expanded_pat])
-        except Exception as exc:  # noqa: BLE001 — surface as config error
+        except Exception as exc:  # noqa: BLE001  # any pathspec parser failure surfaces as config error
             raise AuraConfigError(
                 source=str(source),
                 detail=(
@@ -177,8 +164,7 @@ def load(project_root: Path) -> PermissionsConfig:
     project_raw = _load_permissions_raw(project_path)
     local_raw = _load_permissions_raw(local_path)
 
-    # Validate each file independently so error messages point at the
-    # file that actually has the typo.
+    # Validate each file standalone so errors point at the file with the typo.
     project_cfg = _validate(project_raw, project_path)
     local_cfg = _validate(local_raw, local_path)
 
@@ -224,12 +210,7 @@ def _validate_known_tools(
     *,
     source: str,
 ) -> None:
-    """Reject rules whose ``tool`` is not in ``known_tool_names``.
-
-    Wildcard tool patterns (``*`` anywhere in the tool field) are treated
-    as known — they may scope to an MCP server discovered later. Exact-name
-    misses raise :class:`AuraConfigError` with a ``did you mean`` hint.
-    """
+    """Reject unknown tool names; wildcards pass (MCP server may register them later)."""
     known_set = set(known_tool_names)
     for rule in rules:
         if "*" in rule.tool:
@@ -278,8 +259,8 @@ def _load_kind_ruleset(
     *,
     field: Literal["deny", "ask"],
 ) -> RuleSet:
-    """Deny / ask loader. Malformed entries journal + skip (no raise)."""
-    from aura.core import journal as _j  # noqa: PLC0415  # deferred import is intentional
+    """Deny/ask loader; malformed entries journal + skip rather than raise."""
+    from aura.core import journal as _j  # noqa: PLC0415  # defer to dodge import cycle
 
     cfg = load(project_root)
     raw_list = cfg.deny if field == "deny" else cfg.ask
@@ -336,10 +317,7 @@ def save_rule(
     *,
     scope: Literal["project", "local"] = "project",
 ) -> None:
-    """Persist ``rule`` to settings.json (``project``) or settings.local.json
-    (``local``). Atomic write (tmp + ``Path.replace``), dedup on rule
-    string, preserves unrelated top-level keys.
-    """
+    """Atomic-write ``rule`` into the chosen scope; preserves unrelated top-level keys."""
     if scope == "project":
         settings = _settings_path(project_root)
     elif scope == "local":
@@ -349,18 +327,13 @@ def save_rule(
             f"scope must be 'project' or 'local', got {scope!r}",
         )
     _write_rule_to_file(settings, rule)
-    # A project-scope save creates ``.aura/`` on first run; drop the sibling
-    # local template in now so the user discovers it on THIS run.
+    # First project save creates .aura/ — drop the local template now so it's discoverable.
     if scope == "project":
         ensure_local_settings(project_root)
 
 
 def ensure_local_settings(project_root: Path) -> tuple[Path, bool]:
-    """Create ``./.aura/settings.local.json`` with an empty template if absent.
-
-    Returns ``(path, created)``. Only fires when ``./.aura/`` already
-    exists — a no-op in directories the user has not opted into.
-    """
+    """Drop an empty local-settings template when ``.aura/`` exists and the file does not."""
     settings = _settings_local_path(project_root)
     if settings.exists():
         return settings, False
@@ -374,8 +347,7 @@ def ensure_local_settings(project_root: Path) -> tuple[Path, bool]:
             "content, so one rule covers a whole family. Examples: "
             "\"bash(npm test)\" (exact), \"bash(npm install *)\" (glob — "
             "covers every npm install variant), \"bash(ls *)\" (any ls), "
-            "\"read_file(/tmp)\" (path prefix), \"grep\" (tool-wide). "
-            "Full spec: docs/specs/2026-04-19-aura-permission.md."
+            "\"read_file(/tmp)\" (path prefix), \"grep\" (tool-wide)."
         ),
         "permissions": {
             "allow": [],

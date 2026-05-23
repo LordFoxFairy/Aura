@@ -85,8 +85,7 @@ class GitStatusCommand:
     argument_hint: str | None = None
 
     def __init__(self, *, writer: Writer | None = None) -> None:
-        # Writer kept for symmetry with /diff and /log; /status renders via
-        # CommandResult.text so the REPL printer owns the output.
+        # Symmetry with /diff /log; /status renders via CommandResult.text, never writes here.
         self._writer = writer
 
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
@@ -233,9 +232,7 @@ class GitDiffCommand:
             return CommandResult(
                 handled=True, kind="print", text="[dim]no changes[/dim]",
             )
-        # We wrote the colorized diff directly to stdout; ``kind="view"``
-        # with empty text triggers the REPL's "press Enter to continue"
-        # pause without re-printing.
+        # Diff printed to stdout already; empty-text view triggers REPL pause.
         self._print_ansi(stdout)
         return CommandResult(handled=True, kind="view", text="")
 
@@ -324,11 +321,6 @@ def _parse_log_count(arg: str) -> int | str:
     if n > _LOG_MAX:
         return _LOG_MAX
     return n
-
-
-# ---------------------------------------------------------------------------
-# Shared error-result factories
-# ---------------------------------------------------------------------------
 
 
 def _not_installed_result() -> CommandResult:

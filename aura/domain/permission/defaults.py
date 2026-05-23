@@ -1,9 +1,7 @@
-"""Built-in default allow-rules composed with user rules at startup.
+"""Built-in default allow-rules merged with user rules at startup.
 
-Pure local-filesystem reads are auto-allowed via these rules so they
-flow through the normal allow path (audit visible, safety still applies).
-``ask_user_question`` is here because its own UI IS the consent moment;
-gating it behind another prompt would double-ask.
+Local-FS reads flow through the normal allow path (audit + safety still apply).
+ask_user_question is here because its own UI is the consent moment.
 """
 
 from __future__ import annotations

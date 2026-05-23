@@ -1,21 +1,4 @@
-"""TEAMS Phase A.1 — ``send_message`` auto-enables on join_team.
-
-The default ``ToolsConfig.enabled`` allowlist deliberately excludes
-``send_message`` — outside a team the tool errors on invocation, and we
-don't want it cluttering the LLM's tool schema in the common
-single-agent case. When the agent enters a team (via ``join_team``,
-which fires for both leader on ``/team create`` and teammates inside
-``add_member``), Phase A.1 transparently:
-
-1. registers the pre-built ``SendMessage`` instance into the live
-   :class:`ToolRegistry`, and
-2. rebinds the ``AgentLoop``'s bound model so the LLM's tool schema
-   for the next turn includes ``send_message``.
-
-``leave_team`` unwinds both. The auto-enable is suppressed whenever
-the user has pinned a custom ``tools.enabled`` allowlist — the user's
-config wins, even if their pin happens to omit ``send_message``.
-"""
+"""``send_message`` auto-enables on ``join_team`` and unwinds on ``leave_team``."""
 
 from __future__ import annotations
 
@@ -30,13 +13,7 @@ from tests.conftest import FakeChatModel
 
 
 def _default_cfg() -> AuraConfig:
-    """AuraConfig with the shipped default ``tools.enabled`` allowlist.
-
-    ``teams.enabled=True`` is set explicitly so these tests exercise the
-    auto-enable path; the v0.18+ default is ``False`` (claude-code parity
-    with ``isAgentSwarmsEnabled()``), and that's covered by
-    ``test_teams_feature_flag.py``.
-    """
+    """Default ``tools.enabled`` with ``teams.enabled=True`` for auto-enable path."""
     return AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},

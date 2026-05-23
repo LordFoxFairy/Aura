@@ -1,4 +1,4 @@
-"""Default V14-HOOK-CATALOG consumers — live-reload project memory + rules."""
+"""Live-reload project memory + rules on AURA.md / cwd changes."""
 
 from __future__ import annotations
 
@@ -21,13 +21,12 @@ def _is_aura_md_path(path: Path) -> bool:
 
 
 def make_aura_md_reload_hook(agent: Agent) -> FileChangedHook:
-    """FileChangedHook that rebuilds project memory on AURA.md changes."""
 
     async def _hook(
         *,
         path: Path,
         kind: str,
-        state: LoopState,
+        state: LoopState,  # noqa: ARG001  # Protocol kw arg; unused by this hook
         **_: Any,
     ) -> None:
         if not _is_aura_md_path(path):
@@ -35,7 +34,7 @@ def make_aura_md_reload_hook(agent: Agent) -> FileChangedHook:
         agent.apply_aura_md_reload()
         journal.write(
             "aura_md_reloaded",
-            session=agent._session_id,
+            session=agent.session_id,
             path=str(path),
             kind=kind,
         )
@@ -44,19 +43,18 @@ def make_aura_md_reload_hook(agent: Agent) -> FileChangedHook:
 
 
 def make_cwd_rules_reload_hook(agent: Agent) -> CwdChangedHook:
-    """CwdChangedHook that refreshes rules + project memory for new cwd."""
 
     async def _hook(
         *,
         old_cwd: Path,
         new_cwd: Path,
-        state: LoopState,
+        state: LoopState,  # noqa: ARG001  # Protocol kw arg; unused by this hook
         **_: Any,
     ) -> None:
         agent.change_cwd_and_reload(new_cwd)
         journal.write(
             "cwd_rules_reloaded",
-            session=agent._session_id,
+            session=agent.session_id,
             old_cwd=str(old_cwd),
             new_cwd=str(new_cwd),
         )

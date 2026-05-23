@@ -57,7 +57,7 @@ class SkillTool(BaseTool):
         "of registered skills (with optional 'when to use' guidance) and "
         "their declared arguments."
     )
-    args_schema: type[BaseModel] = SkillParams
+    args_schema: type[BaseModel] = SkillParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=True,
         is_destructive=False,
@@ -107,8 +107,7 @@ class SkillTool(BaseTool):
         self, name: str, arguments: list[str] | None,
     ) -> dict[str, Any]:
         skill = self._registry.get(name)
-        # disable_model_invocation skills are surfaced as "missing" so the
-        # model's retry logic doesn't distinguish hidden vs unknown.
+        # disable_model_invocation skills surface as "missing" so retry can't tell hidden vs absent.
         if skill is not None and skill.disable_model_invocation:
             available = [s.name for s in self._registry.model_visible()]
             raise ToolError(

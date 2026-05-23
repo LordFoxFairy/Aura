@@ -14,18 +14,17 @@ from aura.infrastructure.persistence import journal
 
 
 class UnknownModelSpecError(AuraConfigError):
-    """Raised when a model spec can't be resolved to a known provider."""
+    pass
 
 
 class MissingProviderDependencyError(AuraConfigError):
-    """Raised when the LangChain SDK for a protocol isn't installed."""
+    pass
 
 
 class MissingCredentialError(AuraConfigError):
-    """Raised when no API key is found for a protocol that requires one."""
+    pass
 
 
-# protocol → (SDK module, class name, default API key env var).
 _PROTOCOLS: dict[str, tuple[str, str, str | None]] = {
     "openai": ("langchain_openai", "ChatOpenAI", "OPENAI_API_KEY"),
     "anthropic": ("langchain_anthropic", "ChatAnthropic", "ANTHROPIC_API_KEY"),
@@ -33,9 +32,7 @@ _PROTOCOLS: dict[str, tuple[str, str, str | None]] = {
 }
 
 
-# Family → max context window. Substring match w/ longest-prefix wins.
-# Over-stating defaults causes "status bar reads 8% while prompt overflows";
-# 128k floor matches claude-code's safe default.
+# Over-stating defaults causes status-bar % drift; 128k floor mirrors claude-code.
 _CONTEXT_WINDOWS: dict[str, int] = {
     "claude-3-5-sonnet": 200_000,
     "claude-3-5-haiku": 200_000,
@@ -116,11 +113,11 @@ def _load_class(protocol: str) -> type[BaseChatModel]:
             source="provider sdk",
             detail=f"{module_name} not installed. Run: pip install 'aura[{protocol}]'",
         ) from exc
-    return getattr(module, class_name)  # type: ignore[no-any-return]  # fake returns Any from __dict__
+    return getattr(module, class_name)  # type: ignore[no-any-return]
 
 
 def _resolve_api_key(provider: ProviderConfig) -> str | None:
-    """Return the resolved key or raise; empty-string ``api_key`` is treated as missing."""
+    # Empty-string api_key counts as missing so accidental "" doesn't bypass env lookup.
     if provider.api_key:
         return provider.api_key
 
@@ -160,11 +157,7 @@ def _resolve_api_key(provider: ProviderConfig) -> str | None:
 
 
 def resolve(spec: str, *, cfg: AuraConfig) -> tuple[ProviderConfig, str]:
-    """Resolve *spec* to ``(ProviderConfig, model_name)``.
-
-    Rules: router alias → substitute once; split on first ``:``; left =
-    provider name, right = model name.
-    """
+    """Resolve to ``(ProviderConfig, model_name)``: router alias once, then ``provider:model``."""
     resolved = cfg.router.get(spec, spec)
 
     provider_name, sep, model_name = resolved.partition(":")
@@ -239,11 +232,7 @@ def make_summary_model_factory(
     *,
     summary_spec: str | None = None,
 ) -> Callable[[], BaseChatModel]:
-    """Memoized factory yielding the model for cheap summary turns.
-
-    ``summary_spec=None`` → returns ``main_model`` verbatim. A failed
-    spec surfaces on the FIRST invocation (lazy build).
-    """
+    """Memoized factory for the summary model; failed spec surfaces lazily on first call."""
     cached: list[BaseChatModel] = []
 
     def _factory() -> BaseChatModel:

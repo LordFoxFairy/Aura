@@ -1,11 +1,4 @@
-"""Shared session driver for external desktop/front-end wrappers.
-
-This module owns the transport-neutral Python session behavior for the current
-headless desktop path: Agent construction, permission rendezvous, prompt
-submission, and canonical wire-event emission. Front-end specific wrappers can
-provide their own request readers and event emitters without re-owning the
-session logic.
-"""
+"""Transport-neutral session driver for desktop front-end wrappers."""
 
 from __future__ import annotations
 
@@ -48,8 +41,6 @@ class RequestReader(Protocol):
 
 
 class IpcAsker:
-    """Permission asker that round-trips through external request/response I/O."""
-
     def __init__(self, *, emit: EventEmitter) -> None:
         self._emit = emit
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
@@ -288,10 +279,7 @@ async def run_session_driver(
 
             emit({"event": "error", "message": f"unsupported request kind: {kind!r}"})
     finally:
-        # Cancel-and-await order is load-bearing: cancel() schedules the
-        # CancelledError, await drains the resulting Final("(cancelled)")
-        # so the wire sees ``final`` BEFORE ``exited``. Without the await,
-        # the in-flight turn would race past us and emit final after exited.
+        # Await after cancel so ``final`` flushes before ``exited`` on the wire.
         if turn_task is not None and not turn_task.done():
             turn_task.cancel()
             with contextlib.suppress(BaseException):

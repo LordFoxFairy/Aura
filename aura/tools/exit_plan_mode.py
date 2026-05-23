@@ -12,7 +12,6 @@ from aura.schemas.tool import ToolError, ToolMetadata
 from aura.tools.ask_user import FormQuestionDict, UserAsker
 from aura.tools.enter_plan_mode import ModeGetter, ModeSetter
 
-# bypass / plan are not valid exit targets.
 ExitTarget = Literal["default", "accept_edits"]
 
 PriorModeGetter = Callable[[], str | None]
@@ -68,7 +67,7 @@ class ExitPlanMode(BaseTool):
         "error and mode stays 'plan' so you can revise. Only valid from "
         "plan mode — call this after enter_plan_mode."
     )
-    args_schema: type[BaseModel] = ExitPlanModeParams
+    args_schema: type[BaseModel] = ExitPlanModeParams  # pyright: ignore[reportIncompatibleVariableOverride]  # langchain BaseTool declares args_schema as mutable ArgsSchema|None; subclass narrows widely on purpose.
     aura_metadata: ToolMetadata = ToolMetadata(
         is_read_only=False,
         is_destructive=False,
@@ -98,13 +97,13 @@ class ExitPlanMode(BaseTool):
         self._get_prior_mode = get_prior_mode
 
     def _resolve_target(self, to_mode: ExitTarget | None) -> ExitTarget:
-        # bypass/plan are never valid restore targets even if saved.
         if to_mode is not None:
             return to_mode
+        # Saved prior may be bypass/plan; only restore the two valid exit targets.
         if self._get_prior_mode is not None:
             prior = self._get_prior_mode()
             if prior in ("default", "accept_edits"):
-                return prior  # type: ignore[return-value]  # fake return shape test-only
+                return prior  # type: ignore[return-value]  # narrowed by membership check
         return "default"
 
     def _run(
@@ -123,8 +122,9 @@ class ExitPlanMode(BaseTool):
             )
         question = _build_question(plan)
         answers = await self._asker([question])
-        # Empty / cancel maps to denial (fail-safe).
-        answer = answers.get(question["question"], "")
+        # Empty / cancel maps to denial: only explicit "yes" exits plan mode.
+        question_text = question.get("question", "")
+        answer = answers.get(question_text, "")
         if answer.strip().lower() != "yes":
             raise ToolError(
                 "user rejected the plan; staying in plan mode — "

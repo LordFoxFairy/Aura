@@ -1,4 +1,4 @@
-"""Hook orchestration — :class:`HookChain` composes Protocol-typed hooks."""
+"""HookChain composes Protocol-typed hooks."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ _ASK_RESOLVED_REASONS = frozenset({"user_accept", "user_always"})
 
 
 def _merge_outcomes(outcomes: list[Outcome], ask_requested: bool) -> Outcome:
-    """Apply spec §3.2 precedence on a pure-Outcome chain."""
+    """Merge pre_tool outcomes per spec §3.2: Block > Replace > Allow/Ask precedence."""
     for o in outcomes:
         if isinstance(o, Block):
             return o
@@ -94,13 +94,7 @@ class HookChain:
         state: LoopState,
         **kwargs: Any,
     ) -> Outcome:
-        """Merge pre_tool outcomes per spec §3.2.
-
-        ``ask_pending`` is a chain-local signal threaded into each
-        downstream hook's kwargs once any upstream hook returns Ask;
-        a permission hook reads it to demote auto-allow paths to the
-        asker. It never escapes this call.
-        """
+        # ask_pending: once any hook returns Ask, downstream auto-allow demotes to asker.
         from aura.infrastructure.persistence import journal
 
         outcomes: list[Outcome] = []

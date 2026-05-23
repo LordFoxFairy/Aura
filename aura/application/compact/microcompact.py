@@ -1,9 +1,4 @@
-"""Microcompact — per-turn view-only compression of old tool pairs.
-
-Pure-function module: returns new lists, never mutates input. Storage
-keeps full payloads; only the outgoing prompt drops them. ``Math.max(1,
-keep_recent)`` floor ensures we never strand the model with zero results.
-"""
+"""Microcompact: per-turn view-only compression of old tool pairs (storage stays raw)."""
 
 from __future__ import annotations
 

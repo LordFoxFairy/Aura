@@ -8,7 +8,6 @@ import surface.
 
 from __future__ import annotations
 
-import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -112,48 +111,47 @@ class HookChain:
         state: LoopState,
         **kwargs: Any,
     ) -> Outcome:
-        """Merge pre_tool outcomes per spec §3.2."""
+        """Merge pre_tool outcomes per spec §3.2.
+
+        ``ask_pending`` is a chain-local signal threaded into each
+        downstream hook's kwargs once any upstream hook returns Ask;
+        a permission hook reads it to demote auto-allow paths to the
+        asker. It never escapes this call.
+        """
         from aura.infrastructure.persistence import journal
 
         outcomes: list[Outcome] = []
-        ask_requested = False
-        prior_ask_pending = state.slots.ask_pending
-        try:
-            for hook in self.pre_tool:
-                raw = await hook(tool=tool, args=args, state=state, **kwargs)
-                outcomes.append(raw)
+        ask_pending = False
+        for hook in self.pre_tool:
+            raw = await hook(
+                tool=tool, args=args, state=state,
+                ask_pending=ask_pending, **kwargs,
+            )
+            outcomes.append(raw)
 
-                if isinstance(raw, Ask) and not ask_requested:
-                    ask_requested = True
-                    state.slots = dataclasses.replace(
-                        state.slots, ask_pending=True,
-                    )
+            if isinstance(raw, Ask):
+                ask_pending = True
 
-                if isinstance(raw, Block | Ask | Replace):
-                    decision_attr = getattr(raw, "decision", None)
-                    hook_name = (
-                        f"{getattr(hook, '__module__', '')}."
-                        f"{getattr(hook, '__qualname__', repr(hook))}"
-                    ).lstrip(".")
-                    journal.write(
-                        "pre_tool_hook_decision",
-                        hook=hook_name,
-                        tool=tool.name,
-                        allow=False if decision_attr is None else decision_attr.allow,
-                        reason="" if decision_attr is None else decision_attr.reason,
-                    )
-
-                if isinstance(raw, Block):
-                    return raw
-
-            if outcomes:
-                return _merge_outcomes(outcomes, ask_requested)
-            return Allow(decision=Decision(allow=True, reason="chain_empty"))
-        finally:
-            if state.slots.ask_pending != prior_ask_pending:
-                state.slots = dataclasses.replace(
-                    state.slots, ask_pending=prior_ask_pending,
+            if isinstance(raw, Block | Ask | Replace):
+                decision_attr = getattr(raw, "decision", None)
+                hook_name = (
+                    f"{getattr(hook, '__module__', '')}."
+                    f"{getattr(hook, '__qualname__', repr(hook))}"
+                ).lstrip(".")
+                journal.write(
+                    "pre_tool_hook_decision",
+                    hook=hook_name,
+                    tool=tool.name,
+                    allow=False if decision_attr is None else decision_attr.allow,
+                    reason="" if decision_attr is None else decision_attr.reason,
                 )
+
+            if isinstance(raw, Block):
+                return raw
+
+        if outcomes:
+            return _merge_outcomes(outcomes, ask_pending)
+        return Allow(decision=Decision(allow=True, reason="chain_empty"))
 
     async def run_post_tool(
         self,

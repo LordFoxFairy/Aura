@@ -14,7 +14,7 @@ itself):
   surface "what is the child doing right now" without replaying the whole
   transcript. The progress dataclass is deliberately mutable (``recent_activities``
   is a bounded ring) and not frozen; treat it as owned by the store.
-- Anything else (``description``, ``prompt``, ``parent_id``, ``started_at``,
+- Anything else (``description``, ``prompt``, ``started_at``,
   ``id``) is write-at-create and read-only thereafter.
 """
 
@@ -87,7 +87,6 @@ class TaskProgress:
 @dataclass
 class TaskRecord:
     id: str
-    parent_id: str | None
     description: str
     prompt: str
     status: TaskStatus = "running"

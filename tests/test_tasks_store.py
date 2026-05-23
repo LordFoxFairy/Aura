@@ -23,7 +23,6 @@ def test_create_record_and_list() -> None:
     assert rec.status == "running"
     assert rec.description == "scan repo"
     assert rec.prompt == "look for TODOs"
-    assert rec.parent_id is None
     assert rec.final_result is None
     assert rec.error is None
     assert store.list() == [rec]

@@ -172,8 +172,67 @@ async def test_subagent_run_enqueues_task_started_event_before_terminal(
         assert len(started) == 1
         assert started[0]["subagent_id"] == rec.id
         assert started[0]["payload"]["description"] == "probe"
-        assert started[0]["payload"]["parent_session_id"] == ""
+        assert started[0]["payload"]["parent_session_id"] == agent.session_id
         assert started[0]["payload"]["started_at"] == rec.started_at
+    finally:
+        await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_record_activity_enqueues_task_progress_event(
+    tmp_path: Path,
+) -> None:
+    """Each ``record_activity`` call enqueues one ``task_progress`` event
+    carrying the tool name and the running ``activity_count``."""
+    agent = _make_agent(tmp_path)
+    try:
+        store = agent._tasks_store
+        rec = store.create(description="probe", prompt="hi")
+        store.record_activity(rec.id, "read_file")
+        store.record_activity(rec.id, "bash")
+
+        events = [cast(dict[str, Any], e) for e in agent.pending_protocol_events]
+        progress = [e for e in events if e.get("action") == "task_progress"]
+        assert len(progress) == 2
+        assert progress[0]["subagent_id"] == rec.id
+        assert progress[0]["payload"] == {
+            "task_id": rec.id,
+            "tool_name": "read_file",
+            "activity_count": 1,
+        }
+        assert progress[1]["payload"] == {
+            "task_id": rec.id,
+            "tool_name": "bash",
+            "activity_count": 2,
+        }
+        assert progress[0]["parent_id"] == agent.session_id
+    finally:
+        await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_progress_events_ordered_started_then_progress_then_terminal(
+    tmp_path: Path,
+) -> None:
+    """task_started must be first, terminal task_notification last; any
+    task_progress events fall between them in record_activity order."""
+    agent = _make_agent(tmp_path)
+    try:
+        store = agent._tasks_store
+        rec = store.create(description="probe", prompt="hi")
+        store.record_started(rec.id)
+        store.record_activity(rec.id, "read_file")
+        store.record_activity(rec.id, "bash")
+        store.mark_completed(rec.id, "done")
+
+        events = [cast(dict[str, Any], e) for e in agent.pending_protocol_events]
+        actions = [e["action"] for e in events if e.get("subagent_id") == rec.id]
+        assert actions == [
+            "task_started",
+            "task_progress",
+            "task_progress",
+            "task_notification",
+        ]
     finally:
         await agent.aclose()
 

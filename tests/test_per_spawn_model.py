@@ -28,7 +28,7 @@ from aura.config.schema import AuraConfig
 from aura.infrastructure import llm
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.tool import ToolError
-from aura.tools.task_create import TaskCreate, TaskCreateParams
+from aura.tools.task_create import TaskCreate
 from aura.tools.task_get import TaskGet
 
 

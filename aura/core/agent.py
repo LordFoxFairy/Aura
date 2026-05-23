@@ -436,7 +436,7 @@ class Agent:
                 task_started_to_wire(
                     task_id=rec.id,
                     description=rec.description,
-                    parent_session_id=rec.parent_id or "",
+                    parent_session_id=self.session_id,
                     started_at=rec.started_at,
                     parent_id=self.session_id,
                 ),
@@ -1006,7 +1006,6 @@ class Agent:
         self._state.slots = dataclasses.replace(
             self._state.slots,
             active_team=None,
-            ask_pending=False,
             consecutive_compact_failures=0,
             buddy=_BuddyState(),
         )

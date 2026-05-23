@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from aura.application.permission.asker import AskerResponse, PermissionAsker
+from aura.application.permission.asker import PermissionAsker
 from aura.domain.permission.rule import Rule
 from aura.tools.base import build_tool
 from cli._permission_asker import make_cli_asker

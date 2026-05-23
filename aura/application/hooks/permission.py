@@ -179,6 +179,7 @@ def make_permission_hook(
         args: dict[str, Any],
         state: LoopState,
         tool_call_id: str = "",
+        ask_pending: bool = False,
         **_: Any,
     ) -> Allow | Replace:
         decision, feedback = await _decide(
@@ -193,6 +194,7 @@ def make_permission_hook(
             mode=_mode_provider(),
             safety=safety,
             state=state,
+            ask_demote=ask_pending,
         )
         extra: dict[str, Any] = {}
         if feedback:
@@ -244,17 +246,21 @@ async def _decide(
     mode: Mode,
     safety: SafetyPolicy,
     state: LoopState,
+    ask_demote: bool = False,
 ) -> tuple[Decision, str]:
-    """Pick an outcome + return ``(decision, feedback)``."""
+    """Pick an outcome + return ``(decision, feedback)``.
+
+    ``ask_demote`` reflects whether an upstream hook in the same
+    pre_tool chain returned Ask; when true, auto-allow paths
+    (mode_bypass, mode_accept_edits, rule_allow, dedup-cache) are
+    demoted to the asker so the user still confirms (F-04-002).
+    """
     if has_active_lease(state) and not tool_allowed_by_lease(state, tool.name):
         return Decision(allow=False, reason="restrict_tools_blocked"), ""
 
     deny_match = deny_rules.matches(tool.name, args, tool)
     if deny_match is not None:
         return Decision(allow=False, reason="rule_deny", rule=deny_match), ""
-
-    # F-04-002: an upstream Ask demotes auto-allow paths to the asker.
-    ask_demote = state.slots.ask_pending
 
     if mode == "bypass" and not ask_demote:
         journal.write("permission_bypass", tool=tool.name)

@@ -40,7 +40,6 @@ def _serialize(rec: TaskRecord, *, include_messages: bool) -> dict[str, Any]:
         duration = rec.finished_at - rec.started_at
     payload: dict[str, Any] = {
         "task_id": rec.id,
-        "parent_id": rec.parent_id,
         "description": rec.description,
         "kind": rec.kind,
         "model_spec": rec.model_spec,

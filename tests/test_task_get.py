@@ -31,7 +31,7 @@ async def test_task_get_running_task_has_no_final_result() -> None:
     assert out["finished_at"] is None
     assert out["duration_seconds"] is None
     assert out["description"] == "scan"
-    assert out["parent_id"] is None
+    assert "parent_id" not in out
     assert out["progress"]["tool_count"] == 0
     assert out["progress"]["recent_activities"] == []
     # include_messages defaults False — transcript key must be absent.

@@ -33,7 +33,6 @@ def test_loop_slots_constructible_with_defaults() -> None:
     assert slots.token_stats == TokenStats()
     assert slots.turn_denials == []
     assert slots.todos == []
-    assert slots.ask_pending is False
     assert slots.perm_dedup_cache == {}
     assert slots.preserved_invoked_skills == []
     assert slots.invoked_skills == []
@@ -43,8 +42,8 @@ def test_loop_slots_constructible_with_defaults() -> None:
     assert slots.skill_restrict_leases == []
 
 
-def test_loop_slots_has_eleven_fields_per_spec() -> None:
-    """Spec §3.1 lists exactly 11 named fields. No extras, no missing.
+def test_loop_slots_has_ten_fields_per_spec() -> None:
+    """Spec §3.1 — every named field is cross-turn state. No extras.
 
     ``mood`` from the spec sketch is realised as ``buddy: BuddyState``
     (a frozen dataclass packing ``mood`` + ``last_event_ts`` +
@@ -57,7 +56,6 @@ def test_loop_slots_has_eleven_fields_per_spec() -> None:
         "token_stats",
         "turn_denials",
         "todos",
-        "ask_pending",
         "perm_dedup_cache",
         "preserved_invoked_skills",
         "invoked_skills",
@@ -77,7 +75,7 @@ def test_loop_slots_is_frozen() -> None:
     mutable collections, which is intentional)."""
     slots = LoopSlots()
     with pytest.raises(dataclasses.FrozenInstanceError):
-        slots.ask_pending = True  # type: ignore[misc]
+        slots.active_team = "team-a"  # type: ignore[misc]
     with pytest.raises(dataclasses.FrozenInstanceError):
         slots.buddy = BuddyState(mood="happy")  # type: ignore[misc]
 
@@ -88,13 +86,13 @@ def test_loop_slots_replace_returns_new_instance() -> None:
     instance is untouched."""
     original = LoopSlots()
     updated = dataclasses.replace(
-        original, ask_pending=True, buddy=BuddyState(mood="busy"),
+        original, active_team="team-a", buddy=BuddyState(mood="busy"),
     )
 
-    assert updated.ask_pending is True
+    assert updated.active_team == "team-a"
     assert updated.buddy.mood == "busy"
     # Original untouched.
-    assert original.ask_pending is False
+    assert original.active_team is None
     assert original.buddy.mood == "idle"
     # Different instances.
     assert updated is not original

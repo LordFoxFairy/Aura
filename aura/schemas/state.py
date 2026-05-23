@@ -95,7 +95,6 @@ class LoopSlots:
     token_stats: TokenStats = field(default_factory=TokenStats)
     turn_denials: list[Denial] = field(default_factory=list)
     todos: list[TodoItem] = field(default_factory=list)
-    ask_pending: bool = False
     perm_dedup_cache: dict[PermissionKey, PermissionDedupEntry] = field(default_factory=dict)
     preserved_invoked_skills: list[Skill] = field(default_factory=list)
     invoked_skills: list[Skill] = field(default_factory=list)

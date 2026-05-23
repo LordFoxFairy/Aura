@@ -6,10 +6,10 @@ both hooks return :class:`aura.schemas.permissions.Outcome` variants
 
     Block > Replace > Ask > Allow(authoritative) > Allow(mode_bypass)
 
-Ask is a side-channel signal (sets ``ask_pending`` on ``LoopSlots``);
-it is consumed by a downstream permission hook which returns the resolved
-Allow/Block. If no hook resolves Ask (no permission hook present), the
-unresolved Ask escalates back to the loop.
+Ask is a side-channel signal threaded as the chain-local ``ask_pending``
+kwarg to downstream hooks; a permission hook reads it and returns the
+resolved Allow/Block. If no hook resolves Ask (no permission hook
+present), the unresolved Ask escalates back to the loop.
 
 Replace beats Ask because a safety block (e.g. bash_safety) must not be
 overridden by a pending confirmation request.

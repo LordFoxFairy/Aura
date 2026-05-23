@@ -128,7 +128,6 @@ class TasksStore:
         self,
         description: str,
         prompt: str,
-        parent_id: str | None = None,
         *,
         kind: TaskKind = "subagent",
         agent_type: str | None = None,
@@ -138,7 +137,6 @@ class TasksStore:
         task_id = uuid.uuid4().hex
         rec = TaskRecord(
             id=task_id,
-            parent_id=parent_id,
             description=description,
             prompt=prompt,
             kind=kind,

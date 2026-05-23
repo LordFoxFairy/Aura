@@ -408,3 +408,35 @@ async def test_double_shutdown_is_idempotent(tmp_path: Path) -> None:
     # Second call: alice is no longer a member.
     with pytest.raises(TeamError, match="not found"):
         await mgr.aremove_member("alice", timeout_sec=0.5)
+
+
+@pytest.mark.asyncio
+async def test_confirm_shutdown_is_idempotent_when_no_waiter(
+    tmp_path: Path,
+) -> None:
+    """``confirm_shutdown`` is safe to call without an active waiter.
+
+    Real runtimes can race the leader's teardown path (pane subprocess
+    acking after force-kill, in-process runtime acking twice). The
+    manager must absorb both ``no-future`` and ``future-already-done``
+    paths silently rather than raising.
+    """
+    storage = SessionStorage(tmp_path / "sessions.db")
+    leader = _leader_stub(storage)
+    mgr = TeamManager(
+        leader=leader,
+        storage=storage,
+        factory=_factory(),
+        running_aborts={},
+        tasks_store=TasksStore(),
+        runtime_runner=_noop_runner,
+    )
+    mgr.create_team("alpha")
+    # No future exists for "alice" — must no-op.
+    mgr.confirm_shutdown("alice")
+    # Allocate a future, resolve it, then ack again — also no-op.
+    loop = asyncio.get_running_loop()
+    fut: asyncio.Future[bool] = loop.create_future()
+    mgr._shutdown_acks["bob"] = fut
+    fut.set_result(True)
+    mgr.confirm_shutdown("bob")  # already done — must not raise

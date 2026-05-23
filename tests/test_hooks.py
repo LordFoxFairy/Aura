@@ -589,8 +589,9 @@ def test_merge_concatenates_all_turn_cycle_slots() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Ask escalation channel — Ask propagates via state.slots.ask_pending so
-# downstream hooks (permission) see the escalation demand.
+# Ask escalation channel — Ask propagates via the chain-local ``ask_pending``
+# kwarg so downstream hooks (permission) see the escalation demand without
+# any cross-turn state.
 # ---------------------------------------------------------------------------
 
 
@@ -608,10 +609,11 @@ async def test_pre_tool_ask_propagates_as_outcome() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_ask_seen_by_downstream_hook_via_state() -> None:
-    """When an upstream hook returns Ask, downstream hooks see
-    state.slots.ask_pending=True so a permission hook later in the
-    chain can detect the demand and demote any auto-allow to the asker path."""
+async def test_pre_tool_ask_seen_by_downstream_hook_via_kwarg() -> None:
+    """When an upstream hook returns Ask, downstream hooks receive
+    ``ask_pending=True`` via kwargs so a permission hook later in the
+    chain can detect the demand and demote any auto-allow to the asker path.
+    """
     seen: list[bool] = []
 
     async def upstream(
@@ -620,26 +622,42 @@ async def test_pre_tool_ask_seen_by_downstream_hook_via_state() -> None:
         return Ask(reason="needs confirmation")
 
     async def downstream(
-        *, tool: BaseTool, args: dict[str, Any], state: LoopState, **_: object,
+        *,
+        tool: BaseTool,
+        args: dict[str, Any],
+        state: LoopState,
+        ask_pending: bool = False,
+        **_: object,
     ) -> Outcome:
-        seen.append(state.slots.ask_pending)
+        seen.append(ask_pending)
         return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 
     chain = HookChain(pre_tool=[upstream, downstream])
-    state = LoopState()
-    await chain.run_pre_tool(tool=_stub_tool, args={}, state=state)
+    await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
     assert seen == [True]
-    # Sentinel must NOT leak past the chain run.
-    assert state.slots.ask_pending is False
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_ask_does_not_leak_when_no_hook_asks() -> None:
-    state = LoopState()
-    chain = HookChain(pre_tool=[])
-    out = await chain.run_pre_tool(tool=_stub_tool, args={}, state=state)
+async def test_pre_tool_ask_kwarg_defaults_false_for_first_hook() -> None:
+    """First hook in the chain sees ``ask_pending=False`` because no
+    upstream hook has run yet."""
+    seen: list[bool] = []
+
+    async def hook(
+        *,
+        tool: BaseTool,
+        args: dict[str, Any],
+        state: LoopState,
+        ask_pending: bool = False,
+        **_: object,
+    ) -> Outcome:
+        seen.append(ask_pending)
+        return Allow(decision=Decision(allow=True, reason="mode_bypass"))
+
+    chain = HookChain(pre_tool=[hook])
+    out = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
     assert isinstance(out, Allow)
-    assert state.slots.ask_pending is False
+    assert seen == [False]
 
 
 @pytest.mark.asyncio

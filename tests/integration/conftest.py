@@ -212,7 +212,7 @@ class ScriptedAsker:
 
 
 class ScriptedPermissionAsker:
-    """Test double for :class:`aura.application.hooks.permission.PermissionAsker`.
+    """Test double for :class:`aura.application.permission.asker.PermissionAsker`.
 
     Returns an :class:`AskerResponse` per call — queue per-tool responses
     or install a sticky default. Records ``calls`` like :class:`ScriptedAsker`

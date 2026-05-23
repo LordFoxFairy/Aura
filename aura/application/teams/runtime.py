@@ -7,9 +7,9 @@ Spawned once by :meth:`TeamManager.add_member`; exits on ``stop_event.set()``
   loop.
 - ``PaneBackend.spawn`` runs :func:`run_teammate_main` inside a subprocess.
 
-Loop: seed prompt (if any) → poll mailbox → ack unseen → on
-``shutdown_request`` exit cleanly, else feed envelope-wrapped messages to
-``Agent.astream``.
+Loop: seed prompt (if any) → wait for new-message signal → ack unseen →
+on ``shutdown_request`` confirm + exit cleanly, else feed envelope-wrapped
+messages to ``Agent.astream``.
 """
 
 from __future__ import annotations
@@ -19,7 +19,11 @@ import contextlib
 import time
 from typing import TYPE_CHECKING
 
-from aura.application.teams.mailbox import Mailbox
+from aura.application.teams.mailbox import (
+    FileMailboxNotifier,
+    Mailbox,
+    MailboxNotifier,
+)
 from aura.domain.abort import AbortController, AbortException
 from aura.domain.team import TeamMessage
 from aura.infrastructure.persistence import journal
@@ -30,8 +34,10 @@ if TYPE_CHECKING:
     from aura.application.tasks.store import TasksStore
     from aura.core.agent import Agent
 
-# Mailbox poll slice (s) — 5s keeps stop_event responsive without spinning.
-_POLL_SLICE_SEC: float = 5.0
+# Mailbox wait slice (s). For QueueMailboxNotifier the wait returns
+# instantly on signal so this only bounds the idle interval; for
+# FileMailboxNotifier (pane subprocess) it caps a single poll window.
+_WAIT_SLICE_SEC: float = 5.0
 
 
 def _task_tracking(agent: Agent) -> tuple[TasksStore, str] | None:
@@ -108,6 +114,36 @@ async def _drive_one_turn(
     return final_text
 
 
+async def _wait_for_message(
+    notifier: MailboxNotifier,
+    member_name: str,
+    stop_event: asyncio.Event,
+    timeout: float,
+) -> bool:
+    """Await ``notifier`` OR ``stop_event``; return ``True`` if a message wins.
+
+    ``asyncio.wait`` races the two so a stop set during an idle window
+    exits the loop at the next iteration without waiting out the full
+    slice. Cancellation of either pending task is suppressed.
+    """
+    wait_task = asyncio.create_task(notifier.wait_new(member_name, timeout=timeout))
+    stop_task = asyncio.create_task(stop_event.wait())
+    try:
+        done, pending = await asyncio.wait(
+            {wait_task, stop_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
+        for t in (wait_task, stop_task):
+            if not t.done():
+                t.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await t
+    if stop_task in done:
+        return False
+    return bool(wait_task.result())
+
+
 async def run_teammate(
     *,
     agent: Agent,
@@ -117,16 +153,24 @@ async def run_teammate(
     stop_event: asyncio.Event,
     abort: AbortController,
     seed_prompt: str | None = None,
+    notifier: MailboxNotifier | None = None,
 ) -> None:
     """Long-lived loop: drain mailbox, run agent, repeat.
 
+    ``notifier`` decouples wake-up cadence from storage: callers pass a
+    :class:`~aura.application.teams.mailbox.QueueMailboxNotifier` for
+    in-process teammates (instant wake on signal) and let the default
+    :class:`FileMailboxNotifier` poll the JSONL for pane subprocesses.
+
     Exit conditions: ``stop_event`` set (graceful boundary), ``abort.aborted``
     propagates as ``AbortException``, or ``asyncio.CancelledError`` re-raises
-    after best-effort cleanup. A ``shutdown_request`` is acked back to the
-    leader with a ``shutdown_response`` so ``aremove_member`` doesn't fall
-    through to force-kill.
+    after best-effort cleanup. A ``shutdown_request`` resolves the manager's
+    per-member ack future (in-process) and writes a ``shutdown_response`` to
+    the leader inbox (pane fallback) before exiting.
     """
     mailbox = Mailbox(storage, team_id)
+    if notifier is None:
+        notifier = FileMailboxNotifier(mailbox)
     journal.write("team_runtime_started", team_id=team_id, member=member_name)
     try:
         if seed_prompt is not None and seed_prompt.strip():
@@ -137,9 +181,8 @@ async def run_teammate(
                     storage=storage, team_id=team_id, member_name=member_name,
                 )
         while not stop_event.is_set() and not abort.aborted:
-            has_msg = await asyncio.to_thread(
-                mailbox.wait_for_new_message,
-                member_name, timeout=_POLL_SLICE_SEC,
+            has_msg = await _wait_for_message(
+                notifier, member_name, stop_event, _WAIT_SLICE_SEC,
             )
             if not has_msg:
                 continue
@@ -157,6 +200,15 @@ async def run_teammate(
                 )
                 manager = getattr(agent, "team", None)
                 if manager is not None and getattr(manager, "is_active", False):
+                    # In-process: resolve the leader's per-member ack future
+                    # directly — no inbox round-trip needed.
+                    confirm = getattr(manager, "confirm_shutdown", None)
+                    if callable(confirm):
+                        with contextlib.suppress(Exception):
+                            confirm(member_name, body=shutdown.body)
+                    # Pane fallback: subprocess can't share futures with the
+                    # leader, so the manager still observes the response via
+                    # its inbox. ``send`` is idempotent w.r.t. confirm above.
                     with contextlib.suppress(Exception):
                         manager.send(
                             sender=member_name, recipient="leader",

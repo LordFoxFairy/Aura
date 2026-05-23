@@ -14,7 +14,7 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool
 from rich.console import Console
 
-from aura.application.hooks.permission import AskerResponse, PermissionAsker
+from aura.application.permission.asker import AskerResponse, PermissionAsker
 from aura.application.permission.rule_hint import derive_rule_hint
 from aura.domain.permission.rule import Rule
 from aura.infrastructure.persistence import journal

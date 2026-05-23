@@ -1,35 +1,10 @@
-"""Subagent runner topologies — claude-code Task hierarchy parity.
+"""Subagent runner — single LocalAgentTask topology.
 
-Three runner shapes, mirroring claude-code's ``tasks/`` directory:
-
-- :class:`LocalAgentTask` — in-process child Agent, fire-and-forget,
-  single prompt → single terminal outcome. The default :func:`run_task`
-  path uses this.
-- :class:`InProcessTeammateTask` — long-lived in-process teammate
-  joined to a team mailbox. Adapts
-  :func:`aura.application.teams.runtime.run_teammate`.
-- :class:`RemoteAgentTask` — subprocess teammate launched via
-  ``python -m cli teammate`` (or an equivalent entrypoint module). The
-  pane backend already uses this in spirit; the runner formalises it as
-  a first-class topology.
-
-All three classes share a ``start() / wait_for_terminal() / abort()``
-contract so callers can dispatch uniformly without branching on
-backend type.
+``task_create`` always dispatches an in-process child Agent: one prompt,
+one terminal outcome, fire-and-forget. Teams use their own runtime in
+:mod:`aura.application.teams.runtime`, not a runner here.
 """
 
-from aura.application.tasks.runners.in_process import InProcessTeammateTask
 from aura.application.tasks.runners.local_agent import LocalAgentTask
-from aura.application.tasks.runners.remote import (
-    DEFAULT_ENTRYPOINT_MODULE,
-    DEFAULT_ENTRYPOINT_SUBCOMMAND,
-    RemoteAgentTask,
-)
 
-__all__ = [
-    "DEFAULT_ENTRYPOINT_MODULE",
-    "DEFAULT_ENTRYPOINT_SUBCOMMAND",
-    "InProcessTeammateTask",
-    "LocalAgentTask",
-    "RemoteAgentTask",
-]
+__all__ = ["LocalAgentTask"]

@@ -2,9 +2,9 @@
 
 Two implementations satisfy this Protocol:
 
-- :class:`~aura.infrastructure.teams_backends.in_process.InProcessBackend` — wraps
+- :class:`~aura.infrastructure.teams.in_process.InProcessBackend` — wraps
   ``run_teammate`` in an asyncio task on the leader's loop.
-- :class:`~aura.infrastructure.teams_backends.pane.PaneBackend` — splits a tmux
+- :class:`~aura.infrastructure.teams.pane.PaneBackend` — splits a tmux
   pane and runs ``python -m cli teammate`` inside it.
 
 Designed so the manager can dispatch on ``member.backend_type`` without
@@ -19,6 +19,7 @@ import asyncio
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from aura.application.teams.mailbox import MailboxNotifier
     from aura.application.teams.manager import TeamManager
     from aura.core.agent import Agent
     from aura.domain.abort import AbortController
@@ -64,7 +65,7 @@ class TeammateBackend(Protocol):
     """Strategy for running a teammate's lifecycle.
 
     Each backend is a singleton (see
-    :mod:`aura.infrastructure.teams_backends.registry`); ``backend_type`` is a
+    :mod:`aura.infrastructure.teams.registry`); ``backend_type`` is a
     class-level constant matching the
     :data:`~aura.domain.team.BackendType` literal the registry
     keys on.
@@ -83,6 +84,7 @@ class TeammateBackend(Protocol):
         stop_event: asyncio.Event,
         abort: AbortController,
         seed_prompt: str | None,
+        notifier: MailboxNotifier | None = None,
     ) -> BackendHandle:
         """Spawn the teammate; return a :class:`BackendHandle`.
 
@@ -91,6 +93,10 @@ class TeammateBackend(Protocol):
         backend-specific bookkeeping) BEFORE returning so the manager
         can persist a complete record on its next ``_persist`` call —
         but the canonical place for that field is the model itself.
+
+        ``notifier`` is the leader-side wake-up channel — in-process
+        backends consume it; cross-process backends (pane) ignore it
+        because the consumer lives in a separate Python process.
         """
         ...
 

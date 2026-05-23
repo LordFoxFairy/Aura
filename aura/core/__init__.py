@@ -12,11 +12,8 @@ from aura.application.hooks.budget import (
     make_size_budget_hook,
     make_usage_tracking_hook,
 )
-from aura.application.hooks.permission import (
-    AskerResponse,
-    PermissionAsker,
-    make_permission_hook,
-)
+from aura.application.hooks.permission import make_permission_hook
+from aura.application.permission.asker import AskerResponse, PermissionAsker
 from aura.application.permission.denials import PermissionDenial
 from aura.core.agent import Agent, build_agent
 from aura.core.loop import AgentLoop, ToolStep

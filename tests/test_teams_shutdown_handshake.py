@@ -170,11 +170,12 @@ async def test_shutdown_request_triggers_response(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_remove_member_accepts_response_as_ack(tmp_path: Path) -> None:
-    """``aremove_member`` returns True (ack) when the runtime responds in time.
+    """``aremove_member`` returns True (ack) when the runtime confirms in time.
 
-    The runtime stand-in ACKs by writing a shutdown_response to the
-    leader's mailbox before exiting. ``aremove_member`` must observe it
-    and skip the force-kill path entirely.
+    The runtime stand-in ACKs by calling ``manager.confirm_shutdown``
+    (the in-process path) and writing a ``shutdown_response`` to the
+    leader inbox (parity with the real runtime). ``aremove_member`` must
+    observe the future resolution and skip the force-kill path entirely.
     """
     storage = SessionStorage(tmp_path / "sessions.db")
     leader = _leader_stub(storage)
@@ -198,6 +199,7 @@ async def test_remove_member_accepts_response_as_ack(tmp_path: Path) -> None:
             body=f"shutting down: ack from {member_name}",
             kind="shutdown_response",
         ))
+        kwargs["agent"].team.confirm_shutdown(member_name)
 
     mgr = TeamManager(
         leader=leader,
@@ -241,6 +243,7 @@ async def test_graceful_remove_marks_cancelled_only_after_ack(
             body="shutting down after delay",
             kind="shutdown_response",
         ))
+        kwargs["agent"].team.confirm_shutdown(kwargs["member_name"])
 
     mgr = TeamManager(
         leader=leader,
@@ -335,6 +338,7 @@ async def test_response_includes_member_name_for_correlation(
             body=f"shutting down: ack from {member_name}",
             kind="shutdown_response",
         ))
+        kwargs["agent"].team.confirm_shutdown(member_name)
 
     mgr = TeamManager(
         leader=leader,
@@ -386,6 +390,7 @@ async def test_double_shutdown_is_idempotent(tmp_path: Path) -> None:
             body=f"shutting down: ack from {member_name}",
             kind="shutdown_response",
         ))
+        kwargs["agent"].team.confirm_shutdown(member_name)
 
     mgr = TeamManager(
         leader=leader,

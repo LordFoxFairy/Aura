@@ -12,7 +12,9 @@ from aura.infrastructure.wire.event_dto import (
     AuraStateEvent,
     CompactEvent,
     PermissionRequestEvent,
+    SubagentProgressEvent,
     SubagentProtocolEvent,
+    SubagentStartedEvent,
     TeamProtocolEvent,
     WireEvent,
 )
@@ -167,6 +169,56 @@ def task_notification_to_wire(
             "summary": notification.summary,
             "description": notification.description,
             "terminal": True,
+        },
+    }
+    if parent_id:
+        payload["parent_id"] = parent_id
+    return payload
+
+
+def task_started_to_wire(
+    *,
+    task_id: str,
+    description: str,
+    parent_session_id: str,
+    started_at: float,
+    parent_id: str | None = None,
+) -> SubagentStartedEvent:
+    """Build the live ``task_started`` coordination event."""
+    payload: SubagentStartedEvent = {
+        "event": "coordination",
+        "family": "subagent",
+        "action": "task_started",
+        "subagent_id": task_id,
+        "payload": {
+            "task_id": task_id,
+            "description": description,
+            "parent_session_id": parent_session_id,
+            "started_at": float(started_at),
+        },
+    }
+    if parent_id:
+        payload["parent_id"] = parent_id
+    return payload
+
+
+def task_progress_to_wire(
+    *,
+    task_id: str,
+    tool_name: str,
+    activity_count: int,
+    parent_id: str | None = None,
+) -> SubagentProgressEvent:
+    """Build a per-tool-start ``task_progress`` coordination event."""
+    payload: SubagentProgressEvent = {
+        "event": "coordination",
+        "family": "subagent",
+        "action": "task_progress",
+        "subagent_id": task_id,
+        "payload": {
+            "task_id": task_id,
+            "tool_name": tool_name,
+            "activity_count": int(activity_count),
         },
     }
     if parent_id:

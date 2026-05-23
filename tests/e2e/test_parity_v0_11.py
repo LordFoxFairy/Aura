@@ -313,7 +313,7 @@ _DENIALS_DRIVER = textwrap.dedent(
     # A deny-everything asker (never actually called because safety trips first).
     class _NeverAsker:
         async def __call__(self, *, tool, args, rule_hint):
-            from aura.application.hooks.permission import AskerResponse
+            from aura.application.permission.asker import AskerResponse
             return AskerResponse(choice="deny")
 
     cfg = AuraConfig.model_validate({{
@@ -563,7 +563,7 @@ _LIVE_MODE_DRIVER = textwrap.dedent(
     # before the asker is consulted — that's the path we care about here).
     class _DenyAsker:
         async def __call__(self, *, tool, args, rule_hint):
-            from aura.application.hooks.permission import AskerResponse
+            from aura.application.permission.asker import AskerResponse
             return AskerResponse(choice="deny")
 
     cfg = AuraConfig.model_validate({{

@@ -180,7 +180,9 @@ async def test_team_add_explicit_in_process_backend(
 
 @pytest.mark.asyncio
 async def test_team_add_pane_backend_outside_tmux_errors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reset_teams_registry: None,
 ) -> None:
     """``--backend pane`` without ``$TMUX`` surfaces a friendly error.
 
@@ -188,10 +190,6 @@ async def test_team_add_pane_backend_outside_tmux_errors(
     PATH; we strip ``$TMUX`` so the gate fires regardless of host env.
     """
     monkeypatch.delenv("TMUX", raising=False)
-    # Reset registry singletons so the env-gate check actually runs
-    # (it's bypassed if a singleton was cached by a prior test).
-    from aura.infrastructure.teams_backends.registry import _reset_for_tests
-    _reset_for_tests()
     agent = _agent(tmp_path)
     cmd = TeamCommand()
     await cmd.handle("create demo", agent)

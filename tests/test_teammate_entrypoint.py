@@ -88,7 +88,7 @@ def test_argparse_parser_matches_pane_backend_command_shape() -> None:
     """
     from aura.domain.team import TeammateMember
     from aura.infrastructure.persistence.storage import SessionStorage
-    from aura.infrastructure.teams_backends.pane import PaneBackend
+    from aura.infrastructure.teams.pane import PaneBackend
 
     storage = SessionStorage(Path(":memory:"))
     member = TeammateMember(

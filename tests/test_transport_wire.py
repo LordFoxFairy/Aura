@@ -16,7 +16,9 @@ from aura.infrastructure.wire.event_dto import (
     FinalEvent,
     PermissionAuditEvent,
     PermissionRequestEvent,
+    SubagentProgressEvent,
     SubagentProtocolEvent,
+    SubagentStartedEvent,
     TeamProtocolEvent,
     ToolCallCompletedEvent,
     ToolCallProgressEvent,
@@ -29,6 +31,8 @@ from aura.infrastructure.wire.wire import (
     event_to_wire,
     permission_request_to_wire,
     task_notification_to_wire,
+    task_progress_to_wire,
+    task_started_to_wire,
 )
 from aura.schemas.events import (
     AgentEvent,
@@ -61,6 +65,8 @@ def test_wire_event_is_explicit_union_of_protocol_families() -> None:
     assert CompactEvent in members
     assert ErrorEvent in members
     assert SubagentProtocolEvent in members
+    assert SubagentStartedEvent in members
+    assert SubagentProgressEvent in members
     assert TeamProtocolEvent in members
     assert UnknownEvent in members
 
@@ -179,6 +185,50 @@ def test_task_notification_to_wire_maps_terminal_subagent_notification() -> None
             "summary": "child-final",
             "description": "probe",
             "terminal": True,
+        },
+    }
+
+
+def test_task_started_to_wire_shapes_live_progress_event() -> None:
+    payload = task_started_to_wire(
+        task_id="task_abcdef",
+        description="probe",
+        parent_session_id="parent_sess",
+        started_at=1234.5,
+        parent_id="parent_sess",
+    )
+
+    assert payload == {
+        "event": "coordination",
+        "family": "subagent",
+        "action": "task_started",
+        "subagent_id": "task_abcdef",
+        "payload": {
+            "task_id": "task_abcdef",
+            "description": "probe",
+            "parent_session_id": "parent_sess",
+            "started_at": 1234.5,
+        },
+        "parent_id": "parent_sess",
+    }
+
+
+def test_task_progress_to_wire_carries_tool_name_and_count() -> None:
+    payload = task_progress_to_wire(
+        task_id="task_abcdef",
+        tool_name="read_file",
+        activity_count=3,
+    )
+
+    assert payload == {
+        "event": "coordination",
+        "family": "subagent",
+        "action": "task_progress",
+        "subagent_id": "task_abcdef",
+        "payload": {
+            "task_id": "task_abcdef",
+            "tool_name": "read_file",
+            "activity_count": 3,
         },
     }
 

@@ -31,6 +31,8 @@ struct PermissionResponse {
     id: String,
     choice: String,        // "accept" | "always" | "deny"
     feedback: String,      // optional free-text from the user
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<String>, // "project" | "session" — only meaningful with choice="always"
 }
 
 /// Shared handle on the running Aura subprocess. Wrapped in a Mutex so
@@ -73,18 +75,25 @@ async fn send_permission_response(
     id: String,
     choice: String,
     feedback: Option<String>,
+    scope: Option<String>,
     state: State<'_, AuraProcess>,
 ) -> Result<(), String> {
-    // Validate choice on the Rust side so a buggy frontend can't smuggle
-    // an unrecognized value through to the Python asker.
+    // Reject unrecognised values here so a buggy frontend can't smuggle
+    // them to the Python asker (which would silently degrade scope).
     if !matches!(choice.as_str(), "accept" | "always" | "deny") {
         return Err(format!("invalid choice: {:?}", choice));
+    }
+    if let Some(ref s) = scope {
+        if !matches!(s.as_str(), "project" | "session") {
+            return Err(format!("invalid scope: {:?}", s));
+        }
     }
     let req = PermissionResponse {
         kind: "permission_response".to_string(),
         id,
         choice,
         feedback: feedback.unwrap_or_default(),
+        scope,
     };
     let line =
         serde_json::to_string(&req).map_err(|e| format!("encode: {e}"))? + "\n";

@@ -16,10 +16,8 @@ import pytest
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from aura.application.hooks.permission import (
-    AskerResponse,
-    make_permission_hook,
-)
+from aura.application.hooks.permission import make_permission_hook
+from aura.application.permission.asker import AskerResponse
 from aura.application.permission.decision import Decision
 from aura.domain.permission.mode import DEFAULT_MODE, Mode
 from aura.domain.permission.rule import Rule

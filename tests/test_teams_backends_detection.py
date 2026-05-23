@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from aura.infrastructure.teams_backends import detection
+from aura.infrastructure.teams import detection
 
 
 def test_detection_returns_false_outside_tmux(monkeypatch: pytest.MonkeyPatch) -> None:

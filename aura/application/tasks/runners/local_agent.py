@@ -419,6 +419,8 @@ async def _run_local_agent(
         agent_type=record.agent_type or "general-purpose",
         prompt_chars=len(record.prompt),
     )
+    # Frontend lifecycle event — sibling to the terminal listener.
+    store.record_started(task_id)
     agent: Any = None
     final_text = ""
     summarizer: Any = None

@@ -1,7 +1,16 @@
-"""JSONL mailbox + ``.seen`` cursor sidecar.
+"""JSONL mailbox + ``.seen`` cursor + notifier strategies.
 
-Writes are append-only; reads use a sidecar ``.seen`` file so we never
-mutate the JSONL itself (no rewrite race, no torn writes).
+Append-only JSONL stays the source of record (so ``/team view`` and
+post-mortem replay both work uniformly), but new-message wake-up runs
+through a :class:`MailboxNotifier` strategy:
+
+- :class:`QueueMailboxNotifier` — per-recipient ``asyncio.Event`` flipped
+  on every ``signal()``; used by the in-process backend where the
+  publisher and consumer share a loop, eliminating the 200 ms poll.
+- :class:`FileMailboxNotifier` — coarse-grained sleep + filesystem
+  re-check; used by the pane backend where the consumer is a separate
+  Python process and the JSONL is the only IPC channel.
+
 ``fcntl.flock`` guards the append because TeamMessage lines (~700 B
 after Pydantic dump) sit above macOS APFS's 512-byte atomicity floor.
 Exactly one reader per recipient.
@@ -9,11 +18,13 @@ Exactly one reader per recipient.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import fcntl
 import os
 import time
 from pathlib import Path
+from typing import Protocol
 
 from pydantic import ValidationError
 
@@ -116,22 +127,92 @@ class Mailbox:
         except OSError:
             return set()
 
-    def wait_for_new_message(
-        self,
-        member: str,
-        *,
-        poll_interval: float = 0.2,
-        timeout: float = 30.0,
-    ) -> bool:
-        """Block until an unseen message arrives or ``timeout`` elapses.
 
-        Sync; called via ``asyncio.to_thread`` from the runtime loop.
-        """
+class MailboxNotifier(Protocol):
+    """Strategy for waking a teammate when a new message lands.
+
+    Decouples wake-up cadence (which is backend-specific — instant for
+    in-process, periodic for cross-process pane) from the JSONL storage
+    of record.
+    """
+
+    async def wait_new(self, member: str, *, timeout: float) -> bool:
+        """Return ``True`` when an unseen message is available for ``member``
+        within ``timeout``; ``False`` on timeout. Must be cancel-safe."""
+        ...
+
+    def signal(self, member: str) -> None:
+        """Hint that ``member`` may have a new message. Idempotent; no-op
+        on notifiers that don't need explicit publish signals."""
+        ...
+
+
+class QueueMailboxNotifier:
+    """Per-recipient ``asyncio.Event`` notifier — in-process publisher/consumer.
+
+    ``signal(member)`` flips the event; ``wait_new`` awaits it and clears
+    on return. The event is *edge-triggered*: a publisher that fires
+    twice before the consumer wakes once still causes the consumer to
+    drain the JSONL (read_unseen yields both messages on the same wake).
+    """
+
+    def __init__(self) -> None:
+        self._events: dict[str, asyncio.Event] = {}
+
+    def _event(self, member: str) -> asyncio.Event:
+        ev = self._events.get(member)
+        if ev is None:
+            ev = asyncio.Event()
+            self._events[member] = ev
+        return ev
+
+    async def wait_new(self, member: str, *, timeout: float) -> bool:
+        ev = self._event(member)
+        try:
+            await asyncio.wait_for(ev.wait(), timeout=timeout)
+        except TimeoutError:
+            return False
+        ev.clear()
+        return True
+
+    def signal(self, member: str) -> None:
+        self._event(member).set()
+
+
+class FileMailboxNotifier:
+    """Filesystem-polling notifier — cross-process pane backend.
+
+    ``signal`` is a no-op (the publisher is in a different process and
+    can't reach the consumer's event loop); ``wait_new`` re-reads the
+    JSONL on a fixed 200 ms cadence until an unseen message appears or
+    ``timeout`` elapses. Implemented on top of the existing
+    :class:`Mailbox` cursor so we never have to mutate the JSONL.
+    """
+
+    _POLL_INTERVAL_SEC: float = 0.2
+
+    def __init__(self, mailbox: Mailbox) -> None:
+        self._mailbox = mailbox
+
+    async def wait_new(self, member: str, *, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
         while True:
-            if self.read_unseen(member):
+            if self._mailbox.read_unseen(member):
                 return True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return False
-            time.sleep(min(poll_interval, remaining))
+            await asyncio.sleep(min(self._POLL_INTERVAL_SEC, remaining))
+
+    def signal(self, member: str) -> None:
+        # Cross-process: the publisher can't reach this notifier's loop.
+        # Wake-up has to come from the polling cadence above.
+        del member
+
+
+__all__ = [
+    "FileMailboxNotifier",
+    "Mailbox",
+    "MailboxNotifier",
+    "QueueMailboxNotifier",
+]

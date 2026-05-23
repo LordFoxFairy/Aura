@@ -46,10 +46,11 @@ from aura.domain.team import (
     TeamMessage,
 )
 from aura.infrastructure.persistence import journal
-from aura.infrastructure.teams_backends.detection import pane_backend_available
-from aura.infrastructure.teams_backends.types import BackendHandle
+from aura.infrastructure.teams.detection import pane_backend_available
+from aura.infrastructure.teams.types import BackendHandle
 
 if TYPE_CHECKING:
+    from aura.application.teams.mailbox import MailboxNotifier
     from aura.application.teams.manager import TeamManager
     from aura.core.agent import Agent
     from aura.domain.abort import AbortController
@@ -173,9 +174,9 @@ class PaneHandle(BackendHandle):
     def _wait_for_ack(self, mailbox: object, baseline: set[str], timeout: float) -> bool:
         """Block until a matching shutdown_response lands or timeout.
 
-        ``mailbox`` typed loose to dodge the ``TYPE_CHECKING`` import.
-        Same shape as
-        :meth:`TeamManager._wait_for_shutdown_response`.
+        Inbox-poll only — pane runs the teammate as a subprocess so we
+        can't share an asyncio.Future with the leader's manager; the
+        on-disk JSONL is the IPC channel.
         """
         import time as _time
         deadline = _time.monotonic() + timeout
@@ -223,7 +224,7 @@ class PaneBackend:
     """Singleton pane backend.
 
     Construction does NOT validate the environment — the registry runs
-    :func:`~aura.infrastructure.teams_backends.detection.pane_backend_available`
+    :func:`~aura.infrastructure.teams.detection.pane_backend_available`
     before handing the singleton out. ``spawn`` re-checks defensively
     so a programmatic instantiation surfaces the same error path.
     """
@@ -241,6 +242,7 @@ class PaneBackend:
         stop_event: asyncio.Event,
         abort: AbortController,
         seed_prompt: str | None,
+        notifier: MailboxNotifier | None = None,
     ) -> PaneHandle:
         """Split a pane and start the teammate subprocess inside it.
 
@@ -248,8 +250,14 @@ class PaneBackend:
         from the storage root. We accept it to match the Protocol so
         the manager can dispatch uniformly. ``seed_prompt`` is forwarded
         to the subprocess via ``--seed-prompt`` and consumed there.
+
+        ``notifier`` is ignored — the subprocess runs in a separate
+        Python process and cannot share an asyncio queue with the
+        leader; the pane backend wakes via the JSONL poll inside the
+        subprocess's own runtime.
         """
         del agent  # subprocess builds its own
+        del notifier  # cross-process; signals can't span loops
         if not pane_backend_available():
             raise PaneBackendError(
                 "pane backend requires tmux on PATH and an active tmux "

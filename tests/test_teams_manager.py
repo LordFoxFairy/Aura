@@ -369,7 +369,7 @@ async def test_aadd_member_propagates_explicit_model_to_task_and_spawn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.infrastructure.teams_backends.registry as registry
+    import aura.infrastructure.teams.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)
@@ -389,7 +389,7 @@ async def test_aadd_member_records_inherited_model_without_spawn_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.infrastructure.teams_backends.registry as registry
+    import aura.infrastructure.teams.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)
@@ -409,7 +409,7 @@ async def test_pane_force_remove_marks_teammate_task_cancelled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.infrastructure.teams_backends.registry as registry
+    import aura.infrastructure.teams.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)
@@ -431,7 +431,7 @@ async def test_pane_session_cleanup_marks_teammate_task_cancelled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.infrastructure.teams_backends.registry as registry
+    import aura.infrastructure.teams.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)
@@ -449,7 +449,7 @@ async def test_aadd_member_rejects_invalid_model_without_state_leak(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.infrastructure.teams_backends.registry as registry
+    import aura.infrastructure.teams.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)
@@ -471,7 +471,7 @@ async def test_aadd_member_rejects_empty_model_without_state_leak(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import aura.infrastructure.teams_backends.registry as registry
+    import aura.infrastructure.teams.registry as registry
 
     monkeypatch.setattr(registry, "get_backend", lambda _backend_type: _FakePaneBackend())
     mgr, _ = _mgr(tmp_path)

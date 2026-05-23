@@ -18,7 +18,8 @@ from uuid import uuid4
 from langchain_core.tools import BaseTool
 
 from aura.application.hooks import HookChain
-from aura.application.hooks.permission import AskerResponse, make_permission_hook
+from aura.application.hooks.permission import make_permission_hook
+from aura.application.permission.asker import AskerResponse
 from aura.config.loader import load_config
 from aura.core.agent import Agent
 from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
@@ -79,16 +80,20 @@ class IpcAsker:
 
         choice = response.get("choice")
         feedback = str(response.get("feedback") or "")
+        # Unknown scope → session; never silently elevate an unvalidated value.
+        scope: Literal["project", "session"] = (
+            "project" if response.get("scope") == "project" else "session"
+        )
         if choice == "always":
             return AskerResponse(
                 choice="always",
-                scope="session",
+                scope=scope,
                 rule=rule_hint,
                 feedback=feedback,
             )
         if choice == "accept":
-            return AskerResponse(choice="accept", scope="session", feedback=feedback)
-        return AskerResponse(choice="deny", scope="session", feedback=feedback)
+            return AskerResponse(choice="accept", feedback=feedback)
+        return AskerResponse(choice="deny", feedback=feedback)
 
     def feed_response(self, payload: dict[str, Any]) -> bool:
         req_id = payload.get("id")

@@ -24,9 +24,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from aura.application.teams.runtime import run_teammate
-from aura.infrastructure.teams_backends.types import BackendHandle
+from aura.infrastructure.teams.types import BackendHandle
 
 if TYPE_CHECKING:
+    from aura.application.teams.mailbox import MailboxNotifier
     from aura.application.teams.manager import TeamManager
     from aura.core.agent import Agent
     from aura.domain.abort import AbortController
@@ -87,7 +88,7 @@ class InProcessBackend:
 
     Stateless — the spawn args carry every piece of context the runtime
     needs. The manager holds one shared instance via
-    :func:`~aura.infrastructure.teams_backends.registry.get_backend`.
+    :func:`~aura.infrastructure.teams.registry.get_backend`.
     """
 
     backend_type: BackendType = "in_process"
@@ -103,6 +104,7 @@ class InProcessBackend:
         stop_event: asyncio.Event,
         abort: AbortController,
         seed_prompt: str | None,
+        notifier: MailboxNotifier | None = None,
     ) -> InProcessHandle:
         """Schedule ``run_teammate`` and return a wired-up handle.
 
@@ -120,6 +122,7 @@ class InProcessBackend:
             stop_event=stop_event,
             abort=abort,
             seed_prompt=seed_prompt,
+            notifier=notifier,
         )
 
     def spawn_sync(
@@ -133,15 +136,20 @@ class InProcessBackend:
         stop_event: asyncio.Event,
         abort: AbortController,
         seed_prompt: str | None,
+        notifier: MailboxNotifier | None = None,
     ) -> InProcessHandle:
         """Synchronous spawn — wraps ``asyncio.create_task`` directly.
 
         Used by :meth:`TeamManager.add_member` (sync entry) so we don't
         have to drive an async-no-op coroutine from inside an already-
         running event loop. Same return shape as :meth:`spawn`.
+
+        ``notifier`` is the manager-owned wake-up channel; the runtime
+        falls back to filesystem-poll when ``None`` (used by unit tests
+        that drive the backend directly).
         """
         # ``manager`` is unused here — the runtime reaches the manager
-        # back through ``agent.team`` if it needs to send shutdown_response.
+        # back through ``agent.team`` if it needs to confirm shutdown.
         # Accepting it keeps the Protocol uniform across backends.
         del manager
         task: asyncio.Task[None] = asyncio.create_task(
@@ -153,6 +161,7 @@ class InProcessBackend:
                 stop_event=stop_event,
                 abort=abort,
                 seed_prompt=seed_prompt,
+                notifier=notifier,
             ),
             name=f"aura-teammate-{member.name}",
         )

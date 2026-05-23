@@ -96,12 +96,43 @@ class _SubagentPayload(TypedDict):
     terminal: Literal[True]
 
 
+class _SubagentStartedPayload(TypedDict):
+    task_id: str
+    description: str
+    parent_session_id: str
+    started_at: float
+
+
+class _SubagentProgressPayload(TypedDict):
+    task_id: str
+    tool_name: str
+    activity_count: int
+
+
 class SubagentProtocolEvent(TypedDict):
     event: Literal["coordination"]
     family: Literal["subagent"]
     action: Literal["task_notification"]
     subagent_id: str
     payload: _SubagentPayload
+    parent_id: NotRequired[str]
+
+
+class SubagentStartedEvent(TypedDict):
+    event: Literal["coordination"]
+    family: Literal["subagent"]
+    action: Literal["task_started"]
+    subagent_id: str
+    payload: _SubagentStartedPayload
+    parent_id: NotRequired[str]
+
+
+class SubagentProgressEvent(TypedDict):
+    event: Literal["coordination"]
+    family: Literal["subagent"]
+    action: Literal["task_progress"]
+    subagent_id: str
+    payload: _SubagentProgressPayload
     parent_id: NotRequired[str]
 
 
@@ -136,5 +167,7 @@ WireEvent: TypeAlias = (
     | ErrorEvent
     | UnknownEvent
     | SubagentProtocolEvent
+    | SubagentStartedEvent
+    | SubagentProgressEvent
     | TeamProtocolEvent
 )

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.store import TasksStore
-from aura.application.teams.mailbox import Mailbox
+from aura.application.teams.mailbox import Mailbox, QueueMailboxNotifier
 from aura.domain.abort import AbortController
 from aura.domain.team import (
     BROADCAST_RECIPIENT,
@@ -43,7 +43,7 @@ from aura.infrastructure.wire.event_dto import WireEvent
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
-    from aura.infrastructure.teams_backends.types import BackendHandle
+    from aura.infrastructure.teams.types import BackendHandle
 
 # Slug pattern for team_id / member name (ASCII alnum + ``-`` / ``_``);
 # filesystem-safe on every platform we support.
@@ -139,8 +139,18 @@ class TeamManager:
         self._member_task_ids: dict[str, str] = {}
         self._member_agents: dict[str, Agent] = {}
         self._stop_events: dict[str, asyncio.Event] = {}
+        # Per-member shutdown ack future; resolved by ``confirm_shutdown``
+        # when the in-process runtime consumes a ``shutdown_request``.
+        # Pane subprocesses cannot reach this future across the process
+        # boundary; ``aremove_member`` falls back to inbox-poll there.
+        self._shutdown_acks: dict[str, asyncio.Future[bool]] = {}
         # In-flight ``aremove_member`` waiter tasks; tests can await these.
         self._shutdown_waiters: dict[str, asyncio.Task[bool]] = {}
+        # In-process mailbox wake-up channel. ``send`` / ``_post`` signal
+        # the recipient's per-member event so the runtime exits its
+        # ``wait_new`` instantly. Pane recipients ignore signals (they
+        # poll the JSONL from a separate process).
+        self._mailbox_notifier = QueueMailboxNotifier()
         # Backend-agnostic shutdown handles. The in-process backend's handle
         # wraps the same task we track in ``_runtimes`` — duplication is
         # intentional so ``cleanup_session_teams`` walks ``_member_backends``
@@ -358,7 +368,7 @@ class TeamManager:
         # Resolve the backend BEFORE we mutate state so a misrouted
         # ``backend_type="pane"`` outside tmux fails fast without
         # leaving an orphan TaskRecord / member row.
-        from aura.infrastructure.teams_backends.registry import (
+        from aura.infrastructure.teams.registry import (
             BackendUnavailable,
             get_backend,
         )
@@ -434,10 +444,10 @@ class TeamManager:
         #    async coroutine from this sync method. Pane backend MUST
         #    use :meth:`aadd_member` from an async context.
         from aura.application.teams.runtime import run_teammate as _default_runner
-        from aura.infrastructure.teams_backends.in_process import (
+        from aura.infrastructure.teams.in_process import (
             InProcessBackend as _InProcessBackend,
         )
-        from aura.infrastructure.teams_backends.in_process import (
+        from aura.infrastructure.teams.in_process import (
             InProcessHandle as _InProcessHandle,
         )
         if backend_type == "pane":
@@ -482,6 +492,7 @@ class TeamManager:
                 stop_event=stop_event,
                 abort=abort,
                 seed_prompt=seed_prompt,
+                notifier=self._mailbox_notifier,
             )
             in_proc_task = handle.task
             def _cleanup(_t: asyncio.Task[None]) -> None:
@@ -560,7 +571,7 @@ class TeamManager:
                 f"team has reached MAX_MEMBERS={MAX_MEMBERS}; "
                 "remove a member before adding another",
             )
-        from aura.infrastructure.teams_backends.registry import (
+        from aura.infrastructure.teams.registry import (
             BackendUnavailable,
             get_backend,
         )
@@ -616,6 +627,7 @@ class TeamManager:
             stop_event=stop_event,
             abort=abort,
             seed_prompt=seed_prompt,
+            notifier=self._mailbox_notifier,
         )
         task = getattr(handle, "task", None)
         if isinstance(task, asyncio.Task):
@@ -718,10 +730,9 @@ class TeamManager:
         force: bool = False,
         timeout_sec: float | None = None,
     ) -> bool:
-        """Graceful shutdown with a real ``shutdown_response`` ack.
+        """Graceful shutdown with a per-member ack future.
 
-        Returns ``True`` when the teammate's runtime emitted a
-        ``shutdown_response`` to the leader's inbox within
+        Returns ``True`` when the teammate confirmed shutdown within
         ``timeout_sec``; ``False`` when the wait timed out and the
         member was force-killed instead. ``force=True`` short-circuits
         the wait and is equivalent to :meth:`remove_member`.
@@ -729,17 +740,19 @@ class TeamManager:
         Sequence:
 
         1. Drop the membership row so concurrent sends raise.
-        2. Append a ``shutdown_request`` to the teammate's mailbox.
-        3. Fire the per-member ``stop_event`` so the runtime exits at
-           the next poll boundary.
-        4. Poll the LEADER's mailbox off-thread for a matching
-           ``shutdown_response`` (sender == ``name``) within
-           ``timeout_sec``.
-        5. On ack: journal ``team_member_shutdown_ack_received`` and
-           let the runtime exit naturally; the done-callback prunes
-           the task handle and abort entry.
-        6. On timeout: journal ``team_member_shutdown_force_killed``
-           and force-kill the runtime via abort + cancel.
+        2. Allocate a per-member ``asyncio.Future`` ack channel.
+        3. Append a ``shutdown_request`` to the teammate's mailbox; the
+           ``QueueMailboxNotifier`` wakes the in-process runtime
+           instantly.
+        4. Fire the per-member ``stop_event`` (covers the no-message
+           idle path).
+        5. ``await`` the ack future with ``timeout_sec``. The runtime
+           resolves it through :meth:`confirm_shutdown` (in-process) or,
+           for pane subprocesses, by writing a ``shutdown_response`` to
+           the leader inbox — pane handles still observe via their own
+           inbox-poll inside the backend handle.
+        6. On ack: journal + cooperative teardown.
+        7. On timeout: journal + force-kill (abort + cancel).
 
         Idempotent: a second call with the same ``name`` raises
         ``TeamError`` (the membership row is already gone), so the
@@ -759,21 +772,17 @@ class TeamManager:
             else self.DEFAULT_SHUTDOWN_GRACE_SEC
         )
         team_id = self._team.team_id
-        # Snapshot leader-mailbox state BEFORE we send the request so
-        # the watcher only counts msg_ids that arrived after this call.
-        # ``team_id`` resolves the inbox path; reading the seen set is
-        # cheap (small txt file) and gives us the cursor we need.
-        from aura.application.teams.mailbox import Mailbox  # local import; cycle-safe.
-        mailbox = Mailbox(self._storage, team_id)
-        baseline_ids = {m.msg_id for m in mailbox.read_all(TEAM_LEADER_NAME)}
-        # Drop the row + send request + fire stop. We do NOT abort or
-        # cancel yet — the runtime needs to live long enough to emit
-        # its shutdown_response.
+        # Drop the row + allocate ack future + send request + fire stop.
+        # The runtime needs to live long enough to resolve the future,
+        # so abort + cancel are deferred to the timeout / teardown path.
         idx = next(
             i for i, m in enumerate(self._team.members) if m.name == name
         )
         self._team.members.pop(idx)
         self._persist()
+        loop = asyncio.get_running_loop()
+        ack_future: asyncio.Future[bool] = loop.create_future()
+        self._shutdown_acks[name] = ack_future
         with contextlib.suppress(Exception):
             self._post(TeamMessage(
                 msg_id=uuid.uuid4().hex,
@@ -788,28 +797,20 @@ class TeamManager:
             if task_id is not None:
                 self._set_teammate_cancel_intent(task_id)
             stop_event.set()
-        # Poll the leader inbox for the matching ack. We deliberately
-        # use ``asyncio.to_thread`` for the blocking sleep so the
-        # runtime task on the same loop gets cycles to drain its
-        # mailbox + write the response. Polling cadence (200ms) is
-        # 25x finer than the runtime's 5s mailbox poll, so the
-        # latency of an ack arriving inside the runtime's cooperative
-        # exit is bounded by the runtime's own poll, not ours.
-        acked = await asyncio.to_thread(
-            self._wait_for_shutdown_response,
-            name,
-            baseline_ids,
-            timeout,
-        )
+        try:
+            acked = await asyncio.wait_for(
+                asyncio.shield(ack_future), timeout=timeout,
+            )
+        except TimeoutError:
+            acked = False
+        finally:
+            self._shutdown_acks.pop(name, None)
         if acked:
             journal.write(
                 "team_member_shutdown_ack_received",
                 team_id=team_id,
                 member=name,
             )
-            # Clean teardown — the runtime has already exited or is
-            # exiting; we just prune the bookkeeping and aclose the
-            # child agent.
             self._teardown_member(
                 name,
                 send_request=False,
@@ -827,39 +828,22 @@ class TeamManager:
         self._teardown_member(name, send_request=False, journal_force=True)
         return False
 
-    def _wait_for_shutdown_response(
-        self,
-        member_name: str,
-        baseline_ids: set[str],
-        timeout: float,
-    ) -> bool:
-        """Block until a matching shutdown_response arrives or timeout.
+    def confirm_shutdown(self, member_name: str, *, body: str = "") -> None:
+        """Resolve the per-member ack future if ``aremove_member`` is waiting.
 
-        Runs in a worker thread (``asyncio.to_thread``) so it never
-        blocks the event loop. Returns ``True`` on first matching
-        message, ``False`` on timeout. Identifies the ack by
-        ``sender == member_name AND kind == "shutdown_response"``;
-        the ``baseline_ids`` set excludes pre-existing leader inbox
-        lines so a stale ack from a previous run can't false-positive.
+        Called by the in-process runtime when it consumes a
+        ``shutdown_request``. ``body`` is accepted for symmetry with
+        the legacy ``shutdown_response`` envelope but currently unused
+        — the future carries a bool, and the journal already records
+        the request body. Idempotent: no future ⇒ no-op (pane path or
+        runtime exiting via abort).
         """
-        import time
-
-        from aura.application.teams.mailbox import Mailbox
-        if self._team is None:
-            return False
-        mailbox = Mailbox(self._storage, self._team.team_id)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            for msg in mailbox.read_all(TEAM_LEADER_NAME):
-                if msg.msg_id in baseline_ids:
-                    continue
-                if (
-                    msg.sender == member_name
-                    and msg.kind == "shutdown_response"
-                ):
-                    return True
-            time.sleep(0.05)
-        return False
+        del body
+        fut = self._shutdown_acks.get(member_name)
+        if fut is None or fut.done():
+            return
+        with contextlib.suppress(Exception):
+            fut.set_result(True)
 
     def _teardown_member(
         self,
@@ -890,6 +874,14 @@ class TeamManager:
             self._persist()
         task_id = self._member_task_ids.pop(name, None)
         stop_event = self._stop_events.pop(name, None)
+        # Drop any pending ack future — the member is gone, no point
+        # leaving an awaiter wedged. ``aremove_member`` owns its own
+        # cleanup so we only drop the orphan entry from a synchronous
+        # ``remove_member(force=True)`` path.
+        pending_ack = self._shutdown_acks.pop(name, None)
+        if pending_ack is not None and not pending_ack.done():
+            with contextlib.suppress(Exception):
+                pending_ack.set_result(False)
         if task_id is not None:
             self._mark_teammate_cancelled(task_id)
         if send_request and task_id is not None:
@@ -1181,6 +1173,7 @@ class TeamManager:
                 kind=kind,
             )
             mailbox.append(msg)
+            self._mailbox_notifier.signal(rcpt)
             sent.append(msg)
             from aura.infrastructure.wire.wire import team_message_to_wire
             self._pending_protocol_events.append(
@@ -1198,6 +1191,7 @@ class TeamManager:
         """
         msg = msg.model_copy(update={"body": redact_secrets(msg.body)})
         self.mailbox().append(msg)
+        self._mailbox_notifier.signal(msg.recipient)
         if self._team is not None:
             from aura.infrastructure.wire.wire import team_message_to_wire
             self._pending_protocol_events.append(

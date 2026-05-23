@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,6 +39,18 @@ def make_minimal_context(
 @pytest.fixture(autouse=True)
 def clear_aura_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AURA_CONFIG", raising=False)
+
+
+@pytest.fixture
+def reset_teams_registry() -> Iterator[None]:
+    # Backend singletons leak across tests that monkeypatch tmux detection;
+    # opt-in reset before + after keeps env gating honest.
+    import aura.infrastructure.teams.registry as _reg
+    _reg._in_process_singleton = None
+    _reg._pane_singleton = None
+    yield
+    _reg._in_process_singleton = None
+    _reg._pane_singleton = None
 
 
 @pytest.fixture(autouse=True)

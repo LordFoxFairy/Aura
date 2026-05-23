@@ -38,7 +38,8 @@ from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
 from aura.application.hooks.bash_safety import make_bash_safety_hook
-from aura.application.hooks.permission import AskerResponse, make_permission_hook
+from aura.application.hooks.permission import make_permission_hook
+from aura.application.permission.asker import AskerResponse
 from aura.application.permission.decision import Decision
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent

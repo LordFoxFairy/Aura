@@ -1,14 +1,19 @@
-"""Mailbox JSONL append + .seen cursor + concurrent writers."""
+"""Mailbox JSONL append + .seen cursor + concurrent writers + notifiers."""
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import uuid
 from pathlib import Path
 
 import pytest
 
-from aura.application.teams.mailbox import Mailbox
+from aura.application.teams.mailbox import (
+    FileMailboxNotifier,
+    Mailbox,
+    QueueMailboxNotifier,
+)
 from aura.domain.team import MAX_BODY_CHARS, TeamMessage
 from aura.infrastructure.persistence.storage import SessionStorage
 
@@ -114,21 +119,54 @@ def test_mailbox_body_oversize_rejected_by_pydantic() -> None:
         )
 
 
-def test_mailbox_wait_for_new_message_returns_false_on_timeout(
-    tmp_path: Path,
-) -> None:
+@pytest.mark.asyncio
+async def test_file_notifier_returns_false_on_timeout(tmp_path: Path) -> None:
     box = Mailbox(_storage(tmp_path), "team-a")
-    # Tight timeout so the test is fast.
-    assert box.wait_for_new_message(
-        "alice", poll_interval=0.05, timeout=0.2,
-    ) is False
+    notifier = FileMailboxNotifier(box)
+    assert await notifier.wait_new("alice", timeout=0.1) is False
 
 
-def test_mailbox_wait_for_new_message_returns_true_on_arrival(
+@pytest.mark.asyncio
+async def test_file_notifier_returns_true_when_unseen_present(
     tmp_path: Path,
 ) -> None:
     box = Mailbox(_storage(tmp_path), "team-a")
     box.append(_msg(body="ready"))
-    assert box.wait_for_new_message(
-        "alice", poll_interval=0.05, timeout=1.0,
-    ) is True
+    notifier = FileMailboxNotifier(box)
+    assert await notifier.wait_new("alice", timeout=1.0) is True
+
+
+@pytest.mark.asyncio
+async def test_queue_notifier_signal_wakes_immediately() -> None:
+    notifier = QueueMailboxNotifier()
+
+    async def signal_after_delay() -> None:
+        await asyncio.sleep(0.05)
+        notifier.signal("alice")
+
+    asyncio.create_task(signal_after_delay())
+    # The 1s timeout is generous; signal arrives at 50 ms so the wait
+    # should return well before deadline. If it didn't, we'd block ≥1 s
+    # — pin that the queue path is truly async-native.
+    assert await notifier.wait_new("alice", timeout=1.0) is True
+
+
+@pytest.mark.asyncio
+async def test_queue_notifier_per_member_isolation() -> None:
+    notifier = QueueMailboxNotifier()
+    notifier.signal("alice")
+    # Bob's wait must time out — alice's signal is not broadcast.
+    assert await notifier.wait_new("bob", timeout=0.1) is False
+    assert await notifier.wait_new("alice", timeout=0.1) is True
+
+
+@pytest.mark.asyncio
+async def test_queue_notifier_edge_triggered_drain() -> None:
+    """Two signals before a wait still cause exactly one wake — caller
+    drains the mailbox JSONL on that wake."""
+    notifier = QueueMailboxNotifier()
+    notifier.signal("alice")
+    notifier.signal("alice")
+    assert await notifier.wait_new("alice", timeout=0.1) is True
+    # No second wake without another signal.
+    assert await notifier.wait_new("alice", timeout=0.1) is False

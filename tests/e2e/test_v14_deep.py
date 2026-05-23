@@ -381,7 +381,7 @@ _RESTRICT_TOOLS_DRIVER = textwrap.dedent(
 
     class _AlwaysAllowAsker:
         async def __call__(self, *, tool, args, rule_hint):
-            from aura.application.hooks.permission import AskerResponse
+            from aura.application.permission.asker import AskerResponse
             return AskerResponse(choice="accept")
 
     cfg = AuraConfig.model_validate({{
@@ -658,7 +658,7 @@ _DEDUP_DRIVER = textwrap.dedent(
     class _CountingAsker:
         async def __call__(self, *, tool, args, rule_hint):
             asker_calls["n"] += 1
-            from aura.application.hooks.permission import AskerResponse
+            from aura.application.permission.asker import AskerResponse
             return AskerResponse(choice="accept")
 
     cfg = AuraConfig.model_validate({{
@@ -996,7 +996,7 @@ _MICROCOMPACT_DRIVER = textwrap.dedent(
 
     class _NeverAsker:
         async def __call__(self, *, tool, args, rule_hint):
-            from aura.application.hooks.permission import AskerResponse
+            from aura.application.permission.asker import AskerResponse
             return AskerResponse(choice="deny")
 
     hook = make_permission_hook(

@@ -18,7 +18,6 @@ from langchain_core.tools import BaseTool
 
 from aura.application.permission.decision import Decision
 from aura.domain.hook import (
-    PRE_TOOL_ASK_PENDING_KEY,
     CwdChangedHook,
     FileChangedHook,
     FileChangeKind,
@@ -316,7 +315,6 @@ class HookChain:
 
 
 __all__ = [
-    "PRE_TOOL_ASK_PENDING_KEY",
     "CwdChangedHook",
     "FileChangeKind",
     "FileChangedHook",

@@ -1,21 +1,13 @@
-"""Shared subagent driver — thin entry point on top of the runner package.
+"""Shared subagent driver — thin entry point on top of LocalAgentTask.
 
-Historically this module owned the entire subagent run loop (744 lines
-of lifecycle plumbing for the local-agent path). After the runner
-split it is reduced to a façade that decides which runner topology to
-dispatch to. The actual lifecycle implementation now lives in
-:mod:`aura.application.tasks.runners.local_agent` (LocalAgentTask),
-:mod:`aura.application.teams.runtime` (InProcessTeammateTask), and
-:mod:`aura.application.tasks.runners.remote` (RemoteAgentTask).
+:func:`run_task` is the entry point Aura code paths call; the actual
+lifecycle implementation lives in
+:mod:`aura.application.tasks.runners.local_agent`. The function-shape is
+preserved so callers that do ``asyncio.create_task(run_task(...))`` keep
+working; new code can use :class:`LocalAgentTask` directly for the
+explicit ``start/abort/wait_for_terminal`` interface.
 
-:func:`run_task` is the entry point Aura code paths call; it delegates
-to the in-process LocalAgentTask path. The function-shape is preserved
-so existing callers (``asyncio.create_task(run_task(...))``) continue
-working without restructuring; new code can use
-:class:`LocalAgentTask` directly for the explicit
-``start/abort/wait_for_terminal`` interface.
-
-Invariants (unchanged from the pre-split contract):
+Invariants:
 
 - Designed to be scheduled via ``asyncio.create_task`` and NEVER
   awaited by the spawning tool (fire-and-forget). ``task_create``

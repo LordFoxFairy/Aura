@@ -23,8 +23,6 @@ FileChangeKind = Literal["created", "modified", "deleted"]
 NotificationKind = Literal["permission_prompt", "ask_user", "error"]
 StopReason = Literal["user_exit", "clear", "max_turns", "error"]
 
-PRE_TOOL_ASK_PENDING_KEY = "_pre_tool_ask_pending"
-
 
 class PreModelHook(Protocol):
     async def __call__(
@@ -155,7 +153,6 @@ class StopHook(Protocol):
 
 
 __all__ = [
-    "PRE_TOOL_ASK_PENDING_KEY",
     "CwdChangedHook",
     "FileChangeKind",
     "FileChangedHook",

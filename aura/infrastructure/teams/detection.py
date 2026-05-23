@@ -8,7 +8,7 @@ them in isolation:
 - :func:`tmux_available` — is the ``tmux`` binary on ``$PATH``?
 - :func:`pane_backend_available` — both of the above; the registry
   uses this as the gate before instantiating
-  :class:`~aura.infrastructure.teams_backends.pane.PaneBackend`.
+  :class:`~aura.infrastructure.teams.pane.PaneBackend`.
 
 We deliberately do NOT cache results: the user may switch sessions
 mid-run (rare but possible), and the cost of an env-var lookup +

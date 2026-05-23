@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
@@ -143,14 +143,59 @@ async def test_subagent_completion_enqueues_protocol_event_for_external_stream(
 
         notification = agent.pending_notifications[0]
 
-        assert agent.pending_protocol_events == (
-            task_notification_to_wire(
-                notification,
-                parent_id=agent.session_id,
-            ),
+        events = [cast(dict[str, Any], e) for e in agent.pending_protocol_events]
+        # Live progress events (task_started + optional task_progress)
+        # share the queue with the terminal notification. Terminal must
+        # always be last; started must be first.
+        assert events[0]["action"] == "task_started"
+        assert events[0]["subagent_id"] == rec.id
+        assert events[-1] == task_notification_to_wire(
+            notification,
+            parent_id=agent.session_id,
         )
     finally:
         await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_subagent_run_enqueues_task_started_event_before_terminal(
+    tmp_path: Path,
+) -> None:
+    agent = _make_agent(tmp_path)
+    try:
+        store = agent._tasks_store
+        rec = store.create(description="probe", prompt="hi")
+        await run_task(store, _make_factory(), rec.id)
+
+        events = [cast(dict[str, Any], e) for e in agent.pending_protocol_events]
+        started = [e for e in events if e.get("action") == "task_started"]
+        assert len(started) == 1
+        assert started[0]["subagent_id"] == rec.id
+        assert started[0]["payload"]["description"] == "probe"
+        assert started[0]["payload"]["parent_session_id"] == ""
+        assert started[0]["payload"]["started_at"] == rec.started_at
+    finally:
+        await agent.aclose()
+
+
+def test_store_activity_listener_fires_with_record_and_activity() -> None:
+    store = TasksStore()
+    rec = store.create(description="probe", prompt="hi")
+    captured: list[tuple[str, str, int]] = []
+
+    def _on_activity(record: object, activity: str) -> None:
+        from aura.domain.task import TaskRecord
+        assert isinstance(record, TaskRecord)
+        captured.append((record.id, activity, record.progress.tool_count))
+
+    store.add_activity_listener(_on_activity)
+    store.record_activity(rec.id, "read_file")
+    store.record_activity(rec.id, "bash")
+
+    assert captured == [
+        (rec.id, "read_file", 1),
+        (rec.id, "bash", 2),
+    ]
 
 
 @pytest.mark.asyncio

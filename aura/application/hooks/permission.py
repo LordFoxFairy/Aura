@@ -16,13 +16,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any
 
 from langchain_core.tools import BaseTool
 
 from aura.application.hooks import PreToolHook
+from aura.application.permission.asker import AskerResponse, PermissionAsker
 from aura.application.permission.decision import Decision
 from aura.application.permission.denials import PermissionDenial
 from aura.application.permission.safety import is_protected
@@ -55,40 +55,6 @@ _PLAN_PREVIEW_MAX_CHARS = 200
 
 def _dedup_key(tool_name: str, args: dict[str, Any]) -> str:
     return f"{tool_name}::{json.dumps(args, sort_keys=True, default=str)}"
-
-
-@dataclass(frozen=True)
-class AskerResponse:
-    """Asker reply.
-
-    ``choice == "always"`` iff ``rule is not None``. ``feedback`` is the
-    free-text note from Tab-to-amend; appended to ``user_deny`` errors so
-    the LLM sees why the user said no.
-    """
-
-    choice: Literal["accept", "always", "deny"]
-    scope: Literal["project", "session"] = "session"
-    rule: Rule | None = None
-    feedback: str = ""
-
-    def __post_init__(self) -> None:
-        if self.choice == "always" and self.rule is None:
-            raise ValueError("choice='always' requires a rule to install")
-        if self.choice != "always" and self.rule is not None:
-            raise ValueError(
-                f"choice={self.choice!r} must not carry a rule"
-            )
-
-
-@runtime_checkable
-class PermissionAsker(Protocol):
-    async def __call__(
-        self,
-        *,
-        tool: BaseTool,
-        args: dict[str, Any],
-        rule_hint: Rule,
-    ) -> AskerResponse: ...
 
 
 def _plan_args_preview(tool: BaseTool, args: dict[str, Any]) -> str:

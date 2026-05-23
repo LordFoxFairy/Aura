@@ -203,22 +203,6 @@ async def test_invalid_spec_raises_clear_error(
     assert store.list() == []
 
 
-def test_run_in_background_field_accepted() -> None:
-    """The run_in_background field must round-trip through the schema."""
-    params = TaskCreateParams.model_validate({
-        "description": "d",
-        "prompt": "p",
-        "run_in_background": True,
-    })
-    assert params.run_in_background is True
-    # Default is False.
-    default_params = TaskCreateParams.model_validate({
-        "description": "d",
-        "prompt": "p",
-    })
-    assert default_params.run_in_background is False
-
-
 @pytest.mark.asyncio
 async def test_task_record_remembers_model_spec(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,

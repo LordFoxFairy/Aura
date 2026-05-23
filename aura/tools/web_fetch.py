@@ -12,11 +12,7 @@ from collections.abc import Callable
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import (
-    HTTPRedirectHandler,
-    Request,
-    urlopen,
-)
+from urllib.request import Request, urlopen
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -28,7 +24,6 @@ from aura.tools.base import Tool
 
 _DEFAULT_TIMEOUT = 30
 _MAX_BYTES = 1024 * 1024
-_MAX_REDIRECTS = 5
 _PROMPT_MAX_CHARS = 4_000
 
 _CACHE_TTL_SEC = 15 * 60
@@ -43,25 +38,6 @@ def set_default_model_factory(
 ) -> None:
     global _DEFAULT_MODEL_FACTORY
     _DEFAULT_MODEL_FACTORY = factory
-
-
-class _RedirectGuard(HTTPRedirectHandler):
-    max_redirections = _MAX_REDIRECTS
-
-    def redirect_request(
-        self,
-        req: Request,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Any,
-        newurl: str,
-    ) -> Request | None:
-        # Re-check every hop so a 302 to localhost can't bypass SSRF gate.
-        new_host = urlparse(newurl).hostname
-        if new_host is not None:
-            _reject_private_host(new_host)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 class WebFetchParams(BaseModel):

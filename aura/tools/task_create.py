@@ -48,10 +48,6 @@ class TaskCreateParams(BaseModel):
             "None inherits the parent's model."
         ),
     )
-    run_in_background: bool = Field(
-        default=False,
-        description="Reserved; every task_create today is fire-and-forget.",
-    )
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -107,7 +103,6 @@ class TaskCreate(BaseTool):
         prompt: str,
         agent_type: str = "general-purpose",
         model: str | None = None,
-        run_in_background: bool = False,
     ) -> dict[str, Any]:
         raise NotImplementedError("task_create is async-only; use ainvoke")
 
@@ -117,7 +112,6 @@ class TaskCreate(BaseTool):
         prompt: str,
         agent_type: str = "general-purpose",
         model: str | None = None,
-        run_in_background: bool = False,
     ) -> dict[str, Any]:
         # Validate before touching the store so a typo doesn't leave an orphan.
         try:

@@ -106,14 +106,14 @@ def _make_parser() -> argparse.ArgumentParser:
         help="layer to remove from; 'auto' targets whichever currently owns the name",
     )
 
-    # ``teammate`` — subprocess entry point spawned by the pane backend and
-    # RemoteAgentTask. Communication with the leader is exclusively via the
-    # on-disk JSONL mailbox under ``<storage-root>/teams/<team-id>/``; argv
-    # carries only what the subprocess needs to wire its own Agent.
+    # ``teammate`` — subprocess entry point spawned by the pane backend.
+    # Communication with the leader is exclusively via the on-disk JSONL
+    # mailbox under ``<storage-root>/teams/<team-id>/``; argv carries only
+    # what the subprocess needs to wire its own Agent.
     teammate = subparsers.add_parser(
         "teammate",
-        help="run an Aura teammate inside a subprocess (pane/remote backends)",
-        description="Subprocess entrypoint for pane- and remote-backed teammates.",
+        help="run an Aura teammate inside a subprocess (pane backend)",
+        description="Subprocess entrypoint for pane-backed teammates.",
     )
     teammate.add_argument("--team-id", required=True)
     teammate.add_argument("--member", required=True)

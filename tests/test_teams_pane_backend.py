@@ -19,13 +19,9 @@ import pytest
 from aura.domain.abort import AbortController
 from aura.domain.team import TeammateMember
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.infrastructure.teams_backends import detection
-from aura.infrastructure.teams_backends.pane import PaneBackend, PaneBackendError, PaneHandle
-from aura.infrastructure.teams_backends.registry import (
-    BackendUnavailable,
-    _reset_for_tests,
-    get_backend,
-)
+from aura.infrastructure.teams import detection
+from aura.infrastructure.teams.pane import PaneBackend, PaneBackendError, PaneHandle
+from aura.infrastructure.teams.registry import BackendUnavailable, get_backend
 
 
 class _LeaderStub:
@@ -49,13 +45,12 @@ class _LeaderStub:
 
 def test_pane_registry_unavailable_outside_tmux(
     monkeypatch: pytest.MonkeyPatch,
+    reset_teams_registry: None,
 ) -> None:
     """Registry refuses to hand out the pane backend when the env can't run it."""
     monkeypatch.setattr(detection, "is_inside_tmux", lambda: False)
-    _reset_for_tests()
     with pytest.raises(BackendUnavailable, match="pane backend unavailable"):
         get_backend("pane")
-    _reset_for_tests()
 
 
 def test_pane_backend_spawn_raises_when_unavailable(
@@ -149,13 +144,12 @@ async def test_pane_backend_force_kill_kills_pane(tmp_path: Path) -> None:
 
 def test_pane_backend_singleton_when_available(
     monkeypatch: pytest.MonkeyPatch,
+    reset_teams_registry: None,
 ) -> None:
     """Registry returns the same PaneBackend instance on repeated calls."""
     monkeypatch.setattr(detection, "is_inside_tmux", lambda: True)
     monkeypatch.setattr(detection, "tmux_available", lambda: True)
-    _reset_for_tests()
     a = get_backend("pane")
     b = get_backend("pane")
     assert a is b
     assert a.backend_type == "pane"
-    _reset_for_tests()

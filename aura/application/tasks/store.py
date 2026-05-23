@@ -105,6 +105,9 @@ class _LazyEvent:
 # may be called from outside an event loop in tests; making the
 # contract sync keeps every call site compatible.
 TerminalListener = Callable[[TaskRecord], None]
+StartedListener = Callable[[TaskRecord], None]
+# Carries the activity string so listeners skip a progress re-read.
+ActivityListener = Callable[[TaskRecord, str], None]
 
 
 class TasksStore:
@@ -117,6 +120,9 @@ class TasksStore:
         # caught + journaled so a buggy listener can't strand the
         # mark_* call.
         self._terminal_listeners: list[TerminalListener] = []
+        # Live progress channels — same exception-swallow contract.
+        self._started_listeners: list[StartedListener] = []
+        self._activity_listeners: list[ActivityListener] = []
 
     def create(
         self,
@@ -179,6 +185,35 @@ class TasksStore:
         rec.progress.tool_count += 1
         rec.progress.last_activity_at = time.time()
         _append_recent(rec.progress, activity)
+        for listener in list(self._activity_listeners):
+            try:
+                listener(rec, activity)
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "tasks_activity_listener_error",
+                    task_id=rec.id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+
+    def record_started(self, task_id: str) -> None:
+        """Fire ``started_listeners`` for a freshly-running task.
+
+        Idempotent at the listener layer (callers fire once per task);
+        no-op for unknown task_ids so a racing cancel between create +
+        run cannot KeyError.
+        """
+        rec = self._records.get(task_id)
+        if rec is None:
+            return
+        for listener in list(self._started_listeners):
+            try:
+                listener(rec)
+            except Exception as exc:  # noqa: BLE001
+                journal.write(
+                    "tasks_started_listener_error",
+                    task_id=rec.id,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
 
     def record_activity_note(self, task_id: str, activity: str) -> None:
         """Note non-tool task activity without bumping ``tool_count``.
@@ -342,6 +377,26 @@ class TasksStore:
         except ValueError:
             return
 
+    def add_started_listener(self, callback: StartedListener) -> None:
+        """Register a sync callback fired once per :meth:`record_started`."""
+        self._started_listeners.append(callback)
+
+    def remove_started_listener(self, callback: StartedListener) -> None:
+        try:
+            self._started_listeners.remove(callback)
+        except ValueError:
+            return
+
+    def add_activity_listener(self, callback: ActivityListener) -> None:
+        """Register a sync callback fired on each :meth:`record_activity`."""
+        self._activity_listeners.append(callback)
+
+    def remove_activity_listener(self, callback: ActivityListener) -> None:
+        try:
+            self._activity_listeners.remove(callback)
+        except ValueError:
+            return
+
     def _fire_terminal(self, rec: TaskRecord) -> None:
         """Common terminal-fanout: trigger event + dispatch listeners.
 
@@ -407,6 +462,8 @@ class TasksStore:
 # ``types.py``. Several CLI / Context.build call sites historically
 # imported from store; keep both addresses live.
 __all__ = [
+    "ActivityListener",
+    "StartedListener",
     "TasksStore",
     "TaskNotification",
     "TerminalListener",

@@ -426,6 +426,37 @@ class Agent:
                 ),
             )
         self._tasks_store.add_terminal_listener(_on_terminal)
+
+        def _on_started(rec: object) -> None:
+            from aura.domain.task import TaskRecord
+            if not isinstance(rec, TaskRecord):
+                return
+            from aura.infrastructure.wire.wire import task_started_to_wire
+            self._enqueue_protocol_event(
+                task_started_to_wire(
+                    task_id=rec.id,
+                    description=rec.description,
+                    parent_session_id=rec.parent_id or "",
+                    started_at=rec.started_at,
+                    parent_id=self.session_id,
+                ),
+            )
+        self._tasks_store.add_started_listener(_on_started)
+
+        def _on_activity(rec: object, activity: str) -> None:
+            from aura.domain.task import TaskRecord
+            if not isinstance(rec, TaskRecord):
+                return
+            from aura.infrastructure.wire.wire import task_progress_to_wire
+            self._enqueue_protocol_event(
+                task_progress_to_wire(
+                    task_id=rec.id,
+                    tool_name=activity,
+                    activity_count=rec.progress.tool_count,
+                    parent_id=self.session_id,
+                ),
+            )
+        self._tasks_store.add_activity_listener(_on_activity)
         # F-01-001: live abort controller for the running astream call.
         # Set at the top of :meth:`astream` and cleared on exit.
         self._current_abort: AbortController | None = None

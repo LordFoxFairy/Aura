@@ -11,13 +11,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from aura.infrastructure.teams_backends.detection import pane_backend_available
-from aura.infrastructure.teams_backends.in_process import InProcessBackend
-from aura.infrastructure.teams_backends.pane import PaneBackend, PaneBackendError
+from aura.infrastructure.teams.detection import pane_backend_available
+from aura.infrastructure.teams.in_process import InProcessBackend
+from aura.infrastructure.teams.pane import PaneBackend, PaneBackendError
 
 if TYPE_CHECKING:
     from aura.domain.team import BackendType
-    from aura.infrastructure.teams_backends.types import TeammateBackend
+    from aura.infrastructure.teams.types import TeammateBackend
 
 
 class BackendUnavailable(RuntimeError):
@@ -60,18 +60,6 @@ def get_backend(backend_type: BackendType) -> TeammateBackend:
     # Future backend types (e.g. iterm2 split, ssh) plug in here. Until
     # then a Literal-violating value is a programmer error.
     raise BackendUnavailable(f"unknown backend_type: {backend_type!r}")
-
-
-def _reset_for_tests() -> None:
-    """Reset the singletons. Test-only — do not call from production code.
-
-    Tests that monkeypatch ``pane_backend_available`` need a fresh
-    instance afterward; this helper short-circuits the cache without
-    exposing the module globals.
-    """
-    global _in_process_singleton, _pane_singleton  # noqa: PLW0603
-    _in_process_singleton = None
-    _pane_singleton = None
 
 
 __all__ = ["BackendUnavailable", "PaneBackendError", "get_backend"]

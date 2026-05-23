@@ -62,7 +62,7 @@ def _plan_args_preview(tool: BaseTool, args: dict[str, Any]) -> str:
     if callable(preview_fn):
         try:
             out = preview_fn(args)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # preview/format failures fall back gracefully
             out = None
         if isinstance(out, str) and out:
             return _truncate(out, _PLAN_PREVIEW_MAX_CHARS)
@@ -296,7 +296,7 @@ async def _decide(
         rule_hint = Rule(tool=tool.name, content=None)
         try:
             response = await asker(tool=tool, args=args, rule_hint=rule_hint)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             journal.write(
                 "permission_asker_failed",
                 tool=tool.name,
@@ -344,7 +344,7 @@ async def _decide(
     rule_hint = Rule(tool=tool.name, content=None)
     try:
         response = await asker(tool=tool, args=args, rule_hint=rule_hint)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
         # Catches Exception only — KeyboardInterrupt / CancelledError propagate.
         journal.write(
             "permission_asker_failed",

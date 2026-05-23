@@ -96,9 +96,9 @@ def test_tool_metadata_is_frozen() -> None:
         timeout_sec=None,
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        meta.is_read_only = False  # type: ignore[misc]
+        meta.is_read_only = False  # type: ignore[misc]  # rebinding/mutating frozen field for test
     with pytest.raises(dataclasses.FrozenInstanceError):
-        meta.capability_flags = frozenset({"x"})  # type: ignore[misc]
+        meta.capability_flags = frozenset({"x"})  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_tool_metadata_capability_flags_defaults_to_empty_frozenset() -> None:
@@ -195,11 +195,6 @@ def test_tool_metadata_exported_from_aura_schemas() -> None:
     assert "ToolMetadata" in schemas.__all__
 
 
-# ---------------------------------------------------------------------------
-# Phase 5 Task 1: ``ValidationResult`` contract
-# ---------------------------------------------------------------------------
-
-
 def test_validation_result_default_reason_is_empty() -> None:
     """Spec §4 — ``reason`` defaults to ``""`` so a "valid" result needs
     only ``invalid=False``. Asserts the default factory behaves as
@@ -226,9 +221,9 @@ def test_validation_result_is_frozen() -> None:
     """
     vr = ValidationResult(invalid=True, reason="bad")
     with pytest.raises(dataclasses.FrozenInstanceError):
-        vr.invalid = False  # type: ignore[misc]
+        vr.invalid = False  # type: ignore[misc]  # rebinding/mutating frozen field for test
     with pytest.raises(dataclasses.FrozenInstanceError):
-        vr.reason = "other"  # type: ignore[misc]
+        vr.reason = "other"  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_validation_result_invalid_is_required() -> None:
@@ -237,7 +232,7 @@ def test_validation_result_invalid_is_required() -> None:
     explicit at the construction site.
     """
     with pytest.raises(TypeError):
-        ValidationResult()  # type: ignore[call-arg]
+        ValidationResult()  # type: ignore[call-arg]  # exercising missing/extra arg path
 
 
 def test_validation_result_exported_from_aura_schemas() -> None:

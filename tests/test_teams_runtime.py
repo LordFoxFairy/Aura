@@ -24,7 +24,7 @@ def _msg(body: str = "hi", kind: str = "text", sender: str = "leader") -> TeamMe
         sender=sender,
         recipient="alice",
         body=body,
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
     )
 
 
@@ -82,7 +82,7 @@ async def test_runtime_processes_text_message(tmp_path: Path) -> None:
     stop = asyncio.Event()
     box.append(_msg(body="please work"))
     task = asyncio.create_task(run_teammate(
-        agent=agent,  # type: ignore[arg-type]
+        agent=agent,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         team_id="team-a",
         member_name="alice",
         storage=storage,
@@ -120,7 +120,7 @@ async def test_runtime_records_teammate_task_progress(tmp_path: Path) -> None:
     box.append(_msg(body="please work"))
 
     task = asyncio.create_task(run_teammate(
-        agent=agent,  # type: ignore[arg-type]
+        agent=agent,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         team_id="team-a",
         member_name="alice",
         storage=storage,
@@ -152,7 +152,7 @@ async def test_runtime_seed_prompt_runs_immediately(tmp_path: Path) -> None:
     abort = AbortController()
     stop = asyncio.Event()
     task = asyncio.create_task(run_teammate(
-        agent=agent,  # type: ignore[arg-type]
+        agent=agent,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         team_id="team-a",
         member_name="alice",
         storage=storage,
@@ -179,7 +179,7 @@ async def test_runtime_shutdown_request_exits_cleanly(tmp_path: Path) -> None:
     stop = asyncio.Event()
     box.append(_msg(kind="shutdown_request", body="please go"))
     task = asyncio.create_task(run_teammate(
-        agent=agent,  # type: ignore[arg-type]
+        agent=agent,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         team_id="team-a",
         member_name="alice",
         storage=storage,
@@ -198,7 +198,7 @@ async def test_runtime_abort_stops_loop(tmp_path: Path) -> None:
     abort = AbortController()
     stop = asyncio.Event()
     task = asyncio.create_task(run_teammate(
-        agent=agent,  # type: ignore[arg-type]
+        agent=agent,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         team_id="team-a",
         member_name="alice",
         storage=storage,

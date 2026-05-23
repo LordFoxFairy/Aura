@@ -99,13 +99,14 @@ async def test_reactive_compact_on_context_length_error(tmp_path: Path) -> None:
     for i in range(10):
         h.append(HumanMessage(content=f"u-{i}"))
         h.append(AIMessage(content=f"a-{i}"))
-    agent._storage.save(agent.session_id, h)
+    agent.storage.save(agent.session_id, h)
 
     compact_calls: list[str] = []
     orig_compact = Agent.compact
 
     async def _spy(self: Agent, *, source: str = "manual") -> CompactResult:
         compact_calls.append(source)
+        # deliberately off-type arg to exercise path
         return await orig_compact(self, source=source)  # type: ignore[arg-type]
 
     with patch.object(Agent, "compact", _spy):
@@ -139,7 +140,7 @@ async def test_reactive_compact_only_retries_once(tmp_path: Path) -> None:
     for i in range(10):
         h.append(HumanMessage(content=f"u-{i}"))
         h.append(AIMessage(content=f"a-{i}"))
-    agent._storage.save(agent.session_id, h)
+    agent.storage.save(agent.session_id, h)
 
     with pytest.raises(RuntimeError, match="still too long"):
         async for _ in agent.astream("hi"):
@@ -165,7 +166,7 @@ async def test_reactive_compact_other_error_passthrough(tmp_path: Path) -> None:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]
+            source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         )
 
     with (
@@ -204,7 +205,7 @@ async def test_reactive_compact_journal_event(tmp_path: Path) -> None:
         for i in range(10):
             h.append(HumanMessage(content=f"u-{i}"))
             h.append(AIMessage(content=f"a-{i}"))
-        agent._storage.save(agent.session_id, h)
+        agent.storage.save(agent.session_id, h)
 
         async for _ in agent.astream("hi"):
             pass
@@ -261,7 +262,7 @@ async def test_reactive_compact_preserves_turn_count(tmp_path: Path) -> None:
     for i in range(10):
         h.append(HumanMessage(content=f"u-{i}"))
         h.append(AIMessage(content=f"a-{i}"))
-    agent._storage.save(agent.session_id, h)
+    agent.storage.save(agent.session_id, h)
 
     async for _ in agent.astream("hi"):
         pass

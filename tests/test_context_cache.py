@@ -223,12 +223,6 @@ def test_cache_breakpoint_with_unconditional_rule_only(tmp_path: Path) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# F-03-014 — <skills-available> belongs INSIDE the cached prefix and renders
-# byte-identically across consecutive builds when the registry is stable.
-# ---------------------------------------------------------------------------
-
-
 def _mk_skill(name: str, tmp_path: Path, *, description: str = "desc") -> Skill:
     """Construct a minimal Skill rooted under *tmp_path*.
 

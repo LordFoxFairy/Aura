@@ -92,6 +92,6 @@ def _resolve_flag(
     if callable(raw):
         try:
             return bool(raw(args))
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             return fail_safe
     return bool(raw)

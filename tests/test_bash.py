@@ -110,11 +110,6 @@ def test_bash_is_destructive_covers_system_path_redirect() -> None:
     ) is True
 
 
-# ---------------------------------------------------------------------------
-# F-02-016 — command-substitution regex now covers more than rm
-# ---------------------------------------------------------------------------
-
-
 def test_bash_is_destructive_covers_dollar_paren_chown() -> None:
     """``$(chown -R nobody /etc)`` is destructive even via command sub."""
     assert resolve_is_destructive(
@@ -365,11 +360,6 @@ async def test_bash_below_hard_ceiling_not_killed() -> None:
     assert out["exit_code"] == 0
 
 
-# ---------------------------------------------------------------------------
-# F-02-016 — destructive-pattern regex coverage (command sub + find)
-# ---------------------------------------------------------------------------
-
-
 def test_is_destructive_blocks_command_sub_rm() -> None:
     # $(rm -rf /) wraps the destructive command in command substitution —
     # the wrapping bash will execute the inner; static check must catch.
@@ -400,11 +390,6 @@ def test_is_destructive_blocks_find_execdir_rm() -> None:
     assert resolve_is_destructive(
         meta_dict(bash), {"command": "find . -execdir rm {} \\;"}
     ) is True
-
-
-# ---------------------------------------------------------------------------
-# F-02-035 — process-group teardown on timeout/cancel
-# ---------------------------------------------------------------------------
 
 
 async def test_bash_timeout_kills_process_group() -> None:
@@ -498,11 +483,6 @@ async def test_bash_sigterm_race_cleaned_up_with_sigkill() -> None:
     finally:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(pid_path)
-
-
-# ---------------------------------------------------------------------------
-# Phase 5 Task 2 — ``validate_input`` rejects blank commands
-# ---------------------------------------------------------------------------
 
 
 def test_validate_input_rejects_empty_command() -> None:

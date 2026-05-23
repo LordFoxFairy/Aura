@@ -150,7 +150,7 @@ def _load_raw() -> dict[str, Any]:
                 "mcp_approvals_load_failed",
                 path=str(path),
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             pass
         return {}
     if not isinstance(data, dict):

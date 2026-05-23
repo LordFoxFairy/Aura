@@ -89,9 +89,6 @@ def _final_turn(text: str = "done") -> FakeTurn:
     return FakeTurn(message=AIMessage(content=text))
 
 
-# --- Success triggers ---
-
-
 @pytest.mark.asyncio
 async def test_successful_read_file_triggers_path_matching(tmp_path: Path) -> None:
     target = tmp_path / "x.py"
@@ -157,9 +154,6 @@ async def test_parallel_tool_calls_all_paths_propagate(tmp_path: Path) -> None:
     matched_globs = {r.globs for r in ctx._matched_rules}
     assert ("a.py",) in matched_globs
     assert ("b.py",) in matched_globs
-
-
-# --- No-trigger paths ---
 
 
 @pytest.mark.asyncio
@@ -248,9 +242,6 @@ async def test_short_circuited_tool_does_not_trigger(tmp_path: Path) -> None:
     assert ctx._matched_rules == []
 
 
-# --- Rule injection reaches the next model call ---
-
-
 @pytest.mark.asyncio
 async def test_matched_rule_injected_into_next_model_call(tmp_path: Path) -> None:
     target = tmp_path / "x.py"
@@ -273,7 +264,7 @@ async def test_matched_rule_injected_into_next_model_call(tmp_path: Path) -> Non
                 messages, stop=stop, run_manager=run_manager, **_,
             )
 
-    model = _CapturingFake(turns=[  # type: ignore[call-arg]
+    model = _CapturingFake(turns=[  # type: ignore[call-arg]  # exercising missing/extra arg path
         _tool_turn("read_file", args={"path": str(target)}),
         _final_turn(),
     ])

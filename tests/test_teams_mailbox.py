@@ -29,7 +29,7 @@ def _msg(
         sender=sender,
         recipient=recipient,
         body=body,
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
     )
 
 

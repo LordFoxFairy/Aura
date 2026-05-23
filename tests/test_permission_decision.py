@@ -43,7 +43,7 @@ def test_user_deny_reason_must_be_deny() -> None:
 def test_decision_is_frozen() -> None:
     d = Decision(allow=True, reason="user_accept")
     with pytest.raises((AttributeError, TypeError)):
-        d.allow = False  # type: ignore[misc]
+        d.allow = False  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_rule_allow_with_rule_roundtrips() -> None:
@@ -79,11 +79,6 @@ def test_safety_blocked_without_target_still_valid() -> None:
     assert d.target is None
 
 
-# ---------------------------------------------------------------------------
-# audit_line — one-liner the renderer dims and appends to tool-call output
-# ---------------------------------------------------------------------------
-
-
 def test_audit_line_rule_allow_embeds_rule() -> None:
     rule = Rule(tool="bash", content="npm test")
     line = Decision(allow=True, reason="rule_allow", rule=rule).audit_line()
@@ -110,11 +105,6 @@ def test_audit_line_user_deny() -> None:
 
 def test_audit_line_safety_blocked() -> None:
     assert Decision(allow=False, reason="safety_blocked").audit_line() == "blocked: safety"
-
-
-# ---------------------------------------------------------------------------
-# 4-mode completion: plan_mode_blocked + mode_accept_edits reason invariants
-# ---------------------------------------------------------------------------
 
 
 def test_mode_accept_edits_is_allow_reason() -> None:

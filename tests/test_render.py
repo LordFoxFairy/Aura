@@ -275,9 +275,6 @@ def test_renderer_escapes_bracket_markup_in_audit_text() -> None:
     assert "[weird]" in out
 
 
-# --------------------------------------------------------------------------
-# Per-tool formatted summaries on ToolCallCompleted (spec §render polish).
-# --------------------------------------------------------------------------
 def test_tool_call_completed_read_file_renders_formatted_summary() -> None:
     r, buf = _capture()
     r.on_event(ToolCallCompleted(
@@ -335,16 +332,6 @@ def test_tool_call_completed_bash_shows_exit_marker_on_failure() -> None:
     assert "exit 2" in out
 
 
-# --------------------------------------------------------------------------
-# Markdown rendering path (buffer-on-delta, flush-on-boundary).
-#
-# Streaming chunk-by-chunk through ``rich.Markdown`` would break mid-fence
-# rendering, so the renderer buffers AssistantDelta text and only flushes
-# at turn boundaries (any non-delta event) or ``finish()``. Tests below
-# cover the markdown/plain branch, empty/whitespace short-circuit, the
-# UIConfig toggle, and the ordering guarantee (prose flushes BEFORE the
-# tool line that triggered the flush).
-# --------------------------------------------------------------------------
 def test_assistant_delta_not_emitted_incrementally() -> None:
     r, buf = _capture()
     r.on_event(AssistantDelta(text="chunk one "))

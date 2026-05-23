@@ -160,11 +160,6 @@ def test_web_fetch_metadata_includes_matcher_and_preview() -> None:
     assert preview({"url": "https://x.com"}) == "url: https://x.com"
 
 
-# ---------------------------------------------------------------------------
-# Phase 5 Task 2 — ``validate_input`` rejects unsupported URL schemes / hosts
-# ---------------------------------------------------------------------------
-
-
 def test_validate_input_rejects_non_http_scheme() -> None:
     from aura.tools.web_fetch import web_fetch
 

@@ -16,9 +16,6 @@ from cli.forms import FormCancelled, render_form
 from cli.forms.widget import FormQuestion
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 class _FakeApp:
     """Captures the Application instance so tests can drive its handlers."""
 
@@ -75,9 +72,6 @@ class _FakeEvent:
         self.data = ""
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 async def test_single_select_returns_chosen_label(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

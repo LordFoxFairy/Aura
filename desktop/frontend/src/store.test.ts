@@ -34,13 +34,11 @@ describe("Aura desktop store", () => {
   });
 
   it("preserves tool content when a tool call completes", () => {
-    // Phase 2 Task 9: ``content: {text, error}`` replaces split
-    // output/error fields.
     const store = useAuraStore.getState();
 
     store.appendToolCall("tc_1", "read_file", { path: "README.md" });
     store.completeToolCall("tc_1", "read_file", {
-      text: '{"content":"hello"}',
+      output: { content: "hello" },
       error: false,
     });
 
@@ -51,25 +49,23 @@ describe("Aura desktop store", () => {
         name: "read_file",
         args: { path: "README.md" },
         completed: true,
-        content: { text: '{"content":"hello"}', error: false },
+        content: { output: { content: "hello" }, error: false },
         progress: [],
       },
     ]);
   });
 
   it("preserves error flag when tool fails", () => {
-    // Phase 2 Task 9: a failing tool's ``content.error`` is true so
-    // the frontend can render the red banner / ⊘ glyph.
     const store = useAuraStore.getState();
 
     store.appendToolCall("tc_err", "bash", { command: "rm -rf /" });
     store.completeToolCall("tc_err", "bash", {
-      text: "permission denied",
+      output: "permission denied",
       error: true,
     });
 
     expect(toolMessages()[0]?.content).toEqual({
-      text: "permission denied",
+      output: "permission denied",
       error: true,
     });
   });
@@ -78,7 +74,7 @@ describe("Aura desktop store", () => {
     const store = useAuraStore.getState();
 
     store.appendToolCall("tc_1", "bash", { command: "printf hi" });
-    store.completeToolCall("tc_1", "bash", { text: '{"stdout":"hi"}', error: false });
+    store.completeToolCall("tc_1", "bash", { output: { stdout: "hi" }, error: false });
     store.appendToolProgress("tc_1", "bash", "stdout", "late");
 
     expect(toolMessages()[0]?.progress).toEqual([]);
@@ -90,22 +86,22 @@ describe("Aura desktop store", () => {
     store.appendToolCall(undefined, "bash", { command: "one" });
     store.appendToolCall(undefined, "bash", { command: "two" });
     store.appendToolProgress(undefined, "bash", "stdout", "two running");
-    store.completeToolCall(undefined, "bash", { text: '{"stdout":"two"}', error: false });
-    store.completeToolCall(undefined, "bash", { text: '{"stdout":"one"}', error: false });
+    store.completeToolCall(undefined, "bash", { output: { stdout: "two" }, error: false });
+    store.completeToolCall(undefined, "bash", { output: { stdout: "one" }, error: false });
 
     expect(toolMessages()).toMatchObject([
       {
         name: "bash",
         args: { command: "one" },
         completed: true,
-        content: { text: '{"stdout":"one"}', error: false },
+        content: { output: { stdout: "one" }, error: false },
         progress: [],
       },
       {
         name: "bash",
         args: { command: "two" },
         completed: true,
-        content: { text: '{"stdout":"two"}', error: false },
+        content: { output: { stdout: "two" }, error: false },
         progress: [{ stream: "stdout", chunk: "two running" }],
       },
     ]);
@@ -116,14 +112,14 @@ describe("Aura desktop store", () => {
 
     store.appendToolCall("dup", "bash", { command: "printf hi" });
     store.appendToolCall("dup", "read_file", { path: "README.md" });
-    store.completeToolCall("dup", "bash", { text: '{"stdout":"hi"}', error: false });
+    store.completeToolCall("dup", "bash", { output: { stdout: "hi" }, error: false });
 
     expect(toolMessages()).toMatchObject([
       {
         id: "dup",
         name: "bash",
         completed: true,
-        content: { text: '{"stdout":"hi"}', error: false },
+        content: { output: { stdout: "hi" }, error: false },
       },
       {
         id: "dup",
@@ -137,13 +133,13 @@ describe("Aura desktop store", () => {
     const store = useAuraStore.getState();
 
     store.appendToolCall("", "bash", { command: "printf hi" });
-    store.completeToolCall("", "bash", { text: '{"stdout":"hi"}', error: false });
+    store.completeToolCall("", "bash", { output: { stdout: "hi" }, error: false });
 
     expect(toolMessages()[0]).toMatchObject({
       id: "00000000-0000-4000-8000-000000000001",
       name: "bash",
       completed: true,
-      content: { text: '{"stdout":"hi"}', error: false },
+      content: { output: { stdout: "hi" }, error: false },
     });
   });
 

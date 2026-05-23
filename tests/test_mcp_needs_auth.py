@@ -27,10 +27,6 @@ from aura.infrastructure.mcp.manager import (
     _is_needs_auth_error,
 )
 
-# ---------------------------------------------------------------------------
-# Pure classifier
-# ---------------------------------------------------------------------------
-
 
 class _CodedError(Exception):
     """Mirror MCP SDK's coded error shape: ``exc.code`` is the JSON-RPC
@@ -73,11 +69,6 @@ def test_classifier_other_codes_not_needs_auth() -> None:
     """Non-auth JSON-RPC codes don't trigger the route."""
     assert _is_needs_auth_error(_CodedError(-32600, "Invalid Request")) is False
     assert _is_needs_auth_error(_CodedError(-32601, "Method not found")) is False
-
-
-# ---------------------------------------------------------------------------
-# Manager connect path → state transition
-# ---------------------------------------------------------------------------
 
 
 async def _empty_list(*_args: Any, **_kwargs: Any) -> list[Any]:

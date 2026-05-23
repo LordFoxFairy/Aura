@@ -24,19 +24,10 @@ from aura.domain.task import TaskNotification
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import ReadCarryover, ReadRecord
 
-# ----------------------------------------------------------------------
-# Fixtures
-# ----------------------------------------------------------------------
-
 
 @pytest.fixture
 def storage(tmp_path: Path) -> SessionStorage:
     return SessionStorage(tmp_path / "aura.db", cwd=tmp_path)
-
-
-# ----------------------------------------------------------------------
-# Init
-# ----------------------------------------------------------------------
 
 
 def test_init_minimal_args(storage: SessionStorage) -> None:
@@ -82,11 +73,6 @@ def test_init_holds_session_rules_reference(
     assert len(rules.rules()) == 1
 
 
-# ----------------------------------------------------------------------
-# Save / load history
-# ----------------------------------------------------------------------
-
-
 def test_save_then_load_roundtrips_history(storage: SessionStorage) -> None:
     """Round-trip a couple of messages through the runtime — proves
     the storage delegation actually persists + reloads correctly
@@ -108,11 +94,6 @@ def test_load_empty_session_returns_empty_list(
 ) -> None:
     rt = SessionRuntime(storage=storage, session_id="s-empty")
     assert rt.load_history() == []
-
-
-# ----------------------------------------------------------------------
-# Resume
-# ----------------------------------------------------------------------
 
 
 def test_resume_swaps_session_id_and_returns_message_count(
@@ -172,11 +153,6 @@ def test_resume_retargets_session_log_path(
     assert rt.session_log_path == log_dir / "s-2.jsonl"
 
 
-# ----------------------------------------------------------------------
-# Clear
-# ----------------------------------------------------------------------
-
-
 def test_clear_drops_history_buffers_notifications_and_rules(
     storage: SessionStorage,
 ) -> None:
@@ -218,11 +194,6 @@ def test_clear_without_session_rules_is_no_op_on_rules(
     assert rt.load_history() == []
 
 
-# ----------------------------------------------------------------------
-# Close
-# ----------------------------------------------------------------------
-
-
 def test_close_storage_is_idempotent(storage: SessionStorage) -> None:
     """:meth:`close_storage` closes the SQLite handle; calling twice
     must not raise (lifecycle is best-effort and may run on every
@@ -230,11 +201,6 @@ def test_close_storage_is_idempotent(storage: SessionStorage) -> None:
     rt = SessionRuntime(storage=storage, session_id="s-close")
     rt.close_storage()
     rt.close_storage()  # idempotent — must not raise
-
-
-# ----------------------------------------------------------------------
-# Streaming buffer + notification helpers
-# ----------------------------------------------------------------------
 
 
 def test_buffer_partial_assistant_text_accumulates(
@@ -271,11 +237,6 @@ def test_drain_task_notifications_returns_oldest_first(
     drained = rt.drain_task_notifications()
     assert drained == [a, b]
     assert rt.pending_notifications == ()
-
-
-# ----------------------------------------------------------------------
-# Read carryover (Workstream G8 + Phase 3 Task 4)
-# ----------------------------------------------------------------------
 
 
 def _carryover_with_one_record(path: Path) -> ReadCarryover:

@@ -50,7 +50,6 @@ def _sc(outcome: object) -> ToolResult | None:
     return getattr(outcome, "short_circuit", None)
 
 
-
 def _fake_bash_bg_tool() -> BashBackground:
     """A real BashBackground with fresh state — used for hook-level assertions."""
     store = TasksStore()
@@ -59,11 +58,6 @@ def _fake_bash_bg_tool() -> BashBackground:
         running_shells={},
         running_tasks={},
     )
-
-
-# -----------------------------------------------------------------------
-# Hook-level — bash_safety hook matches bash_background
-# -----------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -77,8 +71,9 @@ async def test_bash_safety_hook_matches_bash_background() -> None:
         state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    # narrowed by assert; mypy keeps union
     assert "bash safety blocked" in _sc(outcome).error  # type: ignore[operator,union-attr]
     assert "zsh_dangerous_command" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
@@ -144,14 +139,9 @@ async def test_bash_safety_hook_sets_decision_on_outcome_for_bash_background() -
         args={"command": "zmodload zsh/system"},
         state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.allow is False  # type: ignore[union-attr]
     assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
-
-
-# -----------------------------------------------------------------------
-# Hook-level — bypass mode short-circuits safety for bash_background
-# -----------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -191,11 +181,6 @@ async def test_bash_safety_hook_honors_bypass_mode_for_bash() -> None:
     assert _sc(outcome) is None
 
 
-# -----------------------------------------------------------------------
-# Tool-level — inline check_bash_safety is gone; the tool no longer raises
-# -----------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_bash_background_no_longer_raises_tool_error_inline() -> None:
     """After the fix the tool must NOT raise :class:`ToolError` for a
@@ -222,11 +207,6 @@ async def test_bash_background_no_longer_raises_tool_error_inline() -> None:
     assert out["status"] == "running"
     # Drain the watcher so the test doesn't leak a pending subprocess task.
     await asyncio.gather(*running_tasks.values())
-
-
-# -----------------------------------------------------------------------
-# End-to-end — Agent.astream routes bash_background through the hook chain
-# -----------------------------------------------------------------------
 
 
 def _minimal_config(enabled: list[str]) -> AuraConfig:
@@ -277,7 +257,7 @@ async def test_agent_bash_background_safety_end_to_end_populates_denials(
             events.append(e)
 
         # ToolMessage carries the short-circuit error.
-        history = agent._storage.load("default")
+        history = agent.storage.load("default")
         tool_msgs = [m for m in history if isinstance(m, ToolMessage)]
         assert tool_msgs, "expected a ToolMessage for the blocked call"
         blob = " ".join(str(m.content) for m in tool_msgs)

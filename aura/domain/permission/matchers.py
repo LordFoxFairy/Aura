@@ -34,7 +34,7 @@ def exact_match_on(key: str) -> ToolRuleMatcher:
             return fnmatchcase(value, content)
         return value == content
 
-    _matches.key = key  # type: ignore[attr-defined]
+    _matches.key = key  # type: ignore[attr-defined]  # test sets attribute mypy can't see
     return _matches
 
 
@@ -57,7 +57,7 @@ def path_prefix_on(key: str) -> ToolRuleMatcher:
         except ValueError:
             return False
 
-    _matches.key = key  # type: ignore[attr-defined]
+    _matches.key = key  # type: ignore[attr-defined]  # test sets attribute mypy can't see
     return _matches
 
 

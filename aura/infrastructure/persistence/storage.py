@@ -12,7 +12,6 @@ Layout (v3, per-project nested):
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import sqlite3
@@ -83,9 +82,11 @@ class SessionStorage:
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
         self._append_lock = threading.Lock()
-        if not self._in_memory:
-            self._maybe_migrate_legacy()
-            self._maybe_migrate_v2_to_v3()
+
+    @property
+    def path(self) -> Path:
+        """Sqlite index file path; subprocess wiring uses ``path.parent``."""
+        return self._path
 
     # ------------------------------------------------------------------
     # v3 path API.
@@ -148,135 +149,6 @@ class SessionStorage:
             cwd=cwd,
         )
         return transcript.with_suffix(".meta.json")
-
-    # ------------------------------------------------------------------
-    # Migrations.
-    # ------------------------------------------------------------------
-
-    def _maybe_migrate_legacy(self) -> None:
-        """Drain the legacy ``messages`` table into JSONL once."""
-        cur = self._conn.cursor()
-        try:
-            cur.execute(
-                "SELECT session_id, payload_json FROM messages "
-                "ORDER BY session_id, turn_index"
-            )
-            rows = cur.fetchall()
-        except sqlite3.DatabaseError:
-            return
-        if not rows:
-            return
-        from collections import defaultdict
-        buckets: dict[str, list[str]] = defaultdict(list)
-        for sid, payload in rows:
-            buckets[sid].append(payload)
-        any_drained = False
-        for sid, payloads in buckets.items():
-            jsonl = self.session_jsonl_path(sid)
-            jsonl.parent.mkdir(parents=True, exist_ok=True)
-            if jsonl.exists():
-                continue
-            with jsonl.open("w", encoding="utf-8") as fh:
-                for p in payloads:
-                    envelope = {
-                        "ts": datetime.now(UTC).isoformat(),
-                        "payload": json.loads(p),
-                    }
-                    fh.write(json.dumps(envelope, ensure_ascii=False))
-                    fh.write("\n")
-            any_drained = True
-            self._refresh_index_for_session(sid, jsonl)
-        if any_drained:
-            backup = self._path.with_suffix(
-                self._path.suffix + f".legacy-{int(datetime.now().timestamp())}"
-            )
-            self._conn.commit()
-            self._conn.close()
-            with contextlib.suppress(OSError):
-                self._path.rename(backup)
-            self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
-            self._conn.executescript(_SCHEMA_SQL)
-            self._conn.commit()
-
-    def _maybe_migrate_v2_to_v3(self) -> None:
-        """Rename v2 flat dirs to ``*.legacy-<ts>`` and fold v2 index in."""
-        root = self._path.parent
-        legacy_sessions = root / "sessions"
-        legacy_subagents = root / "subagents"
-        ts = int(datetime.now().timestamp())
-
-        renamed_sessions: Path | None = None
-        renamed_subagents: Path | None = None
-
-        if legacy_sessions.is_dir():
-            has_jsonl = any(legacy_sessions.glob("*.jsonl"))
-            has_index = (legacy_sessions / "index.sqlite").exists()
-            if has_jsonl or has_index:
-                renamed_sessions = root / f"sessions.legacy-{ts}"
-                with contextlib.suppress(OSError):
-                    legacy_sessions.rename(renamed_sessions)
-
-        if legacy_subagents.is_dir():
-            has_jsonl = any(legacy_subagents.glob("*.jsonl"))
-            if has_jsonl:
-                renamed_subagents = root / f"subagents.legacy-{ts}"
-                with contextlib.suppress(OSError):
-                    legacy_subagents.rename(renamed_subagents)
-
-        if renamed_sessions is not None:
-            old_index = renamed_sessions / "index.sqlite"
-            if old_index.exists():
-                self._merge_legacy_index(old_index)
-
-        if renamed_sessions is not None or renamed_subagents is not None:
-            journal.write(
-                "storage_layout_v3_migration",
-                renamed_sessions=(
-                    str(renamed_sessions) if renamed_sessions else None
-                ),
-                renamed_subagents=(
-                    str(renamed_subagents) if renamed_subagents else None
-                ),
-            )
-
-    def _merge_legacy_index(self, old_index_path: Path) -> None:
-        try:
-            old_conn = sqlite3.connect(str(old_index_path))
-        except sqlite3.DatabaseError:
-            return
-        try:
-            try:
-                rows = old_conn.execute(
-                    "SELECT session_id, message_count, first_user_prompt, "
-                    "created_at, last_used_at FROM sessions"
-                ).fetchall()
-            except sqlite3.DatabaseError:
-                return
-        finally:
-            old_conn.close()
-        if not rows:
-            return
-        new_index = self._index_path()
-        new_index.parent.mkdir(parents=True, exist_ok=True)
-        idx = sqlite3.connect(str(new_index))
-        try:
-            idx.executescript(_INDEX_SCHEMA_SQL)
-            for sid, count, prompt, created, last in rows:
-                idx.execute(
-                    "INSERT INTO sessions("
-                    "session_id, message_count, first_user_prompt, "
-                    "created_at, last_used_at"
-                    ") VALUES (?, ?, ?, COALESCE(?, datetime('now')), "
-                    "COALESCE(?, datetime('now'))) "
-                    "ON CONFLICT(session_id) DO UPDATE SET "
-                    "  message_count = excluded.message_count, "
-                    "  first_user_prompt = excluded.first_user_prompt, "
-                    "  last_used_at = excluded.last_used_at",
-                    (sid, int(count or 0), prompt or "", created, last),
-                )
-            idx.commit()
-        finally:
-            idx.close()
 
     # ------------------------------------------------------------------
     # Index helpers.
@@ -344,7 +216,7 @@ class SessionStorage:
     def __enter__(self) -> SessionStorage:
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(self, *_: object) -> None:
         self.close()
 
     def _validate_session_id(self, session_id: str) -> None:
@@ -584,21 +456,11 @@ class SessionStorage:
         return out
 
     def load(self, session_id: str) -> list[BaseMessage]:
-        """Load messages: v3 nested → v2 legacy backup → in-process table."""
+        """Load messages: v3 JSONL on disk, falling back to the in-process table."""
         self._validate_session_id(session_id)
         cur = self._conn.cursor()
         jsonl_path = self.session_jsonl_path(session_id)
         payloads = self._read_jsonl_payloads(jsonl_path)
-        if not payloads:
-            for legacy_dir in sorted(
-                self._path.parent.glob("sessions.legacy-*"),
-                reverse=True,
-            ):
-                legacy_path = legacy_dir / f"{session_id}.jsonl"
-                if legacy_path.exists():
-                    payloads = self._read_jsonl_payloads(legacy_path)
-                    if payloads:
-                        break
         if not payloads:
             cur.execute(
                 "SELECT payload_json FROM messages WHERE session_id = ? ORDER BY turn_index",

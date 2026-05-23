@@ -18,8 +18,8 @@ try:
 
     _HAS_DDGS = True
 except ImportError:  # pragma: no cover — exercised via monkeypatch in tests
-    DDGS = None  # type: ignore[assignment,misc]
-    RatelimitException = Exception  # type: ignore[assignment,misc]
+    DDGS = None  # type: ignore[assignment,misc]  # ddgs absent: stub names so callers fail at runtime, not import
+    RatelimitException = Exception  # type: ignore[assignment,misc]  # ddgs absent: alias to Exception so except-clause still parses
     _HAS_DDGS = False
 
 
@@ -110,7 +110,7 @@ class WebSearch(BaseTool):
             raise ToolError(
                 f"web_search rate-limited by DuckDuckGo, try again shortly: {exc}",
             ) from exc
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             raise ToolError(f"web_search failed: {type(exc).__name__}: {exc}") from exc
 
         return {

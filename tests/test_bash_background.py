@@ -197,8 +197,9 @@ async def test_safety_rejects_command_substitution() -> None:
             state=LoopState(),
         )
         assert _sc(outcome) is not None, bad
-        assert _sc(outcome).ok is False  # type: ignore[union-attr]
+        assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert _sc(outcome).error is not None  # type: ignore[union-attr]
+        # narrowed by assert; mypy keeps union
         assert "command substitution" in _sc(outcome).error  # type: ignore[operator,union-attr]
     # No task records should have been created — the hook blocks the
     # call before the tool runs.

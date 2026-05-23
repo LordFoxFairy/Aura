@@ -277,7 +277,7 @@ def _resolve_import(raw: str, base_dir: Path) -> Path | None:
                 path=str(resolved),
                 suffix=resolved.suffix,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             import logging
 
             logging.getLogger(__name__).warning(

@@ -168,7 +168,9 @@ def _supported_transports() -> set[str]:
     startup instead of letting ``create_session`` blow up mid-loop.
     """
     try:
-        from langchain_mcp_adapters import sessions  # noqa: PLC0415
+        from langchain_mcp_adapters import (
+            sessions,  # noqa: PLC0415  # deferred import is intentional
+        )
     except ImportError:
         return {"stdio"}
     supported = {"stdio"}
@@ -229,7 +231,9 @@ def _make_list_changed_logger(server_name: str) -> Any:
     unknown messages). Implemented as a closure so the journal event
     carries the server name without a global registry lookup.
     """
-    from aura.infrastructure.persistence import journal  # noqa: PLC0415
+    from aura.infrastructure.persistence import (
+        journal,  # noqa: PLC0415  # deferred import is intentional
+    )
 
     async def _handler(message: Any) -> None:
         # The library hands us either a request, notification, or exception.
@@ -302,9 +306,11 @@ class MCPManager:
         # when caller didn't supply the set.
         if project_server_names is None:
             try:
-                from aura.config import mcp_store as _store  # noqa: PLC0415
+                from aura.config import (
+                    mcp_store as _store,  # noqa: PLC0415  # deferred import is intentional
+                )
                 project_server_names = _store.project_layer_names()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001  # connection failure surfaces as config error
                 project_server_names = set()
         self._project_server_names: set[str] = set(project_server_names)
 
@@ -312,7 +318,9 @@ class MCPManager:
         # approval is missing or whose fingerprint doesn't match the live
         # config. Re-checked / mutated by approve / revoke / reload.
         self._unapproved: set[str] = set()
-        from aura.config import mcp_approvals as _approvals  # noqa: PLC0415
+        from aura.config import (
+            mcp_approvals as _approvals,  # noqa: PLC0415  # deferred import is intentional
+        )
         from aura.core import journal as _j  # noqa: PLC0415
         for cfg in self._configs_all:
             if cfg.name not in self._project_server_names:
@@ -402,7 +410,7 @@ class MCPManager:
             async with client.session(server_name) as session:
                 response = await session.list_prompts()
                 return list(response.prompts)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             return []
 
     @staticmethod
@@ -420,7 +428,7 @@ class MCPManager:
             async with client.session(server_name) as session:
                 response = await session.list_resources()
                 return list(response.resources)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             return []
 
     async def start_all(self) -> tuple[list[BaseTool], list[Command]]:
@@ -492,7 +500,7 @@ class MCPManager:
                 op_name="get_tools",
                 server=cfg.name,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # connection failure surfaces as config error
             err_text = f"{type(exc).__name__}: {exc}"
             if _is_needs_auth_error(exc):
                 # Auth failure — distinct journal event + state, NO
@@ -911,7 +919,9 @@ class MCPManager:
         rather than in :class:`MCPServerConfig` so SDK callers who
         construct connections by hand still get the audit hook for free.
         """
-        from aura.infrastructure.mcp.adapter import _expand_env_vars  # noqa: PLC0415
+        from aura.infrastructure.mcp.adapter import (
+            _expand_env_vars,  # noqa: PLC0415  # deferred import is intentional
+        )
 
         missing: list[str] = []
 
@@ -1163,7 +1173,9 @@ class MCPManager:
             return (
                 f"MCP server {name!r} is user-scope; approval is not required"
             )
-        from aura.config import mcp_approvals as _approvals  # noqa: PLC0415
+        from aura.config import (
+            mcp_approvals as _approvals,  # noqa: PLC0415  # deferred import is intentional
+        )
         _approvals.approve(cfg)
         self._unapproved.discard(name)
         # Flip from ``unapproved`` to ``never_started`` so the connect
@@ -1188,7 +1200,9 @@ class MCPManager:
                 f"no MCP server named {name!r}; "
                 f"known: {known}"
             )
-        from aura.config import mcp_approvals as _approvals  # noqa: PLC0415
+        from aura.config import (
+            mcp_approvals as _approvals,  # noqa: PLC0415  # deferred import is intentional
+        )
         _approvals.revoke(name)
         self._unapproved.add(name)
         # Tear the live connection down.
@@ -1221,9 +1235,11 @@ class MCPManager:
         """
         if project_server_names is None:
             try:
-                from aura.config import mcp_store as _store  # noqa: PLC0415
+                from aura.config import (
+                    mcp_store as _store,  # noqa: PLC0415  # deferred import is intentional
+                )
                 project_server_names = _store.project_layer_names()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
                 project_server_names = set()
 
         before_names = {c.name for c in self._configs_all}

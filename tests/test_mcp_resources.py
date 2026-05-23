@@ -59,11 +59,6 @@ def _fake_resource(
     )
 
 
-# ---------------------------------------------------------------------------
-# normalize_resource_contents
-# ---------------------------------------------------------------------------
-
-
 def test_normalize_text_resource_returns_text_shape() -> None:
     obj = SimpleNamespace(
         uri="file:///a.md", mimeType="text/markdown", text="hello"
@@ -95,11 +90,6 @@ def test_normalize_unknown_falls_back_to_repr() -> None:
     out = normalize_resource_contents(obj)
     assert out["type"] == "unknown"
     assert out["uri"] == "x://y"
-
-
-# ---------------------------------------------------------------------------
-# MCPManager — start_all discovers resources
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -187,11 +177,6 @@ async def test_start_all_resource_listing_failure_is_graceful(
     # Tools still come through; resources catalogue is empty.
     assert any(t.name == "mcp__gh__search" for t in tools)
     assert mgr.resources_catalogue() == []
-
-
-# ---------------------------------------------------------------------------
-# MCPManager.read_resource — routing
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -291,11 +276,6 @@ async def test_read_resource_unknown_uri_raises_with_known_list(
     msg = str(exc_info.value)
     assert "doc://unknown" in msg
     assert "doc://known" in msg
-
-
-# ---------------------------------------------------------------------------
-# Agent wiring — manager exposed without any resource-reader tool registration
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

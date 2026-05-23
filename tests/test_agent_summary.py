@@ -63,7 +63,7 @@ def _make_summary_model(
         captured.append(list(messages))
         return await orig_agenerate(messages, *a, **kw)
 
-    model._agenerate = _spy  # type: ignore[method-assign]
+    model._agenerate = _spy  # type: ignore[method-assign]  # monkey-patching method for test
     return model, captured
 
 

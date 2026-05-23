@@ -57,7 +57,7 @@ async def test_set_cwd_updates_internal_cwd(
         new_dir.mkdir()
 
         await agent.set_cwd(new_dir)
-        assert agent._cwd == new_dir.resolve()
+        assert agent.cwd == new_dir.resolve()
     finally:
         await agent.aclose()
 
@@ -85,7 +85,7 @@ async def test_set_cwd_fires_cwd_changed_hook(
 
         agent._hooks.cwd_changed.append(hook)
 
-        old = agent._cwd
+        old = agent.cwd
         await agent.set_cwd(new_dir)
 
         assert captured == [(old, new_dir.resolve())]

@@ -40,11 +40,6 @@ def _reset_caches() -> Iterator[None]:
     rules_module.clear_cache()
 
 
-# ---------------------------------------------------------------------------
-# F-03-003 — system-reminder OVERRIDE framing
-# ---------------------------------------------------------------------------
-
-
 def test_f03_003_project_memory_wrapped_in_system_reminder_with_override(
     tmp_path: Path,
 ) -> None:
@@ -78,11 +73,6 @@ def test_f03_003_no_eager_emits_no_system_reminder(tmp_path: Path) -> None:
     assert all("<system-reminder>" not in str(m.content) for m in out)
 
 
-# ---------------------------------------------------------------------------
-# F-03-005 — paths: ["**"] universal carve-out
-# ---------------------------------------------------------------------------
-
-
 def test_f03_005_paths_double_star_yields_unconditional_empty_tuple() -> None:
     assert _extract_globs({"paths": ["**"]}) == ()
     assert _extract_globs({"paths": ["**/*"]}) == ()
@@ -113,11 +103,6 @@ def test_f03_005_universal_paths_lands_in_unconditional_bucket(
     assert bundle.unconditional[0].globs == ()
     assert "ALWAYS-ON" in bundle.unconditional[0].content
     assert bundle.conditional == []
-
-
-# ---------------------------------------------------------------------------
-# F-03-006 — walk-up stops at git root
-# ---------------------------------------------------------------------------
 
 
 def test_f03_006_walk_caps_at_git_root(
@@ -163,11 +148,6 @@ def test_f03_006_no_git_falls_back_to_fs_root(
     assert pm.load_project_memory(inner) == "OUTER\n\nINNER"
 
 
-# ---------------------------------------------------------------------------
-# F-03-007 — truncation marker carries WARNING + byte counts
-# ---------------------------------------------------------------------------
-
-
 def test_f03_007_truncate_marker_contains_warning_and_byte_counts() -> None:
     body = "x" * 30_000
     out = _truncate(body)
@@ -202,11 +182,6 @@ def test_f03_007_primary_memory_load_path_caps_oversize_aura_md(
     assert "WARNING" in result
     assert "30000" in result
     assert "25000" in result
-
-
-# ---------------------------------------------------------------------------
-# F-03-008 — @imports extension allowlist
-# ---------------------------------------------------------------------------
 
 
 def test_f03_008_exe_import_skipped(

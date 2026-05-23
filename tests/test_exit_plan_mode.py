@@ -23,7 +23,7 @@ from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
 from aura.schemas.tool import (
     ToolError,
-    ToolResult,  # noqa: F401
+    ToolResult,  # noqa: F401  # import is the assertion / fixture side-effect
 )
 from aura.tools.ask_user import FormQuestionDict
 from aura.tools.base import build_tool
@@ -36,7 +36,6 @@ def _sc(outcome: object) -> ToolResult | None:
     if isinstance(outcome, Replace):
         return outcome.result
     return getattr(outcome, "short_circuit", None)
-
 
 
 class _FakeAgent:
@@ -74,11 +73,6 @@ def _make_tool(
         mode_getter=lambda: agent.mode,
         asker=asker,
     )
-
-
-# ---------------------------------------------------------------------------
-# Approval gate — the core contract added in this change.
-# ---------------------------------------------------------------------------
 
 
 async def test_asks_user_before_mutating_mode() -> None:
@@ -190,11 +184,6 @@ async def test_approval_answer_is_case_insensitive() -> None:
         assert result["approved"] is True
 
 
-# ---------------------------------------------------------------------------
-# Category errors — still enforced.
-# ---------------------------------------------------------------------------
-
-
 async def test_called_outside_plan_mode_raises_toolerror_without_asking() -> None:
     # If the tool was somehow invoked from default mode (LLM confusion,
     # bug), we must reject BEFORE asking — asking "exit plan mode?" when
@@ -215,14 +204,6 @@ def test_sync_run_raises_notimplemented() -> None:
     tool = _make_tool(agent, asker)
     with pytest.raises(NotImplementedError):
         tool.invoke({"plan": "1. thing"})
-
-
-# ---------------------------------------------------------------------------
-# Permission-layer contract — tool still exempt from plan-mode enforcement.
-# The gate we added is INSIDE the tool; the outer permission allowlist
-# must stay in place or the LLM could never reach the gate in the first
-# place. Regression guard for the "exemption preserved" rule.
-# ---------------------------------------------------------------------------
 
 
 class _P(BaseModel):
@@ -251,12 +232,6 @@ class _HookSpy:
         raise AssertionError(
             "asker should not be reached; exit_plan_mode is exempt + rule-allowed",
         )
-
-
-# ---------------------------------------------------------------------------
-# prePlanMode restoration — the tool restores whatever mode the user was
-# in BEFORE entering plan. Claude-code parity: ToolPermissionContext.prePlanMode.
-# ---------------------------------------------------------------------------
 
 
 def _tool_with_prior(
@@ -328,11 +303,6 @@ async def test_prior_bypass_is_clamped_to_default_on_restore() -> None:
     result = await tool.ainvoke({"plan": "1. thing"})
     assert agent.mode == "default"
     assert result["new_mode"] == "default"
-
-
-# ---------------------------------------------------------------------------
-# Permission-layer contract — tool still exempt from plan-mode enforcement.
-# ---------------------------------------------------------------------------
 
 
 async def test_exit_plan_mode_bypasses_plan_mode_blocklist_at_hook() -> None:

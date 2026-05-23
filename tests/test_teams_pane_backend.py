@@ -68,7 +68,7 @@ def test_pane_backend_spawn_raises_when_unavailable(
         await backend.spawn(
             team_id="team-a",
             member=member,
-            agent=None,  # type: ignore[arg-type]
+            agent=None,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
             manager=None,  # type: ignore[arg-type]
             storage=storage,
             stop_event=stop,
@@ -96,7 +96,7 @@ async def test_pane_backend_spawn_creates_tmux_pane(tmp_path: Path) -> None:
     handle = await backend.spawn(
         team_id="team-a",
         member=member,
-        agent=None,  # type: ignore[arg-type]
+        agent=None,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         manager=leader,  # type: ignore[arg-type]
         storage=storage,
         stop_event=stop,
@@ -128,7 +128,7 @@ async def test_pane_backend_force_kill_kills_pane(tmp_path: Path) -> None:
     handle = await backend.spawn(
         team_id="team-a",
         member=member,
-        agent=None,  # type: ignore[arg-type]
+        agent=None,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         manager=leader,  # type: ignore[arg-type]
         storage=storage,
         stop_event=stop,

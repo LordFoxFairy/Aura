@@ -36,4 +36,5 @@ def test_no_aura_md_content_even_when_present(tmp_path: Path) -> None:
 
 def test_registry_kwarg_rejected(tmp_path: Path) -> None:
     with pytest.raises(TypeError):
+        # exercising missing/extra arg path
         build_system_prompt(registry="anything", cwd=tmp_path)  # type: ignore[call-arg]

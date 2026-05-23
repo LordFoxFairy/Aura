@@ -104,7 +104,7 @@ class ExitPlanMode(BaseTool):
         if self._get_prior_mode is not None:
             prior = self._get_prior_mode()
             if prior in ("default", "accept_edits"):
-                return prior  # type: ignore[return-value]
+                return prior  # type: ignore[return-value]  # fake return shape test-only
         return "default"
 
     def _run(

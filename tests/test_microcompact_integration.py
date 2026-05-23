@@ -43,10 +43,6 @@ from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _minimal_config() -> AuraConfig:
     return AuraConfig.model_validate({
@@ -70,7 +66,7 @@ class _RecordingFakeChatModel(FakeChatModel):
 
     @property
     def captured_messages(self) -> list[list[BaseMessage]]:
-        return self.__dict__["captured_messages"]  # type: ignore[no-any-return]
+        return self.__dict__["captured_messages"]  # type: ignore[no-any-return]  # fake returns Any from __dict__
 
     async def _agenerate(
         self,
@@ -138,11 +134,6 @@ def _count_markers(messages: Sequence[BaseMessage]) -> int:
     )
 
 
-# ---------------------------------------------------------------------------
-# T5 — config surface (misconfig)
-# ---------------------------------------------------------------------------
-
-
 def test_misconfig_keep_gte_trigger_raises_at_construction(tmp_path: Path) -> None:
     # keep_recent == trigger_pairs → impossible to ever clear anything.
     with pytest.raises(AuraConfigError) as excinfo:
@@ -164,11 +155,6 @@ def test_misconfig_keep_gte_trigger_raises_at_construction(tmp_path: Path) -> No
             microcompact_trigger_pairs=5,
             microcompact_keep_recent=7,
         )
-
-
-# ---------------------------------------------------------------------------
-# T5 — disable paths
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -244,11 +230,6 @@ async def test_trigger_pairs_zero_disables_feature(tmp_path: Path) -> None:
         if isinstance(m, ToolMessage) and m.name == "read_file"
     ]
     assert len(payloads) == 20
-
-
-# ---------------------------------------------------------------------------
-# T4 — journal event + storage invariant + AIMessage preservation
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

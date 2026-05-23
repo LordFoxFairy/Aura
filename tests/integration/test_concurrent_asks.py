@@ -88,11 +88,6 @@ def _mutex_wrapped_asker(inner: PermissionAsker) -> PermissionAsker:
     return _wrapped
 
 
-# ---------------------------------------------------------------------------
-# Test 1 — two subagent bash calls; mutex serializes them strictly.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_two_parallel_permission_asks_serialize_fifo(
     tmp_path: Path,
@@ -181,11 +176,6 @@ async def test_two_parallel_permission_asks_serialize_fifo(
     # observed both asks; that's sufficient proof the mutex didn't deadlock.)
 
 
-# ---------------------------------------------------------------------------
-# Test 2 — two concurrent agents, asker slow ⇒ FIFO ordering holds
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_fifo_ordering_holds_under_contention(
     tmp_path: Path,
@@ -251,11 +241,6 @@ async def test_fifo_ordering_holds_under_contention(
         await agent_second.aclose()
 
     assert [c["args"]["command"] for c in inner.calls] == ["first", "second"]
-
-
-# ---------------------------------------------------------------------------
-# Test 3 — a hung asker on one call must NOT drain the next call's budget.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

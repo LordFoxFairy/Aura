@@ -48,11 +48,6 @@ async def test_read_file_invalid_utf8(tmp_path: Path) -> None:
         await read_file.ainvoke({"path": str(f)})
 
 
-# ---------------------------------------------------------------------------
-# F-02-003 — head-truncate at 1 MB instead of rejecting
-# ---------------------------------------------------------------------------
-
-
 async def test_read_file_oversize_head_truncated(tmp_path: Path) -> None:
     f = tmp_path / "big.bin"
     # 2 MB of single-byte ASCII lines: each "a\n" is 2 bytes ⇒ 1,048,576
@@ -73,11 +68,6 @@ async def test_read_file_within_cap_no_truncation_field(tmp_path: Path) -> None:
     # Field present, but None when no head-truncation occurred.
     assert out["truncated_at_bytes"] is None
     assert out["partial"] is False
-
-
-# ---------------------------------------------------------------------------
-# F-02-005 — BOM-aware decode (UTF-16 LE/BE, UTF-8 BOM)
-# ---------------------------------------------------------------------------
 
 
 async def test_read_file_utf16_le_bom(tmp_path: Path) -> None:
@@ -154,11 +144,6 @@ def test_read_file_metadata_includes_matcher_and_preview() -> None:
     preview = meta.get("args_preview")
     assert callable(preview)
     assert preview({"path": "/tmp/a"}) == "path: /tmp/a"
-
-
-# ---------------------------------------------------------------------------
-# offset / limit / partial semantics — mirrors claude-code FileReadTool
-# ---------------------------------------------------------------------------
 
 
 def _five_line_file(tmp_path: Path, name: str = "lines.txt") -> Path:
@@ -241,11 +226,6 @@ async def test_total_lines_reflects_file_not_slice(tmp_path: Path) -> None:
     # Slice has 1 line, but total_lines is the whole file.
     assert out["lines"] == 1
     assert out["total_lines"] == 5
-
-
-# ---------------------------------------------------------------------------
-# Phase 5 Task 2 — ``validate_input`` mirrors the device-path block
-# ---------------------------------------------------------------------------
 
 
 def test_validate_input_rejects_blocked_device() -> None:

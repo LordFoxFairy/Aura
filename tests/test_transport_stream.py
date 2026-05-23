@@ -198,6 +198,108 @@ async def test_stream_agent_wire_drains_coordination_events_from_runtime_paths()
     ]
 
 
+@pytest.mark.asyncio
+async def test_stream_agent_wire_drops_skipped_no_op_compact_events() -> None:
+    class _NoisyCompactAgent(_FakeAgent):
+        async def astream(self, prompt: str) -> Any:
+            assert prompt == "hello"
+            yield {
+                "event": "compact_event",
+                "trigger": "microcompact",
+                "tokens_before": 100,
+                "tokens_after": 100,
+                "outcome": "skipped",
+                "duration_ms": 0.1,
+            }
+            yield AssistantDelta("hi")
+            yield Final("done")
+            yield {
+                "event": "compact_event",
+                "trigger": "auto",
+                "tokens_before": 200,
+                "tokens_after": 200,
+                "outcome": "skipped",
+                "duration_ms": 0.1,
+            }
+
+    ticks = _clock([10.0, 11.0])
+    events = [
+        event
+        async for event in stream_agent_wire(
+            _NoisyCompactAgent(),
+            "hello",
+            clock=lambda: next(ticks),
+        )
+    ]
+    kinds = [e["event"] for e in events]
+    assert kinds == ["assistant_delta", "final", "aura_state"]
+
+
+@pytest.mark.asyncio
+async def test_stream_agent_wire_keeps_compact_events_that_changed_tokens() -> None:
+    class _RealCompactAgent(_FakeAgent):
+        async def astream(self, prompt: str) -> Any:
+            assert prompt == "hello"
+            yield AssistantDelta("hi")
+            yield Final("done")
+            yield {
+                "event": "compact_event",
+                "trigger": "auto",
+                "tokens_before": 5000,
+                "tokens_after": 1200,
+                "outcome": "ok",
+                "duration_ms": 42.0,
+            }
+            yield {
+                "event": "compact_event",
+                "trigger": "microcompact",
+                "tokens_before": 800,
+                "tokens_after": 600,
+                "outcome": "skipped",
+                "duration_ms": 0.2,
+            }
+
+    ticks = _clock([10.0, 11.0])
+    events = [
+        event
+        async for event in stream_agent_wire(
+            _RealCompactAgent(),
+            "hello",
+            clock=lambda: next(ticks),
+        )
+    ]
+    kinds = [e["event"] for e in events]
+    assert kinds == ["assistant_delta", "final", "compact_event", "compact_event", "aura_state"]
+
+
+@pytest.mark.asyncio
+async def test_stream_agent_wire_emits_aura_state_last_even_after_post_final_events() -> None:
+    class _PostFinalAgent(_FakeAgent):
+        async def astream(self, prompt: str) -> Any:
+            assert prompt == "hello"
+            yield AssistantDelta("hi")
+            yield Final("done")
+            yield {
+                "event": "compact_event",
+                "trigger": "auto",
+                "tokens_before": 5000,
+                "tokens_after": 1200,
+                "outcome": "ok",
+                "duration_ms": 42.0,
+            }
+
+    ticks = _clock([10.0, 11.0])
+    events = [
+        event
+        async for event in stream_agent_wire(
+            _PostFinalAgent(),
+            "hello",
+            clock=lambda: next(ticks),
+        )
+    ]
+    assert events[-1]["event"] == "aura_state"
+
+
 def test_encode_sse_emits_single_aura_frame() -> None:
     frame = encode_sse(cast(Any, {"event": "foo", "x": 1}))
     assert frame == 'event: aura\ndata: {"event": "foo", "x": 1}\n\n'

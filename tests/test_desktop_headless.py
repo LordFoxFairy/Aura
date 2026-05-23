@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel
 
+from aura.application.hooks.permission import make_permission_hook
+from aura.config.loader import load_config
+from aura.core.agent import Agent
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet
+from aura.infrastructure import permission_store as perm_store
+from aura.infrastructure.llm import make_model_for_spec
 from aura.schemas.events import (
     AssistantDelta,
     Final,
@@ -81,22 +87,19 @@ def test_event_to_dict_matches_frontend_contract_via_canonical_adapter() -> None
         "stream": "stdout",
         "chunk": "ok\n",
     }
-    # Phase 2 Task 9: tool_call_completed wire shape carries
-    # ``content: {"text": str, "error": bool}`` instead of split
-    # output/error fields.
     assert headless._event_to_dict(
         ToolCallCompleted(name="grep", output={"matches": 1}, error=None),
     ) == {
         "event": "tool_call_completed",
         "name": "grep",
-        "content": {"text": '{"matches": 1}', "error": False},
+        "content": {"output": {"matches": 1}, "error": False},
     }
     assert headless._event_to_dict(
         ToolCallCompleted(name="bash", output=None, error="boom"),
     ) == {
         "event": "tool_call_completed",
         "name": "bash",
-        "content": {"text": "boom", "error": True},
+        "content": {"output": "boom", "error": True},
     }
     assert headless._event_to_dict(
         ToolCallCompleted(
@@ -109,7 +112,7 @@ def test_event_to_dict_matches_frontend_contract_via_canonical_adapter() -> None
         "event": "tool_call_completed",
         "id": "tc_bash",
         "name": "bash",
-        "content": {"text": "boom", "error": True},
+        "content": {"output": "boom", "error": True},
     }
     assert headless._event_to_dict(Final("done")) == {
         "event": "final",
@@ -512,3 +515,189 @@ async def test_headless_run_delegates_to_session_service(
     monkeypatch.setattr(session_service, "run_session_driver", fake_driver)
 
     assert await headless._run() == 7
+
+
+def _build_minimal_driver_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    emitted: list[dict[str, Any]],
+) -> None:
+    """Wire up just enough monkeypatches so ``run_session_driver`` runs."""
+    cfg = SimpleNamespace(
+        router={"default": "p1:fake-model"},
+        storage=SimpleNamespace(path=str(tmp_path / "sessions.jsonl")),
+        tools=SimpleNamespace(enabled=["web_fetch"]),
+    )
+    monkeypatch.setattr(headless, "_emit", emitted.append)
+    monkeypatch.setattr(headless, "load_config", lambda: cfg)
+    monkeypatch.setattr(headless, "make_model_for_spec", lambda *_args: object())
+    monkeypatch.setattr(
+        "desktop.host.headless.perm_store.load",
+        lambda _root: PermissionsConfig(mode="default", disable_bypass=False),
+    )
+    monkeypatch.setattr(
+        "desktop.host.headless.perm_store.load_ruleset",
+        lambda *_a, **_kw: RuleSet((Rule("web_fetch", None),)),
+    )
+    monkeypatch.setattr(
+        "desktop.host.headless.perm_store.load_deny_ruleset",
+        lambda _root: RuleSet(()),
+    )
+    monkeypatch.setattr(
+        "desktop.host.headless.perm_store.load_ask_ruleset",
+        lambda _root: RuleSet(()),
+    )
+
+    def _hook_factory(**_kwargs: Any) -> object:
+        async def _hook(**_kw: Any) -> object:
+            raise AssertionError("permission hook should not run")
+        return _hook
+
+    monkeypatch.setattr(headless, "make_permission_hook", _hook_factory)
+
+
+class _ScriptedReader:
+    """In-memory NDJSON reader feeding lines from a script."""
+
+    def __init__(self, lines: list[bytes]) -> None:
+        self._lines = list(lines)
+
+    async def readline(self) -> bytes:
+        if not self._lines:
+            return b""
+        return self._lines.pop(0)
+
+
+@pytest.mark.asyncio
+async def test_session_driver_emits_exited_after_final_when_turn_completes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancel-and-await ordering: cancelled turn's final reaches the wire BEFORE exited."""
+    from aura.schemas.state import LoopSlots
+
+    turn_started = asyncio.Event()
+
+    class FakeAgent:
+        session_id = "session-1"
+        current_model = "p1:fake-model"
+        mode = "default"
+        state = SimpleNamespace(slots=LoopSlots())
+        pinned_tokens_estimate = 0
+        context_window = 0
+
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def astream(self, _prompt: str) -> Any:
+            turn_started.set()
+            try:
+                # Block forever until cancelled — simulates a long-running turn.
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                yield Final("(cancelled)", reason="aborted")
+                raise
+
+        def drain_protocol_events(self) -> list[dict[str, Any]]:
+            return []
+
+        @property
+        def pending_protocol_events(self) -> tuple[dict[str, Any], ...]:
+            return ()
+
+        async def aclose(self) -> None:
+            return None
+
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+    monkeypatch.setattr(headless, "Agent", FakeAgent)
+
+    reader = _ScriptedReader([
+        b'{"kind":"prompt","text":"hi"}\n',
+    ])
+
+    def emit(payload: dict[str, Any]) -> None:
+        emitted.append(payload)
+
+    async def _run_with_cancel() -> None:
+        task = asyncio.create_task(
+            session_service.run_session_driver(
+                emit=emit,
+                reader=reader,
+                load_config_fn=load_config,
+                make_model_for_spec_fn=make_model_for_spec,
+                make_permission_hook_fn=make_permission_hook,
+                agent_cls=cast(type[Agent], FakeAgent),
+                perm_store_module=perm_store,
+            ),
+        )
+        # Wait until astream is actually running — otherwise cancel races
+        # with the readline loop before the turn is in-flight.
+        await asyncio.wait_for(turn_started.wait(), timeout=5)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    await _run_with_cancel()
+
+    kinds = [ev["event"] for ev in emitted]
+    # exited is exactly one event and comes last.
+    assert kinds.count("exited") == 1
+    assert kinds[-1] == "exited"
+    # final("(cancelled)") must precede exited (B1 fix: await turn_task after cancel).
+    assert "final" in kinds
+    assert kinds.index("final") < kinds.index("exited")
+
+
+@pytest.mark.asyncio
+async def test_session_driver_emits_exited_exactly_once_on_clean_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No KeyboardInterrupt path means a single ``exited`` per session, not two."""
+    from aura.schemas.state import LoopSlots
+
+    class FakeAgent:
+        session_id = "session-1"
+        current_model = "p1:fake-model"
+        mode = "default"
+        state = SimpleNamespace(slots=LoopSlots())
+        pinned_tokens_estimate = 0
+        context_window = 0
+
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def drain_protocol_events(self) -> list[dict[str, Any]]:
+            return []
+
+        @property
+        def pending_protocol_events(self) -> tuple[dict[str, Any], ...]:
+            return ()
+
+        async def aclose(self) -> None:
+            return None
+
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+    monkeypatch.setattr(headless, "Agent", FakeAgent)
+
+    # EOF immediately — clean close path through the while-loop.
+    reader = _ScriptedReader([])
+
+    def emit(payload: dict[str, Any]) -> None:
+        emitted.append(payload)
+
+    rc = await session_service.run_session_driver(
+        emit=emit,
+        reader=reader,
+        load_config_fn=load_config,
+        make_model_for_spec_fn=make_model_for_spec,
+        make_permission_hook_fn=make_permission_hook,
+        agent_cls=cast(type[Agent], FakeAgent),
+        perm_store_module=perm_store,
+    )
+    assert rc == 0
+    kinds = [ev["event"] for ev in emitted]
+    assert kinds.count("exited") == 1
+    assert kinds[-1] == "exited"

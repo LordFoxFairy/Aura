@@ -32,10 +32,6 @@ from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.skill import SkillTool
 from tests.conftest import FakeChatModel
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _skill(
     name: str = "foo",
@@ -76,11 +72,6 @@ def _tool(
         registry=registry,
         session_id_provider=lambda: session_id,
     )
-
-
-# ---------------------------------------------------------------------------
-# Unit tests — tool in isolation
-# ---------------------------------------------------------------------------
 
 
 def test_skill_tool_known_name_returns_success_envelope() -> None:
@@ -134,11 +125,6 @@ def test_skill_tool_metadata_is_read_only_and_not_destructive() -> None:
 def test_skill_tool_in_default_enabled_tools() -> None:
     # Regression: the default config ships with skill enabled.
     assert "skill" in AuraConfig().tools.enabled
-
-
-# ---------------------------------------------------------------------------
-# Argument handling
-# ---------------------------------------------------------------------------
 
 
 def test_skill_tool_substitutes_argument_placeholders(tmp_path: Path) -> None:
@@ -205,11 +191,6 @@ def test_skill_tool_substitutes_skill_dir_and_session_id(tmp_path: Path) -> None
     rendered = spy.calls[0].body
     assert str(skill_file.parent) in rendered
     assert "my-sid" in rendered
-
-
-# ---------------------------------------------------------------------------
-# Integration — tool -> Agent.record_skill_invocation -> Context
-# ---------------------------------------------------------------------------
 
 
 def _make_agent(tmp_path: Path, skills: list[Skill]) -> Agent:

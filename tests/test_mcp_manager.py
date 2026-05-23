@@ -200,11 +200,6 @@ async def test_start_all_skips_disabled_servers(
     fake_client.get_tools.assert_not_awaited()
 
 
-# ---------------------------------------------------------------------------
-# In-REPL control surface — /mcp enable / disable / reconnect / status
-# ---------------------------------------------------------------------------
-
-
 def _patch_manager_internals(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -458,15 +453,7 @@ def test_mcp_server_status_is_frozen_dataclass() -> None:
         error_message=None, tool_count=0, resource_count=0, prompt_count=0,
     )
     with pytest.raises(_dc.FrozenInstanceError):
-        s.tool_count = 5  # type: ignore[misc]
-
-
-# ---------------------------------------------------------------------------
-# F-06-002 — env-var expansion in ``_build_one_connection``.
-# Belt-and-suspenders defence for configs constructed in code that bypass
-# ``mcp_store.load()`` (the loader's own expansion is covered in
-# ``tests/test_mcp_env_expand.py``).
-# ---------------------------------------------------------------------------
+        s.tool_count = 5  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_build_one_connection_expands_stdio_command_args_env(
@@ -550,11 +537,6 @@ def test_build_one_connection_missing_var_in_headers_raises(
     msg = str(exc_info.value)
     assert "ABSENT_TOKEN" in msg
     assert "s1" in msg
-
-
-# ---------------------------------------------------------------------------
-# F-06-004 — list-changed message handler attached to each connection
-# ---------------------------------------------------------------------------
 
 
 def test_build_one_connection_attaches_message_handler_stdio() -> None:

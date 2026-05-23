@@ -8,13 +8,7 @@ Pins the wire-level invariants ``aura.infrastructure.persistence.storage`` expos
   - The top-level ``index.sqlite`` is updated on every ``append``.
   - ``list_sessions`` reads from the index across ALL project buckets.
   - Concurrent appends do not interleave bytes mid-line.
-  - Migration from the legacy SQLite ``messages`` table is one-shot
-    and idempotent and lands directly in the v3 layout.
-  - Migration from the v2 flat layout (``<root>/sessions/`` +
-    ``<root>/subagents/``) renames the originals to timestamped
-    backups and merges the v2 index into the new top-level index.
   - A session resume after JSONL writes loads cleanly.
-  - A session in the v2 backup remains readable via :meth:`load`.
   - Two project cwds isolate cleanly into separate buckets.
 """
 
@@ -144,88 +138,9 @@ def test_concurrent_appends_dont_interleave_lines(tmp_path: Path) -> None:
     jsonl = storage.session_jsonl_path("s")
     lines = _read_jsonl(jsonl)
     assert len(lines) == 40
+    # test data shape known but not in stub
     seen = {line["payload"]["data"]["content"] for line in lines}  # type: ignore[index]
     assert seen == set(payloads)
-
-
-def test_migration_from_legacy_sqlite_format(tmp_path: Path) -> None:
-    """Pre-v0.16 SQLite db is drained into the v3 JSONL layout."""
-    legacy = tmp_path / "aura.db"
-    conn = sqlite3.connect(str(legacy))
-    conn.executescript(
-        """
-        CREATE TABLE messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            turn_index INTEGER NOT NULL,
-            payload_json TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(session_id, turn_index)
-        );
-        """
-    )
-    payloads = [
-        {"type": "human", "data": {"content": "legacy hello"}},
-        {"type": "ai", "data": {"content": "legacy reply"}},
-    ]
-    for i, p in enumerate(payloads):
-        conn.execute(
-            "INSERT INTO messages (session_id, turn_index, payload_json) "
-            "VALUES (?, ?, ?)",
-            ("legacy-session", i, json.dumps(p)),
-        )
-    conn.commit()
-    conn.close()
-
-    storage = SessionStorage(legacy, cwd=tmp_path)
-    msgs = storage.load("legacy-session")
-    assert [m.content for m in msgs] == ["legacy hello", "legacy reply"]
-
-    backups = list(tmp_path.glob("aura.db.legacy-*"))
-    assert backups, "legacy db should be renamed, not deleted"
-    # Drained data must land in the v3 nested path.
-    drained = storage.session_jsonl_path("legacy-session")
-    assert drained.exists()
-
-
-def test_migration_idempotent(tmp_path: Path) -> None:
-    """Running the migration twice does not double-insert messages."""
-    legacy = tmp_path / "aura.db"
-    conn = sqlite3.connect(str(legacy))
-    conn.executescript(
-        """
-        CREATE TABLE messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            turn_index INTEGER NOT NULL,
-            payload_json TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(session_id, turn_index)
-        );
-        """
-    )
-    conn.execute(
-        "INSERT INTO messages (session_id, turn_index, payload_json) "
-        "VALUES (?, ?, ?)",
-        ("s", 0, json.dumps({"type": "human", "data": {"content": "once"}})),
-    )
-    conn.commit()
-    conn.close()
-
-    storage1 = SessionStorage(legacy, cwd=tmp_path)
-    msgs1 = storage1.load("s")
-    jsonl = storage1.session_jsonl_path("s")
-    storage1.close()
-
-    before_size = jsonl.stat().st_size
-
-    storage2 = SessionStorage(legacy, cwd=tmp_path)
-    msgs2 = storage2.load("s")
-    storage2.close()
-
-    after_size = jsonl.stat().st_size
-    assert before_size == after_size
-    assert [m.content for m in msgs1] == [m.content for m in msgs2] == ["once"]
 
 
 def test_session_resume_after_jsonl_write_loads_correctly(
@@ -359,110 +274,6 @@ def test_index_handles_legacy_created_at_schema(tmp_path: Path) -> None:
         storage.close()
 
 
-# ---- v3 layout migration + new-API tests ----------------------------------
-
-
-def test_migration_from_v2_legacy_to_v3_renames_old_dirs(
-    tmp_path: Path,
-) -> None:
-    """The flat v2 ``sessions/`` and ``subagents/`` dirs are renamed to backups."""
-    # Simulate a v2 install: flat sessions/, flat subagents/, nested
-    # sessions/index.sqlite.
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir()
-    (sessions_dir / "old-session.jsonl").write_text(
-        json.dumps({
-            "ts": "2025-01-01T00:00:00",
-            "payload": {"type": "human", "data": {"content": "v2 hi"}},
-        }) + "\n",
-        encoding="utf-8",
-    )
-    legacy_idx = sessions_dir / "index.sqlite"
-    conn = sqlite3.connect(str(legacy_idx))
-    conn.executescript(
-        "CREATE TABLE sessions("
-        "session_id TEXT PRIMARY KEY, "
-        "created_at TEXT NOT NULL DEFAULT (datetime('now')), "
-        "last_used_at TEXT NOT NULL DEFAULT (datetime('now')), "
-        "message_count INTEGER NOT NULL DEFAULT 0, "
-        "first_user_prompt TEXT NOT NULL DEFAULT '');"
-    )
-    conn.execute(
-        "INSERT INTO sessions(session_id, message_count, first_user_prompt) "
-        "VALUES (?, ?, ?)",
-        ("old-session", 1, "v2 hi"),
-    )
-    conn.commit()
-    conn.close()
-
-    sub_dir = tmp_path / "subagents"
-    sub_dir.mkdir()
-    (sub_dir / "subagent-old-task.jsonl").write_text(
-        json.dumps({"type": "human", "data": {"content": "child"}}) + "\n",
-        encoding="utf-8",
-    )
-
-    storage = SessionStorage(tmp_path / "aura.db", cwd=tmp_path)
-    try:
-        # Old flat dirs were renamed.
-        assert not sessions_dir.exists()
-        assert not sub_dir.exists()
-        backup_sessions = list(tmp_path.glob("sessions.legacy-*"))
-        backup_subagents = list(tmp_path.glob("subagents.legacy-*"))
-        assert backup_sessions, "expected sessions.legacy-<ts>"
-        assert backup_subagents, "expected subagents.legacy-<ts>"
-        # Index rows were folded into the new top-level index.
-        new_index = tmp_path / "index.sqlite"
-        assert new_index.exists()
-        idx = sqlite3.connect(str(new_index))
-        try:
-            row = idx.execute(
-                "SELECT message_count, first_user_prompt FROM sessions "
-                "WHERE session_id = ?",
-                ("old-session",),
-            ).fetchone()
-        finally:
-            idx.close()
-        assert row is not None
-        assert row[0] == 1
-        assert row[1] == "v2 hi"
-        # list_sessions surfaces the migrated row.
-        ids = {s.session_id for s in storage.list_sessions(limit=10)}
-        assert "old-session" in ids
-    finally:
-        storage.close()
-
-
-def test_legacy_session_still_loadable_after_migration(tmp_path: Path) -> None:
-    """A v2 session that lives only in the backup dir is still loadable."""
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir()
-    (sessions_dir / "rescue.jsonl").write_text(
-        json.dumps({
-            "ts": "2025-01-01T00:00:00",
-            "payload": {
-                "type": "human",
-                "data": {"content": "rescue me"},
-            },
-        }) + "\n"
-        + json.dumps({
-            "ts": "2025-01-01T00:00:01",
-            "payload": {
-                "type": "ai",
-                "data": {"content": "ok"},
-            },
-        }) + "\n",
-        encoding="utf-8",
-    )
-
-    storage = SessionStorage(tmp_path / "aura.db", cwd=tmp_path)
-    try:
-        msgs = storage.load("rescue")
-        assert [m.content for m in msgs] == ["rescue me", "ok"]
-    finally:
-        storage.close()
-
-
 def test_encode_cwd_handles_special_chars(tmp_path: Path) -> None:
     """The cwd encoder mirrors claude-code: each ``/`` → ``-``."""
     storage = SessionStorage(tmp_path / "aura.db", cwd=tmp_path)
@@ -495,6 +306,7 @@ def test_two_projects_isolated_in_separate_buckets(tmp_path: Path) -> None:
     # Each bucket holds only its own append.
     a_msgs = _read_jsonl(bucket_a / "session-x.jsonl")
     b_msgs = _read_jsonl(bucket_b / "session-x.jsonl")
+    # test data shape known but not in stub
     assert a_msgs[0]["payload"]["data"]["content"] == "A msg"  # type: ignore[index]
     assert b_msgs[0]["payload"]["data"]["content"] == "B msg"  # type: ignore[index]
     # The shared top-level index lists BOTH (last-write-wins on

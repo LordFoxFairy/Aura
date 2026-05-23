@@ -255,7 +255,7 @@ def main() -> int:
             providers=[p.name for p in config.providers],
             default_spec=config.router.get("default", ""),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
         return _fail_startup(console, exc)
 
     if args.log or config.log.enabled:
@@ -354,13 +354,13 @@ def main() -> int:
         )
         _agent_cell[0] = agent
         journal.write("agent_built")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
         return _fail_startup(console, exc)
 
     async def _entry() -> None:
         try:
             await agent.aconnect()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             console.print(f"[yellow]mcp connect error (continuing): {exc}[/yellow]")
             journal.write("mcp_connect_cli_error", error=str(exc))
         from aura.application.hooks.file_watcher import FileWatcher, default_watch_paths
@@ -371,7 +371,7 @@ def main() -> int:
         )
         try:
             await watcher.start()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             journal.write(
                 "file_watcher_start_error",
                 error=f"{type(exc).__name__}: {exc}",

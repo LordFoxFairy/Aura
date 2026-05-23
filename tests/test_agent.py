@@ -33,7 +33,6 @@ def _sc(outcome: object) -> ToolResult | None:
     return getattr(outcome, "short_circuit", None)
 
 
-
 def _minimal_config(enabled: list[str] | None = None) -> AuraConfig:
     return AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
@@ -275,8 +274,9 @@ async def test_clear_session_wipes_read_state(tmp_path: Path) -> None:
         state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    # narrowed by assert; mypy keeps union
     assert "has not been read" in _sc(outcome).error  # type: ignore[operator,union-attr]
 
 
@@ -598,6 +598,7 @@ async def test_system_prompt_prepended_to_model_messages(tmp_path: Path) -> None
     cfg = _minimal_config(enabled=[])
     agent = Agent(
         config=cfg,
+        # exercising missing/extra arg path
         model=_CapturingFake(turns=[FakeTurn(message=AIMessage(content="hi"))]),  # type: ignore[call-arg]
         storage=_storage(tmp_path),
     )
@@ -758,7 +759,7 @@ class _CapturingFakeChatModel(FakeChatModel):
 
     @property
     def seen_messages(self) -> list[list[BaseMessage]]:
-        return self.__dict__["seen_messages"]  # type: ignore[no-any-return]
+        return self.__dict__["seen_messages"]  # type: ignore[no-any-return]  # fake returns Any from __dict__
 
     async def _agenerate(
         self,
@@ -1019,7 +1020,7 @@ async def test_bash_safety_hook_blocks_zmodload_even_with_permission_allow(
 
     # History must record the tool_call message AND a ToolMessage with an
     # error string coming from the bash_safety hook — NOT a successful ls.
-    history = agent._storage.load("default")
+    history = agent.storage.load("default")
     tool_msgs = [m for m in history if isinstance(m, ToolMessage)]
     assert tool_msgs, "expected a ToolMessage for the blocked call"
     blob = " ".join(str(m.content) for m in tool_msgs)
@@ -1097,11 +1098,11 @@ async def test_clear_session_wipes_todos(tmp_path: Path) -> None:
     # Turn establishing todos.
     async for _ in agent.astream("hi"):
         pass
-    assert agent._state.slots.todos
+    assert agent.state.slots.todos
 
     # clear_session wipes custom state including todos.
     agent.clear_session()
-    assert agent._state.slots.todos == []
+    assert agent.state.slots.todos == []
 
     # The next turn must not carry a <todos> HumanMessage.
     async for _ in agent.astream("after-clear"):
@@ -1358,9 +1359,6 @@ async def test_agent_aconnect_graceful_on_manager_failure(
     await agent.aclose()
 
 
-# --------------------------------------------------------------------------
-# Agent.mode — permission mode mirrored for the status bar
-# --------------------------------------------------------------------------
 def test_agent_mode_defaults_to_default(tmp_path: Path) -> None:
     # No mode kwarg ⇒ "default". Matches Aura's 4-mode ladder default.
     agent = _agent(tmp_path, turns=[FakeTurn(AIMessage(content="ok"))])
@@ -1387,7 +1385,7 @@ def test_build_agent_plumbs_mode_through(tmp_path: Path, monkeypatch: pytest.Mon
         "storage": {"path": str(tmp_path / "s.db")},
     })
 
-    def _fake_create(provider: Any, model_name: str) -> Any:  # noqa: ARG001
+    def _fake_create(provider: Any, model_name: str) -> Any:  # noqa: ARG001  # signature-matching stub; args unused
         return FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))])
 
     monkeypatch.setattr("aura.core.agent.llm.create", _fake_create)
@@ -1400,12 +1398,6 @@ def test_build_agent_plumbs_mode_through(tmp_path: Path, monkeypatch: pytest.Mon
         agent.close()
 
 
-# --------------------------------------------------------------------------
-# Agent.disable_bypass — Finding B: programmatic kill switch for bypass
-# mode. Must refuse at BOTH construction (Agent(mode="bypass")) AND at
-# runtime (set_mode("bypass")). A clean AuraConfigError carries the same
-# wording as the CLI-flag path so the operator sees one consistent message.
-# --------------------------------------------------------------------------
 def test_agent_construct_bypass_refused_when_disable_bypass_true(
     tmp_path: Path,
 ) -> None:
@@ -1516,7 +1508,7 @@ def test_build_agent_plumbs_disable_bypass_through(
         "storage": {"path": str(tmp_path / "s.db")},
     })
 
-    def _fake_create(provider: Any, model_name: str) -> Any:  # noqa: ARG001
+    def _fake_create(provider: Any, model_name: str) -> Any:  # noqa: ARG001  # signature-matching stub; args unused
         return FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))])
 
     monkeypatch.setattr("aura.core.agent.llm.create", _fake_create)
@@ -1526,9 +1518,6 @@ def test_build_agent_plumbs_disable_bypass_through(
         build_agent(cfg, mode="bypass", disable_bypass=True)
 
 
-# --------------------------------------------------------------------------
-# Agent.context_window — override takes precedence over llm lookup
-# --------------------------------------------------------------------------
 def test_agent_context_window_falls_back_to_llm_lookup(tmp_path: Path) -> None:
     # No override ⇒ resolve via the llm module's static table.
     # openai:gpt-4o-mini is in the table at 128k.
@@ -1552,9 +1541,6 @@ def test_agent_context_window_honors_config_override(tmp_path: Path) -> None:
     assert agent.context_window == 1_000_000
 
 
-# --------------------------------------------------------------------------
-# Agent.pinned_tokens_estimate — local char-count estimate of pinned prefix
-# --------------------------------------------------------------------------
 def test_agent_pinned_tokens_estimate_is_positive(tmp_path: Path) -> None:
     # The system prompt alone guarantees a positive count — even an empty
     # project has a baseline pinned prefix. If this ever drops to zero,

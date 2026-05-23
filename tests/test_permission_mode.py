@@ -25,7 +25,7 @@ from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
 from aura.schemas.tool import (
     ToolMetadata,
-    ToolResult,  # noqa: F401
+    ToolResult,  # noqa: F401  # import is the assertion / fixture side-effect
 )
 from aura.tools.base import build_tool
 
@@ -36,7 +36,6 @@ def _sc(outcome: object) -> ToolResult | None:
     if isinstance(outcome, Replace):
         return outcome.result
     return getattr(outcome, "short_circuit", None)
-
 
 
 def test_default_mode_is_default_string() -> None:
@@ -54,11 +53,6 @@ def test_mode_alias_matches_schemas_permissions_mode_field() -> None:
 
     schema_field = PermissionsConfig.model_fields["mode"].annotation
     assert set(get_args(schema_field)) == set(get_args(Mode))
-
-
-# ---------------------------------------------------------------------------
-# Shared helpers for plan / accept_edits hook tests.
-# ---------------------------------------------------------------------------
 
 
 class _P(BaseModel):
@@ -130,11 +124,6 @@ def journal_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
     return events
 
 
-# ---------------------------------------------------------------------------
-# plan mode — dry-run every tool call
-# ---------------------------------------------------------------------------
-
-
 async def test_plan_mode_allows_read_file() -> None:
     # Plan mode keeps the read-tool allow-list reachable so the planner
     # can gather context. A matching default-allow rule covers read_file,
@@ -169,7 +158,7 @@ async def test_plan_mode_blocks_write_file() -> None:
         tool=tool, args={"path": "/tmp/new.txt"}, state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert spy.calls == []
 
 
@@ -187,7 +176,7 @@ async def test_plan_mode_blocks_bash() -> None:
         tool=tool, args={"command": "ls"}, state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert spy.calls == []
 
 
@@ -204,9 +193,10 @@ async def test_plan_mode_error_says_would_have_called() -> None:
         tool=tool, args={"command": "ls -la"}, state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     # Must mention plan mode + the tool name that was attempted.
     assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    # narrowed by assert; mypy keeps union
     assert "plan mode" in _sc(outcome).error  # type: ignore[operator,union-attr]
     assert "would have called" in _sc(outcome).error  # type: ignore[operator,union-attr]
     assert "bash" in _sc(outcome).error  # type: ignore[operator,union-attr]
@@ -232,7 +222,7 @@ async def test_plan_mode_respects_safety_floor(tmp_path: Path) -> None:
         state=state,
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     # Safety wins: the decision must report safety_blocked, not plan_mode_blocked.
     assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
     assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
@@ -253,17 +243,13 @@ async def test_plan_mode_stashes_plan_decision_in_state(
     outcome = await hook(
         tool=tool, args={"path": "/tmp/x"}, state=state,
     )
+    # narrowed by assert above; mypy keeps union
     assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
     assert outcome.decision.reason == "plan_mode_blocked"  # type: ignore[union-attr]
     assert outcome.decision.allow is False  # type: ignore[union-attr]
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "plan_mode_blocked"
     assert decision_event[1]["mode"] == "plan"
-
-
-# ---------------------------------------------------------------------------
-# accept_edits mode — auto-allow read/edit/write tools, prompt everything else
-# ---------------------------------------------------------------------------
 
 
 async def test_accept_edits_mode_allows_read_file(
@@ -370,7 +356,7 @@ async def test_accept_edits_respects_safety_floor(tmp_path: Path) -> None:
         state=state,
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
     assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
 
@@ -394,13 +380,8 @@ async def test_accept_edits_respects_user_deny_rule(tmp_path: Path) -> None:
         tool=tool, args={"command": "rm -rf /tmp/wat"}, state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert _sc(outcome).error == "denied: user"  # type: ignore[union-attr]
-
-
-# ---------------------------------------------------------------------------
-# audit_line coverage for the two new reasons
-# ---------------------------------------------------------------------------
 
 
 def test_decision_audit_line_for_accept_edits() -> None:
@@ -411,11 +392,6 @@ def test_decision_audit_line_for_accept_edits() -> None:
 def test_decision_audit_line_for_plan_mode() -> None:
     line = Decision(allow=False, reason="plan_mode_blocked").audit_line()
     assert line == "blocked: plan mode (dry-run)"
-
-
-# ---------------------------------------------------------------------------
-# Preserve existing default / bypass behavior (regression guards).
-# ---------------------------------------------------------------------------
 
 
 async def test_default_mode_unchanged_ask_flow(tmp_path: Path) -> None:
@@ -446,14 +422,6 @@ async def test_bypass_mode_unchanged_auto_allow() -> None:
     outcome = await hook(tool=tool, args={}, state=LoopState())
     assert _sc(outcome) is None
     assert spy.calls == []
-
-
-# ---------------------------------------------------------------------------
-# Input-aware is_destructive — the safety layer's direction flag must
-# honour per-call classifiers (claude-code's isDestructive(input) pattern).
-# A static ``metadata.get("is_destructive")`` would see the classifier as
-# truthy and misclassify every invocation as destructive.
-# ---------------------------------------------------------------------------
 
 
 def _tool_with_classifier(
@@ -516,6 +484,7 @@ async def test_safety_uses_callable_is_destructive_true_branch(tmp_path: Path) -
         state=state,
     )
     assert _sc(outcome) is not None
+    # narrowed by assert above; mypy keeps union
     assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
     assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
 
@@ -553,6 +522,7 @@ async def test_safety_uses_callable_is_destructive_false_branch(tmp_path: Path) 
     )
     # Not blocked by safety — fell through to the ask path.
     assert _sc(outcome) is None
+    # narrowed by assert above; mypy keeps union
     assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
     assert outcome.decision.reason != "safety_blocked"  # type: ignore[union-attr]
 
@@ -619,6 +589,7 @@ async def test_safety_callable_exception_fails_safe_to_destructive(
     )
     # Fail-safe: treated as destructive → safety_blocked on protected write path.
     assert _sc(outcome) is not None
+    # narrowed by assert above; mypy keeps union
     assert isinstance(outcome.decision, Decision)  # type: ignore[union-attr]
     assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
 
@@ -652,17 +623,6 @@ async def test_accept_edits_bash_ls_still_prompts_not_auto_allowed(
     # Fell through to ask — the asker was consulted.
     assert _sc(outcome) is None
     assert len(spy.calls) == 1
-
-
-# ---------------------------------------------------------------------------
-# B1 — audit journal records the LIVE resolved mode, not the captured param.
-#
-# When ``mode`` is a Callable the journal must record the resolved string,
-# not the function object (which would either blow up JSON serialization
-# or write an opaque ``"<function ... at 0x...>"`` blob). When the mode
-# provider changes mid-session (``Agent.set_mode``) the *next* journal
-# event must reflect the new value, not a startup-frozen snapshot.
-# ---------------------------------------------------------------------------
 
 
 async def test_permission_audit_mode_live_read_with_callable(

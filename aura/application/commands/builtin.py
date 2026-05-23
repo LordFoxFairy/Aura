@@ -137,7 +137,7 @@ class ContextCommand:
             else:
                 sections["other"] += tokens
 
-        history = agent._storage.load(agent.session_id)
+        history = agent.storage.load(agent.session_id)
         raw_history_tokens = sum(estimate_message_tokens(msg) for msg in history)
         summary_history = compact_summary_messages(agent, history)
         history_tokens = sum(estimate_message_tokens(msg) for msg in summary_history)
@@ -242,7 +242,7 @@ class ResumeCommand:
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         target = arg.strip()
         if not target:
-            sessions = agent._storage.list_sessions(limit=10)
+            sessions = agent.storage.list_sessions(limit=10)
             if not sessions:
                 return CommandResult(
                     handled=True, kind="print", text="(no saved sessions)",

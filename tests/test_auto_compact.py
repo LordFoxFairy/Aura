@@ -65,7 +65,7 @@ def _agent(
 @pytest.mark.asyncio
 async def test_auto_compact_fires_when_threshold_crossed(tmp_path: Path) -> None:
     agent = _agent(tmp_path, threshold=50)
-    agent._state.total_tokens_used = 100
+    agent.state.total_tokens_used = 100
 
     compact_calls: list[str] = []
 
@@ -73,7 +73,7 @@ async def test_auto_compact_fires_when_threshold_crossed(tmp_path: Path) -> None
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]
+            source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         )
 
     with patch.object(Agent, "compact", _spy):
@@ -87,7 +87,7 @@ async def test_auto_compact_fires_when_threshold_crossed(tmp_path: Path) -> None
 @pytest.mark.asyncio
 async def test_auto_compact_not_fired_below_threshold(tmp_path: Path) -> None:
     agent = _agent(tmp_path, threshold=100)
-    agent._state.total_tokens_used = 50
+    agent.state.total_tokens_used = 50
 
     compact_calls: list[str] = []
 
@@ -95,7 +95,7 @@ async def test_auto_compact_not_fired_below_threshold(tmp_path: Path) -> None:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]
+            source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         )
 
     with patch.object(Agent, "compact", _spy):
@@ -110,7 +110,7 @@ async def test_auto_compact_not_fired_below_threshold(tmp_path: Path) -> None:
 async def test_auto_compact_disabled_when_threshold_zero(tmp_path: Path) -> None:
     agent = _agent(tmp_path, threshold=0)
     # Even a massive token count must not trigger auto-compact when disabled.
-    agent._state.total_tokens_used = 10_000_000
+    agent.state.total_tokens_used = 10_000_000
 
     compact_calls: list[str] = []
 
@@ -118,7 +118,7 @@ async def test_auto_compact_disabled_when_threshold_zero(tmp_path: Path) -> None
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]
+            source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         )
 
     with patch.object(Agent, "compact", _spy):
@@ -136,7 +136,7 @@ async def test_auto_compact_journal_event(tmp_path: Path) -> None:
     journal.configure(log_path)
     try:
         agent = _agent(tmp_path, threshold=10)
-        agent._state.total_tokens_used = 42
+        agent.state.total_tokens_used = 42
 
         compact_calls: list[str] = []
 
@@ -144,7 +144,7 @@ async def test_auto_compact_journal_event(tmp_path: Path) -> None:
             compact_calls.append(source)
             return CompactResult(
                 before_tokens=0, after_tokens=0,
-                source=source,  # type: ignore[arg-type]
+                source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
             )
 
         with patch.object(Agent, "compact", _spy):
@@ -189,12 +189,13 @@ async def test_auto_compact_skipped_on_cancel(tmp_path: Path) -> None:
 
     agent = Agent(
         config=_minimal_config(),
+        # exercising missing/extra arg path
         model=_SlowFake(turns=[FakeTurn(AIMessage(content="never"))]),  # type: ignore[call-arg]
         storage=_storage(tmp_path),
         auto_compact_threshold=10,
     )
     # Over the threshold BEFORE the turn even starts.
-    agent._state.total_tokens_used = 100
+    agent.state.total_tokens_used = 100
 
     compact_calls: list[str] = []
 
@@ -202,7 +203,7 @@ async def test_auto_compact_skipped_on_cancel(tmp_path: Path) -> None:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]
+            source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         )
 
     with patch.object(Agent, "compact", _spy):

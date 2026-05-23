@@ -56,11 +56,6 @@ def _reset_conditional_state() -> Iterator[None]:
     clear_conditional_state()
 
 
-# ---------------------------------------------------------------------------
-# Basic discovery
-# ---------------------------------------------------------------------------
-
-
 def test_user_skill_dir_layout_loads(tmp_path: Path) -> None:
     home = tmp_path / "home"
     cwd = tmp_path / "proj"
@@ -101,11 +96,6 @@ def test_project_skill_dir_layout_loads(tmp_path: Path) -> None:
     assert skills[0].name == "refactor"
     assert skills[0].layer == "project"
     assert "P-BODY" in skills[0].body
-
-
-# ---------------------------------------------------------------------------
-# Frontmatter — all supported fields
-# ---------------------------------------------------------------------------
 
 
 def test_frontmatter_all_fields_roundtrip(tmp_path: Path) -> None:
@@ -178,11 +168,6 @@ def test_allowed_tools_scalar_form(tmp_path: Path) -> None:
     reg = load_skills(cwd=cwd, home=home)
     skill = reg.list()[0]
     assert skill.allowed_tools == frozenset({"bash", "read_file", "edit_file"})
-
-
-# ---------------------------------------------------------------------------
-# Collisions & layering
-# ---------------------------------------------------------------------------
 
 
 def test_user_wins_on_name_collision(tmp_path: Path) -> None:
@@ -278,11 +263,6 @@ def test_outer_project_wins_on_collision_against_inner(tmp_path: Path) -> None:
     assert skill.description == "OUTER."
 
 
-# ---------------------------------------------------------------------------
-# Realpath dedup
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.skipif(os.name == "nt", reason="symlink permissions flaky on Windows")
 def test_realpath_dedup_via_symlink(tmp_path: Path) -> None:
     home = tmp_path / "home"
@@ -304,11 +284,6 @@ def test_realpath_dedup_via_symlink(tmp_path: Path) -> None:
     # Exactly one — the symlinked path collapsed to the same realpath.
     assert len(skills) == 1
     assert skills[0].description == "Real skill."
-
-
-# ---------------------------------------------------------------------------
-# Conditional skills
-# ---------------------------------------------------------------------------
 
 
 def test_conditional_skill_not_in_registry_at_load(tmp_path: Path) -> None:
@@ -363,11 +338,6 @@ def test_activate_no_match_keeps_skill_conditional(tmp_path: Path) -> None:
     assert [s.name for s in get_conditional_skills()] == ["pyhelp"]
 
 
-# ---------------------------------------------------------------------------
-# Legacy format migration
-# ---------------------------------------------------------------------------
-
-
 def test_plain_md_at_top_level_not_loaded_journals_event(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -400,11 +370,6 @@ def test_plain_md_at_top_level_not_loaded_journals_event(tmp_path: Path) -> None
     files = legacy_events[0]["files"]
     assert isinstance(files, list)
     assert any(str(legacy) in f for f in files)
-
-
-# ---------------------------------------------------------------------------
-# Rendering / variable substitution
-# ---------------------------------------------------------------------------
 
 
 def test_render_skill_body_substitutes_skill_dir(tmp_path: Path) -> None:
@@ -451,11 +416,6 @@ def test_render_skill_body_substitutes_session_id(tmp_path: Path) -> None:
     skill = reg.list()[0]
     out = render_skill_body(skill, session_id="my-session-abc")
     assert "Session: my-session-abc." in out
-
-
-# ---------------------------------------------------------------------------
-# Error handling — missing fields, broken YAML
-# ---------------------------------------------------------------------------
 
 
 def test_missing_description_silent_skip_journal(tmp_path: Path) -> None:
@@ -528,13 +488,6 @@ def test_home_defaults_to_path_home(
     reg = load_skills(cwd=cwd)
     names = {s.name for s in reg.list()}
     assert names == {"from-home"}
-
-
-# ---------------------------------------------------------------------------
-# Claude-code compat (V12-G) — load ``~/.claude/skills/<name>/SKILL.md``
-# verbatim, accept both ``${CLAUDE_*}`` and ``${AURA_*}`` placeholders, and
-# surface a journal warning on inline ``!`cmd` `` usage (unsupported here).
-# ---------------------------------------------------------------------------
 
 
 def test_claude_code_skills_dir_loads(tmp_path: Path) -> None:
@@ -666,11 +619,7 @@ def test_inline_cmd_in_body_emits_journal_warning(tmp_path: Path) -> None:
         journal_module.reset()
 
 
-# ---------------------------------------------------------------------------
-# Bug A1 — render-time sanitisation of inline shell-exec syntax
-# ---------------------------------------------------------------------------
-
-
+# fake helper, type hints not needed
 def _make_skill_with_body(body: str, tmp_path: Path):  # type: ignore[no-untyped-def]
     """Construct a Skill dataclass directly so render tests don't have to round-trip yaml."""
     from aura.infrastructure.skills.types import Skill
@@ -758,11 +707,6 @@ def test_render_skill_body_returns_helper_command_list(tmp_path: Path) -> None:
     assert "[Aura: inline shell not supported — original: !`x`]" in sanitized
     assert "[Aura: inline shell not supported — original: !`y`]" in sanitized
     assert originals == ["x", "y"]
-
-
-# ---------------------------------------------------------------------------
-# Bug A2 — unsupported claude-code frontmatter fields → journal warning
-# ---------------------------------------------------------------------------
 
 
 def test_unsupported_frontmatter_single_field_journals(tmp_path: Path) -> None:
@@ -858,11 +802,6 @@ def test_unsupported_frontmatter_silent_when_only_recognized_fields(
         assert events == []
     finally:
         journal_module.reset()
-
-
-# ---------------------------------------------------------------------------
-# Integration test — synthetic claude-code skill with all bad shapes
-# ---------------------------------------------------------------------------
 
 
 def test_integration_claude_code_skill_full_bad_shape(tmp_path: Path) -> None:

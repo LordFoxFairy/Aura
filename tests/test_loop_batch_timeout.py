@@ -62,6 +62,7 @@ class _RecordingFakeChatModel(FakeChatModel):
 
     @property
     def seen_messages(self) -> list[list[BaseMessage]]:
+        # fake returns Any from __dict__
         return self.__dict__.setdefault("seen_messages", [])  # type: ignore[no-any-return]
 
     async def _agenerate(
@@ -69,11 +70,6 @@ class _RecordingFakeChatModel(FakeChatModel):
     ) -> Any:
         self.seen_messages.append(list(messages))
         return await super()._agenerate(messages, *args, **kwargs)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _slow_tool(
@@ -146,11 +142,6 @@ def _reset_journal() -> Any:
     journal.reset()
     yield
     journal.reset()
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

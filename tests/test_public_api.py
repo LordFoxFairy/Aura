@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 def test_aura_top_level_exports() -> None:
-    from aura import (  # noqa: F401
+    from aura import (  # noqa: F401  # import is the assertion / fixture side-effect
         Agent,
         AuraConfig,
         AuraConfigError,
@@ -23,7 +23,7 @@ def test_aura_top_level_exports() -> None:
 
 
 def test_aura_core_exports() -> None:
-    from aura.core import (  # noqa: F401
+    from aura.core import (  # noqa: F401  # import is the assertion / fixture side-effect
         Agent,
         AgentEvent,
         AgentLoop,
@@ -51,7 +51,7 @@ def test_aura_core_exports() -> None:
 
 
 def test_aura_tools_exports() -> None:
-    from aura.tools import (  # noqa: F401
+    from aura.tools import (  # noqa: F401  # import is the assertion / fixture side-effect
         ToolError,
         ToolResult,
         bash,
@@ -75,7 +75,7 @@ def test_aura_tools_exports() -> None:
 
 
 def test_aura_config_exports() -> None:
-    from aura.config import (  # noqa: F401
+    from aura.config import (  # noqa: F401  # import is the assertion / fixture side-effect
         AuraConfig,
         AuraConfigError,
         LogConfig,
@@ -94,7 +94,7 @@ def test_aura_config_exports() -> None:
 def test_aura_schemas_exports() -> None:
     """Schemas package is the neutral leaf; its surface is stable and imported
     by both core and tools. Lock the current set."""
-    from aura.schemas import (  # noqa: F401
+    from aura.schemas import (  # noqa: F401  # import is the assertion / fixture side-effect
         AgentEvent,
         AssistantDelta,
         Final,

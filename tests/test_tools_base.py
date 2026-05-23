@@ -36,7 +36,7 @@ def test_tool_result_full_fields() -> None:
 
 def test_tool_result_ok_is_required() -> None:
     with pytest.raises(TypeError):
-        ToolResult()  # type: ignore[call-arg]
+        ToolResult()  # type: ignore[call-arg]  # exercising missing/extra arg path
 
 
 class _Empty(BaseModel):
@@ -78,11 +78,6 @@ async def test_build_tool_ainvoke_propagates_tool_error() -> None:
     )
     with pytest.raises(ToolError, match="kaboom"):
         await tool.ainvoke({})
-
-
-# ---------------------------------------------------------------------------
-# Phase D additions: rule_matcher + args_preview metadata slots
-# ---------------------------------------------------------------------------
 
 
 def _noop() -> dict[str, Any]:
@@ -145,11 +140,6 @@ def test_build_tool_without_new_kwargs_has_none_slots() -> None:
     meta = meta_dict(tool)
     assert meta.get("rule_matcher") is None
     assert meta.get("args_preview") is None
-
-
-# ---------------------------------------------------------------------------
-# Phase 5 Task 1: ``Tool.validate_input`` default
-# ---------------------------------------------------------------------------
 
 
 class _AcceptAllTool(Tool):

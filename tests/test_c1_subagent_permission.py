@@ -51,7 +51,7 @@ from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import LoopState
 from aura.schemas.tool import (
     ToolMetadata,
-    ToolResult,  # noqa: F401
+    ToolResult,  # noqa: F401  # import is the assertion / fixture side-effect
 )
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -145,7 +145,7 @@ async def test_subagent_denies_tool_requiring_user_prompt() -> None:
         assert _sc(outcome) is not None, (
             "subagent hook must short-circuit (deny) on the ask path"
         )
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.allow is False  # type: ignore[union-attr]
         assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
         # Model-facing error string identifies this as a subagent auto-deny
@@ -181,7 +181,7 @@ async def test_subagent_honors_parent_allow_rule() -> None:
         )
         # Allow path: no short_circuit, decision.allow True, reason rule_allow.
         assert _sc(outcome) is None
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.allow is True  # type: ignore[union-attr]
         assert outcome.decision.reason == "rule_allow"  # type: ignore[union-attr]
     finally:
@@ -204,7 +204,7 @@ async def test_subagent_honors_parent_deny_rule_over_allow_rule() -> None:
             state=LoopState(),
         )
         assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.allow is False  # type: ignore[union-attr]
         assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
     finally:
@@ -227,7 +227,7 @@ async def test_subagent_honors_parent_ask_rule_by_auto_denying_prompt() -> None:
             state=LoopState(),
         )
         assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.allow is False  # type: ignore[union-attr]
         assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
         assert "subagent_auto_deny" in (_sc(outcome).error or "")  # type: ignore[union-attr]
@@ -272,7 +272,7 @@ async def test_agent_wiring_passes_deny_and_ask_rules_to_subagent_factory(
             state=LoopState(),
         )
         assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
     finally:
         await child.aclose()
@@ -301,7 +301,7 @@ async def test_nested_subagent_factory_inherits_permission_context() -> None:
             state=LoopState(),
         )
         assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.allow is False  # type: ignore[union-attr]
         assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
     finally:
@@ -372,7 +372,7 @@ async def test_subagent_inherits_bypass_mode_from_parent() -> None:
             state=LoopState(),
         )
         assert _sc(outcome) is None
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.allow is True  # type: ignore[union-attr]
         assert outcome.decision.reason == "mode_bypass"  # type: ignore[union-attr]
     finally:
@@ -405,7 +405,7 @@ async def test_subagent_freezes_parent_mode_at_spawn() -> None:
             state=LoopState(),
         )
         assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.allow is False  # type: ignore[union-attr]
         assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
         assert "subagent_auto_deny" in (_sc(outcome).error or "")  # type: ignore[union-attr]
@@ -429,7 +429,7 @@ async def test_subagent_collapses_interactive_parent_modes_to_default(
             state=LoopState(),
         )
         assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.allow is False  # type: ignore[union-attr]
         assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
         assert "subagent_auto_deny" in (_sc(outcome).error or "")  # type: ignore[union-attr]
@@ -499,7 +499,7 @@ async def test_subagent_still_denies_on_safety_violation(tmp_path: Path) -> None
             state=LoopState(),
         )
         assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.allow is False  # type: ignore[union-attr]
         assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
     finally:

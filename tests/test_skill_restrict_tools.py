@@ -62,11 +62,6 @@ def _sc(outcome: object) -> ToolResult | None:
     return getattr(outcome, "short_circuit", None)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _skill(
     name: str = "foo",
     *,
@@ -150,11 +145,6 @@ class _SpyAsker:
         return AskerResponse(choice="accept")
 
 
-# ---------------------------------------------------------------------------
-# 1. Undeclared tool short-circuits to restrict_tools_blocked
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_restrict_tools_blocks_undeclared_tool(tmp_path: Path) -> None:
     session = SessionRuleSet()
@@ -175,22 +165,17 @@ async def test_restrict_tools_blocks_undeclared_tool(tmp_path: Path) -> None:
         outcome = await hook(
             tool=bash_tool,
             args={},
-            state=agent._state,
+            state=agent.state,
         )
         # Hook denied + asker never consulted.
         assert _sc(outcome) is not None
-        assert _sc(outcome).ok is False  # type: ignore[union-attr]
+        assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert asker.calls == []
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
         assert outcome.decision.allow is False  # type: ignore[union-attr]
     finally:
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# 2. Declared tool flows through normal permission path
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -213,7 +198,7 @@ async def test_restrict_tools_allows_declared_tool(tmp_path: Path) -> None:
         outcome = await hook(
             tool=read_tool,
             args={},
-            state=agent._state,
+            state=agent.state,
         )
         # restrict_tools does NOT auto-allow — it just doesn't block. The
         # asker is consulted (no rule, no auto-allow path), and answers
@@ -222,15 +207,10 @@ async def test_restrict_tools_allows_declared_tool(tmp_path: Path) -> None:
         assert len(asker.calls) == 1
         assert asker.calls[0]["tool"] == "read_file"
         assert _sc(outcome) is None
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.reason == "user_accept"  # type: ignore[union-attr]
     finally:
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# 3. Lease expires when turn advances
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -239,7 +219,7 @@ async def test_lease_expires_when_turn_advances(tmp_path: Path) -> None:
     agent = _agent(tmp_path, session_rules=session)
     try:
         # Pin a known turn for the install-time sentinel.
-        agent._state.turn_count = 5
+        agent.state.turn_count = 5
 
         skill = _skill("ephemeral", restrict_tools=frozenset({"read_file"}))
         cmd = SkillCommand(skill=skill, agent=agent)
@@ -256,26 +236,21 @@ async def test_lease_expires_when_turn_advances(tmp_path: Path) -> None:
 
         # Same turn → lease active → bash is blocked.
         outcome = await hook(
-            tool=bash_tool, args={}, state=agent._state,
+            tool=bash_tool, args={}, state=agent.state,
         )
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
 
         # Advance turn → lease expires → bash falls through to asker.
-        agent._state.turn_count = 6
+        agent.state.turn_count = 6
         outcome2 = await hook(
-            tool=bash_tool, args={}, state=agent._state,
+            tool=bash_tool, args={}, state=agent.state,
         )
         assert _sc(outcome2) is None
         assert len(asker.calls) == 1
         assert asker.calls[0]["tool"] == "bash"
     finally:
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# 4. Multiple active skills union their restrict sets
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -301,7 +276,7 @@ async def test_multiple_active_skills_union(tmp_path: Path) -> None:
             outcome = await hook(
                 tool=_build_probe_tool(declared),
                 args={},
-                state=agent._state,
+                state=agent.state,
             )
             assert _sc(outcome) is None, (
                 f"{declared!r} should not be blocked"
@@ -311,17 +286,12 @@ async def test_multiple_active_skills_union(tmp_path: Path) -> None:
         outcome = await hook(
             tool=_build_probe_tool("bash"),
             args={},
-            state=agent._state,
+            state=agent.state,
         )
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
     finally:
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# 5. Empty restrict_tools installs no lease
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -344,17 +314,12 @@ async def test_empty_restrict_tools_no_restriction(tmp_path: Path) -> None:
         outcome = await hook(
             tool=_build_probe_tool("bash"),
             args={},
-            state=agent._state,
+            state=agent.state,
         )
         assert _sc(outcome) is None
         assert len(asker.calls) == 1
     finally:
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# 6. Restrict-blocked decision emits a permission_decision journal event
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -377,7 +342,7 @@ async def test_restrict_blocks_emit_journal_event(
         await hook(
             tool=_build_probe_tool("bash"),
             args={},
-            state=agent._state,
+            state=agent.state,
         )
 
         events = _journal_events(journal_path)
@@ -390,11 +355,6 @@ async def test_restrict_blocks_emit_journal_event(
         assert decisions[0]["tool"] == "bash"
     finally:
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# 7. Tool path (SkillTool._invoke) installs lease too
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -418,18 +378,13 @@ async def test_restrict_lease_via_tool_path(tmp_path: Path) -> None:
         outcome = await hook(
             tool=_build_probe_tool("bash"),
             args={},
-            state=agent._state,
+            state=agent.state,
         )
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
         assert asker.calls == []
     finally:
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# 8. Internal tools are exempt from restrict
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -453,18 +408,13 @@ async def test_internal_tools_exempt_from_restrict(tmp_path: Path) -> None:
         outcome = await hook(
             tool=_build_probe_tool("ask_user_question"),
             args={},
-            state=agent._state,
+            state=agent.state,
         )
         # Not short-circuited by restrict — flows through to asker.
         assert outcome.decision is not None  # type: ignore[union-attr]
         assert outcome.decision.reason != "restrict_tools_blocked"  # type: ignore[union-attr]
     finally:
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# 9. Loader parses restrict-tools frontmatter
-# ---------------------------------------------------------------------------
 
 
 def test_loader_parses_restrict_tools_frontmatter(tmp_path: Path) -> None:

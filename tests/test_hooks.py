@@ -35,7 +35,7 @@ _stub_tool: BaseTool = build_tool(
 
 
 def _allow(reason: str = "mode_bypass") -> Decision:
-    return Decision(allow=True, reason=reason)  # type: ignore[arg-type]
+    return Decision(allow=True, reason=reason)  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
 
 
 def _allow_with_rule(tool: str) -> Decision:
@@ -43,7 +43,7 @@ def _allow_with_rule(tool: str) -> Decision:
 
 
 def _deny(reason: str = "safety_blocked") -> Decision:
-    return Decision(allow=False, reason=reason)  # type: ignore[arg-type]
+    return Decision(allow=False, reason=reason)  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
 
 
 @pytest.mark.asyncio
@@ -533,14 +533,6 @@ def test_post_tool_hook_protocol_accepts_correct_signature() -> None:
     assert len(chain.post_tool) == 1
 
 
-# ---------------------------------------------------------------------------
-# Turn-cycle slot defaults — regression guard that HookChain() exposes each
-# slot as field(default_factory=list). A new hook type added as a module-
-# level list would silently bypass this contract and break isolated merge
-# semantics.
-# ---------------------------------------------------------------------------
-
-
 def test_hookchain_defaults_include_all_turn_cycle_slots() -> None:
     chain = HookChain()
     assert chain.pre_model == []
@@ -586,13 +578,6 @@ def test_merge_concatenates_all_turn_cycle_slots() -> None:
     # Non-destructive — originals untouched.
     assert len(left.pre_model) == 1
     assert len(right.post_tool) == 1
-
-
-# ---------------------------------------------------------------------------
-# Ask escalation channel — Ask propagates via the chain-local ``ask_pending``
-# kwarg so downstream hooks (permission) see the escalation demand without
-# any cross-turn state.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

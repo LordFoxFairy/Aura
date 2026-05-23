@@ -199,7 +199,7 @@ async def test_aclose_fast_path_emits_mcp_stopped_no_timeout_event(
         await agent.aclose(mcp_timeout=5.0)
 
         assert fake_mgr.stop_called
-        assert agent._mcp_manager is None  # noqa: SLF001
+        assert agent._mcp_manager is None  # noqa: SLF001  # test reaches into private state by design
 
         events = _journal_events(log_path)
         stopped = [e for e in events if e.get("event") == "mcp_stopped"]
@@ -238,7 +238,7 @@ async def test_aclose_unexpected_error_emits_mcp_close_error(
         # Must not propagate — shutdown swallows expected errors.
         await agent.aclose(mcp_timeout=1.0)
 
-        assert agent._mcp_manager is None  # noqa: SLF001
+        assert agent._mcp_manager is None  # noqa: SLF001  # test reaches into private state by design
         events = _journal_events(log_path)
         err = [e for e in events if e.get("event") == "mcp_close_error"]
         assert len(err) == 1
@@ -274,7 +274,7 @@ def test_sync_close_no_loop_runs_aclose_via_asyncio_run(tmp_path: Path) -> None:
         agent.close()
 
         assert fake_mgr.stop_called
-        assert agent._mcp_manager is None  # noqa: SLF001
+        assert agent._mcp_manager is None  # noqa: SLF001  # test reaches into private state by design
         events = _journal_events(log_path)
         assert any(e.get("event") == "mcp_stopped" for e in events)
     finally:

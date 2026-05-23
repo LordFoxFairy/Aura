@@ -91,11 +91,6 @@ class _SpyManager:
         return self._revoke_result or f"MCP server {name!r} revoked"
 
 
-# ---------------------------------------------------------------------------
-# list view
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_mcp_empty_manager_prints_placeholder() -> None:
     agent = _FakeAgent(_mcp_manager=_SpyManager(statuses=[]))
@@ -173,11 +168,6 @@ async def test_mcp_list_error_row_surfaces_error_message() -> None:
     result = await MCPCommand().handle("list", _as_agent(agent))
     assert "broken" in result.text
     assert "error: RuntimeError: cannot spawn child" in result.text
-
-
-# ---------------------------------------------------------------------------
-# enable / disable / reconnect
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -326,11 +316,6 @@ async def test_mcp_revoke_without_target_is_usage_error() -> None:
     assert "revoke" in result.text
 
 
-# ---------------------------------------------------------------------------
-# help + unknown subcommand
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_mcp_help_lists_subcommands() -> None:
     agent = _FakeAgent(_mcp_manager=None)
@@ -358,11 +343,6 @@ async def test_mcp_toggle_without_manager_returns_friendly_error() -> None:
     result = await MCPCommand().handle("enable foo", _as_agent(agent))
     assert result.handled is True
     assert "no mcp manager" in result.text.lower()
-
-
-# ---------------------------------------------------------------------------
-# registry wiring
-# ---------------------------------------------------------------------------
 
 
 def test_mcp_command_registered_in_default_registry() -> None:

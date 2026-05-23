@@ -73,13 +73,13 @@ async def test_compact_command_end_to_end_with_real_agent(tmp_path: Path) -> Non
     for i in range(10):
         history.append(HumanMessage(content=f"u-{i}"))
         history.append(AIMessage(content=f"a-{i}"))
-    agent._storage.save(agent.session_id, history)
+    agent.storage.save(agent.session_id, history)
 
     r = build_default_registry()
     result = await dispatch("/compact", agent, r)
     assert result.handled and result.kind == "print"
 
-    after = agent._storage.load(agent.session_id)
+    after = agent.storage.load(agent.session_id)
     # Tail (last 6) + summary (1) = 7 messages.
     assert len(after) == 7
     await agent.aclose()

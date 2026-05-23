@@ -192,7 +192,6 @@ async def test_first_deny_beats_later_allow_in_real_agent_turn(
     assert len(completed_events) == 1
     assert completed_events[0].error == "soft-policy denied: example"
 
-    # --- Audit trail assertions: this is the load-bearing one. ---
     log_path = session_log_dir / "test-deny-merge.jsonl"
     assert log_path.exists()
     lines = log_path.read_text().splitlines()
@@ -314,11 +313,6 @@ async def test_multiple_non_short_circuiting_decisions_merge_first_deny_wins(
         f"merged decision should be deny, not bypass-allow; "
         f"got perm_audits={perm_audits!r}"
     )
-
-
-# ---------------------------------------------------------------------------
-# Helper: an asker that is NEVER consulted (bypass mode short-circuits).
-# ---------------------------------------------------------------------------
 
 
 async def _unused_asker(**_: Any) -> AskerResponse:

@@ -11,10 +11,6 @@ from aura.schemas.tool import ToolError
 from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.web_search import WebSearch
 
-# ---------------------------------------------------------------------------
-# metadata / shape
-# ---------------------------------------------------------------------------
-
 
 def test_web_search_tool_metadata_flags() -> None:
     tool = WebSearch(config=None)
@@ -42,11 +38,6 @@ def test_web_search_args_preview() -> None:
     preview = meta.get("args_preview")
     assert callable(preview)
     assert preview({"query": "python typing"}) == "query: python typing"
-
-
-# ---------------------------------------------------------------------------
-# DuckDuckGo backend — happy path + field mapping
-# ---------------------------------------------------------------------------
 
 
 class _FakeDDGS:
@@ -155,11 +146,6 @@ async def test_web_search_uses_config_max_results_when_param_absent(
     assert len(out["results"]) == 9
 
 
-# ---------------------------------------------------------------------------
-# Error handling
-# ---------------------------------------------------------------------------
-
-
 async def test_web_search_ddgs_rate_limit_becomes_tool_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -194,11 +180,6 @@ async def test_web_search_ddgs_not_installed_returns_friendly_error(
         await tool._arun(query="python", max_results=3)
 
 
-# ---------------------------------------------------------------------------
-# Config schema
-# ---------------------------------------------------------------------------
-
-
 def test_web_search_config_defaults() -> None:
     cfg = WebSearchConfig()
     assert cfg.provider == "duckduckgo"
@@ -210,13 +191,7 @@ def test_web_search_config_rejects_unknown_provider() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        WebSearchConfig(provider="bing")  # type: ignore[arg-type]
-
-
-# ---------------------------------------------------------------------------
-# Agent wiring — web_search registered in BUILTIN_STATEFUL_TOOLS, injected
-# with config.web_search at construction time.
-# ---------------------------------------------------------------------------
+        WebSearchConfig(provider="bing")  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
 
 
 def test_web_search_is_registered_as_stateful() -> None:

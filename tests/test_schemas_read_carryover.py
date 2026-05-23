@@ -181,7 +181,7 @@ def test_read_carryover_is_frozen() -> None:
     carry = ReadCarryover(records={}, source_session_id=None, generated_at_turn=0)
 
     with pytest.raises(dataclasses.FrozenInstanceError):
-        carry.source_session_id = "mutated"  # type: ignore[misc]
+        carry.source_session_id = "mutated"  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_read_record_is_frozen(tmp_path: Path) -> None:
@@ -193,7 +193,7 @@ def test_read_record_is_frozen(tmp_path: Path) -> None:
     record = _make_record(f)
 
     with pytest.raises(dataclasses.FrozenInstanceError):
-        record.size_at_read = 9999  # type: ignore[misc]
+        record.size_at_read = 9999  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_records_mapping_rejects_mutation(tmp_path: Path) -> None:
@@ -210,4 +210,4 @@ def test_records_mapping_rejects_mutation(tmp_path: Path) -> None:
     )
 
     with pytest.raises(TypeError):
-        carry.records[f] = _make_record(f, turn=99)  # type: ignore[index]
+        carry.records[f] = _make_record(f, turn=99)  # type: ignore[index]  # test data shape known but not in stub

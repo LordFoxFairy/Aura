@@ -43,7 +43,7 @@ def _seed_history(agent: Agent, *, pairs: int = 10) -> None:
     for i in range(pairs):
         h.append(HumanMessage(content=f"u-{i}"))
         h.append(AIMessage(content=f"a-{i}"))
-    agent._storage.save(agent.session_id, h)
+    agent.storage.save(agent.session_id, h)
 
 
 @pytest.mark.asyncio
@@ -60,7 +60,7 @@ async def test_running_task_emitted_as_active_task_message(
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     blob = "\n".join(str(m.content) for m in history)
     assert "<active-task" in blob
     assert rec.id in blob
@@ -83,7 +83,7 @@ async def test_unobserved_terminal_tasks_still_surface(tmp_path: Path) -> None:
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     blob = "\n".join(str(m.content) for m in history)
     assert "done subagent" in blob
     assert 'status="completed"' in blob
@@ -110,7 +110,7 @@ async def test_observed_terminal_tasks_are_excluded(tmp_path: Path) -> None:
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     blob = "\n".join(str(m.content) for m in history)
     assert "observed done" not in blob
     assert "observed failed" not in blob
@@ -138,7 +138,7 @@ async def test_mixed_task_observation_controls_compact_injection(
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     blob = "\n".join(str(m.content) for m in history)
     assert running.id in blob
     assert "still running" in blob
@@ -157,6 +157,6 @@ async def test_no_tasks_no_active_task_messages(tmp_path: Path) -> None:
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     blob = "\n".join(str(m.content) for m in history)
     assert "<active-task" not in blob

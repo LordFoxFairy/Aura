@@ -129,7 +129,7 @@ async def _wait_for_message(
     wait_task = asyncio.create_task(notifier.wait_new(member_name, timeout=timeout))
     stop_task = asyncio.create_task(stop_event.wait())
     try:
-        done, pending = await asyncio.wait(
+        done, _ = await asyncio.wait(
             {wait_task, stop_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
@@ -226,7 +226,7 @@ async def run_teammate(
                 )
             except AbortException:
                 break
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001  # cleanup path must not propagate
                 # A single turn failure shouldn't kill the teammate;
                 # the leader can /team remove to escalate.
                 journal.write(

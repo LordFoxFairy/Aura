@@ -89,7 +89,9 @@ def _expand_in_place(item: dict[str, object], missing: list[str]) -> dict[str, o
     accumulate in *missing* (deduplicated by the expander itself).
     Non-string leaves (ints, bools, None) pass through unchanged.
     """
-    from aura.infrastructure.mcp.adapter import _expand_env_vars  # noqa: PLC0415
+    from aura.infrastructure.mcp.adapter import (
+        _expand_env_vars,  # noqa: PLC0415  # deferred import is intentional
+    )
 
     def _walk(node: object) -> object:
         if isinstance(node, str):
@@ -142,13 +144,13 @@ def _load_layer(path: Path) -> list[MCPServerConfig]:
             expanded.append(item)
     if missing:
         try:
-            from aura.core import journal  # noqa: PLC0415
+            from aura.core import journal  # noqa: PLC0415  # deferred import is intentional
             journal.write(
                 "mcp_env_var_missing",
                 path=str(path),
                 missing=sorted(set(missing)),
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             pass
     try:
         return [MCPServerConfig.model_validate(item) for item in expanded]

@@ -3,7 +3,7 @@
 Modes: bare (current session via ``state.slots.token_stats``), ``7d``
 (last week via ``turn_usage`` journal replay), ``all`` (full replay).
 The journal path resolves from ``journal._path`` (live) →
-``agent._config.log.path`` (configured default). Missing files yield an
+``agent.config.log.path`` (configured default). Missing files yield an
 empty aggregate with a helpful hint rather than an error.
 """
 
@@ -43,7 +43,7 @@ class StatsCommand:
         return self._current_session(agent)
 
     def _current_session(self, agent: Agent) -> CommandResult:
-        stats = agent._state.slots.token_stats
+        stats = agent.state.slots.token_stats
         if stats.turn_count == 0:
             return CommandResult(
                 handled=True,
@@ -173,14 +173,11 @@ def _resolve_journal_path(agent: Agent) -> Path | None:
     live = getattr(journal_mod, "_path", None)
     if isinstance(live, Path):
         return live
-    cfg = getattr(agent, "_config", None)
+    cfg = agent.config
     if cfg is None:
         return None
-    log_cfg = getattr(cfg, "log", None)
-    if log_cfg is None:
-        return None
-    raw_path = getattr(log_cfg, "path", None)
-    if not isinstance(raw_path, str) or not raw_path.strip():
+    raw_path = cfg.log.path
+    if not raw_path.strip():
         return None
     return Path(raw_path).expanduser()
 

@@ -32,7 +32,7 @@ from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.schemas.state import LoopState
 from aura.schemas.tool import (
     ToolError,
-    ToolResult,  # noqa: F401
+    ToolResult,  # noqa: F401  # import is the assertion / fixture side-effect
 )
 from aura.tools.ask_user import FormQuestionDict
 from aura.tools.base import build_tool
@@ -46,11 +46,6 @@ def _sc(outcome: object) -> ToolResult | None:
     if isinstance(outcome, Replace):
         return outcome.result
     return getattr(outcome, "short_circuit", None)
-
-
-# ---------------------------------------------------------------------------
-# Fake Agent that exposes set_mode / mode — the two entry points the tools use.
-# ---------------------------------------------------------------------------
 
 
 class _FakeAgent:
@@ -85,11 +80,6 @@ def _exit_tool(
         mode_getter=lambda: agent.mode,
         asker=asker or _always_yes_asker,
     )
-
-
-# ---------------------------------------------------------------------------
-# enter_plan_mode
-# ---------------------------------------------------------------------------
 
 
 def test_enter_plan_mode_flips_mode_and_returns_envelope() -> None:
@@ -165,11 +155,6 @@ def test_enter_plan_mode_caps_plan_length() -> None:
         tool.invoke({"plan": "x" * 4001})
 
 
-# ---------------------------------------------------------------------------
-# exit_plan_mode
-# ---------------------------------------------------------------------------
-
-
 async def test_exit_plan_mode_defaults_to_default() -> None:
     agent = _FakeAgent(mode="plan")
     tool = _exit_tool(agent)
@@ -214,11 +199,6 @@ def test_exit_plan_mode_rejects_bypass_as_target() -> None:
     tool = _exit_tool(agent)
     with pytest.raises(ValidationError):
         tool.invoke({"plan": "1. thing", "to_mode": "bypass"})
-
-
-# ---------------------------------------------------------------------------
-# permission hook — plan-mode exemption / read-allow / write-block
-# ---------------------------------------------------------------------------
 
 
 class _P(BaseModel):
@@ -282,8 +262,9 @@ async def test_plan_mode_blocks_write_file_through_hook() -> None:
         tool=tool, args={"path": "/tmp/new.txt"}, state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    # narrowed by assert; mypy keeps union
     assert "plan mode" in _sc(outcome).error  # type: ignore[operator,union-attr]
     assert spy.calls == []
 
@@ -357,6 +338,7 @@ async def test_plan_mode_still_blocks_unknown_tools() -> None:
     tool = _mk_tool("weird_custom_tool", args_schema=_P)
     outcome = await hook(tool=tool, args={}, state=LoopState())
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    # narrowed by assert; mypy keeps union
     assert "plan mode" in _sc(outcome).error  # type: ignore[operator,union-attr]

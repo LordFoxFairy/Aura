@@ -34,9 +34,6 @@ from aura.tools.errors import hint_for_error
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 
 
-# ---------------------------------------------------------------------------
-# Feature 1 — hint propagation
-# ---------------------------------------------------------------------------
 class _P(BaseModel):
     msg: str = ""
 
@@ -124,9 +121,6 @@ async def test_no_hint_means_error_text_unchanged() -> None:
     assert "surprise entirely novel failure" in content
 
 
-# ---------------------------------------------------------------------------
-# Feature 2 — bash stdout/stderr streaming
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_bash_emits_progress_events_for_stdout() -> None:
     # A bash call that prints multiple lines should surface as

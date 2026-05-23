@@ -22,10 +22,6 @@ import pytest
 from aura.config import mcp_store
 from aura.infrastructure.mcp.adapter import _expand_env_vars
 
-# ---------------------------------------------------------------------------
-# Direct expander grammar
-# ---------------------------------------------------------------------------
-
 
 def test_expand_passthrough_no_template(monkeypatch: pytest.MonkeyPatch) -> None:
     """A string with no ``${...}`` returns identically — fast path."""
@@ -95,11 +91,6 @@ def test_expand_default_with_dash_in_value(
     preserved verbatim."""
     monkeypatch.delenv("MISSING", raising=False)
     assert _expand_env_vars("${MISSING:-multi-word-default}") == "multi-word-default"
-
-
-# ---------------------------------------------------------------------------
-# mcp_store integration
-# ---------------------------------------------------------------------------
 
 
 def _write_global_store(home: Path, payload: dict[str, Any]) -> Path:

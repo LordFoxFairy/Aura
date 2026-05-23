@@ -27,8 +27,6 @@ import pytest
 
 from aura.schemas.permissions import AskerPrompt, AskerResponse
 
-# ---------- AskerPrompt ----------
-
 
 def test_asker_prompt_constructs_with_all_fields() -> None:
     prompt = AskerPrompt(
@@ -54,7 +52,7 @@ def test_asker_prompt_is_frozen() -> None:
         request_id="req-1",
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
-        prompt.tool = "other"  # type: ignore[misc]
+        prompt.tool = "other"  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_asker_prompt_rejects_empty_request_id() -> None:
@@ -83,13 +81,11 @@ def test_asker_prompt_rejects_empty_tool() -> None:
         )
 
 
-# ---------- AskerResponse ----------
-
-
 @pytest.mark.parametrize("choice", ["yes", "yes-always", "no", "no-always"])
 def test_asker_response_accepts_each_literal_choice(choice: str) -> None:
     """All four ``Literal`` values must construct cleanly. Spec §6 maps
     them onto Decision factories in the gate (Task 8)."""
+    # deliberately off-type arg to exercise path
     response = AskerResponse(choice=choice, request_id="req-1")  # type: ignore[arg-type]
     assert response.choice == choice
     assert response.request_id == "req-1"
@@ -98,7 +94,7 @@ def test_asker_response_accepts_each_literal_choice(choice: str) -> None:
 def test_asker_response_is_frozen() -> None:
     response = AskerResponse(choice="yes", request_id="req-1")
     with pytest.raises(dataclasses.FrozenInstanceError):
-        response.choice = "no"  # type: ignore[misc]
+        response.choice = "no"  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_asker_response_rejects_empty_request_id() -> None:
@@ -113,10 +109,8 @@ def test_asker_response_rejects_unknown_choice() -> None:
     construction with a foreign string raises so a malformed IPC
     payload surfaces at deserialization, not at the gate."""
     with pytest.raises(ValueError, match="choice"):
+        # deliberately off-type arg to exercise path
         AskerResponse(choice="maybe", request_id="req-1")  # type: ignore[arg-type]
-
-
-# ---------- Module exports ----------
 
 
 def test_asker_types_exported_from_schemas_permissions() -> None:
@@ -133,9 +127,6 @@ def test_asker_types_exported_from_schemas_init() -> None:
 
     assert hasattr(schemas_mod, "AskerPrompt")
     assert hasattr(schemas_mod, "AskerResponse")
-
-
-# ---------- request_id pairing convention ----------
 
 
 def test_request_id_pairing_round_trip() -> None:

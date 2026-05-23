@@ -43,7 +43,7 @@ def get_backend(backend_type: BackendType) -> TeammateBackend:
     environment lacks tmux (no ``$TMUX`` or no binary on PATH). The
     in-process backend is always available.
     """
-    global _in_process_singleton, _pane_singleton  # noqa: PLW0603
+    global _in_process_singleton, _pane_singleton  # noqa: PLW0603 — module-scope cache; lazy init needs global rebind
     if backend_type == "in_process":
         if _in_process_singleton is None:
             _in_process_singleton = InProcessBackend()

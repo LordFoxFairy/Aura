@@ -53,11 +53,6 @@ def _sc(outcome: object) -> ToolResult | None:
     return getattr(outcome, "short_circuit", None)
 
 
-# ---------------------------------------------------------------------------
-# Shared fixtures & helpers
-# ---------------------------------------------------------------------------
-
-
 def _skill(
     name: str = "foo",
     *,
@@ -142,11 +137,6 @@ class _SpyAsker:
         return AskerResponse(choice="accept")
 
 
-# ---------------------------------------------------------------------------
-# 1. Slash-command path installs allow-rules
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_skill_invocation_installs_allow_rules(tmp_path: Path) -> None:
     session = SessionRuleSet()
@@ -169,11 +159,6 @@ async def test_skill_invocation_installs_allow_rules(tmp_path: Path) -> None:
         await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# 2. Idempotent re-invocation
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_skill_invocation_idempotent(tmp_path: Path) -> None:
     session = SessionRuleSet()
@@ -188,11 +173,6 @@ async def test_skill_invocation_idempotent(tmp_path: Path) -> None:
         assert rules[0].tool == "grep"
     finally:
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# 3. Undeclared tool still reaches asker (permissive, not restrictive)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -231,11 +211,6 @@ async def test_undeclared_tool_still_prompts(tmp_path: Path) -> None:
         await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# 4. Declared tool auto-allowed via rule_allow
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_declared_tool_auto_allowed(tmp_path: Path) -> None:
     session = SessionRuleSet()
@@ -262,17 +237,12 @@ async def test_declared_tool_auto_allowed(tmp_path: Path) -> None:
         )
         assert _sc(outcome) is None
         assert asker.calls == []
-        assert outcome.decision is not None  # type: ignore[union-attr]
+        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         assert outcome.decision.reason == "rule_allow"  # type: ignore[union-attr]
         assert outcome.decision.rule is not None  # type: ignore[union-attr]
         assert outcome.decision.rule.tool == "grep"  # type: ignore[union-attr]
     finally:
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# 5. Tool path (SkillTool._invoke) installs rules too
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -297,11 +267,6 @@ async def test_tool_path_invocation_also_installs_rules(tmp_path: Path) -> None:
         await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# 6. Empty allowed_tools → no rules
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_allowed_tools_empty_no_rules_added(tmp_path: Path) -> None:
     session = SessionRuleSet()
@@ -313,11 +278,6 @@ async def test_allowed_tools_empty_no_rules_added(tmp_path: Path) -> None:
         assert session.rules() == ()
     finally:
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# 7. Journal event per installed rule
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

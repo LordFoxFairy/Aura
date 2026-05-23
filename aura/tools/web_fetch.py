@@ -94,7 +94,7 @@ def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
 
     req = Request(url, headers={"User-Agent": "aura/0.1.0"})
     try:
-        with urlopen(req, timeout=timeout) as resp:  # noqa: S310
+        with urlopen(req, timeout=timeout) as resp:  # noqa: S310 — scheme + private-host already validated above
             data = resp.read(_MAX_BYTES + 1)
             status = resp.status
             content_type = resp.headers.get("Content-Type", "") or ""
@@ -102,7 +102,7 @@ def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
         # HTTPError is response-like; read body so summary path can describe it.
         try:
             body = exc.read(_MAX_BYTES + 1) if hasattr(exc, "read") else b""
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # corrupt input falls back to default
             body = b""
         return {
             "url": url,
@@ -329,7 +329,7 @@ class WebFetch(Tool):
             raise
         try:
             summary_model = factory()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             return _failure_payload(
                 url=url,
                 status=fetched.get("status"),
@@ -341,7 +341,7 @@ class WebFetch(Tool):
             summary_text, truncated, model_name = await _run_summary(
                 model=summary_model, prompt=prompt, body=body,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             return _failure_payload(
                 url=url,
                 status=fetched.get("status"),

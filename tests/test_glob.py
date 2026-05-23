@@ -146,6 +146,7 @@ def test_invalid_sort_value_rejected() -> None:
     from aura.tools.glob import GlobParams
 
     with pytest.raises(ValidationError):
+        # deliberately off-type arg to exercise path
         GlobParams(pattern="*.py", sort="lastmod")  # type: ignore[arg-type]
 
 

@@ -64,7 +64,9 @@ def _default_manager_factory(
     Kept lazy so module load doesn't pull the heavy MCP transport stack
     when no servers are configured.
     """
-    from aura.infrastructure.mcp import MCPManager  # noqa: PLC0415
+    from aura.infrastructure.mcp import (
+        MCPManager,  # noqa: PLC0415  # deferred import is intentional
+    )
 
     return MCPManager(configs)
 
@@ -182,7 +184,7 @@ class McpRuntime:
         try:
             manager = self._manager_factory(self._configs)
             tools, commands = await manager.start_all()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             journal.write(
                 "mcp_aconnect_failed",
                 error=f"{type(exc).__name__}: {exc}",
@@ -246,7 +248,7 @@ class McpRuntime:
             return []
         try:
             entries = mgr.status()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             return []
         return [
             e.name for e in entries
@@ -297,7 +299,7 @@ class McpRuntime:
                 timeout_sec=timeout_sec,
                 servers_hanging=servers_hanging,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             journal.write(
                 "mcp_close_error",
                 session=session_id,

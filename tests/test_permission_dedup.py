@@ -246,7 +246,7 @@ async def test_asker_failure_not_cached(
     out2 = await hook(tool=tool, args=args, state=state)
 
     assert asker.invocations == 2
-    assert out1.decision is not None  # type: ignore[union-attr]
+    assert out1.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert out1.decision.allow is False  # type: ignore[union-attr]
     assert out2.decision is not None  # type: ignore[union-attr]
     assert out2.decision.allow is True  # type: ignore[union-attr]
@@ -277,7 +277,7 @@ async def test_always_decision_not_stored_in_dedup_cache(tmp_path: Path) -> None
 
     out = await hook(tool=tool, args=args, state=state)
 
-    assert out.decision is not None  # type: ignore[union-attr]
+    assert out.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert out.decision.reason == "user_always"  # type: ignore[union-attr]
     # Cache should be created (by the setdefault in _decide) but the
     # ``always`` branch must NOT have inserted this signature into it.

@@ -35,7 +35,7 @@ describe("findActiveTool", () => {
         name: "bash",
         args: {},
         completed: true,
-        content: { text: '{"ok":true}', error: false },
+        content: { output: { ok: true }, error: false },
         progress: [],
       },
     ];
@@ -51,20 +51,18 @@ describe("findActiveTool", () => {
         name: "read_file",
         args: {},
         completed: true,
-        content: { text: '{"content":"hello"}', error: false },
+        content: { output: { content: "hello" }, error: false },
         progress: [],
       },
     ];
 
     expect(findLatestTool(messages)?.content).toEqual({
-      text: '{"content":"hello"}',
+      output: { content: "hello" },
       error: false,
     });
   });
 
   it("surfaces the error flag for failed tool calls", () => {
-    // Phase 2 Task 9: ``content.error`` is the boolean signal the
-    // ToolCard reads to render the red banner / ⊘ glyph.
     const messages: Message[] = [
       {
         kind: "tool",
@@ -72,14 +70,14 @@ describe("findActiveTool", () => {
         name: "bash",
         args: { command: "rm -rf /" },
         completed: true,
-        content: { text: "permission denied: rm refused", error: true },
+        content: { output: "permission denied: rm refused", error: true },
         progress: [],
       },
     ];
 
     const latest = findLatestTool(messages);
     expect(latest?.content?.error).toBe(true);
-    expect(latest?.content?.text).toBe("permission denied: rm refused");
+    expect(latest?.content?.output).toBe("permission denied: rm refused");
   });
 
   it("formats progress chunks with stable line boundaries", () => {

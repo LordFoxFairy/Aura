@@ -51,11 +51,6 @@ def test_add_aura_metadata_namespaces_tool_name() -> None:
     assert tool.name == "mcp__github__search"
 
 
-# ---------------------------------------------------------------------------
-# F-06-006 — per-tool MCP annotations override conservative defaults.
-# ---------------------------------------------------------------------------
-
-
 def _mk_tool_with_metadata(
     name: str, metadata: dict[str, Any]
 ) -> StructuredTool:
@@ -203,12 +198,6 @@ async def test_make_mcp_command_handle_fetches_body_and_prints() -> None:
     client.get_prompt.assert_awaited_once_with(
         "github", "summarize_pr", arguments={}
     )
-
-
-# ---------------------------------------------------------------------------
-# Argument forwarding — parity with claude-code's ``zipObject`` behaviour in
-# ``src/services/mcp/client.ts`` around lines 2055/2077.
-# ---------------------------------------------------------------------------
 
 
 class _PromptArg:
@@ -359,11 +348,6 @@ async def test_prompt_command_fetch_failure_is_surfaced_not_raised() -> None:
     assert result.handled is True
     assert result.kind == "print"
     assert "server gone" in result.text
-
-
-# ---------------------------------------------------------------------------
-# Per-op timeout — handle() must convert hang → user-readable CommandResult
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

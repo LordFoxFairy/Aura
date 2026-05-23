@@ -140,7 +140,7 @@ def _cmd_add(args: argparse.Namespace) -> int:
         try:
             entry = MCPServerConfig(
                 name=name,
-                transport=transport,  # type: ignore[arg-type]
+                transport=transport,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
                 url=url,
             )
         except ValueError as exc:

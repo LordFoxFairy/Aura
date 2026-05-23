@@ -60,6 +60,7 @@ async def test_two_agents_same_process_write_to_separate_logs(
 
     # Hand-roll agents with the slow model.
     def _slow_agent(session_id: str, content: str) -> Agent:
+        # exercising missing/extra arg path
         model = _SlowFake(turns=[FakeTurn(AIMessage(content=content))])  # type: ignore[call-arg]
         storage = SessionStorage(tmp_path / f"{session_id}.db")
         return Agent(

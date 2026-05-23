@@ -884,7 +884,7 @@ _SUBAGENT_ISOLATION_DRIVER = textwrap.dedent(
         captured[tid] = agent._session_id
         return agent
 
-    factory.spawn = _spying_spawn  # type: ignore[method-assign]
+    factory.spawn = _spying_spawn  # type: ignore[method-assign]  # monkey-patching method for test
 
     async def main() -> None:
         await asyncio.gather(
@@ -1131,7 +1131,7 @@ _AUTO_COMPACT_DRIVER = textwrap.dedent(
             pass
         # After astream, total_tokens_used was 0 (FakeChatModel) so
         # auto-compact didn't fire on its own — bump and re-trigger.
-        agent._state.total_tokens_used = 5000
+        agent.state.total_tokens_used = 5000
         # Manually invoke the post-turn condition by re-running astream
         # with a dummy turn — the threshold check runs at end of astream.
         # But our queue is empty; instead call compact() directly to
@@ -1139,12 +1139,12 @@ _AUTO_COMPACT_DRIVER = textwrap.dedent(
         # Simpler: manually fire the auto-compact branch
         if (
             agent._auto_compact_threshold > 0
-            and agent._state.total_tokens_used > agent._auto_compact_threshold
+            and agent.state.total_tokens_used > agent._auto_compact_threshold
         ):
             journal.write(
                 "auto_compact_triggered",
                 session=agent._session_id,
-                tokens=agent._state.total_tokens_used,
+                tokens=agent.state.total_tokens_used,
                 threshold=agent._auto_compact_threshold,
             )
             await agent.compact(source="auto")
@@ -1225,7 +1225,7 @@ _AURA_MD_RELOAD_DRIVER = textwrap.dedent(
         watcher = FileWatcher(
             paths=[aura_md_path],
             chain=agent._hooks,
-            state=agent._state,
+            state=agent.state,
             poll_interval=0.05,
         )
         await watcher.start()

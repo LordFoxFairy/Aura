@@ -102,6 +102,7 @@ async def test_bash_allow_command_installs_session_rule(
     })
     asker = make_cli_asker()
     resp = await asker(
+        # deliberately off-type arg to exercise path
         tool=_bash_tool(), args={"command": "ls -la"}, rule_hint=None,  # type: ignore[arg-type]
     )
     assert resp.choice == "always"
@@ -119,6 +120,7 @@ async def test_bash_allow_prefix_installs_project_rule(
     })
     asker = make_cli_asker()
     resp = await asker(
+        # deliberately off-type arg to exercise path
         tool=_bash_tool(), args={"command": "git status"}, rule_hint=None,  # type: ignore[arg-type]
     )
     assert resp.choice == "always"
@@ -136,6 +138,7 @@ async def test_bash_deny_carries_feedback(
     })
     asker = make_cli_asker()
     resp = await asker(
+        # deliberately off-type arg to exercise path
         tool=_bash_tool(), args={"command": "rm -rf /"}, rule_hint=None,  # type: ignore[arg-type]
     )
     assert resp.choice == "deny"
@@ -154,7 +157,7 @@ async def test_write_allow_dir_installs_dir_rule(
     resp = await asker(
         tool=_write_tool(),
         args={"path": "src/foo/bar.py", "content": ""},
-        rule_hint=None,  # type: ignore[arg-type]
+        rule_hint=None,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
     )
     assert resp.choice == "always"
     assert resp.scope == "project"
@@ -173,7 +176,7 @@ async def test_write_allow_path_uses_derived_rule(
     resp = await asker(
         tool=_write_tool(),
         args={"path": "src/foo.py", "content": ""},
-        rule_hint=None,  # type: ignore[arg-type]
+        rule_hint=None,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
     )
     assert resp.choice == "always"
     assert resp.scope == "project"
@@ -191,6 +194,7 @@ async def test_generic_allow_always_session_rule_when_no_matcher(
     })
     asker = make_cli_asker()
     resp = await asker(
+        # deliberately off-type arg to exercise path
         tool=_generic_tool(), args={"arg": ""}, rule_hint=None,  # type: ignore[arg-type]
     )
     assert resp.choice == "always"

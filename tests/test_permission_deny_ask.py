@@ -41,7 +41,6 @@ def _sc(outcome: object) -> ToolResult | None:
     return getattr(outcome, "short_circuit", None)
 
 
-
 class _P(BaseModel):
     pass
 
@@ -95,11 +94,6 @@ def journal_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
     return events
 
 
-# ---------------------------------------------------------------------------
-# Schema — backward compatibility + new fields
-# ---------------------------------------------------------------------------
-
-
 def test_permissions_config_deny_ask_default_to_empty_lists() -> None:
     cfg = PermissionsConfig()
     assert cfg.deny == []
@@ -149,11 +143,6 @@ def test_load_concatenates_deny_and_ask_across_project_and_local(
     # Project first, local appended — same shape as allow.
     assert cfg.deny == ["bash(rm:*)", "bash(curl:*)"]
     assert cfg.ask == ["bash(git push:*)", "read_file(/etc/passwd)"]
-
-
-# ---------------------------------------------------------------------------
-# Loader — load_deny_ruleset / load_ask_ruleset
-# ---------------------------------------------------------------------------
 
 
 def test_load_deny_ruleset_parses_kind_deny(tmp_path: Path) -> None:
@@ -223,11 +212,6 @@ def test_invalid_rule_pattern_in_ask_logs_and_skips(
     assert parse_events[0][1]["kind"] == "ask"
 
 
-# ---------------------------------------------------------------------------
-# Decision pipeline — deny rules
-# ---------------------------------------------------------------------------
-
-
 async def test_deny_rule_blocks_under_default_mode(
     journal_events: list[tuple[str, dict[str, Any]]],
     tmp_path: Path,
@@ -253,10 +237,11 @@ async def test_deny_rule_blocks_under_default_mode(
         state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert _sc(outcome).error is not None  # type: ignore[union-attr]
+    # narrowed by assert; mypy keeps union
     assert "deny rule" in _sc(outcome).error  # type: ignore[operator,union-attr]
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
     assert outcome.decision.allow is False  # type: ignore[union-attr]
     # Asker must NOT be consulted — deny rules short-circuit hard.
@@ -289,7 +274,7 @@ async def test_deny_rule_blocks_even_under_bypass(
         state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
     # ``permission_bypass`` MUST NOT fire — deny short-circuited first.
     assert "permission_bypass" not in [e[0] for e in journal_events]
@@ -321,7 +306,7 @@ async def test_deny_overrides_allow_when_both_match(
         args={"command": pattern},
         state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
     assert outcome.decision.allow is False  # type: ignore[union-attr]
 
@@ -351,11 +336,6 @@ async def test_journal_records_rule_pattern_and_kind_for_deny(
     assert decision_event[1]["reason"] == "rule_deny"
     assert decision_event[1]["rule"] == deny_rule.to_string()
     assert decision_event[1]["rule_kind"] == "deny"
-
-
-# ---------------------------------------------------------------------------
-# Decision pipeline — ask rules
-# ---------------------------------------------------------------------------
 
 
 async def test_ask_rule_forces_prompt_when_allow_rule_would_match(
@@ -388,7 +368,7 @@ async def test_ask_rule_forces_prompt_when_allow_rule_would_match(
     assert _sc(outcome) is None
     # Asker WAS consulted — the allow rule was overridden by the ask rule.
     assert len(spy.calls) == 1
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.reason == "user_accept"  # type: ignore[union-attr]
 
 
@@ -479,11 +459,6 @@ async def test_ask_rule_emits_audit_event(
     assert forced[0][1]["rule"] == ask_rule.to_string()
 
 
-# ---------------------------------------------------------------------------
-# Precedence — full ladder deny > ask > allow > default
-# ---------------------------------------------------------------------------
-
-
 async def test_deny_overrides_ask_when_both_match(
     journal_events: list[tuple[str, dict[str, Any]]],
     tmp_path: Path,
@@ -513,7 +488,7 @@ async def test_deny_overrides_ask_when_both_match(
         args={"command": pattern},
         state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
     assert spy.calls == []  # never prompted — deny short-circuits
 
@@ -541,14 +516,9 @@ async def test_no_deny_no_ask_falls_through_to_allow_path(
         args={"command": "ls -la"},
         state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.reason == "rule_allow"  # type: ignore[union-attr]
     assert outcome.decision.allow is True  # type: ignore[union-attr]
-
-
-# ---------------------------------------------------------------------------
-# End-to-end via store loader — confirms the wiring
-# ---------------------------------------------------------------------------
 
 
 async def test_e2e_settings_json_deny_rule_blocks_call(
@@ -575,5 +545,5 @@ async def test_e2e_settings_json_deny_rule_blocks_call(
         args={"command": "npm publish"},
         state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]

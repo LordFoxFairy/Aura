@@ -35,10 +35,6 @@ from aura.application.compact.microcompact import (
     select_clear_ids,
 )
 
-# ---------------------------------------------------------------------------
-# Fixture helpers
-# ---------------------------------------------------------------------------
-
 
 def _ai_with_call(
     tool_name: str, tool_call_id: str, args: dict[str, object] | None = None,
@@ -75,11 +71,6 @@ def _n_pairs(n: int, *, tool_name: str = "read_file") -> list[BaseMessage]:
         messages.append(_ai_with_call(tool_name, f"tc-{i}"))
         messages.append(_tool_msg(f"tc-{i}", name=tool_name, content=f"result-{i}"))
     return messages
-
-
-# ---------------------------------------------------------------------------
-# find_tool_pairs
-# ---------------------------------------------------------------------------
 
 
 def test_find_tool_pairs_empty_messages_returns_empty() -> None:
@@ -144,11 +135,6 @@ def test_find_tool_pairs_collision_first_match_wins() -> None:
     assert pairs[0].tool_idx == 1  # first ToolMessage wins
 
 
-# ---------------------------------------------------------------------------
-# select_clear_ids
-# ---------------------------------------------------------------------------
-
-
 def _synthetic_pairs(n: int) -> list[ToolPair]:
     return [
         ToolPair(ai_idx=2 * i, tool_idx=2 * i + 1, tool_call_id=f"tc-{i}", tool_name="read_file")
@@ -187,11 +173,6 @@ def test_select_clear_ids_trigger_one_keep_one() -> None:
     # 2 pairs, trigger=1, keep_recent=1 → clear 1 (tc-0).
     ids = select_clear_ids(_synthetic_pairs(2), trigger_pairs=1, keep_recent=1)
     assert ids == {"tc-0"}
-
-
-# ---------------------------------------------------------------------------
-# apply_clear
-# ---------------------------------------------------------------------------
 
 
 def test_apply_clear_empty_ids_returns_references() -> None:
@@ -278,11 +259,6 @@ def test_apply_clear_only_touches_matching_tool_messages() -> None:
     # Other two keep original content.
     assert t0.content == "keep-0"
     assert t2.content == "keep-2"
-
-
-# ---------------------------------------------------------------------------
-# apply_microcompact (facade)
-# ---------------------------------------------------------------------------
 
 
 def test_apply_microcompact_trigger_zero_is_noop() -> None:

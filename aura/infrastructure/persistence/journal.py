@@ -81,6 +81,6 @@ def write(event: str, /, **fields: Any) -> None:
             # tmpfs / nfs may reject fsync; suppress to keep agent running.
             with contextlib.suppress(OSError, ValueError):
                 os.fsync(f.fileno())
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # persistence failure is non-fatal best-effort
         # Contract: audit failure must NEVER crash the agent.
         pass

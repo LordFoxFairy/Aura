@@ -31,10 +31,6 @@ from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
-# ---------------------------------------------------------------------------
-# fixtures
-# ---------------------------------------------------------------------------
-
 
 def _config() -> AuraConfig:
     return AuraConfig.model_validate({
@@ -68,11 +64,11 @@ def _make_compactor(
     """
     return Compactor(
         agent=agent,
-        config=agent._config.compact,
+        config=agent.config.compact,
         summary_model=agent._model,
         microcompact_policy=microcompact_policy,
         session_id=agent.session_id,
-        turn_provider=lambda: agent._state.turn_count,
+        turn_provider=lambda: agent.state.turn_count,
         event_emitter=(events.append if events is not None else None),
     )
 
@@ -87,11 +83,6 @@ def _read_journal(log: Path) -> list[dict[str, Any]]:
     ]
 
 
-# ---------------------------------------------------------------------------
-# microcompact
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_microcompact_skipped_when_policy_none(tmp_path: Path) -> None:
     """No policy → method is a pass-through; emits ``outcome="skipped"``."""
@@ -100,7 +91,7 @@ async def test_microcompact_skipped_when_policy_none(tmp_path: Path) -> None:
     compactor = _make_compactor(agent, events=events, microcompact_policy=None)
 
     msgs = [HumanMessage(content="hi"), AIMessage(content="hello")]
-    out = await compactor.microcompact(msgs, agent._state.slots)
+    out = await compactor.microcompact(msgs, agent.state.slots)
 
     assert out is msgs  # identity preserved
     assert len(events) == 1
@@ -146,7 +137,7 @@ async def test_microcompact_happy_path_emits_ok(tmp_path: Path) -> None:
             ),
         )
 
-    out = await compactor.microcompact(msgs, agent._state.slots)
+    out = await compactor.microcompact(msgs, agent.state.slots)
     assert len(events) == 1
     # When pairs were cleared, outcome must be "ok".
     if events[0]["outcome"] == "ok":
@@ -170,7 +161,7 @@ async def test_microcompact_writes_compact_event_to_journal(
         agent = _agent(tmp_path)
         compactor = _make_compactor(agent, microcompact_policy=None)
         await compactor.microcompact(
-            [HumanMessage(content="hi")], agent._state.slots,
+            [HumanMessage(content="hi")], agent.state.slots,
         )
         records = [
             ev for ev in _read_journal(log) if ev.get("event") == "compact_event"
@@ -185,11 +176,6 @@ async def test_microcompact_writes_compact_event_to_journal(
         await agent.aclose()
     finally:
         journal.reset()
-
-
-# ---------------------------------------------------------------------------
-# reactive
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -210,7 +196,7 @@ async def test_reactive_delegates_to_agent_compact(tmp_path: Path) -> None:
 
     history: list[Any] = []
     with patch.object(Agent, "compact", _ok):
-        result = await compactor.reactive(history, agent._state.slots)
+        result = await compactor.reactive(history, agent.state.slots)
 
     assert seen == ["reactive"]
     assert result.before_tokens == 100
@@ -234,7 +220,7 @@ async def test_reactive_failure_emits_failed_outcome(tmp_path: Path) -> None:
 
     history: list[Any] = []
     with patch.object(Agent, "compact", _boom), pytest.raises(RuntimeError, match="simulated"):
-        await compactor.reactive(history, agent._state.slots)
+        await compactor.reactive(history, agent.state.slots)
 
     assert len(events) == 1
     assert events[0]["trigger"] == "reactive"
@@ -242,21 +228,16 @@ async def test_reactive_failure_emits_failed_outcome(tmp_path: Path) -> None:
     await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# auto
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_auto_below_threshold_skips(tmp_path: Path) -> None:
     """Token usage below threshold → ``None`` + ``outcome="skipped"``."""
     agent = _agent(tmp_path, threshold=1_000)
-    agent._state.total_tokens_used = 10
+    agent.state.total_tokens_used = 10
     events: list[dict[str, Any]] = []
     compactor = _make_compactor(agent, events=events)
 
     result = await compactor.auto(
-        [], agent._state.slots, model="openai:gpt-4o-mini",
+        [], agent.state.slots, model="openai:gpt-4o-mini",
     )
 
     assert result is None
@@ -273,9 +254,9 @@ async def test_auto_above_threshold_runs_and_resets_breaker(
     """Crossing threshold → run; success resets ``consecutive_compact_failures``."""
     import dataclasses as _dc
     agent = _agent(tmp_path, threshold=10)
-    agent._state.total_tokens_used = 100
-    agent._state.slots = _dc.replace(
-        agent._state.slots, consecutive_compact_failures=2,
+    agent.state.total_tokens_used = 100
+    agent.state.slots = _dc.replace(
+        agent.state.slots, consecutive_compact_failures=2,
     )
     events: list[dict[str, Any]] = []
     compactor = _make_compactor(agent, events=events)
@@ -288,12 +269,12 @@ async def test_auto_above_threshold_runs_and_resets_breaker(
 
     with patch.object(Agent, "compact", _ok):
         result = await compactor.auto(
-            [], agent._state.slots, model="openai:gpt-4o-mini",
+            [], agent.state.slots, model="openai:gpt-4o-mini",
         )
 
     assert result is not None
     assert result.after_tokens == 20
-    assert agent._state.slots.consecutive_compact_failures == 0
+    assert agent.state.slots.consecutive_compact_failures == 0
     assert any(
         ev["trigger"] == "auto" and ev["outcome"] == "ok" for ev in events
     )
@@ -310,7 +291,7 @@ async def test_auto_failure_increments_circuit_breaker(tmp_path: Path) -> None:
     ``Agent.compact`` again.
     """
     agent = _agent(tmp_path, threshold=10)
-    agent._state.total_tokens_used = 100
+    agent.state.total_tokens_used = 100
     events: list[dict[str, Any]] = []
     compactor = _make_compactor(agent, events=events)
 
@@ -325,17 +306,17 @@ async def test_auto_failure_increments_circuit_breaker(tmp_path: Path) -> None:
         for _ in range(3):
             with pytest.raises(RuntimeError):
                 await compactor.auto(
-                    [], agent._state.slots, model="openai:gpt-4o-mini",
+                    [], agent.state.slots, model="openai:gpt-4o-mini",
                 )
 
-    assert agent._state.slots.consecutive_compact_failures == 3
+    assert agent.state.slots.consecutive_compact_failures == 3
     assert len(calls) == 3
 
     # Fourth attempt — breaker tripped, no more Agent.compact calls.
     pre = len(calls)
     with patch.object(Agent, "compact", _fail):
         result = await compactor.auto(
-            [], agent._state.slots, model="openai:gpt-4o-mini",
+            [], agent.state.slots, model="openai:gpt-4o-mini",
         )
     assert result is None
     assert len(calls) == pre, "circuit breaker did not block 4th attempt"
@@ -361,7 +342,7 @@ async def test_auto_breaker_limit_honors_config(tmp_path: Path) -> None:
         storage=SessionStorage(tmp_path / "aura.db"),
         auto_compact_threshold=10,
     )
-    agent._state.total_tokens_used = 100
+    agent.state.total_tokens_used = 100
     compactor = _make_compactor(agent)
 
     calls: list[str] = []
@@ -373,11 +354,11 @@ async def test_auto_breaker_limit_honors_config(tmp_path: Path) -> None:
     with patch.object(Agent, "compact", _fail):
         with pytest.raises(RuntimeError):
             await compactor.auto(
-                [], agent._state.slots, model="openai:gpt-4o-mini",
+                [], agent.state.slots, model="openai:gpt-4o-mini",
             )
         # After ONE failure the breaker is tripped (limit=1).
         result = await compactor.auto(
-            [], agent._state.slots, model="openai:gpt-4o-mini",
+            [], agent.state.slots, model="openai:gpt-4o-mini",
         )
 
     assert result is None
@@ -385,18 +366,13 @@ async def test_auto_breaker_limit_honors_config(tmp_path: Path) -> None:
     await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# manual
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_manual_delegates_and_bypasses_breaker(tmp_path: Path) -> None:
     """Manual ignores the circuit breaker entirely."""
     import dataclasses as _dc
     agent = _agent(tmp_path)
-    agent._state.slots = _dc.replace(
-        agent._state.slots, consecutive_compact_failures=99,
+    agent.state.slots = _dc.replace(
+        agent.state.slots, consecutive_compact_failures=99,
     )
     events: list[dict[str, Any]] = []
     compactor = _make_compactor(agent, events=events)
@@ -411,22 +387,17 @@ async def test_manual_delegates_and_bypasses_breaker(tmp_path: Path) -> None:
         )
 
     with patch.object(Agent, "compact", _ok):
-        result = await compactor.manual([], agent._state.slots)
+        result = await compactor.manual([], agent.state.slots)
 
     assert seen == ["manual"]
     assert result.before_tokens == 10
     assert result.after_tokens == 5
     # Breaker counter untouched — manual is a user-explicit override.
-    assert agent._state.slots.consecutive_compact_failures == 99
+    assert agent.state.slots.consecutive_compact_failures == 99
     assert len(events) == 1
     assert events[0]["trigger"] == "manual"
     assert events[0]["outcome"] == "ok"
     await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# wire-event shape contract
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -447,7 +418,7 @@ async def test_event_emitter_payload_matches_spec(tmp_path: Path) -> None:
         )
 
     with patch.object(Agent, "compact", _ok):
-        await compactor.manual([], agent._state.slots)
+        await compactor.manual([], agent.state.slots)
 
     assert len(events) == 1
     ev = events[0]
@@ -474,18 +445,18 @@ async def test_emitter_failure_does_not_propagate(tmp_path: Path) -> None:
 
     compactor = Compactor(
         agent=agent,
-        config=agent._config.compact,
+        config=agent.config.compact,
         summary_model=agent._model,
         microcompact_policy=None,
         session_id=agent.session_id,
-        turn_provider=lambda: agent._state.turn_count,
+        turn_provider=lambda: agent.state.turn_count,
         event_emitter=_boom,
     )
 
     # microcompact with policy=None is a pass-through; the emitter
     # would normally fire here. The buggy emitter must be swallowed.
     out = await compactor.microcompact(
-        [HumanMessage(content="x")], agent._state.slots,
+        [HumanMessage(content="x")], agent.state.slots,
     )
     assert len(out) == 1
     await agent.aclose()

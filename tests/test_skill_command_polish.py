@@ -38,11 +38,6 @@ if TYPE_CHECKING:
     pass
 
 
-# ---------------------------------------------------------------------------
-# Shared fixtures
-# ---------------------------------------------------------------------------
-
-
 def _skill(
     name: str = "foo",
     *,
@@ -59,7 +54,7 @@ def _skill(
         description=description or f"Description of {name}.",
         body=body,
         source_path=Path(f"/tmp/{name}.md"),
-        layer=layer,  # type: ignore[arg-type]
+        layer=layer,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         arguments=arguments,
         user_invocable=user_invocable,
         disable_model_invocation=disable_model_invocation,
@@ -103,11 +98,6 @@ def _journal_events(log: Path) -> list[dict[str, object]]:
         for line in log.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-
-
-# ===========================================================================
-# Item 1 — user_invocable=False filter
-# ===========================================================================
 
 
 def test_user_invocable_false_skill_not_registered_as_slash_command(
@@ -195,11 +185,6 @@ def test_fully_hidden_skill(tmp_path: Path) -> None:
         agent.close()
 
 
-# ===========================================================================
-# Item 2 — slash path errors on missing required args
-# ===========================================================================
-
-
 @pytest.mark.asyncio
 async def test_slash_path_errors_on_missing_required_arg(
     tmp_path: Path,
@@ -279,11 +264,6 @@ async def test_tool_and_slash_paths_share_error_format(
         assert str(exc_info.value) == slash_result.text
     finally:
         await agent.aclose()
-
-
-# ===========================================================================
-# Item 3 — /help grouping by source
-# ===========================================================================
 
 
 class _StubCommand:
@@ -398,11 +378,6 @@ async def test_help_maintains_alignment_within_group(tmp_path: Path) -> None:
         agent.close()
 
 
-# ===========================================================================
-# Item 4 — /help multi-line description collapse
-# ===========================================================================
-
-
 @pytest.mark.asyncio
 async def test_help_collapses_multiline_description(tmp_path: Path) -> None:
     """Multi-line description must collapse to its first non-empty line."""
@@ -431,11 +406,6 @@ async def test_help_collapses_multiline_description(tmp_path: Path) -> None:
         assert "first line only" in multi_lines[0]
     finally:
         agent.close()
-
-
-# ===========================================================================
-# Item 5 — skill_invoked journal event carries allowed_tools + source
-# ===========================================================================
 
 
 @pytest.mark.asyncio

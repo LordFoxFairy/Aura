@@ -517,7 +517,7 @@ def _provider_type(model: Any | None) -> str:
         return ""
     try:
         return str(model._llm_type)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
         return ""
 
 

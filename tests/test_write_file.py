@@ -113,11 +113,6 @@ def test_write_file_metadata_includes_matcher_and_preview() -> None:
     assert preview({"path": "x.md", "content": "hello"}) == "path: x.md  (5 chars)"
 
 
-# ---------------------------------------------------------------------------
-# Phase 5 Task 2 — ``validate_input`` rejects empty paths
-# ---------------------------------------------------------------------------
-
-
 def test_validate_input_rejects_empty_path() -> None:
     result = write_file.validate_input({"path": "", "content": "x"})
     assert isinstance(result, ValidationResult)

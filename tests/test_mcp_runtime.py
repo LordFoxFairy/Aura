@@ -44,10 +44,6 @@ def _as_factory(
     """Cast a fake manager class to the production factory type."""
     return cast("Any", cls)
 
-# ----------------------------------------------------------------------
-# Test helpers
-# ----------------------------------------------------------------------
-
 
 class _Args(BaseModel):
     q: str = ""
@@ -132,11 +128,6 @@ def _read_journal(path: Path) -> list[dict[str, Any]]:
         for line in path.read_text().splitlines()
         if line.strip()
     ]
-
-
-# ----------------------------------------------------------------------
-# Cases
-# ----------------------------------------------------------------------
 
 
 def test_init_is_sync_and_does_not_spin_manager() -> None:

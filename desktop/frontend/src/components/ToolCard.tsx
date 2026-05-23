@@ -12,9 +12,19 @@ export function formatToolProgress(
     .join("\n");
 }
 
+export function formatToolOutput(output: unknown): string {
+  // String passthrough preserves error messages / pre-formatted text;
+  // structured values render as pretty JSON for human reading.
+  if (output === undefined || output === null) return "";
+  if (typeof output === "string") return output;
+  try {
+    return JSON.stringify(output, null, 2);
+  } catch {
+    return String(output);
+  }
+}
+
 export default function ToolCard({ msg }: Props): React.ReactElement {
-  // Phase 2 Task 9 — unified ``content: {text, error}`` shape. The
-  // boolean ``error`` flag drives the red banner / ⊘ glyph.
   const isError = msg.completed && msg.content?.error === true;
   const statusClass = !msg.completed
     ? "tool-card__status--running"
@@ -28,7 +38,7 @@ export default function ToolCard({ msg }: Props): React.ReactElement {
       ? "error"
       : "ok";
   const progressText = formatToolProgress(msg.progress);
-  const outputText = msg.content?.text ?? "";
+  const outputText = formatToolOutput(msg.content?.output);
   const cardClass = isError ? "tool-card tool-card--error" : "tool-card";
 
   return (

@@ -167,11 +167,6 @@ def test_bash_background_metadata_timeout_sec_is_none() -> None:
     assert meta_dict(tool).get("timeout_sec") is None
 
 
-# --------------------------------------------------------------------------
-# Per-tool default assertions — documents the exact numeric floor each
-# shipped tool carries, so an accidental regression flips a red test
-# rather than sneaks through review.
-# --------------------------------------------------------------------------
 def test_grep_timeout_default_is_30() -> None:
     assert meta_dict(grep).get("timeout_sec") == 30.0
 

@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import json
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -64,30 +64,16 @@ _AUTO_ALLOW_REASONS: frozenset[str] = frozenset(
     {"rule_allow", "mode_bypass"},
 )
 
-# B4 — batch wall-clock timeout. Env override for
-# ``AgentLoop(batch_timeout_sec=...)``; default 60.0s; ``<= 0`` disables.
-# Resolved once in ``AgentLoop.__init__`` so an env flip mid-session does
-# NOT race against the outer wait — mirrors the ``subagent_timeout`` pattern
-# in :mod:`aura.application.tasks.run`.
+# Resolved once in __init__ so env flip mid-session does not race the outer wait.
 _BATCH_TIMEOUT_ENV_VAR = "AURA_BATCH_TIMEOUT_SEC"
 _DEFAULT_BATCH_TIMEOUT_SEC: float = 60.0
 
-# F-01-005 — partial-response (max_output_tokens) recovery budget. When a
-# model run terminates with finish_reason=length / stop_reason=max_tokens,
-# we append a meta HumanMessage asking the model to resume and re-invoke
-# up to this many extra times PER turn. Three is enough headroom for two
-# concatenated long replies without letting a misbehaving provider park a
-# turn forever.
+# Cap so a misbehaving provider that always returns length cannot loop forever.
 _MAX_LENGTH_RETRY: int = 3
 
-# Finish reasons that map to "output truncated by max_output_tokens" across
-# providers. ``length`` is OpenAI's value, ``max_tokens`` is Anthropic's.
-# Lowercased before compare so SDK casing differences don't slip through.
+# ``length`` = OpenAI; ``max_tokens`` = Anthropic. Lowercased before compare.
 _LENGTH_FINISH_REASONS: frozenset[str] = frozenset({"length", "max_tokens"})
 
-# Body of the meta HumanMessage we append on a length cut-off. Phrased to
-# tell the model to keep going from where it stopped — claude-code uses a
-# similar string in its query-engine length-recovery branch.
 _LENGTH_RESUME_PROMPT: str = (
     "(Output token limit hit. Resume directly from where you stopped, "
     "without repeating prior content.)"
@@ -216,10 +202,7 @@ def partition_batches(steps: list[ToolStep]) -> list[list[ToolStep]]:
 
 class AgentLoop:
     _DEFAULT_MAX_TURNS: int | None = None
-    # F-01-012 — cap reactive-compact retries inside one turn so a
-    # permanently-overflowing prompt cannot loop forever. One retry is
-    # the contract: if a single compact didn't fit the prompt, repeated
-    # compacts won't either, so propagate the error.
+    # One retry: a single compact didn't fit means repeated compacts won't either.
     _MAX_REACTIVE_COMPACT: int = 1
 
     def __init__(
@@ -244,52 +227,18 @@ class AgentLoop:
         self._hooks = hooks or HookChain()
         self._state = state or LoopState()
         self._context = context
-        # Retry policy for the narrow ``model.ainvoke()`` site. ``None`` =
-        # library defaults (3 attempts, 1s base, 30s cap, jitter on) via
-        # :class:`aura.config.schema.RetryConfig`. Stored as a concrete
-        # RetryConfig so ``_invoke_model`` does not branch per call.
         self._retry_config = retry_config or RetryConfig()
-        # G2 microcompact: view-only compression of old tool_use/tool_result
-        # pairs applied per turn between ``Context.build`` and ``ainvoke``.
-        # ``None`` = feature disabled (pass-through). Threaded as a kwarg
-        # (mirroring ``retry_config``) rather than read through ``_state``
-        # so the loop does not need an Agent back-reference. Session id is
-        # threaded separately so journal events carry the same ``session=``
-        # field as Agent-level events (auto_compact_triggered et al.).
         self._session_id = session_id
         self._microcompact_policy = microcompact_policy
-        # Mirror claude-code query.ts:1705. Default 50 is Aura policy: claude-code
-        # leaves this to the caller, we ship a sane default to stop runaway
-        # tool-call loops. Explicit None disables the cap (no-cap semantics).
         self._max_turns = max_turns
-        # Save the raw model so _rebind_tools can rebind a fresh tool set
-        # after MCP registers tools post-construction. Without the ref we'd
-        # be rebinding an already-bound model (double-bind is unsupported
-        # on some providers).
+        # Raw model kept so _rebind_tools can rebind after MCP registers tools
+        # — double-binding an already-bound model is unsupported on some providers.
         self._model = model
-        # bind_tools 只在构造时调一次：schema 在 registry 固定后不变，多 turn 共享同一 bound model。
-        # 空 registry 跳过 bind_tools —— 某些 provider 对 tools=[] 行为不一致，直接不绑更稳。
+        # 空 registry 跳过 bind_tools：某些 provider 对 tools=[] 行为不一致。
         self._bound = model.bind_tools(registry.tools()) if len(registry) > 0 else model
-        # B4 — batch wall-clock deadline. Resolved ONCE per loop so an env
-        # flip mid-session does not race against the outer wait. ``0.0``
-        # sentinel = feature disabled; otherwise ``_run_batch`` enforces
-        # the deadline regardless of batch size (Phase 1 Task 12 dropped
-        # the previous ``len(batch) > 1`` gate).
+        # 0.0 sentinel = disabled; otherwise _run_batch enforces deadline regardless of size.
         self._batch_timeout_sec = _resolve_batch_timeout(batch_timeout_sec)
-        # F-01-012 — reactive compact callback. When set, ``_invoke_model``
-        # catches context-overflow on ``ainvoke``, calls this back to mutate
-        # ``history`` in place (the Agent compacts + reloads), and retries
-        # the SAME turn (turn_count + per-turn audit state preserved).
-        # ``None`` keeps the legacy "raise to caller" behaviour for tests
-        # that drive AgentLoop directly without an Agent.
         self._compact_callback = compact_callback
-        # Phase 1 §3.3 — Compactor Protocol entry point. When supplied
-        # (Agent always supplies a :class:`Compactor`), the loop
-        # routes microcompact + reactive compaction through this
-        # interface instead of the legacy direct paths. Tests that drive
-        # AgentLoop without an Agent leave this ``None`` and the legacy
-        # ``microcompact_policy`` + ``compact_callback`` paths still
-        # work as before.
         self._compactor = compactor
 
     def _rebind_tools(self, tools: list[BaseTool]) -> None:
@@ -315,35 +264,17 @@ class AgentLoop:
         history: list[BaseMessage],
         abort: AbortController | None = None,
     ) -> AsyncIterator[AgentEvent]:
-        # Contract (G1): ``history`` already contains the user's
-        # HumanMessage (+ any attachments), appended by the caller BEFORE
-        # this coroutine is invoked. The caller is also expected to have
-        # persisted that state. See :meth:`Agent.astream`. Matches
-        # claude-code's QueryEngine boundary: the loop owns model rounds
-        # + tool dispatch; transcript ownership lives one layer up so a
-        # crash mid-turn cannot erase the user's input.
+        # Contract: caller appends + persists the user's HumanMessage BEFORE
+        # invoking — transcript ownership lives one layer up so a crash
+        # mid-turn cannot erase the user's input.
         #
-        # G5 / Phase 1 Task 4: clear the per-turn denials sink at the
-        # turn boundary (once per astream call), NOT inside the while
-        # loop — multiple model rounds within the same user turn share
-        # one audit bucket. The sink now lives on the typed
-        # ``state.slots.turn_denials`` slot; in-place ``.clear()`` is
-        # the documented mutation pattern (``LoopSlots`` is frozen at
-        # the *attribute* level, but its mutable container fields
-        # accept in-place mutation — see ``LoopSlots`` docstring + spec
-        # §4 step 1). The list identity is stable for the session so
-        # ``Agent.last_turn_denials`` always sees the same object.
+        # Per-turn sinks reset at the turn boundary, NOT inside the while loop:
+        # multiple model rounds within the same user turn share one bucket.
+        # List identity is stable so Agent.last_turn_denials sees the same object.
         self._state.slots.turn_denials.clear()
-        # Reset the permission-hook per-turn ResolveOnce cache. Lives on
-        # the typed ``state.slots.perm_dedup_cache`` slot (Phase 1 Task 6).
-        # In-place ``.clear()`` is the documented mutation pattern
-        # (``LoopSlots`` is frozen at the *attribute* level, not on its
-        # mutable container fields — see the ``LoopSlots`` docstring).
         self._state.slots.perm_dedup_cache.clear()
-        # F-01-001 abort plumbing — install the controller into the
-        # contextvar so tools (and any spawned subagent on the same task
-        # tree) inherit the same signal. Tests that drive AgentLoop
-        # directly without an Agent pass abort=None — we tolerate that.
+        # Install controller into contextvar so tools (and spawned subagents
+        # on the same task tree) inherit the same signal.
         ctx_token = None
         if abort is not None:
             ctx_token = current_abort_signal.set(abort)
@@ -365,11 +296,8 @@ class AgentLoop:
                         ai.response_metadata.get("finish_reason")
                         == "length_recovery_exhausted"
                     ):
-                        # Phase 1 Task 12 — surface exhaustion as its own
-                        # Final reason carrying the partial assistant text.
-                        # The CLI renderer shows a "⚠ output truncated"
-                        # banner; AG-UI propagates the reason in
-                        # ``RUN_FINISHED.result.reason``.
+                        # Surface exhaustion as its own Final reason carrying
+                        # the partial assistant text.
                         journal.write(
                             "turn_end",
                             turn=self._state.turn_count,
@@ -387,10 +315,9 @@ class AgentLoop:
                     yield Final(message=str(ai.content))
                     return
 
-                # F-01-001 mid-batch abort: synthesise one ToolMessage per
-                # unanswered tool_call_id so the next turn's history is
-                # balanced (provider 400's on a tool_use without a
-                # matching tool_result).
+                # Mid-batch abort: synthesise one ToolMessage per unanswered
+                # tool_call_id — provider 400's on a tool_use without matching
+                # tool_result, so balance the trailing AIMessage on cancel.
                 try:
                     async for event in self._dispatch_tool_calls(
                         ai.tool_calls, history,
@@ -410,7 +337,6 @@ class AgentLoop:
                     tool_count=len(ai.tool_calls),
                 )
 
-                # max_turns cap — mirrors claude-code query.ts:1705.
                 if (
                     self._max_turns is not None
                     and self._state.turn_count >= self._max_turns
@@ -481,7 +407,7 @@ class AgentLoop:
             abort.signal.wait(),
         )
         try:
-            done, _pending = await asyncio.wait(
+            done, _ = await asyncio.wait(
                 {invoke_task, abort_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
@@ -521,69 +447,19 @@ class AgentLoop:
         # turn_count 先于 pre_model hook 递增，hook 看到的是"即将开始的第 N 轮"。
         self._state.turn_count += 1
         await self._hooks.run_pre_model(history=history, state=self._state)
-        # F-01-012 — reactive-compact retry lives INSIDE _invoke_model so
-        # turn_count + per-turn audit state survive the recompact. The
-        # outer Agent layer hands us a callback that compacts and
-        # reloads history in place; we catch context-overflow on
-        # ainvoke, fire the callback, and retry the SAME turn. Capped
-        # at ``_MAX_REACTIVE_COMPACT`` so a permanently-overflowing
-        # prompt cannot loop forever. Without a callback (legacy Agent-
-        # less tests) we re-raise to preserve old behaviour.
-        from aura.core.agent import _is_context_overflow  # noqa: PLC0415  — avoid import cycle
+        from aura.core.agent import (
+            _is_context_overflow,  # noqa: PLC0415  避免循环导入  # deferred import is intentional
+        )
 
         recompact_attempts = 0
+        messages: list[BaseMessage]
+        ai: AIMessage
         while True:
-            # Context.build 是整个代码库中唯一组装 messages 的构造点 ——
-            # 不要在别处拼 SystemMessage/HumanMessage 传给模型。
-            messages = self._context.build(history)
-            # G2 microcompact — view-only compression of old tool_use /
-            # tool_result pairs. Stored history keeps full payloads; only
-            # the outgoing prompt is trimmed. Matches claude-code's
-            # ``messagesForQuery`` semantic (query.ts:412-468). We rebind
-            # the LOCAL ``messages`` only — ``history`` (Agent-owned,
-            # persisted in storage) is never touched here. Phase 1 §3.3:
-            # when a :class:`Compactor` is wired (production path via
-            # Agent), route through ``compactor.microcompact``; tests
-            # that drive AgentLoop without an Agent fall back to the
-            # legacy direct ``apply_microcompact`` call.
-            if self._compactor is not None:
-                messages = await self._compactor.microcompact(
-                    messages, self._state.slots,
-                )
-            elif self._microcompact_policy is not None:
-                mc_result = apply_microcompact(
-                    messages, self._microcompact_policy,
-                )
-                if mc_result.cleared_pair_count > 0:
-                    messages = mc_result.messages
-                    journal.write(
-                        "microcompact_applied",
-                        session=self._session_id,
-                        turn=self._state.turn_count,
-                        cleared_pair_count=mc_result.cleared_pair_count,
-                        cleared_tool_call_ids=list(
-                            mc_result.cleared_tool_call_ids,
-                        ),
-                        cleared_positions=[
-                            [p.ai_idx, p.tool_idx]
-                            for p in mc_result.cleared_pairs
-                        ],
-                    )
-            # Wrap ONLY the SDK call — not tool dispatch, not hook run,
-            # not history.append — so retries are surgical and tool
-            # semantics stay untouched. Transient 429 / 503 / connection
-            # drops become recoverable; auth errors still surface
-            # immediately.
+            messages = await self._build_view(history)
             try:
                 ai = await self._invoke_with_retry(messages)
                 break
             except Exception as exc:
-                # Phase 1 §3.3: prefer the Compactor's reactive path
-                # when wired (production via Agent); fall back to the
-                # legacy ``compact_callback`` for AgentLoop-direct
-                # tests. Both branches gate on ``_is_context_overflow``
-                # + the recompact attempt cap so a permanently-
-                # overflowing prompt cannot loop forever.
                 has_reactive_path = (
                     self._compactor is not None
                     or self._compact_callback is not None
@@ -609,15 +485,52 @@ class AgentLoop:
                 else:
                     assert self._compact_callback is not None
                     await self._compact_callback(history)
-                # Loop continues: rebuild messages from the new
-                # (compacted) history and retry ainvoke.
-        # F-01-005 — partial-response recovery. If the response was cut off
-        # by max_output_tokens, append a meta HumanMessage asking the model
-        # to resume and re-invoke; cap at ``_MAX_LENGTH_RETRY`` so a
-        # misbehaving provider that always returns length cannot loop
-        # forever. The first AIMessage is appended to ``messages`` (the
-        # local view) so the next ainvoke sees it; only the FINAL AIMessage
-        # (the one we actually return) is appended to ``history``.
+
+        ai = await self._retry_on_length_truncation(ai, messages)
+        history.append(ai)
+        await self._hooks.run_post_model(
+            ai_message=ai, history=history, state=self._state,
+        )
+        return ai
+
+    async def _build_view(
+        self, history: list[BaseMessage],
+    ) -> list[BaseMessage]:
+        # Context.build 是组装 messages 的唯一构造点；microcompact 是 view-only：
+        # stored history 保留全量，只压缩出参 messages。
+        messages = self._context.build(history)
+        if self._compactor is not None:
+            return await self._compactor.microcompact(
+                messages, self._state.slots,
+            )
+        if self._microcompact_policy is not None:
+            mc_result = apply_microcompact(
+                messages, self._microcompact_policy,
+            )
+            if mc_result.cleared_pair_count > 0:
+                journal.write(
+                    "microcompact_applied",
+                    session=self._session_id,
+                    turn=self._state.turn_count,
+                    cleared_pair_count=mc_result.cleared_pair_count,
+                    cleared_tool_call_ids=list(
+                        mc_result.cleared_tool_call_ids,
+                    ),
+                    cleared_positions=[
+                        [p.ai_idx, p.tool_idx]
+                        for p in mc_result.cleared_pairs
+                    ],
+                )
+                return mc_result.messages
+        return messages
+
+    async def _retry_on_length_truncation(
+        self,
+        ai: AIMessage,
+        messages: list[BaseMessage],
+    ) -> AIMessage:
+        # messages 是 local view（含 microcompact）—— resume prompts append 在这里
+        # 让下一次 ainvoke 看到 partial AIMessage；最终返回的 ai 由 caller append 到 history。
         length_retries = 0
         while length_retries < _MAX_LENGTH_RETRY and _length_truncated(ai):
             length_retries += 1
@@ -631,33 +544,24 @@ class AgentLoop:
             messages.append(ai)
             messages.append(HumanMessage(content=_LENGTH_RESUME_PROMPT))
             ai = await self._invoke_with_retry(messages)
-        if _length_truncated(ai):
-            journal.write(
-                "length_recovery_exhausted",
-                session=self._session_id,
-                turn=self._state.turn_count,
-                attempts=length_retries,
-            )
-            # Preserve the model's PARTIAL content (the user gets to see
-            # what we have) while flagging exhaustion via a sentinel
-            # finish_reason. The accompanying tool_calls — if any — were
-            # produced on a truncated response and MUST NOT be dispatched
-            # (they may reference half-built args). Rebuild the AIMessage
-            # with the same content but no tool_calls + the sentinel; the
-            # ``run_turn`` length-exhaustion branch then surfaces this as
-            # ``Final(message=ai.content, reason="length_recovery_exhausted")``.
-            ai = AIMessage(
-                content=ai.content,
-                response_metadata={
-                    **(getattr(ai, "response_metadata", None) or {}),
-                    "finish_reason": "length_recovery_exhausted",
-                },
-            )
-        history.append(ai)
-        await self._hooks.run_post_model(
-            ai_message=ai, history=history, state=self._state,
+        if not _length_truncated(ai):
+            return ai
+        journal.write(
+            "length_recovery_exhausted",
+            session=self._session_id,
+            turn=self._state.turn_count,
+            attempts=length_retries,
         )
-        return ai
+        # Preserve partial content; strip tool_calls (they reference half-built
+        # args and MUST NOT be dispatched). Sentinel finish_reason routes
+        # ``run_turn`` to the length-exhaustion Final branch.
+        return AIMessage(
+            content=ai.content,
+            response_metadata={
+                **(getattr(ai, "response_metadata", None) or {}),
+                "finish_reason": "length_recovery_exhausted",
+            },
+        )
 
     async def _dispatch_tool_calls(
         self, tool_calls: list[ToolCall], history: list[BaseMessage],
@@ -683,11 +587,48 @@ class AgentLoop:
     async def _run_batch(
         self, batch: list[ToolStep], history: list[BaseMessage],
     ) -> AsyncIterator[AgentEvent]:
-        # size=1 也走统一 gather 路径 —— 单工具开销只多几行 journal，换来
-        # 批量分发逻辑的单一实现。
-        # 保序：所有 Started 在 gather 之前 yield（并发 tool call 同时宣告开始），
-        # Completed 按 tool_call 顺序依次 yield —— 保证 tool_call.id 与
-        # ToolMessage 的严格一一对齐，provider API 才能正确串联。
+        # 保序：Started 在 gather 之前同步 yield，Completed 按 batch 顺序 yield ——
+        # tool_call.id 与 ToolMessage 严格一一对齐才能让 provider 正确串联。
+        for event in self._emit_started(batch):
+            yield event
+
+        progress_queue: asyncio.Queue[
+            tuple[str, str, str, str] | None
+        ] = asyncio.Queue()
+        batch_deadline = (
+            self._batch_timeout_sec if self._batch_timeout_sec > 0 else 0.0
+        )
+        gather_task = asyncio.create_task(
+            self._gather_all_with_progress(batch, progress_queue, batch_deadline),
+        )
+        # gather 完成时 done_callback 推 None 哨兵，drain 据此退出，不竞争 gather.done()。
+        gather_task.add_done_callback(lambda _: progress_queue.put_nowait(None))
+
+        abort_signal = current_abort_signal.get()
+        watchdog_task: asyncio.Task[None] | None = None
+        if abort_signal is not None and not abort_signal.aborted:
+            watchdog_task = asyncio.ensure_future(
+                self._abort_watchdog(abort_signal, gather_task),
+            )
+
+        try:
+            async for event in self._drain_progress(progress_queue):
+                yield event
+            results: list[ToolResult] = await gather_task
+        finally:
+            if not gather_task.done():
+                gather_task.cancel()
+                await asyncio.gather(gather_task, return_exceptions=True)
+            if watchdog_task is not None and not watchdog_task.done():
+                watchdog_task.cancel()
+
+        for event in self._emit_completed(batch, results, history):
+            yield event
+        journal.write("tool_batch_end", turn=self._state.turn_count, size=len(batch))
+
+    def _emit_started(
+        self, batch: list[ToolStep],
+    ) -> Iterator[AgentEvent]:
         journal.write(
             "tool_batch_begin",
             turn=self._state.turn_count,
@@ -702,8 +643,6 @@ class AgentLoop:
                 input=dict(tc["args"]),
                 id=tc_id,
             )
-            # Auto-allow audit line (spec §8.4): dim "auto-allowed: <reason>"
-            # after Started for the three reasons where no prompt was shown.
             pd = step.permission_decision
             if pd is not None and pd.reason in _AUTO_ALLOW_REASONS:
                 yield PermissionAudit(tool=tc["name"], text=pd.audit_line())
@@ -711,182 +650,12 @@ class AgentLoop:
                 "tool_execute_begin", tool=tc["name"], tool_call_id=tc["id"],
             )
 
-        # Progress plumbing: tools that opt-in (e.g. bash) push chunks onto
-        # ``progress_queue`` via the contextvar-based callback. We drain the
-        # queue WHILE gather is still awaiting — that's the whole reason a
-        # long ``npm test`` no longer sits silently. A ``None`` sentinel
-        # placed by the callback installer signals "all tools done".
-        progress_queue: asyncio.Queue[
-            tuple[str, str, str, str] | None
-        ] = asyncio.Queue()
-
-        def _on_progress(tool_call_id: str, tool_name: str) -> ProgressCallback:
-            def _cb(stream: Literal["stdout", "stderr"], chunk: str) -> None:
-                progress_queue.put_nowait((tool_call_id, tool_name, stream, chunk))
-            return _cb
-
-        async def _execute_with_progress(step: ToolStep) -> ToolResult:
-            # Install the per-step callback only for THIS task's async
-            # context (contextvars are task-local), then reset so nothing
-            # leaks to the next batch.
-            tool_call_id = str(step.tool_call.get("id") or "")
-            token = set_progress_callback(
-                _on_progress(tool_call_id, step.tool_call["name"]),
-            )
-            try:
-                return await self._execute_step(step)
-            finally:
-                reset_progress_callback(token)
-
-        # B4 gate — batch wall-clock deadline applies whenever a positive
-        # deadline is configured, regardless of batch size. Phase 1 Task 12
-        # dropped the previous ``len(batch) > 1`` guard: a single misbehaving
-        # tool that escapes its per-tool ``timeout_sec`` (or has none) used
-        # to stall the whole turn forever. The bounded wait below cancels
-        # the runaway and synthesises a balanced ToolMessage so the next
-        # turn's history is provider-valid. Tools that own their own
-        # SIGTERM/SIGKILL ladder (bash) still run that ladder INSIDE the
-        # task — the outer wait is a backstop, not a replacement.
-        batch_deadline = (
-            self._batch_timeout_sec if self._batch_timeout_sec > 0 else 0.0
-        )
-
-        async def _gather_all() -> list[ToolResult]:
-            if batch_deadline <= 0:
-                return list(await asyncio.gather(
-                    *(_execute_with_progress(s) for s in batch),
-                ))
-            # B4 — bounded wait. Each step runs in its own Task so we can
-            # cancel the slow ones individually while preserving completed
-            # results. Batch order is load-bearing: the caller's
-            # ``zip(batch, results, strict=True)`` below relies on
-            # positional alignment with ``batch``.
-            tasks: list[asyncio.Task[ToolResult]] = [
-                asyncio.create_task(_execute_with_progress(s)) for s in batch
-            ]
-            try:
-                done, pending = await asyncio.wait(
-                    tasks, timeout=batch_deadline,
-                )
-            except asyncio.CancelledError:
-                # Outer cancellation (e.g. ``drive_task.cancel()`` upstream)
-                # — propagate the signal to every still-running tool task
-                # before re-raising so we don't leave coroutines (and any
-                # side-effect ``await asyncio.sleep`` they're parked on)
-                # running in the background. ``asyncio.wait`` does NOT
-                # cancel its waitees on cancellation; only ``gather`` does
-                # — that's the contract gap we cover here. Was previously
-                # masked by the ``len(batch) > 1`` guard which sent size-1
-                # batches through the bare-``gather`` fast path.
-                for t in tasks:
-                    if not t.done():
-                        t.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-                raise
-            if pending:
-                # Cancel every pending task, then await them for clean
-                # shutdown so we don't leak "Task was destroyed but it
-                # is pending" warnings from the event loop. ``_execute_step``
-                # catches Exception (not BaseException) so CancelledError
-                # bubbles up here — exactly what we want.
-                for t in pending:
-                    t.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-            results: list[ToolResult] = []
-            cancelled_ids: list[str] = []
-            completed_ids: list[str] = []
-            for step, t in zip(batch, tasks, strict=True):
-                # ``ToolCall["id"]`` is a NotRequired TypedDict field; all
-                # production callers populate it and the journal fields
-                # below are string lists, so coerce defensively to keep
-                # the audit payload homogeneous.
-                tc_id = step.tool_call["id"] or ""
-                if t in pending:
-                    # Synthesise the timeout result. Run ``post_tool`` on
-                    # it so consumers (size-budget, logger) see a consistent
-                    # ToolResult shape for cancelled tasks too. This runs
-                    # sequentially here — the cancel path is the slow path,
-                    # and hook side-effects prefer deterministic order.
-                    synthesised = ToolResult(
-                        ok=False,
-                        error=f"batch timeout after {batch_deadline}s",
-                    )
-                    final: ToolResult
-                    if step.tool is not None and step.args is not None:
-                        final = await self._hooks.run_post_tool(
-                            tool=step.tool,
-                            args=step.args,
-                            result=synthesised,
-                            state=self._state,
-                        )
-                    else:
-                        final = synthesised
-                    results.append(final)
-                    cancelled_ids.append(tc_id)
-                else:
-                    # Completed path — task.result() is already the
-                    # post_tool output produced inside ``_execute_step``.
-                    results.append(t.result())
-                    completed_ids.append(tc_id)
-            # Emit the audit event ONLY when at least one task was
-            # cancelled. Clean-completion batches stay quiet to avoid
-            # polluting the journal.
-            if cancelled_ids:
-                journal.write(
-                    "batch_timeout",
-                    session=self._session_id,
-                    turn=self._state.turn_count,
-                    size=len(batch),
-                    timeout_sec=batch_deadline,
-                    cancelled_count=len(cancelled_ids),
-                    cancelled_tool_call_ids=cancelled_ids,
-                    completed_tool_call_ids=completed_ids,
-                )
-            return results
-
-        gather_task = asyncio.create_task(_gather_all())
-        # Sentinel pusher: queue a None once gather completes so the drain
-        # loop below can exit cleanly without racing on gather_task.done().
-        gather_task.add_done_callback(lambda _t: progress_queue.put_nowait(None))
-
-        # F-01-001 abort watchdog. If the contextvar carries a live
-        # AbortController and it fires while the batch is still running,
-        # cancel the gather_task so every pending tool task unwinds
-        # immediately. ``_dispatch_tool_calls`` then raises
-        # CancelledError up to the run_turn try/except, which synthesises
-        # the missing ToolMessages for an unbalanced trailing AIMessage.
-        abort_signal = current_abort_signal.get()
-        watchdog_task: asyncio.Task[None] | None = None
-        if abort_signal is not None and not abort_signal.aborted:
-            async def _abort_watchdog() -> None:
-                await abort_signal.signal.wait()
-                if not gather_task.done():
-                    gather_task.cancel()
-            watchdog_task = asyncio.ensure_future(_abort_watchdog())
-
-        try:
-            while True:
-                item = await progress_queue.get()
-                if item is None:
-                    break
-                tool_call_id, tool_name, stream_name, chunk = item
-                # Literal narrowing — the callback only ever pushes valid labels,
-                # but the queue is typed loosely to keep the cast site local.
-                assert stream_name in ("stdout", "stderr")
-                yield ToolCallProgress(
-                    name=tool_name,
-                    stream=stream_name,  # type: ignore[arg-type]
-                    chunk=chunk,
-                    id=tool_call_id,
-                )
-            results: list[ToolResult] = await gather_task
-        finally:
-            if not gather_task.done():
-                gather_task.cancel()
-                await asyncio.gather(gather_task, return_exceptions=True)
-            if watchdog_task is not None and not watchdog_task.done():
-                watchdog_task.cancel()
-
+    def _emit_completed(
+        self,
+        batch: list[ToolStep],
+        results: list[ToolResult],
+        history: list[BaseMessage],
+    ) -> Iterator[AgentEvent]:
         for step, result in zip(batch, results, strict=True):
             tc = step.tool_call
             tc_id = str(tc.get("id") or "")
@@ -895,8 +664,6 @@ class AgentLoop:
                 tool=tc["name"], tool_call_id=tc["id"],
                 ok=result.ok, error=result.error,
             )
-            # tool_call.id 与 ToolMessage 必须严格一一对齐 —— 这里直接 append，
-            # 不抽函数；`_serialize` 已保证绝不抛出（default=str 兜底）。
             status: Literal["success", "error"] = "success" if result.ok else "error"
             history.append(
                 ToolMessage(
@@ -913,7 +680,129 @@ class AgentLoop:
                 id=tc_id,
             )
 
-        journal.write("tool_batch_end", turn=self._state.turn_count, size=len(batch))
+    async def _drain_progress(
+        self,
+        progress_queue: asyncio.Queue[tuple[str, str, str, str] | None],
+    ) -> AsyncIterator[AgentEvent]:
+        while True:
+            item = await progress_queue.get()
+            if item is None:
+                return
+            tool_call_id, tool_name, stream_name, chunk = item
+            assert stream_name in ("stdout", "stderr")
+            yield ToolCallProgress(
+                name=tool_name,
+                stream=stream_name,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+                chunk=chunk,
+                id=tool_call_id,
+            )
+
+    async def _gather_all_with_progress(
+        self,
+        batch: list[ToolStep],
+        progress_queue: asyncio.Queue[tuple[str, str, str, str] | None],
+        batch_deadline: float,
+    ) -> list[ToolResult]:
+        def make_cb(tool_call_id: str, tool_name: str) -> ProgressCallback:
+            def _cb(stream: Literal["stdout", "stderr"], chunk: str) -> None:
+                progress_queue.put_nowait((tool_call_id, tool_name, stream, chunk))
+            return _cb
+
+        async def execute_one(step: ToolStep) -> ToolResult:
+            # contextvars 是 task-local：每个 step 独立设置/重置 callback。
+            tool_call_id = str(step.tool_call.get("id") or "")
+            token = set_progress_callback(
+                make_cb(tool_call_id, step.tool_call["name"]),
+            )
+            try:
+                return await self._execute_step(step)
+            finally:
+                reset_progress_callback(token)
+
+        if batch_deadline <= 0:
+            return list(await asyncio.gather(
+                *(execute_one(s) for s in batch),
+            ))
+        # Per-step Task 便于单独取消慢任务并保留已完成结果；batch 顺序 load-bearing：
+        # 调用方 ``zip(..., strict=True)`` 依赖位置对齐。
+        tasks: list[asyncio.Task[ToolResult]] = [
+            asyncio.create_task(execute_one(s)) for s in batch
+        ]
+        try:
+            _, pending = await asyncio.wait(tasks, timeout=batch_deadline)
+        except asyncio.CancelledError:
+            # asyncio.wait 不会自动取消 waitee（与 gather 不同），需手动传播
+            # 取消信号，否则后台任务连同它们 park 的 sleep 会继续跑。
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        if pending:
+            for t in pending:
+                t.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+        return await self._collect_batch_results(
+            batch, tasks, pending, batch_deadline,
+        )
+
+    async def _collect_batch_results(
+        self,
+        batch: list[ToolStep],
+        tasks: list[asyncio.Task[ToolResult]],
+        pending: set[asyncio.Task[ToolResult]],
+        batch_deadline: float,
+    ) -> list[ToolResult]:
+        results: list[ToolResult] = []
+        cancelled_ids: list[str] = []
+        completed_ids: list[str] = []
+        for step, t in zip(batch, tasks, strict=True):
+            tc_id = step.tool_call["id"] or ""
+            if t in pending:
+                synthesised = ToolResult(
+                    ok=False,
+                    error=f"batch timeout after {batch_deadline}s",
+                )
+                # 取消路径同样走 post_tool，保证 size-budget / logger 等
+                # consumer 看到统一的 ToolResult 形状。
+                final: ToolResult
+                if step.tool is not None and step.args is not None:
+                    final = await self._hooks.run_post_tool(
+                        tool=step.tool,
+                        args=step.args,
+                        result=synthesised,
+                        state=self._state,
+                    )
+                else:
+                    final = synthesised
+                results.append(final)
+                cancelled_ids.append(tc_id)
+            else:
+                results.append(t.result())
+                completed_ids.append(tc_id)
+        if cancelled_ids:
+            journal.write(
+                "batch_timeout",
+                session=self._session_id,
+                turn=self._state.turn_count,
+                size=len(batch),
+                timeout_sec=batch_deadline,
+                cancelled_count=len(cancelled_ids),
+                cancelled_tool_call_ids=cancelled_ids,
+                completed_tool_call_ids=completed_ids,
+            )
+        return results
+
+    async def _abort_watchdog(
+        self,
+        abort_signal: AbortController,
+        gather_task: asyncio.Task[list[ToolResult]],
+    ) -> None:
+        # AbortController fire 时取消 gather_task：让 CancelledError 抛到 run_turn，
+        # 由 run_turn 用合成 ToolMessage 平衡掉孤立的 trailing AIMessage。
+        await abort_signal.signal.wait()
+        if not gather_task.done():
+            gather_task.cancel()
 
     async def _plan_tool_calls(self, tool_calls: list[ToolCall]) -> list[ToolStep]:
         steps: list[ToolStep] = []
@@ -946,8 +835,7 @@ class AgentLoop:
                 state=self._state,
                 tool_call_id=tc["id"],
             )
-            # Pattern-match on Outcome variants (spec §3.2).
-            # run_pre_tool always returns one of the four variants.
+            # run_pre_tool 总返回 Outcome 的四种变体之一。
             match outcome:
                 case Allow(decision=perm_decision):
                     # Hook allowed; tool will run. Carry the decision for
@@ -966,11 +854,9 @@ class AgentLoop:
                         ),
                         permission_decision=perm_decision,
                     ))
-                case Ask(reason=_ask_reason):
-                    # Escalation was not resolved by the permission hook
-                    # (defensive — in a well-formed chain the permission
-                    # hook always resolves Ask before it reaches the loop).
-                    # Treat as a deny with a clear error.
+                case Ask():
+                    # Defensive：well-formed permission chain 应在 hook 里就 resolve Ask；
+                    # 漏到 loop 视为 deny。
                     steps.append(ToolStep(
                         tool_call=tc, tool=tool, args=raw_args,
                         decision=ToolResult(
@@ -993,22 +879,8 @@ class AgentLoop:
             return step.decision
         assert step.tool is not None
         assert step.args is not None
-        # Per-tool hard deadline. ``timeout_sec`` in metadata wraps the tool
-        # invocation with ``asyncio.wait_for`` so a pathological grep on a
-        # 10 GB repo or a hung web_fetch cannot freeze the turn forever.
-        # Tools that own their own internal timeout ladder (bash) set this
-        # to ``None`` so the outer wrapper doesn't stack on top.
+        # Tools 拥有自己 timeout ladder（bash）时把 timeout_sec 设 None 避免叠加。
         timeout: float | None = meta_dict(step.tool).get("timeout_sec")
-        # Phase 2 Task 9: ONE shape for both success and failure. The
-        # split ``except ToolError → user-facing string`` vs ``except
-        # Exception → type-prefixed`` codepaths used to live as two
-        # sibling ``except`` clauses; collapsed to a single defensive
-        # ``except Exception`` (per spec §7) so the loop has a single
-        # tool-result projection. ``ToolError`` is still recognised as
-        # a tool-author-raised user-facing message (no ``RuntimeError:``
-        # prefix); every other exception type is type-prefixed so the
-        # model can distinguish a programmer bug from a deliberate
-        # user-facing error.
         try:
             if timeout is not None:
                 try:
@@ -1023,11 +895,9 @@ class AgentLoop:
                 output = await step.tool.ainvoke(step.args)
             result = ToolResult(ok=True, output=output)
             self._maybe_trigger_path(step, result)
-        except Exception as exc:  # noqa: BLE001
-            # 单一兜底：所有异常 → ToolResult(ok=False)。CancelledError 继承
-            # BaseException（非 Exception），不会被这里吞掉。ToolError 是工具
-            # 作者主动抛的用户态错误（保留原文），其余异常 type-prefix 让模型
-            # 能区分编程错误与用户态错误。
+        except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
+            # ToolError 是工具作者主动抛的用户态消息（保留原文）；其余异常 type-prefix
+            # 让模型能区分编程错误与用户态错误。CancelledError 继承 BaseException 不会进来。
             text = str(exc) if isinstance(exc, ToolError) else f"{type(exc).__name__}: {exc}"
             result = ToolResult(ok=False, error=text)
         return await self._hooks.run_post_tool(
@@ -1043,10 +913,11 @@ class AgentLoop:
         `result.output` 传进来是为了拿到 read_file 返回的 `partial` 标志 ——
         必须用工具返回值而非 args（`limit >= total_lines` 也可能是 full read）。
         """
+        # narrowed by assert above; mypy keeps union
         arg_name = PATH_TRIGGER_TOOLS.get(step.tool.name)  # type: ignore[union-attr]
         if arg_name is None:
             return
-        raw = step.args.get(arg_name)  # type: ignore[union-attr]
+        raw = step.args.get(arg_name)  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
         if not isinstance(raw, str) or not raw:
             return
         try:

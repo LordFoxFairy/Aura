@@ -186,7 +186,7 @@ class TasksStore:
         for listener in list(self._activity_listeners):
             try:
                 listener(rec, activity)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
                 journal.write(
                     "tasks_activity_listener_error",
                     task_id=rec.id,
@@ -206,7 +206,7 @@ class TasksStore:
         for listener in list(self._started_listeners):
             try:
                 listener(rec)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
                 journal.write(
                     "tasks_started_listener_error",
                     task_id=rec.id,
@@ -415,7 +415,7 @@ class TasksStore:
         for listener in list(self._terminal_listeners):
             try:
                 listener(rec)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
                 journal.write(
                     "tasks_terminal_listener_error",
                     task_id=rec.id,

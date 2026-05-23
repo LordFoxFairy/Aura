@@ -21,10 +21,6 @@ from aura.domain.permission.safety import (
     SafetyPolicy,
 )
 
-# ---------------------------------------------------------------------------
-# DEFAULT_PROTECTED_* + DEFAULT_SAFETY shape
-# ---------------------------------------------------------------------------
-
 
 def test_default_protected_writes_is_a_tuple_of_strings() -> None:
     assert isinstance(DEFAULT_PROTECTED_WRITES, tuple)
@@ -85,12 +81,7 @@ def test_safety_policy_is_frozen() -> None:
         exempt=(),
     )
     with pytest.raises((AttributeError, Exception)):
-        policy.protected_writes = ("changed",)  # type: ignore[misc]
-
-
-# ---------------------------------------------------------------------------
-# Writes — each default entry blocks when is_write=True
-# ---------------------------------------------------------------------------
+        policy.protected_writes = ("changed",)  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 @pytest.mark.parametrize(
@@ -113,11 +104,6 @@ def test_default_policy_blocks_writes_to_home_rc_files() -> None:
     for rc in (".bashrc", ".zshrc", ".profile", ".bash_profile", ".zprofile"):
         target = home / rc
         assert is_protected(target, DEFAULT_SAFETY, is_write=True) is True, target
-
-
-# ---------------------------------------------------------------------------
-# Reads — narrower list; .git/ and .aura/ reads are LEGITIMATE
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -168,11 +154,6 @@ def test_etc_blocks_both_reads_and_writes() -> None:
     assert is_protected(target, DEFAULT_SAFETY, is_write=False) is True
 
 
-# ---------------------------------------------------------------------------
-# Bare-directory protection — grep/glob scenario (reviewer-caught bug)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "dir_path",
     [
@@ -202,11 +183,6 @@ def test_bare_dir_path_is_blocked_for_writes(dir_path: str) -> None:
     assert is_protected(dir_path, DEFAULT_SAFETY, is_write=True) is True
 
 
-# ---------------------------------------------------------------------------
-# Non-matching paths
-# ---------------------------------------------------------------------------
-
-
 def test_unprotected_path_returns_false_for_either_direction() -> None:
     target = "/Users/alice/projects/hello/src/main.py"
     assert is_protected(target, DEFAULT_SAFETY, is_write=True) is False
@@ -217,11 +193,6 @@ def test_path_that_contains_git_as_substring_but_not_component_is_not_blocked() 
     target = "/repo/docs/gitignore-primer.md"
     assert is_protected(target, DEFAULT_SAFETY, is_write=True) is False
     assert is_protected(target, DEFAULT_SAFETY, is_write=False) is False
-
-
-# ---------------------------------------------------------------------------
-# Exempt overrides protected (both directions)
-# ---------------------------------------------------------------------------
 
 
 def test_exempt_entry_overrides_write_protected() -> None:
@@ -262,11 +233,6 @@ def test_exempt_without_matching_protected_returns_false() -> None:
     assert is_protected("/tmp/hello.txt", policy, is_write=True) is False
 
 
-# ---------------------------------------------------------------------------
-# Path normalization — relative paths, symlinks, tilde expansion
-# ---------------------------------------------------------------------------
-
-
 def test_relative_path_is_resolved_against_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -303,11 +269,6 @@ def test_home_rc_pattern_matches_expanded_tilde_target() -> None:
 def test_tilde_in_input_path_is_expanded() -> None:
     assert is_protected("~/.bashrc", DEFAULT_SAFETY, is_write=True) is True
     assert is_protected("~/.bashrc", DEFAULT_SAFETY, is_write=False) is True
-
-
-# ---------------------------------------------------------------------------
-# Defensive — never crash
-# ---------------------------------------------------------------------------
 
 
 def test_none_input_returns_false_without_crashing() -> None:

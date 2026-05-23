@@ -105,4 +105,4 @@ def test_agent_def_is_immutable() -> None:
         # runtime frozen contract, not the static type check.
         setattr(td, "name", "hacked")  # noqa: B010
     with pytest.raises(AttributeError):
-        td.tools.add("bash")  # type: ignore[attr-defined]
+        td.tools.add("bash")  # type: ignore[attr-defined]  # test sets attribute mypy can't see

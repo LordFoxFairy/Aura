@@ -161,6 +161,10 @@ class SubagentFactory:
         storage_factory: Callable[[], SessionStorage] | None = None,
         parent_abort_event: asyncio.Event | None = None,
         depth: int = 0,
+        parent_storage: SessionStorage | None = None,
+        parent_hooks: HookChain | None = None,
+        parent_model: BaseChatModel | None = None,
+        parent_session_id: str | None = None,
     ) -> None:
         # ``parent_carryover_provider`` — called at each ``spawn`` to
         # build a typed :class:`ReadCarryover` snapshot of the parent
@@ -191,6 +195,13 @@ class SubagentFactory:
         # deny / ask matrix. ``None`` means "inherit no extra layered
         # rules".
         self._parent_config = parent_config
+        # Parent-side DI handles. Stored so the runner can drive child
+        # lifecycle (token observer install, transcript flush, cleanup
+        # gating) without reaching into Agent privates via getattr.
+        self._parent_storage = parent_storage
+        self._parent_hooks = parent_hooks
+        self._parent_model = parent_model
+        self._parent_session_id = parent_session_id
         self._parent_model_spec = parent_model_spec
         self._parent_skills = parent_skills
         self._parent_carryover_provider = parent_carryover_provider
@@ -221,6 +232,41 @@ class SubagentFactory:
     @property
     def abort_event(self) -> asyncio.Event | None:
         return getattr(self, "_parent_abort_event", None)
+
+    @property
+    def parent_config(self) -> AuraConfig:
+        """Read-only view of the parent's :class:`AuraConfig`.
+
+        Used by runners to read tools-level flags (cleanup toggles,
+        ``web_fetch.summary_model``) without reaching into the spawned
+        child Agent's private ``_config``.
+        """
+        return self._parent_config
+
+    @property
+    def parent_model(self) -> BaseChatModel | None:
+        """Read-only view of the parent's chat model.
+
+        Runners that need to build a summarizer factory (which keys off
+        the parent model's provider/family) read it here instead of
+        peeking into a spawned child's ``_model``.
+        """
+        return self._parent_model
+
+    @property
+    def parent_hooks(self) -> HookChain | None:
+        """Read-only view of the parent's :class:`HookChain`."""
+        return self._parent_hooks
+
+    @property
+    def parent_storage(self) -> SessionStorage | None:
+        """Read-only view of the parent's :class:`SessionStorage`."""
+        return self._parent_storage
+
+    @property
+    def parent_session_id(self) -> str | None:
+        """Read-only view of the parent's session id."""
+        return self._parent_session_id
 
     @property
     def parent_model_spec(self) -> str:

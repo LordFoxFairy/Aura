@@ -134,7 +134,7 @@ async def test_shutdown_request_triggers_response(tmp_path: Path) -> None:
     mgr.create_team("alpha")
     mgr.add_member("alice")
     leader.team = mgr
-    box = Mailbox(storage, mgr.team.team_id)  # type: ignore[union-attr]
+    box = Mailbox(storage, mgr.team.team_id)  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     # Pre-load alice's inbox with a shutdown_request so the runtime
     # consumes it on its first poll.
     box.append(TeamMessage(
@@ -149,8 +149,8 @@ async def test_shutdown_request_triggers_response(tmp_path: Path) -> None:
     stop = asyncio.Event()
     await asyncio.wait_for(
         run_teammate(
-            agent=agent,  # type: ignore[arg-type]
-            team_id=mgr.team.team_id,  # type: ignore[union-attr]
+            agent=agent,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+            team_id=mgr.team.team_id,  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
             member_name="alice",
             storage=storage,
             stop_event=stop,
@@ -358,7 +358,7 @@ async def test_response_includes_member_name_for_correlation(
     b = await mgr.aremove_member("bob", timeout_sec=2.0)
     assert a is True
     assert b is True
-    box = Mailbox(storage, mgr.team.team_id)  # type: ignore[union-attr]
+    box = Mailbox(storage, mgr.team.team_id)  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     leader_inbox = box.read_all(TEAM_LEADER_NAME)
     senders = {
         m.sender for m in leader_inbox if m.kind == "shutdown_response"

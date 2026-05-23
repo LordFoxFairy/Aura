@@ -163,7 +163,7 @@ async def _run_one_summary(
     """
     try:
         messages = transcript_provider()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
         journal.write(
             "agent_summary_transcript_error",
             task_id=task_id,
@@ -178,7 +178,7 @@ async def _run_one_summary(
     prompt = SUMMARY_PROMPT_TEMPLATE.format(transcript=transcript_text)
     try:
         ai = await summary_model.ainvoke([HumanMessage(content=prompt)])
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
         journal.write(
             "agent_summary_invoke_error",
             task_id=task_id,
@@ -256,7 +256,7 @@ async def run_summary_loop(
         if summary_model is None:
             try:
                 summary_model = summary_model_factory()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001  # cleanup path must not propagate
                 journal.write(
                     "agent_summary_model_factory_error",
                     task_id=task_id,

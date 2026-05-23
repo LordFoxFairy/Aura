@@ -30,7 +30,7 @@ class _StubOllama:
 
 
 def _stub_kwargs(model: Any) -> dict[str, Any]:
-    return model.kwargs  # type: ignore[no-any-return]
+    return model.kwargs  # type: ignore[no-any-return]  # fake returns Any from __dict__
 
 
 def test_create_openai_happy_path_uses_default_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -272,16 +272,6 @@ def test_create_resolved_fields_win_over_params(
     kw = _stub_kwargs(model)
     assert kw["model"] == "gpt-4o-mini"
     assert kw["base_url"] == "https://good.example"
-
-
-# ---------------------------------------------------------------------------
-# Protocol-table invariant — prevent silent drift between the runtime
-# _PROTOCOLS dict in aura/core/llm.py and the static Literal in
-# aura/config/schema.py::ProviderConfig.protocol. Adding a provider to ONE
-# without the other leaves either unreachable code or a pydantic-rejected
-# config; either way the drift is loud, not silent — but having the two
-# places out of sync is itself a smell, so this test enforces parity.
-# ---------------------------------------------------------------------------
 
 
 def test_protocols_dict_matches_provider_literal() -> None:

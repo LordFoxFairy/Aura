@@ -171,7 +171,7 @@ async def test_abort_before_any_ai_message_rolls_back_user_turn(
 ) -> None:
     cfg = _make_config()
 
-    async def _slow_model_invoke() -> AIMessage:  # noqa: ARG001
+    async def _slow_model_invoke() -> AIMessage:  # noqa: ARG001  # signature-matching stub; args unused
         await asyncio.sleep(2.0)
         return AIMessage(content="never")
 
@@ -204,7 +204,7 @@ async def test_abort_before_any_ai_message_rolls_back_user_turn(
     events = await drive_task
 
     # No AIMessage was appended → user-turn rolled back from history.
-    persisted = agent._storage.load(agent.session_id)
+    persisted = agent.storage.load(agent.session_id)
     assert all(
         not (isinstance(m, HumanMessage) and m.content == "the user prompt")
         for m in persisted
@@ -271,7 +271,7 @@ async def test_abort_between_tool_batch_and_next_model_persists_balanced_history
     agent.current_abort.abort("user_ctrl_c")
     events = await asyncio.wait_for(drive_task, timeout=3.0)
 
-    persisted = agent._storage.load(agent.session_id)
+    persisted = agent.storage.load(agent.session_id)
     ai_with_tools = [
         m for m in persisted
         if isinstance(m, AIMessage) and m.tool_calls

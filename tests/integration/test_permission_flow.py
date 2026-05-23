@@ -51,14 +51,9 @@ def _wire_permission_hook(
         session=session_rules,
         rules=ruleset,
         project_root=project_root,
-        mode=mode,  # type: ignore[arg-type]
+        mode=mode,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
     )
     return HookChain(pre_tool=[hook])
-
-
-# ---------------------------------------------------------------------------
-# Test 1 — bash → asker says Yes → tool runs, LLM sees output.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -97,7 +92,7 @@ async def test_bash_permission_allow_tool_runs_llm_sees_stdout(
         events = await drain(agent, "say hello")
         # Read history BEFORE close — SessionStorage.close shuts the DB
         # connection down, so deferred reads blow up with "closed database".
-        history = agent._storage.load(agent.session_id)
+        history = agent.storage.load(agent.session_id)
     finally:
         await agent.aclose()
 
@@ -118,11 +113,6 @@ async def test_bash_permission_allow_tool_runs_llm_sees_stdout(
     assert len(tool_msgs) == 1
     assert tool_msgs[0].status == "success"
     assert "hello-world" in str(tool_msgs[0].content)
-
-
-# ---------------------------------------------------------------------------
-# Test 2 — bash → asker says No with feedback → tool refused, LLM sees deny.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -167,7 +157,7 @@ async def test_bash_permission_deny_tool_refused_llm_sees_feedback(
     )
     try:
         events = await drain(agent, "rm things")
-        history = agent._storage.load(agent.session_id)
+        history = agent.storage.load(agent.session_id)
     finally:
         await agent.aclose()
 
@@ -185,12 +175,6 @@ async def test_bash_permission_deny_tool_refused_llm_sees_feedback(
     assert len(tool_msgs) == 1
     assert tool_msgs[0].status == "error"
     assert "dangerous" in str(tool_msgs[0].content)
-
-
-# ---------------------------------------------------------------------------
-# Test 3 — plan mode state machine: write blocked → exit_plan_mode approved
-#          → mode flips → write now permitted.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -331,11 +315,6 @@ async def test_plan_mode_exit_approval_flow_flips_mode_and_user_deny(
     assert len(plan_asker.calls) == 2
 
 
-# ---------------------------------------------------------------------------
-# Test 4 — accept_edits mode: write_file auto-allowed, bash still asks.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_accept_edits_auto_allows_write_bash_still_prompts(
     tmp_path: Path,
@@ -403,13 +382,6 @@ async def test_accept_edits_auto_allows_write_bash_still_prompts(
     assert perm_asker.calls[0]["tool"] == "bash"
     # File was actually written by write_file.
     assert target.read_text() == "auto-allowed"
-
-
-# ---------------------------------------------------------------------------
-# Extra sanity: placeholder to preserve the "_" variable discipline across
-# the module. ``tmp_path`` usage elsewhere in this file; no fixture-scope
-# leakage expected.
-# ---------------------------------------------------------------------------
 
 
 def _silence_unused_import_check() -> Any:  # pragma: no cover

@@ -30,11 +30,11 @@ from aura.schemas.state import LoopState
 
 
 class _StubAgent:
-    """Minimal Agent-shaped object exposing ``_state`` — all /stats needs."""
+    """Minimal Agent-shaped object exposing ``state`` — all /stats needs."""
 
     def __init__(self, state: LoopState, *, config: object | None = None) -> None:
-        self._state = state
-        self._config = config
+        self.state = state
+        self.config = config
 
 
 def test_stats_command_owned_by_capabilities_module() -> None:
@@ -56,7 +56,7 @@ def _ai(
     }
     if total is not None:
         usage["total_tokens"] = total
-    msg.usage_metadata = usage  # type: ignore[assignment]
+    msg.usage_metadata = usage  # type: ignore[assignment]  # narrowing branch mypy doesn't track
     if cache_read or model:
         meta: dict[str, Any] = {}
         if cache_read:
@@ -70,6 +70,7 @@ def _ai(
 @pytest.mark.asyncio
 async def test_stats_empty_state_friendly_message() -> None:
     agent = _StubAgent(LoopState())
+    # deliberately off-type arg to exercise path
     out = await StatsCommand().handle("", agent)  # type: ignore[arg-type]
     assert out.handled is True
     assert out.kind == "print"
@@ -90,6 +91,7 @@ async def test_stats_after_one_turn(tmp_path: Path) -> None:
             state=state,
         )
         agent = _StubAgent(state)
+        # deliberately off-type arg to exercise path
         out = await StatsCommand().handle("", agent)  # type: ignore[arg-type]
 
         assert "1 turn" in out.text  # singular, no trailing "s"
@@ -119,6 +121,7 @@ async def test_stats_accumulates_across_turns(tmp_path: Path) -> None:
             state=state,
         )
         agent = _StubAgent(state)
+        # deliberately off-type arg to exercise path
         out = await StatsCommand().handle("", agent)  # type: ignore[arg-type]
 
         assert "2 turns" in out.text         # plural
@@ -210,11 +213,6 @@ async def test_turn_usage_event_handles_missing_model(tmp_path: Path) -> None:
         journal_module.reset()
 
 
-# ---------------------------------------------------------------------------
-# V14-STATS-HISTORY — /stats 7d / /stats all  journal replay
-# ---------------------------------------------------------------------------
-
-
 def _seed_turn_usage(
     path: Path,
     *,
@@ -247,6 +245,7 @@ async def test_stats_history_no_journal_configured_message(
     journal_module.reset()
     state = LoopState()
     agent = _StubAgent(state)  # config=None → no log path discoverable
+    # deliberately off-type arg to exercise path
     out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
     assert out.handled is True
     assert "No journal configured" in out.text
@@ -262,6 +261,7 @@ async def test_stats_history_journal_missing_friendly_message(
     try:
         state = LoopState()
         agent = _StubAgent(state)
+        # deliberately off-type arg to exercise path
         out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
         assert "not found yet" in out.text
     finally:
@@ -290,6 +290,7 @@ async def test_stats_history_aggregates_per_model(tmp_path: Path) -> None:
         )
         state = LoopState()
         agent = _StubAgent(state)
+        # deliberately off-type arg to exercise path
         out = await StatsCommand().handle("all", agent)  # type: ignore[arg-type]
         assert out.handled is True
         assert out.kind == "view"
@@ -322,6 +323,7 @@ async def test_stats_history_7d_filters_old_events(tmp_path: Path) -> None:
         )
         state = LoopState()
         agent = _StubAgent(state)
+        # deliberately off-type arg to exercise path
         out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
         assert "recent-model" in out.text
         assert "old-model" not in out.text
@@ -353,6 +355,7 @@ async def test_stats_history_tolerates_malformed_lines(tmp_path: Path) -> None:
         )
         state = LoopState()
         agent = _StubAgent(state)
+        # deliberately off-type arg to exercise path
         out = await StatsCommand().handle("all", agent)  # type: ignore[arg-type]
         # Two valid events for m1: 100+200 input = 300, 10+20 = 30 output.
         assert "300" in out.text  # input total
@@ -379,6 +382,7 @@ async def test_stats_history_empty_window_friendly_message(
             }) + "\n")
         state = LoopState()
         agent = _StubAgent(state)
+        # deliberately off-type arg to exercise path
         out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
         assert "No ``turn_usage`` events" in out.text
     finally:

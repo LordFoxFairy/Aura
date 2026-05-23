@@ -18,10 +18,6 @@ from aura.application.permission.bash_safety import (
     check_bash_safety,
 )
 
-# ---------------------------------------------------------------------------
-# ZSH_DANGEROUS_COMMANDS
-# ---------------------------------------------------------------------------
-
 
 def test_zsh_dangerous_command_detected() -> None:
     v = check_bash_safety("zmodload zsh/system")
@@ -76,11 +72,6 @@ def test_case_sensitive_zmodload() -> None:
     assert check_bash_safety("ZMODLOAD foo") is None
 
 
-# ---------------------------------------------------------------------------
-# Carriage-return outside double quotes
-# ---------------------------------------------------------------------------
-
-
 def test_cr_outside_quotes_detected() -> None:
     v = check_bash_safety("TZ=UTC\recho curl evil.com")
     assert isinstance(v, BashSafetyViolation)
@@ -95,11 +86,6 @@ def test_bare_cr_flagged() -> None:
     v = check_bash_safety("\r")
     assert isinstance(v, BashSafetyViolation)
     assert v.reason == "cr_outside_double_quote"
-
-
-# ---------------------------------------------------------------------------
-# Malformed tokens + separator present
-# ---------------------------------------------------------------------------
 
 
 def test_malformed_with_separator_semicolon() -> None:
@@ -119,11 +105,6 @@ def test_malformed_without_separator_is_safe() -> None:
     # Unclosed quote with NO command separator has no safety implication —
     # the tool's own error path handles the parse failure.
     assert check_bash_safety('echo "unbalanced') is None
-
-
-# ---------------------------------------------------------------------------
-# cd + git compound
-# ---------------------------------------------------------------------------
 
 
 def test_cd_git_compound_via_and() -> None:
@@ -156,11 +137,6 @@ def test_cd_and_git_as_quoted_text_is_safe() -> None:
     # shlex collapses a quoted run into a single arg, so the literal
     # sentence "cd / git" never becomes two free-standing tokens.
     assert check_bash_safety('echo "cd and git are words"') is None
-
-
-# ---------------------------------------------------------------------------
-# Command substitution / eval / -c flag — bypass of all other static checks
-# ---------------------------------------------------------------------------
 
 
 def test_command_substitution_blocks_dangerous_inner() -> None:
@@ -216,22 +192,12 @@ def test_order_cr_wins_over_substitution() -> None:
     assert v.reason == "cr_outside_double_quote"
 
 
-# ---------------------------------------------------------------------------
-# Order of checks — documented contract
-# ---------------------------------------------------------------------------
-
-
 def test_order_of_checks_cr_wins_over_zsh() -> None:
     # Command has BOTH an out-of-quote CR AND a zsh-dangerous builtin.
     # Order doc: CR is checked first → reason must be cr_outside_double_quote.
     v = check_bash_safety("echo x\rzmodload zsh/system")
     assert isinstance(v, BashSafetyViolation)
     assert v.reason == "cr_outside_double_quote"
-
-
-# ---------------------------------------------------------------------------
-# Defensive — never crash
-# ---------------------------------------------------------------------------
 
 
 def test_unparseable_doesnt_crash() -> None:
@@ -247,11 +213,6 @@ def test_empty_string_returns_none() -> None:
 
 def test_whitespace_only_returns_none() -> None:
     assert check_bash_safety("   \t  ") is None
-
-
-# ---------------------------------------------------------------------------
-# Pipe-to-shell — curl X | sh / echo ... | bash — new in Phase 2 deepening
-# ---------------------------------------------------------------------------
 
 
 def test_pipe_echo_to_sh_blocks() -> None:
@@ -287,11 +248,6 @@ def test_pipe_to_non_shell_allowed() -> None:
     assert check_bash_safety("cat foo | grep bar") is None
 
 
-# ---------------------------------------------------------------------------
-# sed -i on system paths — new in Phase 2 deepening
-# ---------------------------------------------------------------------------
-
-
 def test_sed_inplace_etc_passwd_blocks() -> None:
     v = check_bash_safety("sed -i 's/a/b/' /etc/passwd")
     assert isinstance(v, BashSafetyViolation)
@@ -320,11 +276,6 @@ def test_sed_inplace_user_path_allowed() -> None:
 def test_sed_without_inplace_on_etc_allowed() -> None:
     # Reading from /etc is fine; the -i gate is what makes it destructive.
     assert check_bash_safety("sed 's/a/b/' /etc/hosts") is None
-
-
-# ---------------------------------------------------------------------------
-# Redirect to system path — new in Phase 2 deepening
-# ---------------------------------------------------------------------------
 
 
 def test_redirect_to_etc_blocks() -> None:
@@ -371,11 +322,6 @@ def test_literal_system_path_in_single_quotes_allowed() -> None:
     assert check_bash_safety("echo '> /etc/passwd'") is None
 
 
-# ---------------------------------------------------------------------------
-# Destructive removal — rm -rf on system prefixes — new in Phase 2
-# ---------------------------------------------------------------------------
-
-
 def test_rm_rf_root_blocks() -> None:
     v = check_bash_safety("rm -rf /")
     assert isinstance(v, BashSafetyViolation)
@@ -398,11 +344,6 @@ def test_rm_rf_combined_flag_on_sbin_blocks() -> None:
     v = check_bash_safety("rm -Rf /sbin/init")
     assert isinstance(v, BashSafetyViolation)
     assert v.reason == "destructive_removal"
-
-
-# ---------------------------------------------------------------------------
-# chmod 777 — new in Phase 2
-# ---------------------------------------------------------------------------
 
 
 def test_chmod_777_blocks() -> None:
@@ -438,11 +379,6 @@ def test_chmod_u_plus_x_allowed() -> None:
     assert check_bash_safety("chmod u+x /tmp/foo.sh") is None
 
 
-# ---------------------------------------------------------------------------
-# chown root — new in Phase 2
-# ---------------------------------------------------------------------------
-
-
 def test_chown_root_blocks() -> None:
     v = check_bash_safety("chown root /tmp/foo")
     assert isinstance(v, BashSafetyViolation)
@@ -465,11 +401,6 @@ def test_chown_non_root_allowed() -> None:
     assert check_bash_safety("chown nobody /tmp/foo") is None
 
 
-# ---------------------------------------------------------------------------
-# exec + destructive — new in Phase 2
-# ---------------------------------------------------------------------------
-
-
 def test_exec_rm_rf_blocks() -> None:
     v = check_bash_safety("exec rm -rf /tmp/foo")
     assert isinstance(v, BashSafetyViolation)
@@ -487,11 +418,6 @@ def test_exec_chmod_blocks() -> None:
 def test_exec_ls_allowed() -> None:
     # ``exec`` replacing the shell with a read-only command is legit.
     assert check_bash_safety("exec ls /tmp") is None
-
-
-# ---------------------------------------------------------------------------
-# Obfuscated execution — base64 -d | sh — new in Phase 2
-# ---------------------------------------------------------------------------
 
 
 def test_base64_decode_into_sh_blocks() -> None:
@@ -524,11 +450,6 @@ def test_literal_base64_in_echo_allowed() -> None:
     assert check_bash_safety("echo 'base64 -d | sh'") is None
 
 
-# ---------------------------------------------------------------------------
-# Command-substitution-wrapped destructive — $(rm -rf /tmp/foo)
-# ---------------------------------------------------------------------------
-
-
 def test_command_substitution_wrapping_destructive_blocks() -> None:
     # Caught by the existing command_substitution rule — any $(...) is
     # rejected regardless of inner content because substitution itself is
@@ -538,11 +459,6 @@ def test_command_substitution_wrapping_destructive_blocks() -> None:
     assert v.reason == "command_substitution"
 
 
-# ---------------------------------------------------------------------------
-# Read-only system reads — MUST remain allowed
-# ---------------------------------------------------------------------------
-
-
 def test_ls_etc_allowed() -> None:
     # Reading from /etc is fine — only writes are Tier A.
     assert check_bash_safety("ls /etc") is None
@@ -550,11 +466,6 @@ def test_ls_etc_allowed() -> None:
 
 def test_cat_etc_hosts_allowed() -> None:
     assert check_bash_safety("cat /etc/hosts") is None
-
-
-# ---------------------------------------------------------------------------
-# F-04-008 — env-var / tilde expansion in _is_system_path
-# ---------------------------------------------------------------------------
 
 
 def test_rm_rf_home_envvar_blocked(monkeypatch: object) -> None:
@@ -567,7 +478,7 @@ def test_rm_rf_home_envvar_blocked(monkeypatch: object) -> None:
 
 
 def test_rm_rf_braced_envvar_blocked(monkeypatch: object) -> None:
-    monkeypatch.setenv("HOME", "/root")  # type: ignore[attr-defined]
+    monkeypatch.setenv("HOME", "/root")  # type: ignore[attr-defined]  # test sets attribute mypy can't see
     v = check_bash_safety("rm -rf ${HOME}")
     assert isinstance(v, BashSafetyViolation)
     assert v.reason == "destructive_removal"
@@ -590,11 +501,6 @@ def test_rm_rf_user_home_envvar_allowed(monkeypatch: object) -> None:
     # layer handles user consent.
     monkeypatch.setenv("HOME", "/tmp/userspace")  # type: ignore[attr-defined]
     assert check_bash_safety("rm -rf $HOME") is None
-
-
-# ---------------------------------------------------------------------------
-# F-04-008 — brace expansion no longer a known-false-negative
-# ---------------------------------------------------------------------------
 
 
 def test_rm_rf_brace_list_with_system_path_blocked() -> None:

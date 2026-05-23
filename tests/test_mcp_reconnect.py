@@ -92,17 +92,12 @@ def _fast_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     real_sleep = asyncio.sleep
 
-    async def _fast(delay: float) -> None:  # noqa: ARG001
+    async def _fast(delay: float) -> None:  # noqa: ARG001  # signature-matching stub; args unused
         # Yield to the loop so CancelledError can reach us if the task
         # was cancelled — matching real ``asyncio.sleep`` cancel-points.
         await real_sleep(0)
 
     monkeypatch.setattr("asyncio.sleep", _fast)
-
-
-# ---------------------------------------------------------------------------
-# Auto-reconnect — remote transports
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -143,7 +138,7 @@ async def test_auto_reconnect_retries_sse_server_on_disconnect(
     # reconnect task must be in flight.
     status = {s.name: s for s in mgr.status()}
     assert status["remote"].state == "error"
-    assert "remote" in mgr._reconnect_tasks  # noqa: SLF001
+    assert "remote" in mgr._reconnect_tasks  # noqa: SLF001  # test reaches into private state by design
 
     # Drain the reconnect task — our fast-sleep fixture means it completes
     # almost immediately.
@@ -197,7 +192,7 @@ async def test_auto_reconnect_gives_up_after_max_attempts(
     # re-schedules on each failure, but the "already in-flight" guard
     # keeps the count bounded at the configured max.
     assert len(calls) == 1 + 5
-    assert mgr._state["doomed"] == "error"  # noqa: SLF001
+    assert mgr._state["doomed"] == "error"  # noqa: SLF001  # test reaches into private state by design
     # Handle cleared after exhaustion so a later /mcp reconnect can
     # freshly spawn a new loop.
     assert "doomed" not in mgr._reconnect_tasks  # noqa: SLF001
@@ -228,7 +223,7 @@ async def test_stdio_transport_does_not_auto_reconnect(
         MCPServerConfig(name="local", command="npx", args=[]),
     ])
     await mgr.start_all()
-    assert mgr._state["local"] == "error"  # noqa: SLF001
+    assert mgr._state["local"] == "error"  # noqa: SLF001  # test reaches into private state by design
     # No task scheduled — stdio opts out of auto-reconnect.
     assert "local" not in mgr._reconnect_tasks  # noqa: SLF001
     await mgr.stop_all()
@@ -266,7 +261,7 @@ async def test_stop_all_cancels_pending_reconnect_timers(
         MCPServerConfig(name="remote", transport="sse", url="http://x"),
     ])
     await mgr.start_all()
-    task = mgr._reconnect_tasks.get("remote")  # noqa: SLF001
+    task = mgr._reconnect_tasks.get("remote")  # noqa: SLF001  # test reaches into private state by design
     assert task is not None
     assert not task.done()
 
@@ -276,11 +271,6 @@ async def test_stop_all_cancels_pending_reconnect_timers(
     # finalised — the gather in stop_all absorbs the CancelledError).
     assert mgr._reconnect_tasks == {}  # noqa: SLF001
     assert task.done()
-
-
-# ---------------------------------------------------------------------------
-# Per-op timeout
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -326,7 +316,7 @@ async def test_read_resource_timeout(
     # something to look up (the real list_resources path is stubbed out).
     fake_resource = MagicMock()
     fake_resource.uri = "mem://doc"
-    mgr._resources[("s", "mem://doc")] = fake_resource  # noqa: SLF001
+    mgr._resources[("s", "mem://doc")] = fake_resource  # noqa: SLF001  # test reaches into private state by design
 
     with pytest.raises(RuntimeError, match="read_resource.*timed out"):
         await mgr.read_resource("mem://doc")

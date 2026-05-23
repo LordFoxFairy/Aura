@@ -55,13 +55,8 @@ _stub_tool: BaseTool = build_tool(
 )
 
 
-# ---------------------------------------------------------------------------
-# Decision factories — keep variant constructors short in tests.
-# ---------------------------------------------------------------------------
-
-
 def _allow(reason: str = "mode_bypass") -> Decision:
-    return Decision(allow=True, reason=reason)  # type: ignore[arg-type]
+    return Decision(allow=True, reason=reason)  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
 
 
 def _allow_with_rule(rule_tool: str = "stub") -> Decision:
@@ -73,7 +68,7 @@ def _allow_with_rule(rule_tool: str = "stub") -> Decision:
 
 
 def _deny(reason: str = "safety_blocked") -> Decision:
-    return Decision(allow=False, reason=reason)  # type: ignore[arg-type]
+    return Decision(allow=False, reason=reason)  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
 
 
 def _make_hook(outcome: Outcome) -> PreToolHook:
@@ -83,12 +78,6 @@ def _make_hook(outcome: Outcome) -> PreToolHook:
     ) -> Outcome:
         return outcome
     return hook
-
-
-# ---------------------------------------------------------------------------
-# Single-variant smoke tests — proves run_pre_tool accepts each Outcome
-# variant in isolation (one hook, one return).
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -135,14 +124,6 @@ async def test_single_replace_variant_short_circuits_with_result() -> None:
     assert isinstance(out, Replace), f"expected Replace, got {type(out).__name__}"
     assert out.result is canned
     assert out.decision is d
-
-
-# ---------------------------------------------------------------------------
-# 4 × 4 = 16-case merge precedence matrix. Each case constructs a 2-hook
-# chain ``[first, second]`` of pure Outcome returns and checks the
-# merged Outcome matches spec §3.2: first Block wins → first Ask wins →
-# first Replace wins → last Allow wins.
-# ---------------------------------------------------------------------------
 
 
 # Build distinct sentinels per variant so the assertion can identify
@@ -195,25 +176,21 @@ def _check_winner(out: Outcome, expected: Outcome) -> None:
 #   when in the first position; Block-first cases are kept for completeness but
 #   the merge never actually sees two outcomes in those cases.
 _MATRIX_CASES: list[tuple[Outcome, Outcome, Outcome]] = [
-    # --- Allow first (4 cases) ---
     # first authoritative Allow wins (mode_bypass < mode_accept_edits)
     (_ALLOW_A, _ALLOW_B, _ALLOW_B),
     (_ALLOW_A, _BLOCK_B, _BLOCK_B),    # Block beats Allow
     (_ALLOW_A, _ASK_B, _ASK_B),        # Ask beats Allow(passthrough)
     (_ALLOW_A, _REPLACE_B, _REPLACE_B),  # Replace beats Allow
-    # --- Block first (4 cases) ---
     # Block short-circuits — second never runs. First Block wins.
     (_BLOCK_A, _ALLOW_B, _BLOCK_A),
     (_BLOCK_A, _BLOCK_B, _BLOCK_A),
     (_BLOCK_A, _ASK_B, _BLOCK_A),
     (_BLOCK_A, _REPLACE_B, _BLOCK_A),
-    # --- Ask first (4 cases) ---
     # Ask beats non-resolved Allow (mode_accept_edits not user-driven)
     (_ASK_A, _ALLOW_B, _ASK_A),
     (_ASK_A, _BLOCK_B, _BLOCK_B),       # Block beats Ask
     (_ASK_A, _ASK_B, _ASK_A),           # first Ask wins (both unresolved)
     (_ASK_A, _REPLACE_B, _REPLACE_B),   # Replace beats Ask (safety overrides confirmation)
-    # --- Replace first (4 cases) ---
     (_REPLACE_A, _ALLOW_B, _REPLACE_A),  # Replace beats Allow
     (_REPLACE_A, _BLOCK_B, _BLOCK_B),    # Block beats Replace
     (_REPLACE_A, _ASK_B, _REPLACE_A),    # Replace beats Ask (safety overrides confirmation)
@@ -238,13 +215,6 @@ async def test_outcome_merge_precedence_matrix(
         tool=_stub_tool, args={}, state=LoopState(),
     )
     _check_winner(out, expected)
-
-
-# ---------------------------------------------------------------------------
-# Block-first must short-circuit: any later hook MUST NOT run. This is
-# the "(short-circuit)" qualifier in spec §3.2 — once Block is seen no
-# later hook can supersede it, so iteration stops.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

@@ -14,9 +14,6 @@ from cli.render import (
 )
 
 
-# --------------------------------------------------------------------------
-# read_file
-# --------------------------------------------------------------------------
 def test_read_file_full_shows_lines_and_size() -> None:
     out = _format_read_file_result({
         "content": "x" * 4300,  # ~4.2 KB
@@ -48,9 +45,6 @@ def test_read_file_non_dict_falls_through_to_str() -> None:
     assert _format_read_file_result("weird") == "weird"
 
 
-# --------------------------------------------------------------------------
-# write_file
-# --------------------------------------------------------------------------
 def test_write_file_bytes_rendering() -> None:
     out = _format_write_file_result({"bytes": 1234})
     assert "1234" in out
@@ -61,9 +55,6 @@ def test_write_file_missing_bytes_fallback() -> None:
     assert _format_write_file_result({}) == "written"
 
 
-# --------------------------------------------------------------------------
-# edit_file
-# --------------------------------------------------------------------------
 def test_edit_file_created_pluralises() -> None:
     out = _format_edit_file_result({"replacements": 1, "created": True})
     assert "created" in out
@@ -84,9 +75,6 @@ def test_edit_file_non_dict_fallback() -> None:
     assert _format_edit_file_result(None) == "edited"
 
 
-# --------------------------------------------------------------------------
-# grep
-# --------------------------------------------------------------------------
 def test_grep_files_with_matches_mode() -> None:
     out = _format_grep_result({
         "mode": "files_with_matches",
@@ -130,9 +118,6 @@ def test_grep_unknown_mode_fallback() -> None:
     assert _format_grep_result({"mode": "weird"}) == "searched"
 
 
-# --------------------------------------------------------------------------
-# glob
-# --------------------------------------------------------------------------
 def test_glob_reports_count() -> None:
     out = _format_glob_result({"files": ["a", "b"], "count": 2, "truncated": False})
     assert "2 files" in out
@@ -144,9 +129,6 @@ def test_glob_singular_and_truncated() -> None:
     assert "truncated" in out
 
 
-# --------------------------------------------------------------------------
-# bash
-# --------------------------------------------------------------------------
 def test_bash_exit_zero_shows_ok() -> None:
     out = _format_bash_result({
         "stdout": "x", "stderr": "", "exit_code": 0,
@@ -179,9 +161,6 @@ def test_bash_truncated_marker() -> None:
     assert "truncated" in out
 
 
-# --------------------------------------------------------------------------
-# task_create
-# --------------------------------------------------------------------------
 def test_task_create_shows_short_id_and_description() -> None:
     out = _format_task_create_result({
         "task_id": "abcdef1234567890",
@@ -198,9 +177,6 @@ def test_task_create_non_dict_fallback() -> None:
     assert _format_task_create_result(None) == "spawned"
 
 
-# --------------------------------------------------------------------------
-# registry wiring
-# --------------------------------------------------------------------------
 def test_registry_maps_all_expected_tools() -> None:
     for name in [
         "read_file", "write_file", "edit_file", "grep", "glob",

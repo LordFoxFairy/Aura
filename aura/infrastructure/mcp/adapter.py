@@ -148,7 +148,7 @@ def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
     if truncated:
         tool.description = capped_desc
         try:
-            from aura.core import journal  # noqa: PLC0415
+            from aura.core import journal  # noqa: PLC0415  # deferred import is intentional
             journal.write(
                 "mcp_description_truncated",
                 tool_name=tool.name,
@@ -156,7 +156,7 @@ def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
                 original_len=original_len,
                 truncated_len=len(capped_desc),
             )
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             pass
     is_read_only = hints["readOnlyHint"] is True
     # Destructive defaults to True (claude-code parity). Only flip to False
@@ -388,7 +388,7 @@ class _MCPPromptCommand:
                     f"(server {self._server!r}, prompt {self._prompt!r})"
                 ),
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             # Server may have died between startup discovery and now. Surface
             # a user-visible failure + journal the reason rather than throw.
             journal.write(

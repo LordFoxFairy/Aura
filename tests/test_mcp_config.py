@@ -16,8 +16,6 @@ from pydantic import ValidationError
 from aura.config.schema import AuraConfigError, MCPServerConfig
 from aura.infrastructure.mcp.manager import MCPManager
 
-# --- schema validation -----------------------------------------------------
-
 
 def test_stdio_config_with_command_validates() -> None:
     cfg = MCPServerConfig(name="gh", command="npx", args=["-y", "pkg"])
@@ -92,9 +90,6 @@ def test_unknown_transport_rejected_by_literal() -> None:
         )
 
 
-# --- wiring: MCPManager._build_connections ---------------------------------
-
-
 def test_build_connections_stdio() -> None:
     mgr = MCPManager([
         MCPServerConfig(name="gh", command="npx", args=["-y", "pkg"],
@@ -157,9 +152,6 @@ def test_build_connections_mixed_transports() -> None:
     assert conns["cloud"]["headers"] == {"X-Key": "k"}
 
 
-# --- library-capability gate -----------------------------------------------
-
-
 def test_unsupported_transport_raises_aura_config_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -190,9 +182,6 @@ def test_disabled_server_bypasses_transport_gate(
     )
     # Must not raise.
     MCPManager([cfg])
-
-
-# --- end-to-end: manager passes transport dicts through to the library ----
 
 
 @pytest.mark.asyncio

@@ -85,4 +85,5 @@ def test_tool_with_no_metadata_returns_none() -> None:
         name = "bare"
         metadata = None
 
+    # deliberately off-type arg to exercise path
     assert derive_rule_hint(_Bare(), {"command": "x"}) is None  # type: ignore[arg-type]

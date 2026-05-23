@@ -98,9 +98,6 @@ def test_resolve_empty_model_name_after_colon() -> None:
     assert model_name == ""
 
 
-# --------------------------------------------------------------------------
-# get_context_window
-# --------------------------------------------------------------------------
 def test_get_context_window_anthropic_opus_4() -> None:
     # Dated suffix + provider prefix — resolver must strip both.
     assert get_context_window("anthropic:claude-opus-4-20250514") == 200_000

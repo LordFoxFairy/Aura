@@ -189,7 +189,7 @@ def _build_rule(md_path: Path, *, base_dir: Path) -> Rule | None:
                 actual_type=actual_type,
             )
             return None  # `paths` 是未知类型 → 跳过
-        globs = globs_or_skip  # type: ignore[assignment]
+        globs = globs_or_skip  # type: ignore[assignment]  # narrowing branch mypy doesn't track
 
     try:
         source = md_path.resolve()
@@ -319,7 +319,7 @@ def _rule_matches_path(rule: Rule, resolved_path: Path) -> bool:
             spec = pathspec.PathSpec.from_lines("gitignore", [glob])
             if spec.match_file(match_target):
                 return True
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             from aura.core import journal
 
             journal.write(

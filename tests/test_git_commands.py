@@ -32,10 +32,6 @@ from aura.application.commands.git import (
 from aura.application.commands.registry import build_default_registry
 from aura.core.agent import Agent
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _run_git(cwd: Path, *args: str) -> None:
     """Run a sync git command for test setup; raise on failure."""
@@ -81,22 +77,12 @@ def agent() -> Agent:
     return MagicMock(spec=Agent)
 
 
-# ---------------------------------------------------------------------------
-# Registration
-# ---------------------------------------------------------------------------
-
-
 def test_git_commands_registered_in_default_registry() -> None:
     r = build_default_registry()
     names = {c.name for c in r.list()}
     assert "/status" in names
     assert "/diff" in names
     assert "/log" in names
-
-
-# ---------------------------------------------------------------------------
-# /status
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -149,11 +135,6 @@ async def test_status_not_a_repo_returns_error(
 
     assert result.handled is True
     assert "not a git repository" in result.text
-
-
-# ---------------------------------------------------------------------------
-# /diff
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -244,11 +225,6 @@ async def test_diff_truncates_at_500_lines(
     assert "truncated" in out
 
 
-# ---------------------------------------------------------------------------
-# /log
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_log_empty_repo_prints_no_commits_yet(
     repo: Path, agent: Agent,
@@ -330,11 +306,6 @@ async def test_log_rejects_non_integer_arg(agent: Agent) -> None:
     result = await GitLogCommand().handle("abc", agent)
     assert result.handled is True
     assert result.text.startswith("error:")
-
-
-# ---------------------------------------------------------------------------
-# Timeout + git-not-installed (mocked — real timeout would add 5 s)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

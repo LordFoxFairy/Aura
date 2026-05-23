@@ -40,8 +40,8 @@ def _aura_invocation() -> list[str] | None:
     if shutil.which("uv") is not None:
         return ["uv", "run", "aura"]
     try:
-        import cli.__main__  # noqa: F401
-    except Exception:  # noqa: BLE001
+        import cli.__main__  # noqa: F401  # import is the assertion / fixture side-effect
+    except Exception:  # noqa: BLE001  # blanket catch acceptable here
         return None
     return [sys.executable, "-m", "cli.__main__"]
 
@@ -238,11 +238,6 @@ def test_mcp_help_lists_add_list_remove(
         assert action in result.stdout, (
             f"expected action {action!r} in `aura mcp --help`; got {result.stdout!r}"
         )
-
-
-# --------------------------------------------------------------------- #
-# --scope flag — claude-code parity (global / project layers).
-# --------------------------------------------------------------------- #
 
 
 def _run_in(

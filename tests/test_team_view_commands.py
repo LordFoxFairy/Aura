@@ -81,13 +81,13 @@ def _install_no_runtime_manager(agent: Agent) -> TeamManager:
     """
     mgr = TeamManager(
         leader=agent,
-        storage=agent._storage,
+        storage=agent.storage,
         factory=agent._subagent_factory,
         running_aborts=agent._running_aborts,
         tasks_store=agent._tasks_store,
         runtime_runner=_no_runtime,
     )
-    agent._team_manager = mgr  # type: ignore[attr-defined]
+    agent._team_manager = mgr  # type: ignore[attr-defined]  # test sets attribute mypy can't see
     return mgr
 
 
@@ -295,7 +295,7 @@ async def test_team_teammate_renders_last_50_messages(tmp_path: Path) -> None:
     await cmd.handle("add scout general-purpose", agent)
     # Manually populate the transcript file so we don't depend on the
     # runtime loop. The render expects "<unix-ts> <Event> <body>" lines.
-    transcript = agent._storage.team_transcript_path("demo", "scout")
+    transcript = agent.storage.team_transcript_path("demo", "scout")
     with transcript.open("w", encoding="utf-8") as f:
         for i in range(60):  # > 50 so the cap actually trims
             f.write(f"{int(time.time())} Final message-{i:03d}\n")
@@ -350,7 +350,7 @@ async def test_team_view_snapshot_includes_subagent_and_transcript_counts(
     await cmd.handle("enter demo", agent)
     await cmd.handle("add scout general-purpose", agent)
     # Drop a transcript file so the count shows non-zero.
-    transcript = agent._storage.team_transcript_path("demo", "scout")
+    transcript = agent.storage.team_transcript_path("demo", "scout")
     with transcript.open("w", encoding="utf-8") as f:
         f.write(f"{int(time.time())} Final hello\n")
     result = await cmd.handle("view", agent)

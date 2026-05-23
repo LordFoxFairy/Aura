@@ -34,8 +34,6 @@ def _agent(
     )
 
 
-# ---- list_sessions / SessionMeta -----------------------------------------
-
 def test_list_sessions_returns_recent_first(tmp_path: Path) -> None:
     storage = SessionStorage(tmp_path / "db")
     # Save three distinct sessions, with explicit small sleeps so the
@@ -199,8 +197,6 @@ async def test_resume_picker_shows_first_prompt_preview(
     assert label.startswith("session-")
 
 
-# ---- format_relative_time --------------------------------------------------
-
 def test_format_relative_time_recent() -> None:
     from aura.application.commands.builtin import format_relative_time
 
@@ -253,4 +249,4 @@ def test_session_meta_is_frozen() -> None:
         first_user_prompt="hi",
     )
     with pytest.raises(FrozenInstanceError):
-        meta.session_id = "xyz"  # type: ignore[misc]
+        meta.session_id = "xyz"  # type: ignore[misc]  # rebinding/mutating frozen field for test

@@ -442,7 +442,7 @@ async def test_multiline_non_slash_input_reaches_agent_intact(
     captured: list[str] = []
 
     class _CaptureModel(FakeChatModel):
-        async def _agenerate(  # type: ignore[override]
+        async def _agenerate(  # type: ignore[override]  # test stub intentionally diverges
             self,
             messages: list[BaseMessage],
             stop: list[str] | None = None,
@@ -455,7 +455,7 @@ async def test_multiline_non_slash_input_reaches_agent_intact(
                 ):
                     captured.append(msg.content)
             return await super()._agenerate(
-                messages, stop, run_manager,  # type: ignore[arg-type]
+                messages, stop, run_manager,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
                 **kwargs,
             )
 
@@ -466,6 +466,7 @@ async def test_multiline_non_slash_input_reaches_agent_intact(
             "tools": {"enabled": []},
         }),
         model=_CaptureModel(
+            # exercising missing/extra arg path
             turns=[FakeTurn(message=AIMessage(content="ok"))],  # type: ignore[call-arg]
         ),
         storage=SessionStorage(tmp_path / "db"),
@@ -778,7 +779,7 @@ async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:
     })
     agent = Agent(
         config=cfg,
-        model=_ExplodingModel(),  # type: ignore[arg-type]
+        model=_ExplodingModel(),  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         storage=SessionStorage(tmp_path / "db"),
     )
     console, buf = _capture_console()

@@ -14,10 +14,6 @@ from pydantic import ValidationError
 from aura.application.compact import CompactionTrigger
 from aura.config.schema import AuraConfig, CompactConfig
 
-# ---------------------------------------------------------------------------
-# CompactionTrigger enum
-# ---------------------------------------------------------------------------
-
 
 def test_compaction_trigger_has_four_members() -> None:
     """Spec §3 — exactly four named triggers, no more, no less."""
@@ -50,11 +46,6 @@ def test_compaction_trigger_is_str_subclass() -> None:
     """
     assert isinstance(CompactionTrigger.microcompact, str)
     assert str(CompactionTrigger.reactive) == "reactive"
-
-
-# ---------------------------------------------------------------------------
-# CompactConfig defaults
-# ---------------------------------------------------------------------------
 
 
 def test_compact_config_defaults_match_legacy_constants() -> None:
@@ -143,11 +134,6 @@ def test_compact_config_rejects_zero_gap_minutes() -> None:
     turn — that's a microcompact bug, not a feature."""
     with pytest.raises(ValidationError):
         CompactConfig.model_validate({"time_based_gap_threshold_minutes": 0})
-
-
-# ---------------------------------------------------------------------------
-# AuraConfig integration
-# ---------------------------------------------------------------------------
 
 
 def test_aura_config_has_compact_block_with_defaults() -> None:

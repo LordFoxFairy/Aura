@@ -129,11 +129,6 @@ async def drain(agent: Agent, prompt: str) -> list[AgentEvent | dict[str, Any]]:
     return events
 
 
-# ---------------------------------------------------------------------------
-# Scripted askers
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class AskerCall:
     """One recorded invocation of a scripted asker."""
@@ -198,17 +193,13 @@ class ScriptedAsker:
         finished = time.monotonic()
         self.calls.append(
             AskerCall(
+                # rebinding/mutating frozen field for test
                 questions=[dict(q) for q in questions],  # type: ignore[misc]
                 started_at=started,
                 finished_at=finished,
             )
         )
         return answers
-
-
-# ---------------------------------------------------------------------------
-# Scripted permission asker (ToolError-driven permission hook fake)
-# ---------------------------------------------------------------------------
 
 
 class ScriptedPermissionAsker:
@@ -256,11 +247,6 @@ class ScriptedPermissionAsker:
         return response
 
 
-# ---------------------------------------------------------------------------
-# Autouse: reset conditional-skill module state between tests.
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def _reset_conditional_skills() -> Generator[None, None, None]:
     """Module-level ``_conditional_skills`` state leaks across tests otherwise.
@@ -273,11 +259,6 @@ def _reset_conditional_skills() -> Generator[None, None, None]:
     clear_conditional_state()
     yield
     clear_conditional_state()
-
-
-# ---------------------------------------------------------------------------
-# Autouse: reset the CLI prompt mutex so each test gets a fresh loop-bound Lock.
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)

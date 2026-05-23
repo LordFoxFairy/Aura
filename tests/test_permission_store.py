@@ -173,11 +173,6 @@ def test_load_ruleset_invalid_rule_string_raises_aura_config_error(
     assert "bash(unclosed" in str(exc_info.value)
 
 
-# ---------------------------------------------------------------------------
-# settings.local.json — machine-local overrides (gitignored by convention)
-# ---------------------------------------------------------------------------
-
-
 def _write_settings(tmp_path: Path, name: str, perms: dict[str, object]) -> Path:
     p = tmp_path / ".aura" / name
     p.parent.mkdir(exist_ok=True)
@@ -306,12 +301,8 @@ def test_save_rule_local_scope_atomic_write_failure_raises(
 
 def test_save_rule_scope_invalid_raises(tmp_path: Path) -> None:
     with pytest.raises((TypeError, ValueError)):
+        # deliberately off-type arg to exercise path
         save_rule(tmp_path, Rule(tool="bash", content=None), scope="bogus")  # type: ignore[arg-type]
-
-
-# ---------------------------------------------------------------------------
-# ensure_local_settings — startup init of the machine-local override file
-# ---------------------------------------------------------------------------
 
 
 def test_ensure_local_creates_file_with_template(tmp_path: Path) -> None:
@@ -405,11 +396,6 @@ def test_ensure_local_output_roundtrips_through_load(tmp_path: Path) -> None:
     # Template's empty allow list means no rules — load should see defaults.
     assert cfg.allow == []
     assert cfg.mode == "default"
-
-
-# ---------------------------------------------------------------------------
-# F-04-007 — known-tool-name validation at RuleSet load time
-# ---------------------------------------------------------------------------
 
 
 def test_load_ruleset_known_tools_skipped_by_default(tmp_path: Path) -> None:

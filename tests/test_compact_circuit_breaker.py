@@ -40,13 +40,13 @@ def _agent(tmp_path: Path, threshold: int = 10) -> Agent:
 
 def test_breaker_counter_seeded_at_session_start(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    assert agent._state.slots.consecutive_compact_failures == 0
+    assert agent.state.slots.consecutive_compact_failures == 0
 
 
 @pytest.mark.asyncio
 async def test_breaker_blocks_after_three_failures(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
-    agent._state.total_tokens_used = 100
+    agent.state.total_tokens_used = 100
 
     calls: list[str] = []
 
@@ -60,7 +60,7 @@ async def test_breaker_blocks_after_three_failures(tmp_path: Path) -> None:
                 async for _ev in agent.astream("hi"):
                     pass
 
-    assert agent._state.slots.consecutive_compact_failures == 3
+    assert agent.state.slots.consecutive_compact_failures == 3
     # Fourth attempt — same conditions, but breaker tripped → no more calls.
     pre = len(calls)
     with patch.object(Agent, "compact", _fail):
@@ -74,9 +74,9 @@ async def test_breaker_blocks_after_three_failures(tmp_path: Path) -> None:
 async def test_breaker_resets_on_success(tmp_path: Path) -> None:
     import dataclasses as _dc
     agent = _agent(tmp_path)
-    agent._state.total_tokens_used = 100
-    agent._state.slots = _dc.replace(
-        agent._state.slots, consecutive_compact_failures=2,
+    agent.state.total_tokens_used = 100
+    agent.state.slots = _dc.replace(
+        agent.state.slots, consecutive_compact_failures=2,
     )
 
     async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:
@@ -89,7 +89,7 @@ async def test_breaker_resets_on_success(tmp_path: Path) -> None:
         async for _ev in agent.astream("hi"):
             pass
 
-    assert agent._state.slots.consecutive_compact_failures == 0
+    assert agent.state.slots.consecutive_compact_failures == 0
     await agent.aclose()
 
 
@@ -101,8 +101,8 @@ async def test_manual_compact_bypasses_breaker(tmp_path: Path) -> None:
     least *attempting* to run."""
     import dataclasses as _dc
     agent = _agent(tmp_path)
-    agent._state.slots = _dc.replace(
-        agent._state.slots, consecutive_compact_failures=99,
+    agent.state.slots = _dc.replace(
+        agent.state.slots, consecutive_compact_failures=99,
     )
 
     # Short history → run_compact short-circuits to a noop, returning a
@@ -135,9 +135,9 @@ async def test_breaker_emits_skip_journal_event(tmp_path: Path) -> None:
     journal.configure(log)
     try:
         agent = _agent(tmp_path)
-        agent._state.total_tokens_used = 100
-        agent._state.slots = _dc.replace(
-            agent._state.slots, consecutive_compact_failures=5,
+        agent.state.total_tokens_used = 100
+        agent.state.slots = _dc.replace(
+            agent.state.slots, consecutive_compact_failures=5,
         )
 
         async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:

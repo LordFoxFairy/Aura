@@ -279,7 +279,7 @@ def _load_kind_ruleset(
     field: Literal["deny", "ask"],
 ) -> RuleSet:
     """Deny / ask loader. Malformed entries journal + skip (no raise)."""
-    from aura.core import journal as _j  # noqa: PLC0415
+    from aura.core import journal as _j  # noqa: PLC0415  # deferred import is intentional
 
     cfg = load(project_root)
     raw_list = cfg.deny if field == "deny" else cfg.ask

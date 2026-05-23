@@ -102,11 +102,11 @@ class FakeChatModel(BaseChatModel):
 
     @property
     def seen_bound_tools(self) -> list[list[Any]]:
-        return self.__dict__["seen_bound_tools"]  # type: ignore[no-any-return]
+        return self.__dict__["seen_bound_tools"]  # type: ignore[no-any-return]  # fake returns Any from __dict__
 
     @property
     def ainvoke_calls(self) -> int:
-        return self.__dict__["ainvoke_calls"]  # type: ignore[no-any-return]
+        return self.__dict__["ainvoke_calls"]  # type: ignore[no-any-return]  # fake returns Any from __dict__
 
     @property
     def _llm_type(self) -> str:

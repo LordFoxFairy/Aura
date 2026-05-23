@@ -98,11 +98,6 @@ def test_invalid_rule_error_is_aura_error_subclass() -> None:
     assert issubclass(InvalidRuleError, AuraError)
 
 
-# ---------------------------------------------------------------------------
-# Rule.matches
-# ---------------------------------------------------------------------------
-
-
 def test_matches_returns_false_on_tool_name_mismatch() -> None:
     rule = Rule(tool="bash", content=None)
     assert rule.matches("read_file", {}, _fake_tool("read_file")) is False
@@ -140,11 +135,6 @@ def test_pattern_rule_returns_false_when_matcher_rejects() -> None:
     rule = Rule(tool="bash", content="npm test")
     tool = _fake_tool("bash", rule_matcher=lambda _args, _content: False)
     assert rule.matches("bash", {"command": "npm test"}, tool) is False
-
-
-# ---------------------------------------------------------------------------
-# Wildcard tool-name matching — MCP use case (tool names namespaced per server)
-# ---------------------------------------------------------------------------
 
 
 def test_wildcard_matches_mcp_namespaced_tool_name() -> None:

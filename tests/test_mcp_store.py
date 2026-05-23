@@ -223,11 +223,6 @@ def test_saved_json_shape_is_hand_editable(isolated_home: Path) -> None:
     assert "\n" in raw
 
 
-# --------------------------------------------------------------------- #
-# Layer merge (global + project) — parity with claude-code's scope model.
-# --------------------------------------------------------------------- #
-
-
 def test_global_path_and_project_path_are_distinct(
     isolated_home: Path, project_dir: Path,
 ) -> None:

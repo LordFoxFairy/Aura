@@ -113,7 +113,7 @@ class TaskOutput(BaseTool):
             tasks.append(asyncio.create_task(_wait_abort()))
 
         try:
-            done, pending = await asyncio.wait(
+            _, pending = await asyncio.wait(
                 tasks,
                 timeout=effective_timeout,
                 return_when=asyncio.FIRST_COMPLETED,

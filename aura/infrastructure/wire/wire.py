@@ -54,18 +54,16 @@ def event_to_wire(event: Any) -> WireEvent:
             payload["id"] = event.id
         return cast(WireEvent, payload)
     if isinstance(event, ToolCallCompleted):
+        # Wire shape: ``content.output`` is a raw JSON value (dict/list/scalar/str)
+        # so the frontend decodes the SSE frame once and reads .output directly,
+        # instead of SSE-parse → JSON.parse(content.text). On error, output is the
+        # error string and error=True.
         is_error = event.error is not None
-        if is_error:
-            text = str(event.error)
-        else:
-            try:
-                text = json.dumps(event.output, default=str, ensure_ascii=False)
-            except (TypeError, ValueError):
-                text = repr(event.output)
+        output: Any = str(event.error) if is_error else _json_safe(event.output)
         payload = {
             "event": "tool_call_completed",
             "name": event.name,
-            "content": {"text": text, "error": is_error},
+            "content": {"output": output, "error": is_error},
         }
         if event.id:
             payload["id"] = event.id

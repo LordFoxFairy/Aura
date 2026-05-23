@@ -41,10 +41,6 @@ from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _minimal_config() -> AuraConfig:
     return AuraConfig.model_validate({
@@ -103,11 +99,6 @@ class _RaisingModel(FakeChatModel):
         return ChatResult(generations=[ChatGeneration(message=turn.message)])
 
 
-# ---------------------------------------------------------------------------
-# Rule 1 — microcompact runs FIRST (every turn, view-only, before ainvoke)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_microcompact_runs_before_model_ainvoke(tmp_path: Path) -> None:
     """Spec §6 #1 — ``Compactor.microcompact`` must complete before the
@@ -133,7 +124,7 @@ async def test_microcompact_runs_before_model_ainvoke(tmp_path: Path) -> None:
             name="read_file",
             status="success",
         ))
-    agent._storage.save(agent.session_id, raw_history)
+    agent.storage.save(agent.session_id, raw_history)
 
     call_order: list[str] = []
 
@@ -181,15 +172,10 @@ async def test_microcompact_runs_before_model_ainvoke(tmp_path: Path) -> None:
 
     # Storage stayed raw — view-only contract. Reload to confirm both
     # ToolMessage payloads survived verbatim.
-    reloaded = agent._storage.load(agent.session_id)
+    reloaded = agent.storage.load(agent.session_id)
     tool_msgs = [m for m in reloaded if isinstance(m, ToolMessage)]
     assert [tm.content for tm in tool_msgs] == ["payload-0", "payload-1"]
     await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Rule 2 — reactive triggers ONLY on PromptTooLong
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -197,7 +183,6 @@ async def test_reactive_only_fires_on_prompt_too_long(tmp_path: Path) -> None:
     """Spec §6 #2 — a normal turn (no PTL exception) must NOT invoke
     ``Agent.compact(source="reactive")``. A PTL turn must.
     """
-    # --- Branch A: normal turn → reactive NOT invoked ---
     agent_ok = _agent(tmp_path / "ok")
     reactive_calls_ok: list[str] = []
     auto_calls_ok: list[str] = []
@@ -221,7 +206,6 @@ async def test_reactive_only_fires_on_prompt_too_long(tmp_path: Path) -> None:
     )
     await agent_ok.aclose()
 
-    # --- Branch B: PTL turn → reactive IS invoked, exactly once ---
     err = RuntimeError("400 — context_length_exceeded for model gpt-4o")
     model = _RaisingModel(
         errors=[err, None, None],  # PTL → summary turn → retry
@@ -257,11 +241,6 @@ async def test_reactive_only_fires_on_prompt_too_long(tmp_path: Path) -> None:
     await agent_ptl.aclose()
 
 
-# ---------------------------------------------------------------------------
-# Rule 3 — auto fires ONLY after a successful turn (post-turn, not mid-turn)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_auto_fires_post_turn_only(tmp_path: Path) -> None:
     """Spec §6 #3 — ``Compactor.auto`` is invoked AFTER ``astream_end``
@@ -270,7 +249,7 @@ async def test_auto_fires_post_turn_only(tmp_path: Path) -> None:
     auto call is observable strictly after iteration finishes.
     """
     agent = _agent(tmp_path, threshold=50)
-    agent._state.total_tokens_used = 100  # threshold crossed
+    agent.state.total_tokens_used = 100  # threshold crossed
 
     auto_call_indices: list[int] = []
     final_event_indices: list[int] = []
@@ -303,11 +282,6 @@ async def test_auto_fires_post_turn_only(tmp_path: Path) -> None:
         "auto-compact must not fire mid-turn — it lands post-Final"
     )
     await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Rule 4 — length-recovery and reactive are disjoint
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -349,11 +323,6 @@ async def test_length_recovery_does_not_invoke_reactive(tmp_path: Path) -> None:
     await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# Rule 5 — circuit breaker (auto): N consecutive failures + reset-on-success
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_circuit_breaker_disables_after_three_failures_and_resets_on_success(
     tmp_path: Path,
@@ -371,7 +340,7 @@ async def test_circuit_breaker_disables_after_three_failures_and_resets_on_succe
         threshold=10,
         turns=[FakeTurn(AIMessage(content="ok"))] * 20,
     )
-    agent._state.total_tokens_used = 100  # always crosses threshold
+    agent.state.total_tokens_used = 100  # always crosses threshold
 
     calls: list[str] = []
 
@@ -389,7 +358,7 @@ async def test_circuit_breaker_disables_after_three_failures_and_resets_on_succe
     assert len(calls) == 3, (
         f"first three turns must each invoke compact once; got {calls!r}"
     )
-    assert agent._state.slots.consecutive_compact_failures == 3
+    assert agent.state.slots.consecutive_compact_failures == 3
 
     # 4th turn — breaker is tripped → spy MUST NOT be re-entered.
     with patch.object(Agent, "compact", _fail):
@@ -403,8 +372,8 @@ async def test_circuit_breaker_disables_after_three_failures_and_resets_on_succe
     # Reset path — drop the counter back to a sub-threshold value so the
     # breaker re-arms, then run a successful turn. The success path
     # (Compactor.auto) zeros the counter on its way out.
-    agent._state.slots = _dc.replace(
-        agent._state.slots, consecutive_compact_failures=2,
+    agent.state.slots = _dc.replace(
+        agent.state.slots, consecutive_compact_failures=2,
     )
 
     async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:
@@ -418,7 +387,7 @@ async def test_circuit_breaker_disables_after_three_failures_and_resets_on_succe
         async for _ in agent.astream("hi"):
             pass
 
-    assert agent._state.slots.consecutive_compact_failures == 0, (
+    assert agent.state.slots.consecutive_compact_failures == 0, (
         "successful auto run must reset consecutive_compact_failures"
     )
     await agent.aclose()

@@ -114,9 +114,6 @@ def journal_events(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str,
     return events
 
 
-# --- AskerResponse invariants ---
-
-
 def test_asker_response_always_requires_rule() -> None:
     with pytest.raises(ValueError):
         AskerResponse(choice="always", rule=None)
@@ -135,7 +132,7 @@ def test_asker_response_deny_rejects_rule() -> None:
 def test_asker_response_is_frozen() -> None:
     resp = AskerResponse(choice="accept")
     with pytest.raises(FrozenInstanceError):
-        resp.choice = "deny"  # type: ignore[misc]
+        resp.choice = "deny"  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_asker_response_feedback_defaults_to_empty_string() -> None:
@@ -148,15 +145,12 @@ def test_asker_response_carries_feedback_field() -> None:
     assert resp.feedback == "wrong dir"
     # Field is frozen like the rest.
     with pytest.raises(FrozenInstanceError):
-        resp.feedback = "changed"  # type: ignore[misc]
+        resp.feedback = "changed"  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_permission_asker_runtime_checkable() -> None:
     asker = _SpyAsker(response=AskerResponse(choice="accept"))
     assert isinstance(asker, PermissionAsker)
-
-
-# --- Decision flow ---
 
 
 async def test_bypass_mode_short_circuits_even_on_protected_path(
@@ -203,7 +197,7 @@ async def test_safety_blocks_destructive_write_to_protected_path(
         state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert _sc(outcome).error == "denied: protected path (safety policy)"  # type: ignore[union-attr]
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
@@ -232,7 +226,7 @@ async def test_safety_blocks_read_file_of_ssh_key(
         state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert _sc(outcome).error == "denied: protected path (safety policy)"  # type: ignore[union-attr]
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
@@ -310,9 +304,6 @@ async def test_safety_skipped_on_destructive_tool_without_path_arg(
     )
     assert _sc(outcome) is None
     assert len(spy.calls) == 1  # asker was consulted
-
-
-# --- rule match and default rules ---
 
 
 async def test_read_file_rule_matches_goes_to_rule_allow(
@@ -436,7 +427,7 @@ async def test_ask_deny_returns_tool_result(
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert _sc(outcome).error == "denied: user"  # type: ignore[union-attr]
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_deny"
@@ -457,6 +448,7 @@ async def test_ask_deny_with_feedback_embeds_note_in_error(
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
     assert _sc(outcome) is not None
+    # narrowed by assert above; mypy keeps union
     assert _sc(outcome).error == "denied: user — note: wrong dir"  # type: ignore[union-attr]
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["feedback"] == "wrong dir"
@@ -591,7 +583,7 @@ async def test_asker_exception_treated_as_deny(
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert _sc(outcome).error == "denied: user"  # type: ignore[union-attr]
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_deny"
@@ -631,6 +623,7 @@ async def test_hook_returns_decision_on_outcome() -> None:
     state = LoopState()
     outcome = await hook(tool=_tool(), args={}, state=state)
     assert isinstance(_decision(outcome), Decision)
+    # test sets attribute mypy can't see
     assert _decision(outcome).reason == "rule_allow"  # type: ignore[attr-defined]
     assert _decision(outcome).allow is True  # type: ignore[attr-defined]
     # Post-G4 direct-return contract: the hook MUST NOT write any
@@ -657,10 +650,12 @@ async def test_hook_decision_refreshes_across_calls() -> None:
     # First call: rule_allow (writer rule matches).
     first_outcome = await hook(tool=_tool(), args={}, state=state)
     assert _decision(first_outcome) is not None
+    # test sets attribute mypy can't see
     assert _decision(first_outcome).reason == "rule_allow"  # type: ignore[attr-defined]
     # Second call: different tool, no matching rule → asker answers accept.
     second_outcome = await hook(tool=_tool("different"), args={}, state=state)
     assert _decision(second_outcome) is not None
+    # test sets attribute mypy can't see
     assert _decision(second_outcome).reason == "user_accept"  # type: ignore[attr-defined]
     assert _decision(second_outcome) is not _decision(first_outcome)
 

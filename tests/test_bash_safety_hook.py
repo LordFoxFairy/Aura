@@ -158,13 +158,6 @@ async def test_non_string_command_arg_passes_through() -> None:
     assert isinstance(outcome, Allow)
 
 
-# ---------------------------------------------------------------------------
-# Phase 1 Task 9 — Outcome variant assertions.
-# Blocked paths return Replace; passthrough paths return Allow.
-# (legacy, resolved in Task 10).
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_dangerous_bash_returns_replace_outcome() -> None:
     hook = make_bash_safety_hook()

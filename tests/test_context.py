@@ -356,7 +356,7 @@ def test_12_two_instances_independent_progressive_state(tmp_path: Path) -> None:
 def test_nested_fragment_is_frozen_dataclass(tmp_path: Path) -> None:
     frag = NestedFragment(source=tmp_path / "x.md", content="X")
     with pytest.raises(FrozenInstanceError):
-        frag.content = "Y"  # type: ignore[misc]
+        frag.content = "Y"  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_ac09_empty_todos_list_emits_no_todos_message(tmp_path: Path) -> None:
@@ -706,11 +706,6 @@ def test_render_todos_body_multi_line_no_trailing_newline() -> None:
     assert not body.endswith("\n")
 
 
-# ---------------------------------------------------------------------------
-# Phase 3 Task 2 — Context.fresh() explicit reset factory
-# ---------------------------------------------------------------------------
-
-
 def test_fresh_clears_progressive_state(tmp_path: Path) -> None:
     """fresh() returns a NEW Context with progressive fields cleared."""
     cwd = tmp_path / "p"
@@ -763,7 +758,7 @@ def test_fresh_clears_progressive_state(tmp_path: Path) -> None:
 def test_fresh_preserves_config(tmp_path: Path) -> None:
     """fresh() carries constructor-injected config onto the new instance."""
     skill = _skill("doc", "documents", "DOC-BODY")
-    todos_provider = lambda: [  # noqa: E731
+    todos_provider = lambda: [  # noqa: E731  # lambda in test is fine
         TodoItem(content="t", status="pending", active_form="Doing t"),
     ]
     ctx = Context(
@@ -878,11 +873,6 @@ def test_fresh_rejects_carryover_and_clear_reads_together(tmp_path: Path) -> Non
     )
     with pytest.raises(ValueError, match="not both"):
         ctx.fresh(carryover=carry, clear_reads=True)
-
-
-# ---------------------------------------------------------------------------
-# Phase 3 Task 6 — cwd-boundary unification
-# ---------------------------------------------------------------------------
 
 
 def test_path_in_scope_helper_under_cwd(tmp_path: Path) -> None:

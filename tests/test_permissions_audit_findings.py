@@ -32,7 +32,6 @@ def _sc(outcome: object) -> ToolResult | None:
     return getattr(outcome, "short_circuit", None)
 
 
-
 class _P(BaseModel):
     pass
 
@@ -86,12 +85,6 @@ class _SpyAsker:
             raise self.raise_
         assert self.response is not None
         return self.response
-
-
-# ---------------------------------------------------------------------------
-# F-04-002 — PreToolHook returning ``ask`` overrides prior allow → next
-# pipeline step is the prompt path (asker invoked).
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -157,7 +150,7 @@ async def test_f_04_002_ask_demotes_bypass_to_asker_call(
         tool=tool, args={}, state=LoopState(),
     )
     assert len(asker.calls) == 1
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.allow is False  # type: ignore[union-attr]
     assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
 
@@ -191,14 +184,8 @@ async def test_f_04_002_ask_does_not_override_safety_block(
     )
     # Asker NEVER called — safety wins.
     assert asker.calls == []
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
-
-
-# ---------------------------------------------------------------------------
-# F-04-005 — plan-mode + web_fetch → denied (web_fetch removed from
-# read-allow list because plan mode = no outbound calls).
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -216,7 +203,7 @@ async def test_f_04_005_plan_mode_blocks_web_fetch(tmp_path: Path) -> None:
         tool=tool, args={"url": "https://example.com"}, state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision is not None  # type: ignore[union-attr]
     assert outcome.decision.reason == "plan_mode_blocked"  # type: ignore[union-attr]
     assert asker.calls == []
@@ -237,7 +224,7 @@ async def test_f_04_005_plan_mode_blocks_web_search(tmp_path: Path) -> None:
         tool=tool, args={}, state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]
+    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision is not None  # type: ignore[union-attr]
     assert outcome.decision.reason == "plan_mode_blocked"  # type: ignore[union-attr]
 
@@ -251,12 +238,6 @@ def test_f_04_005_plan_mode_read_tools_excludes_outbound() -> None:
     assert "read_file" in _PLAN_MODE_READ_TOOLS
     assert "grep" in _PLAN_MODE_READ_TOOLS
     assert "glob" in _PLAN_MODE_READ_TOOLS
-
-
-# ---------------------------------------------------------------------------
-# F-04-015 — disable_bypass=True + runtime mode="bypass" → clamped to
-# default, warning emitted.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -291,7 +272,7 @@ async def test_f_04_015_disable_bypass_clamps_runtime_bypass(
     # The hook must NOT have taken the bypass auto-allow path; instead
     # it falls through to the asker (clamped to default mode).
     assert len(asker.calls) == 1
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.reason != "mode_bypass"  # type: ignore[union-attr]
     assert outcome.decision.reason == "user_accept"  # type: ignore[union-attr]
 
@@ -355,14 +336,9 @@ async def test_f_04_015_disable_bypass_false_lets_bypass_through(
     outcome = await hook(
         tool=tool, args={}, state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]
+    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
     assert outcome.decision.reason == "mode_bypass"  # type: ignore[union-attr]
     assert asker.calls == []
-
-
-# ---------------------------------------------------------------------------
-# F-04-020 — safety_exempt=["~/.ssh/**"] at config load → AuraConfigError.
-# ---------------------------------------------------------------------------
 
 
 def test_f_04_020_safety_exempt_overlaps_ssh_raises(tmp_path: Path) -> None:

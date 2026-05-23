@@ -41,7 +41,7 @@ def _seed_history(agent: Agent, *, pairs: int = 10) -> None:
     for i in range(pairs):
         h.append(HumanMessage(content=f"u-{i}"))
         h.append(AIMessage(content=f"a-{i}"))
-    agent._storage.save(agent.session_id, h)
+    agent.storage.save(agent.session_id, h)
 
 
 @pytest.mark.asyncio
@@ -59,7 +59,7 @@ async def test_invoked_skills_reinjected_into_history(tmp_path: Path) -> None:
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     blob = "\n".join(str(m.content) for m in history)
     assert '<skill-active name="ping">' in blob
     assert "PING-BODY-CONTENT" in blob
@@ -80,7 +80,7 @@ async def test_state_custom_holds_preserved_invoked_skills(tmp_path: Path) -> No
 
     await agent.compact(source="manual")
 
-    preserved = agent._state.slots.preserved_invoked_skills
+    preserved = agent.state.slots.preserved_invoked_skills
     assert preserved
     names = [s.name for s in preserved]
     assert names == ["ping"]
@@ -102,7 +102,7 @@ async def test_skill_body_truncated_when_oversize(tmp_path: Path) -> None:
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     skill_msg = next(
         m for m in history if "<skill-active" in str(m.content)
     )

@@ -67,7 +67,7 @@ def _seed_history(agent: Agent, *, pairs: int) -> None:
     for i in range(pairs):
         h.append(HumanMessage(content=f"user-{i}"))
         h.append(AIMessage(content=f"assistant-{i}"))
-    agent._storage.save(agent.session_id, h)
+    agent.storage.save(agent.session_id, h)
 
 
 class SizeLimitedSummaryModel(FakeChatModel):
@@ -123,7 +123,7 @@ async def test_compact_noop_when_short_history(tmp_path: Path) -> None:
     # Returned result still structurally valid.
     assert result.source == "manual"
     # History unchanged.
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     assert len(history) == 4
     await agent.aclose()
 
@@ -138,7 +138,7 @@ async def test_compact_replaces_middle_with_summary_preserves_tail(
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     # 1 summary HumanMessage + 6 preserved tail messages = 7.
     assert len(history) == 7
     assert isinstance(history[0], HumanMessage)
@@ -162,7 +162,7 @@ async def test_compact_keeps_last_n_turns_raw(tmp_path: Path) -> None:
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     tail = history[-KEEP_LAST_N_TURNS * 2 :]
     assert len(tail) == KEEP_LAST_N_TURNS * 2
     # These are the last N raw turns from the original history — not summaries.
@@ -243,8 +243,8 @@ async def test_compact_preserves_todos(tmp_path: Path) -> None:
     agent = _make_agent(tmp_path)
     _seed_history(agent, pairs=10)
 
-    agent._state.slots.todos.clear()
-    agent._state.slots.todos.append(
+    agent.state.slots.todos.clear()
+    agent.state.slots.todos.append(
         TodoItem(
             content="TASK-A", status="pending", active_form="Doing TASK-A",
         )
@@ -252,7 +252,7 @@ async def test_compact_preserves_todos(tmp_path: Path) -> None:
 
     await agent.compact(source="manual")
 
-    todos = agent._state.slots.todos
+    todos = agent.state.slots.todos
     assert len(todos) == 1
     assert todos[0].content == "TASK-A"
     await agent.aclose()
@@ -380,7 +380,7 @@ async def test_compact_result_dataclass_shape(tmp_path: Path) -> None:
     agent = _make_agent(tmp_path)
     _seed_history(agent, pairs=10)
 
-    agent._state.total_tokens_used = 123
+    agent.state.total_tokens_used = 123
 
     result = await agent.compact(source="manual")
 
@@ -417,11 +417,11 @@ async def test_compact_splits_summary_when_provider_rejects_large_prompt(
     for i in range(16):
         history.append(HumanMessage(content=f"user-{i} " + ("u" * 500)))
         history.append(AIMessage(content=f"assistant-{i} " + ("a" * 500)))
-    agent._storage.save(agent.session_id, history)
+    agent.storage.save(agent.session_id, history)
 
     await agent.compact(source="manual")
 
-    compacted = agent._storage.load(agent.session_id)
+    compacted = agent.storage.load(agent.session_id)
     assert "<session-summary>" in str(compacted[0].content)
     assert model.ainvoke_calls > 1
     assert max(model.prompt_sizes) <= model.__dict__["max_prompt_chars"]
@@ -443,7 +443,7 @@ async def test_compact_truncates_oversized_raw_tool_outputs_before_summary(
         history.append(HumanMessage(content=f"user-{i}"))
         history.append(AIMessage(content="assistant"))
         history.append(HumanMessage(content="TOOL-OUTPUT-" + ("x" * 50_000)))
-    agent._storage.save(agent.session_id, history)
+    agent.storage.save(agent.session_id, history)
 
     await agent.compact(source="manual")
 
@@ -481,21 +481,16 @@ async def test_compact_summarizes_microcompacted_dynamic_history_view(
             tool_call_id=call_id,
             name="read_file",
         ))
-    agent._storage.save(agent.session_id, history)
+    agent.storage.save(agent.session_id, history)
 
     await agent.compact(source="manual")
 
-    compacted = agent._storage.load(agent.session_id)
+    compacted = agent.storage.load(agent.session_id)
     assert "<session-summary>" in str(compacted[0].content)
     sent_summary_prompt = "\n".join(model.prompts)
     assert MICROCOMPACT_CLEAR_MARKER in sent_summary_prompt
     assert "RAW-OLD-TOOL-RESULT-" not in sent_summary_prompt
     await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Item 1 — selective file re-injection after compact
-# ---------------------------------------------------------------------------
 
 
 def _touch_with_mtime(path: Path, body: str, mtime: float) -> None:
@@ -511,7 +506,7 @@ async def test_compact_reinjects_top_n_recent_files_by_mtime(
 ) -> None:
     """Top ``compact.max_files_to_restore`` reads (by mtime DESC) re-injected after compact."""
     agent = _make_agent(tmp_path)
-    max_files_to_restore = agent._config.compact.max_files_to_restore
+    max_files_to_restore = agent.config.compact.max_files_to_restore
     _seed_history(agent, pairs=10)
 
     # Create 7 files, staggered mtimes — file_6 is newest, file_0 oldest.
@@ -525,7 +520,7 @@ async def test_compact_reinjects_top_n_recent_files_by_mtime(
     await agent.compact(source="manual")
 
     # History: summary + N recent-file messages + preserved tail.
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     recent_file_messages = [
         m for m in history
         if isinstance(m, HumanMessage) and "<recent-file" in str(m.content)
@@ -570,7 +565,7 @@ async def test_compact_honors_max_files_to_restore_config_override(
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     recent_file_messages = [
         m for m in history
         if isinstance(m, HumanMessage) and "<recent-file" in str(m.content)
@@ -603,7 +598,7 @@ async def test_compact_skips_partial_reads_in_reinjection(tmp_path: Path) -> Non
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     blob = "\n".join(str(m.content) for m in history)
     assert "FULL-BODY" in blob
     assert "PART-BODY" not in blob
@@ -629,7 +624,7 @@ async def test_compact_handles_deleted_file_during_reinjection(
     # Must not raise.
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     blob = "\n".join(str(m.content) for m in history)
     assert "ALIVE-BODY" in blob
     assert "DEAD-BODY" not in blob
@@ -642,7 +637,7 @@ async def test_compact_caps_file_body_at_max_tokens_per_file(
 ) -> None:
     """Oversize file bodies are truncated with a ``(truncated)`` marker."""
     agent = _make_agent(tmp_path)
-    max_tokens_per_file = agent._config.compact.max_tokens_per_file
+    max_tokens_per_file = agent.config.compact.max_tokens_per_file
     _seed_history(agent, pairs=10)
 
     # 4 chars/token approx → cap is ``max_tokens_per_file * 4`` chars.
@@ -654,7 +649,7 @@ async def test_compact_caps_file_body_at_max_tokens_per_file(
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     recent = [
         str(m.content) for m in history
         if isinstance(m, HumanMessage) and "<recent-file" in str(m.content)
@@ -681,7 +676,7 @@ async def test_compact_recent_files_rendered_before_preserved_tail(
 
     await agent.compact(source="manual")
 
-    history = agent._storage.load(agent.session_id)
+    history = agent.storage.load(agent.session_id)
     # history[0] = summary
     assert "<session-summary>" in str(history[0].content)
     # history[1] = recent-file (only one recorded)

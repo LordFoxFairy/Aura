@@ -74,10 +74,12 @@ async def _run() -> int:
 
 def main() -> int:
     """Entry point — bootstrap the shared session driver over stdio."""
+    # ``exited`` is owned solely by ``run_session_driver``'s finally; KeyboardInterrupt
+    # cancels the running task which still unwinds that finally, so a second emit here
+    # would duplicate the wire event.
     try:
         return asyncio.run(_run())
     except KeyboardInterrupt:
-        _emit({"event": "exited"})
         return 130
 
 

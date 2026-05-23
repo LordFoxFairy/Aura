@@ -146,13 +146,6 @@ def test_todo_write_metadata_includes_matcher_and_preview() -> None:
     assert preview({"todos": []}) == "todos: 0 items"
 
 
-# ---------------------------------------------------------------------------
-# in_progress cardinality validation — matches claude-code TodoWrite policy
-# "exactly ONE in_progress at a time" (zero is also allowed; more than one
-# is the scope-creep signal we reject).
-# ---------------------------------------------------------------------------
-
-
 def test_multiple_in_progress_rejected() -> None:
     with pytest.raises(ValidationError) as exc_info:
         TodoWriteParams.model_validate({

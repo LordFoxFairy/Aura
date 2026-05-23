@@ -26,7 +26,9 @@ class ToolCallProgressEvent(TypedDict):
 
 
 class ToolCallContent(TypedDict):
-    text: str
+    # ``output`` is a raw JSON value: dict / list / scalar / str. On error
+    # this carries the error message string and ``error`` is True.
+    output: Any
     error: bool
 
 

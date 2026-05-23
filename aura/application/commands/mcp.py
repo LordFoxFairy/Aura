@@ -55,7 +55,7 @@ class MCPCommand:
         from aura.config import mcp_store
         try:
             configs = mcp_store.load()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             return CommandResult(handled=True, kind="print", text=f"reload failed: {exc}")
         text = await manager.reload(configs)
         return CommandResult(handled=True, kind="print", text=text)

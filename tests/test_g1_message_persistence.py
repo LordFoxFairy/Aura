@@ -88,11 +88,6 @@ class _RaisingOnce(FakeChatModel):
         return ChatResult(generations=[ChatGeneration(message=turn.message)])
 
 
-# ---------------------------------------------------------------------------
-# AC-G1-1
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_user_message_persisted_before_model_call(tmp_path: Path) -> None:
     """AC-G1-1: storage.load sees the user turn even when ainvoke crashes.
@@ -164,11 +159,6 @@ async def test_user_message_persisted_before_model_call_no_attachments(
     await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# AC-G1-2
-# ---------------------------------------------------------------------------
-
-
 class _OverflowThenOK(FakeChatModel):
     """Raise a context-overflow error on the first call; normal turns after.
 
@@ -183,7 +173,7 @@ class _OverflowThenOK(FakeChatModel):
 
     @property
     def captured(self) -> list[list[BaseMessage]]:
-        return self.__dict__["captured"]  # type: ignore[no-any-return]
+        return self.__dict__["captured"]  # type: ignore[no-any-return]  # fake returns Any from __dict__
 
     async def _agenerate(
         self,
@@ -270,14 +260,6 @@ async def test_reactive_compact_retains_attachments_idempotently(
     await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# AC-G1-3 — spot check the reactive_compact suite still passes shape-wise.
-# (The full test file is invoked by ``make check``; we do a narrow
-# reachability assertion here so a future refactor that orphans those tests
-# fails this one first.)
-# ---------------------------------------------------------------------------
-
-
 def test_reactive_compact_still_green_after_g1() -> None:
     """AC-G1-3 guard: the reactive-compact test module is importable and the
     four named tests still exist with their original signatures."""
@@ -298,10 +280,6 @@ def test_reactive_compact_still_green_after_g1() -> None:
         f"did a refactor rename them?"
     )
 
-
-# ---------------------------------------------------------------------------
-# AC-G1-4 — dogfood / real subprocess
-# ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -483,11 +461,6 @@ def test_cancelled_turn_persists_user_message_dogfood(tmp_path: Path) -> None:
         f"user prompt {prompt!r} not found in persisted history; "
         f"got {[type(m).__name__ + ':' + str(m.content)[:80] for m in loaded]}"
     )
-
-
-# ---------------------------------------------------------------------------
-# Extra: verify the journal shows save_before_run ordering
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

@@ -186,11 +186,6 @@ async def test_error_message_truncates_long_missing_string(tmp_path: Path) -> No
     assert len(echoed.rstrip("\u2026").rstrip()) <= 120
 
 
-# ---------------------------------------------------------------------------
-# Mixed CRLF + LF handling — prior behavior silently mutated unrelated lines
-# ---------------------------------------------------------------------------
-
-
 async def test_mixed_endings_file_does_not_mutate_unrelated_lines(
     tmp_path: Path,
 ) -> None:
@@ -253,11 +248,6 @@ async def test_mixed_endings_ambiguous_old_str_rejected_by_uniqueness(
         )
 
 
-# ---------------------------------------------------------------------------
-# F-02-009 — pre-stat size cap rejects files above _MAX_EDIT_SIZE
-# ---------------------------------------------------------------------------
-
-
 async def test_edit_file_above_size_cap_rejected(tmp_path: Path) -> None:
     f = tmp_path / "huge.bin"
     # Sparse file via os.truncate: 257 MB without consuming disk.
@@ -277,11 +267,6 @@ async def test_edit_file_at_size_cap_accepted(tmp_path: Path) -> None:
         {"path": str(f), "old_str": "hello", "new_str": "goodbye"}
     )
     assert out == {"replacements": 1}
-
-
-# ---------------------------------------------------------------------------
-# Phase 5 Task 2 — ``validate_input`` rejects empty paths
-# ---------------------------------------------------------------------------
 
 
 def test_validate_input_rejects_empty_path() -> None:

@@ -90,7 +90,7 @@ async def test_context_command_history_count_reflects_storage(
         HumanMessage(content="A" * 400),
         AIMessage(content="B" * 400),
     ]
-    agent._storage.save(agent.session_id, history)
+    agent.storage.save(agent.session_id, history)
 
     cmd = ContextCommand()
     result = await cmd.handle("", agent)
@@ -117,7 +117,7 @@ async def test_context_command_counts_hidden_tool_call_args(tmp_path: Path) -> N
             }],
         ),
     ]
-    agent._storage.save(agent.session_id, history)
+    agent.storage.save(agent.session_id, history)
 
     result = await ContextCommand().handle("", agent)
 
@@ -136,7 +136,7 @@ async def test_context_command_shows_manual_compact_prompt_estimate(
     for i in range(8):
         history.append(HumanMessage(content=f"u-{i} " + ("x" * 200)))
         history.append(AIMessage(content=f"a-{i} " + ("y" * 200)))
-    agent._storage.save(agent.session_id, history)
+    agent.storage.save(agent.session_id, history)
 
     result = await ContextCommand().handle("", agent)
 
@@ -172,7 +172,7 @@ async def test_context_command_total_uses_live_microcompacted_history(
             tool_call_id=call_id,
             name="read_file",
         ))
-    agent._storage.save(agent.session_id, history)
+    agent.storage.save(agent.session_id, history)
 
     result = await ContextCommand().handle("", agent)
 

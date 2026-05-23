@@ -113,15 +113,15 @@ def _ensure_manager(agent: Agent) -> TeamManager | None:
     """Return the agent's TeamManager, creating one on first call."""
     existing = getattr(agent, "_team_manager", None)
     if existing is not None:
-        return existing  # type: ignore[no-any-return]
+        return existing  # type: ignore[no-any-return]  # fake returns Any from __dict__
     mgr = TeamManager(
         leader=agent,
-        storage=agent._storage,
+        storage=agent.storage,
         factory=agent._subagent_factory,
         running_aborts=agent._running_aborts,
         tasks_store=agent._tasks_store,
     )
-    agent._team_manager = mgr  # type: ignore[attr-defined]
+    agent._team_manager = mgr  # type: ignore[attr-defined]  # test sets attribute mypy can't see
     return mgr
 
 
@@ -136,11 +136,11 @@ def _resolve_team_id(
     live = manager.team
     if live is not None and (name == live.team_id or name == live.name):
         return live.team_id
-    on_disk = agent._storage.list_team_ids()
+    on_disk = agent.storage.list_team_ids()
     if name in on_disk:
         return name
     for tid in on_disk:
-        path = agent._storage.team_config_path(tid)
+        path = agent.storage.team_config_path(tid)
         if not path.exists():
             continue
         try:
@@ -324,7 +324,7 @@ class TeamCommand:
                 "print",
             )
         if verb == "list":
-            ids = agent._storage.list_team_ids()
+            ids = agent.storage.list_team_ids()
             if not ids:
                 return "(no teams on disk)", "print"
             active = mgr.team.team_id if mgr.team is not None else None
@@ -491,7 +491,7 @@ class TeamCommand:
                 "print",
             )
         lines = _read_transcript_tail(
-            agent._storage, target_team_id, member, _TEAMMATE_TAIL_CAP,
+            agent.storage, target_team_id, member, _TEAMMATE_TAIL_CAP,
         )
         text = _render_teammate(
             member=member,

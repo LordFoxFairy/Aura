@@ -64,7 +64,7 @@ def _candidate_transcript_paths(
         # Track A fallback when no parent_session_id is wired through.
         storage.subagent_transcript_path(task_id),
         # Run.py legacy filename (still present on disk).
-        storage._path.parent / "subagents" / f"subagent-{task_id}.jsonl",
+        storage.path.parent / "subagents" / f"subagent-{task_id}.jsonl",
     ]
 
 

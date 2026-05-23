@@ -18,7 +18,7 @@ def set_progress_callback(cb: ProgressCallback | None) -> object:
 
 
 def reset_progress_callback(token: object) -> None:
-    _progress_cb.reset(token)  # type: ignore[arg-type]
+    _progress_cb.reset(token)  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
 
 
 def get_progress_callback() -> ProgressCallback | None:

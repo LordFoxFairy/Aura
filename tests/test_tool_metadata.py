@@ -18,10 +18,6 @@ from aura.schemas.tool import (
     tool_metadata,
 )
 
-# ---------------------------------------------------------------------------
-# resolve_is_destructive
-# ---------------------------------------------------------------------------
-
 
 def test_resolve_is_destructive_none_metadata_returns_false() -> None:
     # No metadata at all → no claim → not destructive. Prevents a tool
@@ -99,11 +95,6 @@ def test_resolve_is_destructive_truthy_non_bool_coerces() -> None:
     assert resolve_is_destructive(meta, {}) is True
 
 
-# ---------------------------------------------------------------------------
-# resolve_is_read_only
-# ---------------------------------------------------------------------------
-
-
 def test_resolve_is_read_only_none_metadata_returns_false() -> None:
     assert resolve_is_read_only(None, {}) is False
 
@@ -131,11 +122,6 @@ def test_resolve_is_read_only_callable_exception_fails_closed_false() -> None:
 
     meta = tool_metadata(is_read_only=broken)
     assert resolve_is_read_only(meta, {}) is False
-
-
-# ---------------------------------------------------------------------------
-# tool_metadata accepts both shapes
-# ---------------------------------------------------------------------------
 
 
 def test_tool_metadata_accepts_static_bool() -> None:

@@ -107,11 +107,6 @@ def _stub_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     return fake_client
 
 
-# ---------------------------------------------------------------------------
-# Core gate: project-layer entries default to unapproved
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_unapproved_server_not_loaded_at_startup(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
@@ -215,11 +210,6 @@ async def test_user_scope_servers_skip_approval_check(
     assert [t.name for t in tools] == ["mcp__user_srv__t"]
 
 
-# ---------------------------------------------------------------------------
-# /mcp approve / revoke
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_approve_persists_to_user_state(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
@@ -287,11 +277,6 @@ async def test_revoke_disconnects_and_removes_approval(
     assert "proj_srv" not in fake_client.connections
 
 
-# ---------------------------------------------------------------------------
-# Atomic writes
-# ---------------------------------------------------------------------------
-
-
 def test_concurrent_approval_writes_are_atomic(
     isolated_home: Path,
 ) -> None:
@@ -323,11 +308,6 @@ def test_concurrent_approval_writes_are_atomic(
     assert leftovers == []
 
 
-# ---------------------------------------------------------------------------
-# Journal breadcrumb
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_journal_records_unapproved_attempt(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
@@ -352,11 +332,6 @@ async def test_journal_records_unapproved_attempt(
     assert payload["server"] == "srv1"
     assert "project" in payload
     journal.reset()
-
-
-# ---------------------------------------------------------------------------
-# Reload — F-06-014 free win bundled with the approval work
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -405,11 +380,6 @@ async def test_mcp_reload_drops_removed_servers(
     assert {s.name for s in mgr.status()} == {"a"}
 
 
-# ---------------------------------------------------------------------------
-# /mcp list visibility
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_unapproved_server_visible_via_mcp_list(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
@@ -440,11 +410,6 @@ async def test_unapproved_server_visible_via_mcp_list(
     assert "proj_srv" in text
     assert "approve" in text.lower()
     assert "unapproved" in text.lower()
-
-
-# ---------------------------------------------------------------------------
-# Bonus — fingerprint correctness (the security-critical primitive)
-# ---------------------------------------------------------------------------
 
 
 def test_fingerprint_changes_on_command_diff() -> None:
@@ -541,11 +506,6 @@ async def test_user_scope_approve_is_noop(
     assert "user-scope" in text
 
 
-# ---------------------------------------------------------------------------
-# Auto-detection from mcp_store (Agent-side default path)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_auto_detect_project_names_from_store(
     isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
@@ -602,11 +562,6 @@ async def test_reload_via_slash_command_picks_up_disk_changes(
     assert result.handled
     assert "+1" in (result.text or "")
     assert {s.name for s in mgr.status()} == {"a", "b"}
-
-
-# ---------------------------------------------------------------------------
-# project_key resolves symlinks
-# ---------------------------------------------------------------------------
 
 
 def test_project_key_resolves_symlinks(

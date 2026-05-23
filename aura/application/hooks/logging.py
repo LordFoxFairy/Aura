@@ -51,7 +51,7 @@ def make_event_logger_hooks() -> HookChain:
     ) -> Allow:
         try:
             args_preview = _trim(json.dumps(args, ensure_ascii=False, default=str), 200)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             args_preview = "<unserializable>"
         journal.write(
             "pre_tool",

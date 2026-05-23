@@ -49,7 +49,7 @@ def _make_tool(run_counter: list[int]) -> BaseTool:
     def _matcher(args: dict[str, object], content: str) -> bool:
         return args.get("command") == content
 
-    _matcher.key = "command"  # type: ignore[attr-defined]
+    _matcher.key = "command"  # type: ignore[attr-defined]  # test sets attribute mypy can't see
 
     def _run(command: str) -> dict[str, Any]:
         run_counter.append(1)
@@ -128,7 +128,7 @@ def _build_agent_with_perms(
         session=session_rules,
         rules=ruleset,
         project_root=project_root,
-        mode=mode,  # type: ignore[arg-type]
+        mode=mode,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
     )
     hooks = HookChain(pre_tool=[hook])
     cfg = _minimal_cfg()
@@ -220,7 +220,6 @@ async def test_end_to_end_persist_then_auto_allow_across_two_agents(
     run_counter: list[int] = []
     tool = _make_tool(run_counter)
 
-    # --- First run: user answers "always", rule hits disk. ---
     asker1 = _CountingAsker(response=AskerResponse(
         choice="always",
         scope="project",
@@ -241,7 +240,6 @@ async def test_end_to_end_persist_then_auto_allow_across_two_agents(
     assert asker1.call_count == 1
     assert (tmp_path / ".aura" / "settings.json").exists()
 
-    # --- Second run: fresh Agent, same project_root. Asker must stay quiet. ---
     asker2 = _CountingAsker(response=AskerResponse(choice="deny"))
     # Fresh SessionRuleSet — project rule on disk is the only thing allowing.
     agent2 = _build_agent_with_perms(

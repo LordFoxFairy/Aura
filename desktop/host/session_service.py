@@ -10,6 +10,7 @@ session logic.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -166,7 +167,7 @@ async def run_session_driver(
         disk_rules = perm_store_module.load_ruleset(project_root, known_tool_names=known_tools)
         deny_rules = perm_store_module.load_deny_ruleset(project_root)
         ask_rules = perm_store_module.load_ask_ruleset(project_root)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # corrupt input falls back to default
         emit({
             "event": "error",
             "message": f"permissions config: {type(exc).__name__}: {exc}",
@@ -223,7 +224,7 @@ async def run_session_driver(
         try:
             async for event in stream_agent_wire(agent, text):
                 emit(dict(event))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # fan-out callback must not poison loop
             emit({"event": "error", "message": f"{type(exc).__name__}: {exc}"})
 
     try:
@@ -287,8 +288,14 @@ async def run_session_driver(
 
             emit({"event": "error", "message": f"unsupported request kind: {kind!r}"})
     finally:
+        # Cancel-and-await order is load-bearing: cancel() schedules the
+        # CancelledError, await drains the resulting Final("(cancelled)")
+        # so the wire sees ``final`` BEFORE ``exited``. Without the await,
+        # the in-flight turn would race past us and emit final after exited.
         if turn_task is not None and not turn_task.done():
             turn_task.cancel()
+            with contextlib.suppress(BaseException):
+                await turn_task
         await agent.aclose()
         emit({"event": "exited"})
     return 0

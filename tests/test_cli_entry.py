@@ -129,6 +129,7 @@ def test_resolve_mode_defaults_to_default() -> None:
     from cli.__main__ import _resolve_mode
 
     args = _ns(bypass_permissions=False)
+    # deliberately off-type arg to exercise path
     assert _resolve_mode(args, PermissionsConfig()) == "default"  # type: ignore[arg-type]
 
 
@@ -140,6 +141,7 @@ def test_resolve_mode_reads_permissions_config_mode() -> None:
 
     perm_cfg = PermissionsConfig(mode="bypass")
     args = _ns(bypass_permissions=False)
+    # deliberately off-type arg to exercise path
     assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
 
 
@@ -149,6 +151,7 @@ def test_resolve_mode_cli_flag_wins_over_settings_default() -> None:
 
     perm_cfg = PermissionsConfig(mode="default")
     args = _ns(bypass_permissions=True)
+    # deliberately off-type arg to exercise path
     assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
 
 
@@ -161,15 +164,10 @@ def test_resolve_mode_cli_flag_wins_even_over_settings_bypass() -> None:
 
     perm_cfg = PermissionsConfig(mode="bypass")
     args = _ns(bypass_permissions=True)
+    # deliberately off-type arg to exercise path
     assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
 
 
-# ---------------------------------------------------------------------------
-# disable_bypass — audit Finding B: org-level kill switch for
-# --bypass-permissions. Two entry points need enforcement:
-#   1. CLI flag path (this file's subprocess tests).
-#   2. Programmatic Agent/set_mode path (tests/test_agent.py).
-# ---------------------------------------------------------------------------
 def test_bypass_refused_message_is_stable() -> None:
     # The error message is the single piece of text the operator sees
     # when their --bypass-permissions attempt gets refused. Lock its
@@ -238,6 +236,7 @@ def test_disable_bypass_false_allows_bypass_flag() -> None:
 
     perm_cfg = PermissionsConfig(disable_bypass=False)
     args = _ns(bypass_permissions=True)
+    # deliberately off-type arg to exercise path
     assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
     assert perm_cfg.disable_bypass is False
 
@@ -332,6 +331,7 @@ def test_main_wires_allow_deny_and_ask_rules_into_permission_layers(
     rules = captured_hook_kwargs["rules"]
     deny_rules = captured_hook_kwargs["deny_rules"]
     ask_rules = captured_hook_kwargs["ask_rules"]
+    # test sets attribute mypy can't see
     assert [rule.tool for rule in rules.rules][:1] == ["web_fetch"]  # type: ignore[attr-defined]
     assert [rule.tool for rule in deny_rules.rules] == ["bash"]  # type: ignore[attr-defined]
     assert [rule.tool for rule in ask_rules.rules] == ["write_file"]  # type: ignore[attr-defined]

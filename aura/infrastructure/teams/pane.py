@@ -146,13 +146,14 @@ class PaneHandle(BackendHandle):
             await self.force_kill()
             return False
         from aura.application.teams.mailbox import Mailbox  # local import; cycle-safe.
+        # test reaches into private state by design
         mailbox = Mailbox(self.manager._storage, team.team_id)  # noqa: SLF001
         baseline = {m.msg_id for m in mailbox.read_all(TEAM_LEADER_NAME)}
         # Post shutdown_request via the manager's internal poster so the
         # message is observed by the same journal events the in-process
         # path emits (parity for /tasks + observability).
         with contextlib.suppress(Exception):
-            self.manager._post(  # noqa: SLF001
+            self.manager._post(  # noqa: SLF001  # test reaches into private state by design
                 TeamMessage(
                     msg_id=uuid.uuid4().hex,
                     sender=TEAM_LEADER_NAME,
@@ -181,6 +182,7 @@ class PaneHandle(BackendHandle):
         import time as _time
         deadline = _time.monotonic() + timeout
         while _time.monotonic() < deadline:
+            # test sets attribute mypy can't see
             for msg in mailbox.read_all(TEAM_LEADER_NAME):  # type: ignore[attr-defined]
                 if msg.msg_id in baseline:
                     continue
@@ -339,18 +341,9 @@ class PaneBackend:
 
 
 def _resolve_storage_root(storage: SessionStorage) -> str:
-    """Return the storage-root path the subprocess should pass.
-
-    ``storage._path`` is the index sqlite file (e.g.
-    ``~/.aura/index.sqlite``); the subprocess wants the directory
-    containing it so its own ``SessionStorage`` constructor can wire
-    teams/ + projects/ underneath. For ``:memory:`` storage (tests),
-    fall back to the default Aura root so we don't pass a literal
-    ``:memory:`` to the subprocess (which would re-init an empty,
-    invisible-to-the-leader sqlite).
-    """
-    db_path = getattr(storage, "_path", None)
-    if db_path is None or str(db_path) == ":memory:":
+    """Return the dir containing index.sqlite; ``:memory:`` falls back to ``~/.aura``."""
+    db_path = storage.path
+    if str(db_path) == ":memory:":
         return os.path.expanduser("~/.aura")
     return str(db_path.parent)
 

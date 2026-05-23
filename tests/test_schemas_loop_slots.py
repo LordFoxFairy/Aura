@@ -75,9 +75,9 @@ def test_loop_slots_is_frozen() -> None:
     mutable collections, which is intentional)."""
     slots = LoopSlots()
     with pytest.raises(dataclasses.FrozenInstanceError):
-        slots.active_team = "team-a"  # type: ignore[misc]
+        slots.active_team = "team-a"  # type: ignore[misc]  # rebinding/mutating frozen field for test
     with pytest.raises(dataclasses.FrozenInstanceError):
-        slots.buddy = BuddyState(mood="happy")  # type: ignore[misc]
+        slots.buddy = BuddyState(mood="happy")  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_loop_slots_replace_returns_new_instance() -> None:
@@ -105,10 +105,10 @@ def test_loop_slots_default_factories_isolate_per_instance() -> None:
     a = LoopSlots()
     b = LoopSlots()
 
-    a.turn_denials.append("sentinel")  # type: ignore[arg-type]
+    a.turn_denials.append("sentinel")  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
     a.todos.append(TodoItem(content="x", status="pending", active_form="x"))
-    a.perm_dedup_cache["k"] = "v"  # type: ignore[assignment]
-    a.invoked_skills.append("skill_a")  # type: ignore[arg-type]
+    a.perm_dedup_cache["k"] = "v"  # type: ignore[assignment]  # narrowing branch mypy doesn't track
+    a.invoked_skills.append("skill_a")  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
     a.preserved_invoked_skills.append("preserved_a")  # type: ignore[arg-type]
 
     assert b.turn_denials == []
@@ -125,7 +125,7 @@ def test_loop_slots_collections_mutable_in_place_under_frozen() -> None:
     ``LoopSlots`` is frozen.
     """
     slots = LoopSlots()
-    slots.turn_denials.append("d1")  # type: ignore[arg-type]
+    slots.turn_denials.append("d1")  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
     slots.turn_denials.clear()
     assert slots.turn_denials == []
 
@@ -147,7 +147,7 @@ def test_tokenstats_is_frozen_and_zero_default() -> None:
     assert ts.turn_count == 0
 
     with pytest.raises(dataclasses.FrozenInstanceError):
-        ts.last_input_tokens = 5  # type: ignore[misc]
+        ts.last_input_tokens = 5  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_tokenstats_replace_yields_new_instance() -> None:
@@ -169,7 +169,7 @@ def test_skill_restrict_lease_is_frozen_with_required_fields() -> None:
     assert lease.tools == frozenset({"read_file"})
 
     with pytest.raises(dataclasses.FrozenInstanceError):
-        lease.install_turn = 5  # type: ignore[misc]
+        lease.install_turn = 5  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_loop_slots_exported_from_schemas_state_module() -> None:
@@ -197,4 +197,4 @@ def test_buddy_state_defaults_match_idle_observer() -> None:
 def test_buddy_state_is_frozen() -> None:
     bs = BuddyState()
     with pytest.raises(dataclasses.FrozenInstanceError):
-        bs.mood = "happy"  # type: ignore[misc]
+        bs.mood = "happy"  # type: ignore[misc]  # rebinding/mutating frozen field for test

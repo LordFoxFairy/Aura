@@ -28,10 +28,6 @@ from aura.core import agent as agent_module
 from tests.conftest import FakeChatModel
 from tests.integration.conftest import build_integration_agent
 
-# ---------------------------------------------------------------------------
-# FakeMCPManager — drops in where aura.core.agent.MCPManager would go.
-# ---------------------------------------------------------------------------
-
 
 class FakeMCPManager:
     """Drop-in stand-in for :class:`aura.infrastructure.mcp.MCPManager`.
@@ -116,11 +112,6 @@ def _cfg_with_one_server() -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# Test 1 — aconnect exposes the manager and does NOT register the tool
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_aconnect_exposes_manager_without_auto_registering_tool(
     tmp_path: Path,
@@ -159,11 +150,6 @@ async def test_aconnect_exposes_manager_without_auto_registering_tool(
         await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# Test 2 — empty catalogue: manager still exposed, tool still not registered
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_aconnect_empty_catalogue_still_exposes_manager(
     tmp_path: Path,
@@ -192,14 +178,6 @@ async def test_aconnect_empty_catalogue_still_exposes_manager(
     finally:
         # B3: live MCP manager inside async loop → must use aclose().
         await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Sentinel: keep ``build_integration_agent`` imported so its public usage
-# in this tier doesn't drift unnoticed. The test functions above construct
-# Agent manually because they need to pass ``mcp_servers`` in the config —
-# build_integration_agent doesn't expose that knob today.
-# ---------------------------------------------------------------------------
 
 
 def _silence_unused(_a: Any = build_integration_agent) -> None:  # pragma: no cover

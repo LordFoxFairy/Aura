@@ -50,7 +50,7 @@ class ExportCommand:
                 handled=True, kind="print", text=f"error: {exc}",
             )
 
-        messages = agent._storage.load(agent.session_id)
+        messages = agent.storage.load(agent.session_id)
         target_path, fmt, note = _resolve_target(path_arg, fmt_arg)
 
         try:
@@ -114,7 +114,7 @@ def _parse_args(arg: str) -> tuple[str | None, Format | None]:
                 raise ValueError(
                     f"unknown format {value!r}; expected 'md' or 'json'"
                 )
-            fmt = value  # type: ignore[assignment]
+            fmt = value  # type: ignore[assignment]  # narrowing branch mypy doesn't track
             i += 2
             continue
         if tok.startswith("--"):
@@ -168,7 +168,7 @@ def _envelope(agent: Agent, messages: list[BaseMessage]) -> dict[str, object]:
         "session_id": agent.session_id,
         "exported_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "model": agent.current_model,
-        "cwd": str(agent._cwd),
+        "cwd": str(agent.cwd),
         "turns": turns,
         "total_tokens": agent.state.total_tokens_used,
     }

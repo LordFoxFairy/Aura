@@ -116,7 +116,7 @@ def _load_class(protocol: str) -> type[BaseChatModel]:
             source="provider sdk",
             detail=f"{module_name} not installed. Run: pip install 'aura[{protocol}]'",
         ) from exc
-    return getattr(module, class_name)  # type: ignore[no-any-return]
+    return getattr(module, class_name)  # type: ignore[no-any-return]  # fake returns Any from __dict__
 
 
 def _resolve_api_key(provider: ProviderConfig) -> str | None:

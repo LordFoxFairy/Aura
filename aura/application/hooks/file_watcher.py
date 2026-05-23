@@ -69,7 +69,7 @@ class FileWatcher:
                 await self._tick()
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             journal.write(
                 "file_watcher_error",
                 error=f"{type(exc).__name__}: {exc}",
@@ -105,7 +105,7 @@ class FileWatcher:
                 await self._chain.run_file_changed(
                     path=path, kind=kind, state=self._state,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
                 journal.write(
                     "file_watcher_consumer_error",
                     path=str(path),

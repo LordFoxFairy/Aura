@@ -52,11 +52,6 @@ def _sc(outcome: object) -> ToolResult | None:
     return getattr(outcome, "short_circuit", None)
 
 
-# -----------------------------------------------------------------------
-# helpers (mirror test_permission.py patterns so the two files read alike)
-# -----------------------------------------------------------------------
-
-
 class _PathArgs(BaseModel):
     path: str
 
@@ -105,11 +100,6 @@ class _SpyAsker:
         return self.response
 
 
-# -----------------------------------------------------------------------
-# PermissionDenial dataclass — shape + immutability
-# -----------------------------------------------------------------------
-
-
 def test_permission_denial_is_frozen() -> None:
     denial = PermissionDenial(
         tool_name="read_file",
@@ -119,7 +109,7 @@ def test_permission_denial_is_frozen() -> None:
         target="/etc/passwd",
     )
     with pytest.raises(FrozenInstanceError):
-        denial.reason = "user_deny"  # type: ignore[misc]
+        denial.reason = "user_deny"  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
 def test_permission_denial_default_timestamp_is_tz_aware() -> None:
@@ -128,11 +118,6 @@ def test_permission_denial_default_timestamp_is_tz_aware() -> None:
     )
     # UTC-aware so the SDK consumer can compare/serialize safely.
     assert denial.timestamp.tzinfo is not None
-
-
-# -----------------------------------------------------------------------
-# Hook deny branches — every non-allow path populates the sink
-# -----------------------------------------------------------------------
 
 
 async def test_hook_safety_blocked_appends_denial_to_sink() -> None:
@@ -265,11 +250,6 @@ async def test_hook_copies_tool_input_defensively() -> None:
     assert state.slots.turn_denials[0].tool_input == {"k": "v"}
 
 
-# -----------------------------------------------------------------------
-# AC-G5-1 / AC-G5-2 / AC-G5-3 — end-to-end via Agent.astream
-# -----------------------------------------------------------------------
-
-
 def _minimal_config(enabled: list[str]) -> AuraConfig:
     return AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
@@ -396,9 +376,9 @@ async def test_last_turn_denials_is_readonly_view(tmp_path: Path) -> None:
     assert len(view) == 1
     # tuple rejects item assignment AND append
     with pytest.raises(TypeError):
-        view[0] = None  # type: ignore[index]
+        view[0] = None  # type: ignore[index]  # test data shape known but not in stub
     with pytest.raises(AttributeError):
-        view.append(None)  # type: ignore[attr-defined]
+        view.append(None)  # type: ignore[attr-defined]  # test sets attribute mypy can't see
 
 
 async def test_last_turn_denials_empty_before_any_turn(tmp_path: Path) -> None:

@@ -212,7 +212,7 @@ async def test_subagent_cancelled_carries_duration(tmp_path: Path) -> None:
                 await asyncio.sleep(100)
                 if False:  # pragma: no cover - make this an async generator
                     yield
-            agent.astream = _forever  # type: ignore[method-assign,assignment]
+            agent.astream = _forever  # type: ignore[method-assign,assignment]  # monkey-patching method for test
             return agent
 
     try:

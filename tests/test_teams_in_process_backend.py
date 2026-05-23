@@ -51,7 +51,7 @@ async def test_in_process_backend_spawn_returns_handle(tmp_path: Path) -> None:
     handle = await backend.spawn(
         team_id="team-a",
         member=member,
-        agent=_ScriptedAgent(),  # type: ignore[arg-type]
+        agent=_ScriptedAgent(),  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         manager=None,  # type: ignore[arg-type]  # unused by in-process
         storage=storage,
         stop_event=stop,
@@ -88,7 +88,7 @@ async def test_in_process_backend_shutdown_round_trip(tmp_path: Path) -> None:
     handle = await backend.spawn(
         team_id="team-a",
         member=member,
-        agent=_ScriptedAgent(),  # type: ignore[arg-type]
+        agent=_ScriptedAgent(),  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         manager=None,  # type: ignore[arg-type]
         storage=storage,
         stop_event=stop,
@@ -113,7 +113,7 @@ async def test_in_process_backend_force_kill_idempotent(tmp_path: Path) -> None:
     handle = await backend.spawn(
         team_id="team-a",
         member=member,
-        agent=_ScriptedAgent(),  # type: ignore[arg-type]
+        agent=_ScriptedAgent(),  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
         manager=None,  # type: ignore[arg-type]
         storage=storage,
         stop_event=stop,

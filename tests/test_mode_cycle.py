@@ -24,8 +24,6 @@ def _agent(tmp_path: Path, mode: str = "default") -> Agent:
     )
 
 
-# ---------- Agent.set_mode ------------------------------------------------
-
 def test_set_mode_plan(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
     agent.set_mode("plan")
@@ -56,8 +54,6 @@ def test_set_mode_invalid_raises(tmp_path: Path) -> None:
     agent.close()
 
 
-# ---------- _cycle_mode ---------------------------------------------------
-
 def test_cycle_order_matches_spec() -> None:
     assert _cycle_mode("default") == "accept_edits"
     assert _cycle_mode("accept_edits") == "plan"
@@ -68,8 +64,6 @@ def test_cycle_preserves_bypass() -> None:
     # Bypass is NOT in the cycle — safer option: stays bypass.
     assert _cycle_mode("bypass") == "bypass"
 
-
-# ---------- shift+tab keybinding integration ------------------------------
 
 class _FakeApp:
     """Stand-in for prompt_toolkit's Application — we only need invalidate()."""
@@ -164,9 +158,6 @@ def test_escape_under_bypass_is_noop(tmp_path: Path) -> None:
     binding.handler(event)
     assert agent.mode == "bypass"
     agent.close()
-
-
-# ---------- Agent._prior_mode (prePlanMode restoration) -------------------
 
 
 def _agent_with_plan_tools(tmp_path: Path, mode: str = "default") -> Agent:

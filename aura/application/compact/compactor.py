@@ -110,7 +110,7 @@ class Compactor:
         trigger: CompactionTrigger = CompactionTrigger.reactive,
     ) -> CompactResult:
         """Full summary compaction on context-overflow. Refreshes ``history`` in place."""
-        before = self._agent._state.total_tokens_used
+        before = self._agent.state.total_tokens_used
         started = time.monotonic()
         try:
             result = await self._agent.compact(source="reactive")
@@ -123,7 +123,7 @@ class Compactor:
                 duration_ms=_elapsed_ms(started),
             )
             raise
-        history[:] = self._agent._storage.load(self._agent.session_id)
+        history[:] = self._agent.storage.load(self._agent.session_id)
         self._emit_event(
             trigger=trigger,
             tokens_before=result.before_tokens,
@@ -143,7 +143,7 @@ class Compactor:
     ) -> CompactResult | None:
         """Post-turn threshold check + run. ``None`` = no work / breaker open."""
         threshold = self._agent._effective_auto_compact_threshold()
-        before = self._agent._state.total_tokens_used
+        before = self._agent.state.total_tokens_used
         started = time.monotonic()
         if threshold <= 0:
             self._emit_event(
@@ -196,8 +196,8 @@ class Compactor:
             result = await self._agent.compact(source="auto")
         except Exception as exc:  # noqa: BLE001
             new_failures = failures + 1
-            self._agent._state.slots = dataclasses.replace(
-                self._agent._state.slots,
+            self._agent.state.slots = dataclasses.replace(
+                self._agent.state.slots,
                 consecutive_compact_failures=new_failures,
             )
             journal.write(
@@ -214,8 +214,8 @@ class Compactor:
                 duration_ms=_elapsed_ms(started),
             )
             raise
-        self._agent._state.slots = dataclasses.replace(
-            self._agent._state.slots,
+        self._agent.state.slots = dataclasses.replace(
+            self._agent.state.slots,
             consecutive_compact_failures=0,
         )
         self._emit_event(
@@ -234,7 +234,7 @@ class Compactor:
         trigger: CompactionTrigger = CompactionTrigger.manual,
     ) -> CompactResult:
         """User-invoked ``/compact``. Bypasses the circuit breaker by spec."""
-        before = self._agent._state.total_tokens_used
+        before = self._agent.state.total_tokens_used
         started = time.monotonic()
         try:
             result = await self._agent.compact(source="manual")

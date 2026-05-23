@@ -51,7 +51,7 @@ class _CaptureChatModel(FakeChatModel):
 
     @property
     def received_messages(self) -> list[list[BaseMessage]]:
-        return self.__dict__["received_messages"]  # type: ignore[no-any-return]
+        return self.__dict__["received_messages"]  # type: ignore[no-any-return]  # fake returns Any from __dict__
 
     async def _agenerate(
         self,
@@ -75,11 +75,6 @@ def _chdir_to(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     location (required for path-based conditional-skill activation).
     """
     monkeypatch.chdir(path)
-
-
-# ---------------------------------------------------------------------------
-# Test 1 — skill body appears in next turn's context.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -139,11 +134,6 @@ async def test_skill_invocation_injects_body_into_next_turn(
     assert "Follow steps 1-3." in joined
 
 
-# ---------------------------------------------------------------------------
-# Test 2 — skill with arguments substitutes placeholders.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_skill_invocation_substitutes_arguments(
     tmp_path: Path,
@@ -194,11 +184,6 @@ async def test_skill_invocation_substitutes_arguments(
     # Substituted body is present; the raw placeholder is not.
     assert "Fix auth bug" in joined
     assert "${target}" not in joined
-
-
-# ---------------------------------------------------------------------------
-# Test 3 — unknown skill → ToolError, LLM can pivot next turn.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -254,11 +239,6 @@ async def test_skill_unknown_returns_tool_error_llm_pivots(
     finals = [e for e in events if isinstance(e, Final)]
     assert len(finals) == 1
     assert finals[0].message == "I'll try a different approach"
-
-
-# ---------------------------------------------------------------------------
-# Test 4 — conditional skill activates only after matching path is touched.
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

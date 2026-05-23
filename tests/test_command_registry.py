@@ -84,11 +84,6 @@ def test_core_command_registry_facade_points_at_capabilities_module() -> None:
     assert CommandRegistry.__module__ == "aura.application.commands.registry"
 
 
-# ---------------------------------------------------------------------------
-# Registry mechanics
-# ---------------------------------------------------------------------------
-
-
 def test_register_adds_command() -> None:
     r = CommandRegistry()
     cmd = _StubCommand("/foo")
@@ -120,11 +115,6 @@ def test_list_returns_sorted_by_name() -> None:
     r.register(_StubCommand("/mango"))
     names = [c.name for c in r.list()]
     assert names == ["/apple", "/mango", "/zebra"]
-
-
-# ---------------------------------------------------------------------------
-# Dispatch
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -163,11 +153,6 @@ async def test_dispatch_calls_registered_handler_with_arg(
     assert cmd.last_agent is agent
     assert result.handled is True
     assert result.text == "hello world"
-
-
-# ---------------------------------------------------------------------------
-# Built-in commands
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -257,11 +242,6 @@ async def test_model_command_handles_unknown_model_spec_error() -> None:
     assert "bogus" in result.text
 
 
-# ---------------------------------------------------------------------------
-# Forward-facing: external source registration (Skills/MCP)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_command_from_skill_source_registers_and_dispatches(
     tmp_path: Path,
@@ -285,11 +265,6 @@ async def test_command_from_skill_source_registers_and_dispatches(
     assert skill_cmd in r.list()
 
 
-# ---------------------------------------------------------------------------
-# Protocol structural typing
-# ---------------------------------------------------------------------------
-
-
 def test_stub_command_satisfies_command_protocol() -> None:
     """Anchor that duck-typed commands work as registry entries.
 
@@ -298,11 +273,6 @@ def test_stub_command_satisfies_command_protocol() -> None:
     """
     cmd: Command = _StubCommand("/foo")
     assert cmd.name == "/foo"
-
-
-# ---------------------------------------------------------------------------
-# Frontmatter metadata surface — allowed_tools + argument_hint
-# ---------------------------------------------------------------------------
 
 
 def test_builtin_commands_expose_default_frontmatter_fields() -> None:

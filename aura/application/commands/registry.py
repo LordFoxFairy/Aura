@@ -96,12 +96,12 @@ def build_default_registry(agent: Agent | None = None) -> CommandRegistry:
         registry.register(cmd)
     if agent is None:
         return registry
-    if agent._config.teams.enabled:
+    if agent.config.teams.enabled:
         registry.register(TeamCommand())
     for skill in agent._skill_registry.user_invocable():
         registry.register(SkillCommand(skill=skill, agent=agent))
     for mcp_cmd in agent._mcp_commands:
-        registry.register(mcp_cmd)  # type: ignore[arg-type]
+        registry.register(mcp_cmd)  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
     return registry
 
 

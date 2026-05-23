@@ -52,11 +52,6 @@ def _agent(tmp_path: Path, *, turns: list[FakeTurn] | None = None) -> Agent:
     )
 
 
-# ---------------------------------------------------------------------------
-# Agent.switch_model — resolve + create + loop rebuild
-# ---------------------------------------------------------------------------
-
-
 def test_switch_model_via_alias_updates_live_spec(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -71,7 +66,7 @@ def test_switch_model_via_alias_updates_live_spec(
     # readout shows what the user typed.
     assert agent.current_model == "opus"
     # Config surface stays immutable — router default is boot-time, not live.
-    assert agent._config.router["default"] == "openai:gpt-4o-mini"
+    assert agent.config.router["default"] == "openai:gpt-4o-mini"
     # The underlying model instance was swapped.
     assert agent._model is new_model
 
@@ -147,11 +142,6 @@ async def test_switch_model_routes_next_turn_to_new_model(
     assert model_a.ainvoke_calls == 1
     assert model_b.ainvoke_calls == 1
     assert agent.current_model == "opus"
-
-
-# ---------------------------------------------------------------------------
-# /model slash command — no-arg status, switch confirmation, error path
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -241,12 +231,6 @@ async def test_model_command_direct_spec_switches(
     assert result.kind == "print"
     assert "openai:gpt-4o" in result.text
     assert agent.current_model == "openai:gpt-4o"
-
-
-# ---------------------------------------------------------------------------
-# Status bar / post-turn checkpoint integration — both read current_model
-# directly, so proving the property flips proves they flip.
-# ---------------------------------------------------------------------------
 
 
 def test_current_model_is_read_by_both_status_surfaces() -> None:

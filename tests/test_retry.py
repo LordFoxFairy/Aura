@@ -18,8 +18,6 @@ from aura.infrastructure.retry import (
     with_retry,
 )
 
-# --- helpers ---------------------------------------------------------------
-
 
 class _FakeRateLimitError(Exception):
     """Stand-in for openai.RateLimitError without importing the SDK.
@@ -58,9 +56,6 @@ def _make_counting_fn(
     return fn, calls
 
 
-# --- _is_retriable classification -----------------------------------------
-
-
 def test_is_retriable_class_name_rate_limit() -> None:
     assert _is_retriable(_FakeRateLimitError("slow down")) is True
 
@@ -93,9 +88,6 @@ def test_is_retriable_unknown_exception_defaults_to_false() -> None:
 def test_is_retriable_overloaded_substring() -> None:
     # Anthropic-specific phrasing.
     assert _is_retriable(RuntimeError("Overloaded: try again shortly")) is True
-
-
-# --- with_retry success / failure paths -----------------------------------
 
 
 @pytest.mark.asyncio
@@ -166,9 +158,6 @@ async def test_max_attempts_one_disables_retries() -> None:
     assert calls[0] == 1
 
 
-# --- backoff math ----------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_deterministic_backoff_without_jitter(
     monkeypatch: pytest.MonkeyPatch,
@@ -221,9 +210,6 @@ async def test_max_delay_caps_very_high_attempt(
     assert sleeps == [1.0, 2.0, 4.0, 5.0, 5.0]
 
 
-# --- cancellation semantics ----------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_cancelled_error_during_backoff_propagates() -> None:
     # asyncio.sleep raising CancelledError must tear down the retry loop
@@ -256,9 +242,6 @@ async def test_cancelled_error_raised_by_fn_propagates() -> None:
     with pytest.raises(asyncio.CancelledError):
         await with_retry(fn, max_attempts=3, jitter=False, base_delay_s=0.001)
     assert calls[0] == 1
-
-
-# --- journal events --------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -301,9 +284,6 @@ async def test_invalid_max_attempts_raises() -> None:
         await with_retry(fn, max_attempts=0)
 
 
-# --- RetryConfig schema ---------------------------------------------------
-
-
 def test_retry_config_defaults() -> None:
     cfg = RetryConfig()
     assert cfg.max_attempts == 3
@@ -333,12 +313,6 @@ def test_retry_config_extra_forbid() -> None:
         RetryConfig.model_validate({"max_attempts": 3, "bogus": 1})
 
 
-# --- custom retriable callable -------------------------------------------
-
-
-# --- F-01-004: Retry-After header / SDK retry_after field -----------------
-
-
 class _FakeResponse:
     def __init__(self, headers: dict[str, str]) -> None:
         self.headers = headers
@@ -346,6 +320,7 @@ class _FakeResponse:
 
 def _make_rate_limit_with_header(value: str) -> _FakeRateLimitError:
     exc = _FakeRateLimitError("429")
+    # test sets attribute mypy can't see
     exc.response = _FakeResponse({"retry-after": value})  # type: ignore[attr-defined]
     return exc
 
@@ -362,6 +337,7 @@ def test_extract_retry_after_reads_lower_case_header() -> None:
 
 def test_extract_retry_after_reads_title_case_header() -> None:
     exc = _FakeRateLimitError("429")
+    # test sets attribute mypy can't see
     exc.response = _FakeResponse({"Retry-After": "12"})  # type: ignore[attr-defined]
     assert _extract_retry_after(exc) == 12.0
 
@@ -385,19 +361,19 @@ def test_extract_retry_after_zero_and_negative_yield_none() -> None:
 
 def test_extract_retry_after_reads_sdk_field_seconds() -> None:
     exc = _FakeRateLimitError("rl")
-    exc.retry_after = 4.5  # type: ignore[attr-defined]
+    exc.retry_after = 4.5  # type: ignore[attr-defined]  # test sets attribute mypy can't see
     assert _extract_retry_after(exc) == 4.5
 
 
 def test_extract_retry_after_reads_sdk_field_milliseconds() -> None:
     exc = _FakeRateLimitError("rl")
-    exc.retry_after_ms = 2500  # type: ignore[attr-defined]
+    exc.retry_after_ms = 2500  # type: ignore[attr-defined]  # test sets attribute mypy can't see
     assert _extract_retry_after(exc) == 2.5
 
 
 def test_extract_retry_after_header_takes_precedence_over_sdk_field() -> None:
     exc = _make_rate_limit_with_header("8")
-    exc.retry_after = 99  # type: ignore[attr-defined]
+    exc.retry_after = 99  # type: ignore[attr-defined]  # test sets attribute mypy can't see
     assert _extract_retry_after(exc) == 8.0
 
 
@@ -460,9 +436,6 @@ async def test_with_retry_falls_back_to_backoff_when_no_header(
         assert retries[0]["retry_after_source"] == "backoff"
     finally:
         journal.reset()
-
-
-# --- F-01-013: KeyboardInterrupt / SystemExit propagate ---------------------
 
 
 @pytest.mark.asyncio

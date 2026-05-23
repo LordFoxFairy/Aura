@@ -277,15 +277,6 @@ def test_assemble_tool_pool_dedupes_intra_mcp_silently(tmp_path: Path) -> None:
     assert shadow_events[0]["shadowed_by"] == "mcp"
 
 
-# ---------------------------------------------------------------------------
-# Phase 2 Task 7 — ``mcp_overrides_builtin`` collision policy.
-# Default (False): builtin wins (preserves historical behavior).
-# Opt-in (True): MCP wins, builtin is shadowed.
-# Either branch emits ``mcp_tool_shadowed`` with a ``winner`` field that
-# captures the policy outcome.
-# ---------------------------------------------------------------------------
-
-
 def test_assemble_tool_pool_default_builtin_wins_and_winner_builtin(
     tmp_path: Path,
 ) -> None:
@@ -372,14 +363,6 @@ async def test_partition_short_circuited_step_goes_solo() -> None:
     batches = partition_batches(steps)
     sizes = [len(b) for b in batches]
     assert sizes == [1, 1, 1]
-
-
-# ---------------------------------------------------------------------------
-# Phase 2 Task 4 — ``aura_metadata: ToolMetadata`` enforcement at registration.
-# Every Aura tool must declare its capability flags through ``ToolMetadata``;
-# the registry refuses anything else so loop / hook / CLI readers can trust
-# the typed surface.
-# ---------------------------------------------------------------------------
 
 
 def _bare_tool_without_aura_metadata(name: str = "bare") -> BaseTool:

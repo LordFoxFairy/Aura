@@ -52,12 +52,7 @@ def _seed_simple_history(agent: Agent) -> None:
         ),
         AIMessage(content="it's a project about things."),
     ]
-    agent._storage.save(agent.session_id, history)
-
-
-# ---------------------------------------------------------------------------
-# Registration + dispatch
-# ---------------------------------------------------------------------------
+    agent.storage.save(agent.session_id, history)
 
 
 def test_export_command_registered_in_default_registry() -> None:
@@ -68,11 +63,6 @@ def test_export_command_registered_in_default_registry() -> None:
 
 def test_export_command_owned_by_capabilities_module() -> None:
     assert ExportCommand.__module__ == "aura.application.commands.export"
-
-
-# ---------------------------------------------------------------------------
-# Default path / format
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -96,11 +86,6 @@ async def test_export_with_no_args_writes_default_md(tmp_path: Path) -> None:
     body = files[0].read_text(encoding="utf-8")
     assert body.startswith("# Aura session export")
     await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Explicit paths
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -161,11 +146,6 @@ async def test_export_format_json_flag_no_path(tmp_path: Path) -> None:
     await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# Markdown content
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_markdown_includes_envelope_metadata(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
@@ -205,11 +185,6 @@ async def test_markdown_includes_tool_calls_and_results(
     await agent.aclose()
 
 
-# ---------------------------------------------------------------------------
-# JSON content
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_json_parses_back_and_preserves_tool_calls(
     tmp_path: Path,
@@ -230,11 +205,6 @@ async def test_json_parses_back_and_preserves_tool_calls(
     assert tool_msg["role"] == "tool"
     assert tool_msg["tool_call_id"] == "tc-1"
     await agent.aclose()
-
-
-# ---------------------------------------------------------------------------
-# Edge cases
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

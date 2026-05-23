@@ -153,7 +153,7 @@ async def test_meta_json_written_on_terminal_failure(
         _storage = None
         _session_id = None
 
-        async def astream(self, _prompt: str) -> Any:  # noqa: ANN401
+        async def astream(self, _prompt: str) -> Any:  # noqa: ANN401  # Any acceptable for test scaffolding
             raise RuntimeError("boom-mid-stream")
             yield  # pragma: no cover — make this a generator
 
@@ -161,7 +161,7 @@ async def test_meta_json_written_on_terminal_failure(
             return None
 
     class _StubFactory(SubagentFactory):
-        def spawn(self, *_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401
+        def spawn(self, *_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401  # Any acceptable for test scaffolding
             return _MidStreamBoomAgent()
 
     factory = _StubFactory(
@@ -209,14 +209,16 @@ async def test_meta_json_written_on_terminal_cancelled(
     # deterministic window for the outer cancel to land *inside* the
     # asyncio.timeout block in run_task, exercising the
     # CancelledError branch (and not the success / failure branches).
-    class _ForeverAgent:
-        _hooks = None
-        _config = None
-        _model = None
-        _storage = None
-        _session_id = None
+    from aura.application.hooks import HookChain as _HookChain
 
-        async def astream(self, _prompt: str) -> Any:  # noqa: ANN401
+    class _ForeverAgent:
+        hooks = _HookChain()
+        config = None
+        model = None
+        storage = None
+        session_id = "forever"
+
+        async def astream(self, _prompt: str) -> Any:  # noqa: ANN401  # Any acceptable for test scaffolding
             await _asyncio.Event().wait()
             yield  # pragma: no cover
 
@@ -224,7 +226,7 @@ async def test_meta_json_written_on_terminal_cancelled(
             return None
 
     class _ForeverFactory(SubagentFactory):
-        def spawn(self, *_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401
+        def spawn(self, *_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401  # Any acceptable for test scaffolding
             return _ForeverAgent()
 
     factory = _ForeverFactory(
@@ -344,7 +346,7 @@ async def test_meta_write_failure_does_not_block_loop(
     def _raising_path(
         _task_id: str,
         *,
-        parent_session_id: str | None = None,  # noqa: ARG001
+        parent_session_id: str | None = None,  # noqa: ARG001  # signature-matching stub; args unused
         cwd: Path | None = None,  # noqa: ARG001
     ) -> Path:
         raise OSError("disk full")

@@ -353,7 +353,7 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
 
     orig_plan = AgentLoop._plan_tool_calls
 
-    async def spy_plan(self, tool_calls):  # type: ignore[no-untyped-def]
+    async def spy_plan(self, tool_calls):  # type: ignore[no-untyped-def]  # fake helper, type hints not needed
         steps = await orig_plan(self, tool_calls)
         captured_steps.extend(steps)
         return steps
@@ -366,13 +366,13 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
         context=make_minimal_context(),
         hooks=hooks,
     )
-    AgentLoop._plan_tool_calls = spy_plan  # type: ignore[method-assign]
+    AgentLoop._plan_tool_calls = spy_plan  # type: ignore[method-assign]  # monkey-patching method for test
     try:
         events: list[AgentEvent] = []
         async for ev in loop.run_turn(history=[HumanMessage(content="go")]):
             events.append(ev)
     finally:
-        AgentLoop._plan_tool_calls = orig_plan  # type: ignore[method-assign]
+        AgentLoop._plan_tool_calls = orig_plan  # type: ignore[method-assign]  # monkey-patching method for test
 
     # AC-G4-1: Decision landed on ToolStep.permission_decision directly.
     assert len(captured_steps) == 1

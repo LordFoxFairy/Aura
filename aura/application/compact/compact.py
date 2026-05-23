@@ -10,7 +10,6 @@ Flow:
 
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -140,7 +139,7 @@ _DEFAULT_SUMMARY_CAPS = SummaryCaps()
 
 
 def _summary_caps_from_agent(agent: Agent) -> SummaryCaps:
-    cfg = agent._config.compact
+    cfg = agent.config.compact
     return SummaryCaps(
         max_summary_message_chars=cfg.max_summary_message_chars,
         max_summary_tool_args_chars=cfg.max_summary_tool_args_chars,
@@ -243,10 +242,8 @@ def _split_for_summary_budget(
 
 async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> CompactResult:
     """Execute a compaction cycle on ``agent``."""
-    from aura.application.hooks.must_read_first import make_must_read_first_hook
-
-    before_tokens = agent._state.total_tokens_used
-    history = agent._storage.load(agent.session_id)
+    before_tokens = agent.state.total_tokens_used
+    history = agent.storage.load(agent.session_id)
 
     if len(history) < KEEP_LAST_N_TURNS * 2:
         journal.write(
@@ -281,17 +278,13 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
     preserved_read_records = dict(old_ctx._read_records)
     preserved_invoked_skills = list(old_ctx._invoked_skills)
 
-    compact_cfg = agent._config.compact
+    compact_cfg = agent.config.compact
     recent_file_msgs = _build_recent_file_messages(
         preserved_read_records,
         max_files_to_restore=compact_cfg.max_files_to_restore,
         max_tokens_per_file=compact_cfg.max_tokens_per_file,
     )
 
-    # ``[:] = ...`` keeps the slot list identity stable (frozen attr, mutable list).
-    agent._state.slots.preserved_invoked_skills[:] = list(
-        preserved_invoked_skills,
-    )
     skill_msgs = _build_skill_reinjection_messages(preserved_invoked_skills)
     active_task_msgs = _build_active_task_messages(agent)
 
@@ -304,28 +297,26 @@ async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> Comp
         *active_task_msgs,
         *preserved_tail,
     ]
-    agent._storage.save(agent.session_id, new_history)
 
-    project_memory.clear_cache(agent._cwd)
-    rules.clear_cache(agent._cwd)
-    agent._primary_memory = project_memory.load_project_memory(agent._cwd)
-    agent._rules = rules.load_rules(agent._cwd)
+    # Reload memory + rules so a future :meth:`Agent._build_context` (e.g. on
+    # next clear_session / aura_md_reload) starts from fresh-on-disk values;
+    # ``new_ctx = old_ctx.fresh()`` deliberately preserves the OLD constructor
+    # state for THIS post-compact context (the summary already encoded it).
+    project_memory.clear_cache(agent.cwd)
+    rules.clear_cache(agent.cwd)
+    agent._primary_memory = project_memory.load_project_memory(agent.cwd)
+    agent._rules = rules.load_rules(agent.cwd)
 
-    # Fresh Context, preserved read fingerprints; invoked-skill bodies come
-    # back via the <skill-active> messages above (avoid double-render).
     new_ctx = old_ctx.fresh()
     new_ctx._read_records = preserved_read_records
 
-    agent._context = new_ctx
+    agent.apply_compaction(
+        new_history=new_history,
+        new_context=new_ctx,
+        preserved_skills=preserved_invoked_skills,
+    )
 
-    with contextlib.suppress(ValueError):
-        agent._hooks.pre_tool.remove(agent._must_read_first_hook)
-    agent._must_read_first_hook = make_must_read_first_hook(agent._context)
-    agent._hooks.pre_tool.append(agent._must_read_first_hook)
-
-    agent._loop = agent._build_loop()
-
-    after_tokens = agent._state.total_tokens_used
+    after_tokens = agent.state.total_tokens_used
     journal.write(
         "compact_applied",
         source=source,

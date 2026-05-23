@@ -11,12 +11,11 @@ export interface AuraAssistantDeltaEvent { event: "assistant_delta"; text: strin
 export interface AuraToolCallStartedEvent { event: "tool_call_started"; id?: string; name: string; input: unknown; }
 export interface AuraToolCallProgressEvent { event: "tool_call_progress"; id?: string; name: string; stream: "stdout" | "stderr"; chunk: string; }
 /**
- * Phase 2 Task 9 — unified tool-result wire shape. The legacy
- * `output`/`error` split is replaced by a single structured
- * `content: {text, error}` payload, mirroring the spec's
- * "one shape for both success and failure" contract.
+ * Tool-result wire shape: ``output`` is the raw JSON value the tool
+ * returned (dict / list / scalar / string); on error it carries the
+ * error message string and ``error`` is true.
  */
-export interface AuraToolCallCompletedContent { text: string; error: boolean; }
+export interface AuraToolCallCompletedContent { output: unknown; error: boolean; }
 export interface AuraToolCallCompletedEvent {
   event: "tool_call_completed";
   id?: string;

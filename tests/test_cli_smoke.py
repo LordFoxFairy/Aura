@@ -37,7 +37,7 @@ import pytest
 try:
     import pty as _pty
 except ImportError:  # pragma: no cover — Windows only
-    _pty = None  # type: ignore[assignment]
+    _pty = None  # type: ignore[assignment]  # narrowing branch mypy doesn't track
 
 # Repo root == parent of tests/. Resolved once so individual tests don't
 # recompute it; every subprocess is spawned with ``cwd=_REPO_ROOT`` so
@@ -71,8 +71,8 @@ def _aura_invocation() -> list[str] | None:
     # cwd because the aura package is already on sys.path when pytest
     # is running.
     try:
-        import cli.__main__  # noqa: F401
-    except Exception:  # noqa: BLE001
+        import cli.__main__  # noqa: F401  # import is the assertion / fixture side-effect
+    except Exception:  # noqa: BLE001  # blanket catch acceptable here
         return None
     return [sys.executable, "-m", "cli.__main__"]
 
@@ -139,11 +139,6 @@ def _has_startup_block(stdout: str, stderr: str) -> bool:
     )
 
 
-# ---------------------------------------------------------------------------
-# --version
-# ---------------------------------------------------------------------------
-
-
 def test_aura_version_prints_semver(aura_binary: Sequence[str]) -> None:
     """``aura --version`` exits 0 and prints ``aura X.Y.Z``."""
     result = _run([*aura_binary, "--version"])
@@ -165,11 +160,6 @@ def test_aura_version_prints_semver(aura_binary: Sequence[str]) -> None:
         f"version line {version_lines[-1]!r} does not match "
         f"expected shape 'aura X.Y.Z'"
     )
-
-
-# ---------------------------------------------------------------------------
-# --help
-# ---------------------------------------------------------------------------
 
 
 def test_aura_help_exits_cleanly(aura_binary: Sequence[str]) -> None:
@@ -221,11 +211,6 @@ def test_aura_help_has_core_sections(aura_binary: Sequence[str]) -> None:
         assert flag in out, (
             f"expected flag {flag!r} in --help output; got:\n{out}"
         )
-
-
-# ---------------------------------------------------------------------------
-# REPL
-# ---------------------------------------------------------------------------
 
 
 def _popen_repl(aura_binary: Sequence[str]) -> subprocess.Popen[str]:
@@ -328,11 +313,6 @@ def test_aura_exits_on_ctrl_d(aura_binary: Sequence[str]) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# --version + bad config
-# ---------------------------------------------------------------------------
-
-
 def test_aura_with_bad_config_fails_gracefully(
     aura_binary: Sequence[str],
 ) -> None:
@@ -364,9 +344,6 @@ def test_aura_with_bad_config_fails_gracefully(
     )
 
 
-# ---------------------------------------------------------------------------
-# pty-backed REPL tests
-# ---------------------------------------------------------------------------
 #
 # The tests above drive aura with a plain subprocess pipe — enough to catch
 # startup / argparse / exit-path bugs, but pt's ``PromptSession`` needs a
@@ -487,7 +464,6 @@ class _PtyAura:
         self._master_fd = master
         return self
 
-    # -- low-level I/O ----------------------------------------------------
 
     def _read_some(self, timeout: float) -> bytes:
         """Read whatever bytes are available within ``timeout`` seconds.
@@ -576,6 +552,7 @@ class _PtyAura:
         except subprocess.TimeoutExpired:
             return None
 
+    # fake helper, type hints not needed
     def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
         # Always attempt graceful close first, then kill if the child
         # didn't take the hint. The process group start_new_session=True
@@ -622,9 +599,6 @@ def _requires_pty_and_aura(aura_binary: Sequence[str]) -> None:
     # defensive — the pty tests assert-sensitive enough that a silent
     # mis-wire would be hard to diagnose.
     assert aura_binary, "aura_binary fixture returned empty invocation"
-
-
-# ---------------------------------------------------------------------------
 
 
 def test_pty_repl_boots_and_quits_on_exit(

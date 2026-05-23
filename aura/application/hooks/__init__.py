@@ -1,10 +1,4 @@
-"""Hook orchestration — :class:`HookChain` and built-in hook factories.
-
-Pure-type contracts (Protocols, outcome value objects) live in
-:mod:`aura.domain.hook`; this package owns composition + lifecycle
-journaling. Re-exported here so existing call sites keep a single
-import surface.
-"""
+"""Hook orchestration — :class:`HookChain` composes Protocol-typed hooks."""
 
 from __future__ import annotations
 
@@ -20,17 +14,10 @@ from aura.domain.hook import (
     CwdChangedHook,
     FileChangedHook,
     FileChangeKind,
-    NotificationHook,
-    NotificationKind,
     PostModelHook,
     PostToolHook,
     PreModelHook,
     PreToolHook,
-    SessionStartHook,
-    StopHook,
-    StopReason,
-    UserPromptSubmitHook,
-    UserPromptSubmitOutcome,
 )
 from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
 from aura.schemas.state import LoopState
@@ -82,10 +69,6 @@ class HookChain:
     post_tool: list[PostToolHook] = field(default_factory=list)
     file_changed: list[FileChangedHook] = field(default_factory=list)
     cwd_changed: list[CwdChangedHook] = field(default_factory=list)
-    session_start: list[SessionStartHook] = field(default_factory=list)
-    user_prompt_submit: list[UserPromptSubmitHook] = field(default_factory=list)
-    notification: list[NotificationHook] = field(default_factory=list)
-    stop: list[StopHook] = field(default_factory=list)
 
     async def run_pre_model(
         self, *, history: list[BaseMessage], state: LoopState,
@@ -187,114 +170,6 @@ class HookChain:
         for hook in self.cwd_changed:
             await hook(old_cwd=old_cwd, new_cwd=new_cwd, state=state)
 
-    async def run_session_start(
-        self,
-        *,
-        session_id: str,
-        mode: str,
-        cwd: Path,
-        model_name: str,
-        state: LoopState,
-    ) -> None:
-        from aura.infrastructure.persistence import journal
-        for hook in self.session_start:
-            try:
-                await hook(
-                    session_id=session_id,
-                    mode=mode,
-                    cwd=cwd,
-                    model_name=model_name,
-                    state=state,
-                )
-            except Exception as exc:  # noqa: BLE001
-                journal.write(
-                    "lifecycle_hook_error",
-                    slot="session_start",
-                    detail=f"{type(exc).__name__}: {exc}",
-                )
-
-    async def run_user_prompt_submit(
-        self,
-        *,
-        session_id: str,
-        turn_count: int,
-        user_text: str,
-        state: LoopState,
-    ) -> str:
-        """Compose user_prompt_submit chain left-to-right.
-
-        A non-None ``UserPromptSubmitOutcome.prompt`` rewrites; ``None``
-        passes through; raises drop the outcome.
-        """
-        from aura.infrastructure.persistence import journal
-        current = user_text
-        for hook in self.user_prompt_submit:
-            try:
-                outcome = await hook(
-                    session_id=session_id,
-                    turn_count=turn_count,
-                    user_text=current,
-                    state=state,
-                )
-            except Exception as exc:  # noqa: BLE001
-                journal.write(
-                    "lifecycle_hook_error",
-                    slot="user_prompt_submit",
-                    detail=f"{type(exc).__name__}: {exc}",
-                )
-                continue
-            if outcome is not None and outcome.prompt is not None:
-                current = outcome.prompt
-        return current
-
-    async def run_notification(
-        self,
-        *,
-        session_id: str,
-        kind: NotificationKind,
-        body: str,
-        state: LoopState,
-    ) -> None:
-        from aura.infrastructure.persistence import journal
-        for hook in self.notification:
-            try:
-                await hook(
-                    session_id=session_id,
-                    kind=kind,
-                    body=body,
-                    state=state,
-                )
-            except Exception as exc:  # noqa: BLE001
-                journal.write(
-                    "lifecycle_hook_error",
-                    slot="notification",
-                    detail=f"{type(exc).__name__}: {exc}",
-                )
-
-    async def run_stop(
-        self,
-        *,
-        session_id: str,
-        reason: StopReason,
-        turn_count: int,
-        state: LoopState,
-    ) -> None:
-        from aura.infrastructure.persistence import journal
-        for hook in self.stop:
-            try:
-                await hook(
-                    session_id=session_id,
-                    reason=reason,
-                    turn_count=turn_count,
-                    state=state,
-                )
-            except Exception as exc:  # noqa: BLE001
-                journal.write(
-                    "lifecycle_hook_error",
-                    slot="stop",
-                    detail=f"{type(exc).__name__}: {exc}",
-                )
-
     def merge(self, other: HookChain) -> HookChain:
         return HookChain(
             pre_model=[*self.pre_model, *other.pre_model],
@@ -303,12 +178,6 @@ class HookChain:
             post_tool=[*self.post_tool, *other.post_tool],
             file_changed=[*self.file_changed, *other.file_changed],
             cwd_changed=[*self.cwd_changed, *other.cwd_changed],
-            session_start=[*self.session_start, *other.session_start],
-            user_prompt_submit=[
-                *self.user_prompt_submit, *other.user_prompt_submit,
-            ],
-            notification=[*self.notification, *other.notification],
-            stop=[*self.stop, *other.stop],
         )
 
 
@@ -317,15 +186,8 @@ __all__ = [
     "FileChangeKind",
     "FileChangedHook",
     "HookChain",
-    "NotificationHook",
-    "NotificationKind",
     "PostModelHook",
     "PostToolHook",
     "PreModelHook",
     "PreToolHook",
-    "SessionStartHook",
-    "StopHook",
-    "StopReason",
-    "UserPromptSubmitHook",
-    "UserPromptSubmitOutcome",
 ]

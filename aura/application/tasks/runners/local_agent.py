@@ -93,7 +93,7 @@ def make_token_observer(store: TasksStore, task_id: str) -> Any:
             store.record_token_usage(
                 task_id, input_tokens=in_t, output_tokens=out_t,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             journal.write(
                 "subagent_token_observer_error",
                 task_id=task_id,
@@ -129,7 +129,7 @@ def flush_transcript(
         )
         store.set_transcript_path(task_id, path)
         return path
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # persistence failure is non-fatal best-effort
         journal.write(
             "subagent_transcript_flush_error",
             task_id=task_id,
@@ -154,9 +154,7 @@ def maybe_cleanup_completed_transcript(
     failed / cancelled / timeout transcripts always survive.
     """
     try:
-        cfg = getattr(agent, "_config", None)
-        tools_cfg = getattr(cfg, "tools", None) if cfg is not None else None
-        if not getattr(tools_cfg, "cleanup_completed_subagent_transcripts", False):
+        if not agent.config.tools.cleanup_completed_subagent_transcripts:
             return
         cwd_arg: Path | None = Path(cwd) if cwd else None
         parent_arg: str | None = parent_session_id or None
@@ -181,7 +179,7 @@ def maybe_cleanup_completed_transcript(
             task_id=task_id,
             parent_session_id=parent_arg or "",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
         journal.write(
             "subagent_transcript_cleanup_error",
             task_id=task_id,
@@ -244,7 +242,7 @@ def flush_metadata(
         )
         tmp.replace(meta_path)
         return meta_path
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # persistence failure is non-fatal best-effort
         journal.write(
             "subagent_metadata_flush_error",
             task_id=record.id,
@@ -260,18 +258,12 @@ async def capture_child_messages(
     if agent is None:
         return
     try:
-        storage = getattr(agent, "_storage", None)
-        session_id = getattr(agent, "session_id", None) or getattr(
-            agent, "_session_id", None,
-        )
-        if storage is None or session_id is None:
-            return
-        msgs = storage.load(session_id)
+        msgs = agent.storage.load(agent.session_id)
         rec = store.get(task_id)
         if rec is None:
             return
         rec.messages = list(msgs)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
         journal.write(
             "subagent_capture_messages_error",
             task_id=task_id,
@@ -289,13 +281,7 @@ def load_child_messages(
     if agent is None:
         return []
     with contextlib.suppress(Exception):
-        storage = getattr(agent, "_storage", None)
-        session_id = getattr(agent, "session_id", None) or getattr(
-            agent, "_session_id", None,
-        )
-        if storage is None or session_id is None:
-            return []
-        return list(storage.load(session_id))
+        return list(agent.storage.load(agent.session_id))
     return []
 
 
@@ -444,9 +430,7 @@ async def _run_local_agent(
                 )
             else:
                 raise
-        child_hooks = getattr(agent, "_hooks", None)
-        if child_hooks is not None and hasattr(child_hooks, "post_model"):
-            child_hooks.post_model.append(make_token_observer(store, task_id))
+        agent.hooks.post_model.append(make_token_observer(store, task_id))
         # Round 7QS — periodic summary (cheap-model digest tick).
         from aura.application.services.agent_summary import AgentSummarizer
         from aura.infrastructure import llm as _llm_mod
@@ -455,36 +439,30 @@ async def _run_local_agent(
             _llm_mod, "make_summary_model_factory", None,
         )
         if _make_summary_factory is not None:
-            cfg = getattr(agent, "_config", None)
-            wf_cfg = getattr(cfg, "web_fetch", None) if cfg is not None else None
-            summary_spec = (
-                getattr(wf_cfg, "summary_model", None) if wf_cfg is not None else None
+            # AuraConfig has no ``web_fetch`` field today; ``summary_spec=None``
+            # matches the prior best-effort getattr chain (child shares parent's
+            # config so reading from either is equivalent).
+            summary_factory = _make_summary_factory(
+                agent.config, agent.model, summary_spec=None,
             )
-            main_model = getattr(agent, "_model", None)
-            if main_model is not None:
-                summary_factory = _make_summary_factory(
-                    cfg, main_model, summary_spec=summary_spec,
-                )
-                child_storage = getattr(agent, "_storage", None)
-                child_session_id = getattr(agent, "_session_id", None)
+            child_storage = agent.storage
+            child_session_id = agent.session_id
 
-                def _transcript_provider() -> list[BaseMessage]:
-                    if child_storage is not None and child_session_id is not None:
-                        try:
-                            return list(child_storage.load(child_session_id))
-                        except Exception:  # noqa: BLE001
-                            pass
+            def _transcript_provider() -> list[BaseMessage]:
+                try:
+                    return list(child_storage.load(child_session_id))
+                except Exception:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
                     rec = store.get(task_id)
                     return list(rec.messages) if rec is not None else []
 
-                summarizer = AgentSummarizer(
-                    task_id=task_id,
-                    store=store,
-                    transcript_provider=_transcript_provider,
-                    summary_model_factory=summary_factory,
-                    interval_sec=summary_interval_sec,
-                )
-                summarizer.start()
+            summarizer = AgentSummarizer(
+                task_id=task_id,
+                store=store,
+                transcript_provider=_transcript_provider,
+                summary_model_factory=summary_factory,
+                interval_sec=summary_interval_sec,
+            )
+            summarizer.start()
         async with asyncio.timeout(effective_timeout):
             async for event in agent.astream(record.prompt):
                 if isinstance(event, ToolCallStarted):
@@ -555,7 +533,7 @@ async def _run_local_agent(
             await summarizer.stop()
         if agent is not None:
             await agent.aclose()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # cleanup path must not propagate
         if agent is not None:
             await capture_child_messages(agent, store, task_id)
         err_msg = f"{type(exc).__name__}: {exc}"

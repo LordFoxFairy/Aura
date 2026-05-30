@@ -61,22 +61,22 @@ def _extract_token_usage(ai_message: AIMessage) -> dict[str, int]:
     """Per-turn input/output/cache-read counts; missing fields degrade to 0."""
     out = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
 
-    usage = getattr(ai_message, "usage_metadata", None) or {}
-    if isinstance(usage, dict):
-        val = usage.get("input_tokens")
-        if isinstance(val, int):
-            out["input_tokens"] = val
-        val = usage.get("output_tokens")
-        if isinstance(val, int):
-            out["output_tokens"] = val
+    # isinstance guards: usage_metadata is typed UsageMetadata|None, but a
+    # non-conforming provider (DashScope/Ollama) can hand back malformed values.
+    usage = ai_message.usage_metadata
+    if usage is not None:
+        input_tokens = usage.get("input_tokens")
+        if isinstance(input_tokens, int):
+            out["input_tokens"] = input_tokens
+        output_tokens = usage.get("output_tokens")
+        if isinstance(output_tokens, int):
+            out["output_tokens"] = output_tokens
 
-    meta = getattr(ai_message, "response_metadata", None) or {}
-    if isinstance(meta, dict):
-        anthropic_usage = meta.get("usage")
-        if isinstance(anthropic_usage, dict):
-            val = anthropic_usage.get("cache_read_input_tokens")
-            if isinstance(val, int):
-                out["cache_read_tokens"] = val
+    anthropic_usage = ai_message.response_metadata.get("usage")
+    if isinstance(anthropic_usage, dict):
+        cache_read = anthropic_usage.get("cache_read_input_tokens")
+        if isinstance(cache_read, int):
+            out["cache_read_tokens"] = cache_read
 
     return out
 
@@ -89,7 +89,7 @@ def make_usage_tracking_hook() -> PostModelHook:
         state: LoopState,
         **_: Any,
     ) -> None:
-        usage = getattr(ai_message, "usage_metadata", None)
+        usage = ai_message.usage_metadata
         if usage:
             total = usage.get("total_tokens")
             if isinstance(total, int):
@@ -99,7 +99,7 @@ def make_usage_tracking_hook() -> PostModelHook:
         # Char-estimator fallback for providers without usage_metadata (DashScope, some Ollama).
         if per_turn["input_tokens"] == 0 and per_turn["output_tokens"] == 0:
             per_turn["input_tokens"] = sum(estimate_message_tokens(msg) for msg in history)
-            ai_content = getattr(ai_message, "content", "")
+            ai_content = ai_message.content
             per_turn["output_tokens"] = (
                 estimate_text_tokens(ai_content)
                 if isinstance(ai_content, str)
@@ -126,13 +126,11 @@ def make_usage_tracking_hook() -> PostModelHook:
         from aura.infrastructure.persistence import journal
 
         model_name = ""
-        meta = getattr(ai_message, "response_metadata", None) or {}
-        if isinstance(meta, dict):
-            for key in ("model_name", "model", "model_id"):
-                val = meta.get(key)
-                if isinstance(val, str) and val:
-                    model_name = val
-                    break
+        for key in ("model_name", "model", "model_id"):
+            val = ai_message.response_metadata.get(key)
+            if isinstance(val, str) and val:
+                model_name = val
+                break
         journal.write(
             "turn_usage",
             turn=state.turn_count,

@@ -34,7 +34,7 @@ def make_event_logger_hooks() -> HookChain:
         state: LoopState,
         **_: Any,
     ) -> None:
-        usage = getattr(ai_message, "usage_metadata", None) or {}
+        usage = ai_message.usage_metadata
         content = str(ai_message.content) if ai_message.content else ""
         journal.write(
             "post_model",
@@ -42,7 +42,7 @@ def make_event_logger_hooks() -> HookChain:
             content_chars=len(content),
             content_preview=_trim(content, 500),
             tool_calls=len(ai_message.tool_calls or []),
-            usage=dict(usage),
+            usage=dict(usage) if usage is not None else {},
             total_tokens=state.total_tokens_used,
         )
 

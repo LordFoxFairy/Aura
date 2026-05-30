@@ -26,6 +26,13 @@ from aura.domain.tool import ToolResult
 _ASK_RESOLVED_REASONS = frozenset({"user_accept", "user_always"})
 
 
+def _hook_name(hook: PreToolHook) -> str:
+    # Protocol callables aren't required to be functions; dunders are best-effort.
+    module = getattr(hook, "__module__", "")
+    qualname = getattr(hook, "__qualname__", repr(hook))
+    return f"{module}.{qualname}".lstrip(".")
+
+
 def _merge_outcomes(outcomes: list[Outcome], ask_requested: bool) -> Outcome:
     """Merge pre_tool outcomes per spec §3.2: Block > Replace > Allow/Ask precedence."""
     for o in outcomes:
@@ -39,21 +46,15 @@ def _merge_outcomes(outcomes: list[Outcome], ask_requested: bool) -> Outcome:
     for o in outcomes:
         if isinstance(o, Allow):
             last_allow = o
-            if first_authoritative is None:
-                reason = getattr(getattr(o, "decision", None), "reason", "mode_bypass")
-                if reason != "mode_bypass":
-                    first_authoritative = o
+            if first_authoritative is None and o.decision.reason != "mode_bypass":
+                first_authoritative = o
     winner_allow = first_authoritative if first_authoritative is not None else last_allow
     if winner_allow is not None:
-        if ask_requested:
-            winner_reason = getattr(
-                getattr(winner_allow, "decision", None), "reason", "mode_bypass"
-            )
-            if winner_reason not in _ASK_RESOLVED_REASONS:
-                for o in outcomes:
-                    if isinstance(o, Ask):
-                        return o
-                return Ask(reason="pending escalation")
+        if ask_requested and winner_allow.decision.reason not in _ASK_RESOLVED_REASONS:
+            for o in outcomes:
+                if isinstance(o, Ask):
+                    return o
+            return Ask(reason="pending escalation")
         return winner_allow
     for o in outcomes:
         if isinstance(o, Ask):
@@ -110,17 +111,14 @@ class HookChain:
                 ask_pending = True
 
             if isinstance(raw, Block | Ask | Replace):
-                decision_attr = getattr(raw, "decision", None)
-                hook_name = (
-                    f"{getattr(hook, '__module__', '')}."
-                    f"{getattr(hook, '__qualname__', repr(hook))}"
-                ).lstrip(".")
+                # Ask carries no Decision; Block/Replace do.
+                decision = None if isinstance(raw, Ask) else raw.decision
                 journal.write(
                     "pre_tool_hook_decision",
-                    hook=hook_name,
+                    hook=_hook_name(hook),
                     tool=tool.name,
-                    allow=False if decision_attr is None else decision_attr.allow,
-                    reason="" if decision_attr is None else decision_attr.reason,
+                    allow=False if decision is None else decision.allow,
+                    reason="" if decision is None else decision.reason,
                 )
 
             if isinstance(raw, Block):

@@ -20,6 +20,7 @@ from aura.application.memory.rules import Rule, RulesBundle
 from aura.application.memory.rules import match as match_rules
 from aura.domain.skill import Skill
 from aura.domain.state_values import ReadCarryover
+from aura.domain.task import TaskNotification
 from aura.domain.todos import TodoItem
 from aura.infrastructure.persistence import journal
 
@@ -58,7 +59,7 @@ class Context:
         rules: RulesBundle,
         skills: list[Skill] | None = None,
         todos_provider: Callable[[], list[TodoItem]] | None = None,
-        notifications_drainer: Callable[[], list[Any]] | None = None,
+        notifications_drainer: Callable[[], list[TaskNotification]] | None = None,
         carryover: ReadCarryover | None = None,
         model: Any | None = None,
     ) -> None:
@@ -332,13 +333,9 @@ class Context:
                 head = drained[-cap:] if len(drained) > cap else drained
                 lines: list[str] = []
                 for n in head:
-                    task_id = getattr(n, "task_id", "?")
-                    status = getattr(n, "status", "?")
-                    desc = getattr(n, "description", "")
-                    summary = getattr(n, "summary", None)
-                    line = f"- {task_id[:8]} [{status}] {desc}"
-                    if summary:
-                        line += f": {summary}"
+                    line = f"- {n.task_id[:8]} [{n.status}] {n.description}"
+                    if n.summary:
+                        line += f": {n.summary}"
                     lines.append(line)
                 if len(drained) > cap:
                     lines.append(f"({len(drained) - cap} more earlier)")

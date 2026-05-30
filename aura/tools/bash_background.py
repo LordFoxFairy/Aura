@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -44,6 +44,13 @@ class BashBackgroundParams(BaseModel):
         default=None,
         description="Working directory for the child process. Defaults to the agent's cwd.",
     )
+
+
+class BashBackgroundResult(TypedDict):
+    task_id: str
+    command: str
+    status: Literal["running"]
+    started_at: float
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -103,7 +110,7 @@ class BashBackground(BaseTool):
         command: str,
         timeout_sec: int = _DEFAULT_TIMEOUT_SECONDS,
         cwd: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> BashBackgroundResult:
         raise NotImplementedError(
             "bash_background is async-only; use `await tool.ainvoke(...)`"
         )
@@ -113,7 +120,7 @@ class BashBackground(BaseTool):
         command: str,
         timeout_sec: int = _DEFAULT_TIMEOUT_SECONDS,
         cwd: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> BashBackgroundResult:
         rec = self.store.create(
             description=f"bg: {command[:80]}",
             prompt=command,

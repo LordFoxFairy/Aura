@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -20,6 +20,11 @@ class TaskStopParams(BaseModel):
     task_id: str = Field(
         ..., min_length=1, description="Task id returned by task_create.",
     )
+
+
+class TaskStopResult(TypedDict):
+    task_id: str
+    status: Literal["cancelled"]
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -69,10 +74,10 @@ class TaskStop(BaseTool):
     def running_shells(self) -> dict[str, asyncio.subprocess.Process]:
         return self._running_shells
 
-    def _run(self, task_id: str) -> dict[str, Any]:
+    def _run(self, task_id: str) -> TaskStopResult:
         raise NotImplementedError("task_stop is async-only; use ainvoke")
 
-    async def _arun(self, task_id: str) -> dict[str, Any]:
+    async def _arun(self, task_id: str) -> TaskStopResult:
         rec = self.store.get(task_id)
         if rec is None:
             raise ToolError(f"unknown task_id: {task_id!r}")
@@ -85,7 +90,7 @@ class TaskStop(BaseTool):
             return await self._stop_shell(task_id)
         return await self._stop_subagent(task_id)
 
-    async def _stop_subagent(self, task_id: str) -> dict[str, Any]:
+    async def _stop_subagent(self, task_id: str) -> TaskStopResult:
         handle = self._running.get(task_id)
         if handle is None or handle.done():
             self.store.mark_cancelled(task_id)
@@ -101,7 +106,7 @@ class TaskStop(BaseTool):
             self.store.mark_cancelled(task_id)
         return {"task_id": task_id, "status": "cancelled"}
 
-    async def _stop_shell(self, task_id: str) -> dict[str, Any]:
+    async def _stop_shell(self, task_id: str) -> TaskStopResult:
         proc = self._running_shells.get(task_id)
         if proc is None or proc.returncode is not None:
             self.store.mark_cancelled(task_id)

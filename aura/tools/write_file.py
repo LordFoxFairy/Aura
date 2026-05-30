@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,10 @@ class WriteFileParams(BaseModel):
         description="File path. Missing parent directories are created automatically.",
     )
     content: str = Field(description="UTF-8 text content to write. Overwrites any existing file.")
+
+
+class WriteFileResult(TypedDict):
+    written: int
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -48,7 +52,7 @@ class WriteFile(Tool):
             )
         return ValidationResult(invalid=False)
 
-    def _run(self, path: str, content: str) -> dict[str, Any]:
+    def _run(self, path: str, content: str) -> WriteFileResult:
         p = Path(path)
         if p.is_dir():
             raise ToolError(f"path is a directory: {path}")

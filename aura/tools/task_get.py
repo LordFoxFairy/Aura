@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from aura.application.tasks.store import TasksStore
-from aura.domain.task import TaskRecord
+from aura.domain.task import TaskKind, TaskRecord, TaskStatus
 from aura.domain.tool import ToolError, ToolMetadata
 
 
@@ -22,23 +22,60 @@ class TaskGetParams(BaseModel):
     )
 
 
+class TaskMessageDict(TypedDict):
+    type: str
+    # langchain BaseMessage.content is str | list of content blocks.
+    content: str | list[str | dict[str, Any]]
+
+
+class TaskProgressDict(TypedDict):
+    tool_count: int
+    token_count: int
+    line_count: int
+    last_activity_at: float | None
+    recent_activities: list[str]
+    input_tokens: int
+    output_tokens: int
+    latest_summary: str | None
+    summary_updated_at: float | None
+
+
+class TaskGetResult(TypedDict):
+    task_id: str
+    description: str
+    kind: TaskKind
+    model_spec: str
+    agent_type: str
+    status: TaskStatus
+    started_at: float
+    finished_at: float | None
+    observed_at: float | None
+    duration_seconds: float | None
+    final_result: str | None
+    error: str | None
+    transcript_path: str | None
+    progress: TaskProgressDict
+    # Present only when include_messages=True.
+    messages: NotRequired[list[TaskMessageDict]]
+
+
 def _preview(args: dict[str, Any]) -> str:
     tid = args.get("task_id", "?")
     return f"task_get: {tid[:8]}"
 
 
-def _serialize_messages(rec: TaskRecord) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
+def _serialize_messages(rec: TaskRecord) -> list[TaskMessageDict]:
+    out: list[TaskMessageDict] = []
     for msg in rec.messages:
         out.append({"type": msg.type, "content": msg.content})
     return out
 
 
-def _serialize(rec: TaskRecord, *, include_messages: bool) -> dict[str, Any]:
+def _serialize(rec: TaskRecord, *, include_messages: bool) -> TaskGetResult:
     duration: float | None = None
     if rec.finished_at is not None:
         duration = rec.finished_at - rec.started_at
-    payload: dict[str, Any] = {
+    payload: TaskGetResult = {
         "task_id": rec.id,
         "description": rec.description,
         "kind": rec.kind,
@@ -92,15 +129,15 @@ class TaskGet(BaseTool):
     )
     store: TasksStore
 
-    def _run(self, task_id: str, include_messages: bool = False) -> dict[str, Any]:
+    def _run(self, task_id: str, include_messages: bool = False) -> TaskGetResult:
         return self._fetch(task_id, include_messages)
 
     async def _arun(
         self, task_id: str, include_messages: bool = False,
-    ) -> dict[str, Any]:
+    ) -> TaskGetResult:
         return self._fetch(task_id, include_messages)
 
-    def _fetch(self, task_id: str, include_messages: bool) -> dict[str, Any]:
+    def _fetch(self, task_id: str, include_messages: bool) -> TaskGetResult:
         rec = self.store.get(task_id)
         if rec is None:
             raise ToolError(f"unknown task_id: {task_id!r}")

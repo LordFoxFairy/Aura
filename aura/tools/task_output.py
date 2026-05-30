@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import Any
+from typing import Any, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from aura.application.tasks.store import TasksStore
 from aura.domain.abort import current_abort_signal
-from aura.domain.task import TaskRecord
+from aura.domain.task import TaskRecord, TaskStatus
 from aura.domain.tool import ToolError, ToolMetadata
 
 _WAIT_TIMEOUT_MIN = 0.01
@@ -40,7 +40,17 @@ def _preview(args: dict[str, Any]) -> str:
     return f"task_output: {tid[:8]}{wait}"
 
 
-def _snapshot(rec: TaskRecord, *, terminal: bool) -> dict[str, Any]:
+class TaskOutputResult(TypedDict):
+    task_id: str
+    description: str
+    status: TaskStatus
+    final_result: str | None
+    error: str | None
+    terminal: bool
+    observed_at: float | None
+
+
+def _snapshot(rec: TaskRecord, *, terminal: bool) -> TaskOutputResult:
     return {
         "task_id": rec.id,
         "description": rec.description,
@@ -77,7 +87,7 @@ class TaskOutput(BaseTool):
         task_id: str,
         wait: bool = False,
         timeout: float | None = _WAIT_TIMEOUT_DEFAULT,
-    ) -> dict[str, Any]:
+    ) -> TaskOutputResult:
         raise NotImplementedError("task_output is async-only; use ainvoke")
 
     async def _arun(
@@ -85,7 +95,7 @@ class TaskOutput(BaseTool):
         task_id: str,
         wait: bool = False,
         timeout: float | None = _WAIT_TIMEOUT_DEFAULT,
-    ) -> dict[str, Any]:
+    ) -> TaskOutputResult:
         rec = self.store.get(task_id)
         if rec is None:
             raise ToolError(f"unknown task_id: {task_id!r}")

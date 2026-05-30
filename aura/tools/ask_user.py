@@ -50,6 +50,10 @@ class AskUserQuestionParams(BaseModel):
     questions: list[FormQuestion] = Field(min_length=1, max_length=4)
 
 
+class AskUserResult(TypedDict):
+    text: str
+
+
 def _format_answers(answers: dict[str, str]) -> str:
     pairs = ", ".join(f'"{q}"="{a}"' for q, a in answers.items())
     return (
@@ -102,10 +106,10 @@ class AskUserQuestion(BaseTool):
     )
     asker: UserAsker
 
-    def _run(self, questions: list[dict[str, Any]]) -> dict[str, Any]:
+    def _run(self, questions: list[dict[str, Any]]) -> AskUserResult:
         raise NotImplementedError("ask_user_question is async-only; use ainvoke")
 
-    async def _arun(self, questions: list[dict[str, Any]]) -> dict[str, Any]:
+    async def _arun(self, questions: list[dict[str, Any]]) -> AskUserResult:
         validated = [FormQuestion.model_validate(q) for q in questions]
         payload = [_question_to_dict(q) for q in validated]
         answers = await self.asker(payload)

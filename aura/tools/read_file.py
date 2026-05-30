@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -88,6 +88,16 @@ class ReadFileParams(BaseModel):
     )
 
 
+class ReadFileResult(TypedDict):
+    content: str
+    lines: int
+    total_lines: int
+    offset: int
+    limit: int | None
+    partial: bool
+    truncated_at_bytes: int | None
+
+
 def _preview(args: dict[str, Any]) -> str:
     return f"path: {args.get('path', '')}"
 
@@ -128,7 +138,7 @@ class ReadFile(Tool):
 
     def _run(
         self, path: str, offset: int = 0, limit: int | None = None,
-    ) -> dict[str, Any]:
+    ) -> ReadFileResult:
         _reject_blocked_device(path)
         p = Path(path)
         if not p.exists():

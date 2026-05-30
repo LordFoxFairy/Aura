@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from typing import Any, Literal
+from typing import Any, Literal, NotRequired, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, model_validator
@@ -13,6 +13,36 @@ from aura.domain.permission.matchers import exact_match_on
 from aura.domain.tool import ToolError, ToolMetadata
 
 OutputMode = Literal["content", "files_with_matches", "count"]
+
+
+class GrepMatch(TypedDict):
+    path: str
+    line: int
+    text: str
+    # Present (True) only for context lines around a match.
+    is_context: NotRequired[bool]
+
+
+class GrepFilesResult(TypedDict):
+    mode: Literal["files_with_matches"]
+    files: list[str]
+    truncated: bool
+
+
+class GrepCountResult(TypedDict):
+    mode: Literal["count"]
+    counts: dict[str, int]
+    total: int
+    truncated: bool
+
+
+class GrepContentResult(TypedDict):
+    mode: Literal["content"]
+    matches: list[GrepMatch]
+    truncated: bool
+
+
+GrepResult = GrepFilesResult | GrepCountResult | GrepContentResult
 
 
 class GrepParams(BaseModel):
@@ -114,7 +144,7 @@ def _build_argv(p: GrepParams) -> list[str]:
     return argv
 
 
-def _parse_content_line(line: str, has_context: bool) -> dict[str, Any] | None:
+def _parse_content_line(line: str, has_context: bool) -> GrepMatch | None:
     mparts = line.split(_MATCH_SEP, 2)
     if len(mparts) == 3 and mparts[1].isdigit():
         return {
@@ -162,7 +192,7 @@ class Grep(BaseTool):
         capability_flags=frozenset({"search_command"}),
     )
 
-    def _run(self, **kwargs: Any) -> dict[str, Any]:
+    def _run(self, **kwargs: Any) -> GrepResult:
         if shutil.which("rg") is None:
             raise ToolError(
                 "grep requires ripgrep (rg) on PATH. "
@@ -205,7 +235,7 @@ class Grep(BaseTool):
             }
 
         has_context = params.context_before > 0 or params.context_after > 0
-        parsed: list[dict[str, Any]] = []
+        parsed: list[GrepMatch] = []
         for ln in lines:
             if ln == "--":
                 continue

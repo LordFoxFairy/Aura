@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -35,6 +35,12 @@ class GlobParams(BaseModel):
             "'alphabetical' returns lexicographic — use when stable ordering matters."
         ),
     )
+
+
+class GlobResult(TypedDict):
+    files: list[str]
+    count: int
+    truncated: bool
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -95,7 +101,7 @@ class Glob(BaseTool):
         path: str = ".",
         max_results: int = 500,
         sort: Literal["mtime", "alphabetical"] = "mtime",
-    ) -> dict[str, Any]:
+    ) -> GlobResult:
         root = Path(path).expanduser().resolve()
         if not root.exists():
             raise ToolError(f"not found: {root}")

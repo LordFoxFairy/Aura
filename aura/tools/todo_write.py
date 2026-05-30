@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -25,6 +25,10 @@ class TodoWriteParams(BaseModel):
                 f"only one item may have status='in_progress' at a time; found {n}"
             )
         return self
+
+
+class TodoWriteResult(TypedDict):
+    message: str
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -52,7 +56,7 @@ class TodoWrite(BaseTool):
     )
     state: LoopState
 
-    def _run(self, todos: list[TodoItem]) -> dict[str, Any]:
+    def _run(self, todos: list[TodoItem]) -> TodoWriteResult:
         # In-place mutation: LoopSlots is frozen but the todos list is shared by reference.
         self.state.slots.todos.clear()
         self.state.slots.todos.extend(todos)

@@ -10,7 +10,7 @@ import signal
 import subprocess
 import sys
 from asyncio.subprocess import Process
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -35,6 +35,14 @@ class BashParams(BaseModel):
         le=600,
         description="Timeout in seconds (1-600).",
     )
+
+
+class BashResult(TypedDict):
+    stdout: str
+    stderr: str
+    exit_code: int | None
+    truncated: bool
+    killed_at_hard_ceiling: bool
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -178,6 +186,7 @@ async def _drain_pipes(proc: Process) -> None:
             timeout=_REAP_TIMEOUT,
         )
 
+    # Private CPython asyncio attr; absent on some transports, so feature-detect.
     transport = getattr(proc, "_transport", None)
     if transport is not None:
         with contextlib.suppress(Exception):  # pragma: no cover - defensive
@@ -212,15 +221,17 @@ class Bash(Tool):
             )
         return ValidationResult(invalid=False)
 
-    def _run(self, command: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
+    def _run(self, command: str, timeout: int = _DEFAULT_TIMEOUT) -> BashResult:
         raise NotImplementedError("bash is async-only; use `await bash.ainvoke(...)`")
 
     async def _arun(
         self, command: str, timeout: int = _DEFAULT_TIMEOUT
-    ) -> dict[str, Any]:
+    ) -> BashResult:
         # New session/group: isolate Ctrl-C from agent TTY and enable killpg of the whole group.
+        # Heterogeneous by-platform: creationflags(int) | start_new_session(bool).
         spawn_kwargs: dict[str, Any] = {}
         if sys.platform == "win32":
+            # Feature-detection: CREATE_NEW_PROCESS_GROUP is Windows-only on subprocess.
             spawn_kwargs["creationflags"] = getattr(
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0
             )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
@@ -40,14 +40,26 @@ class WebSearchParams(BaseModel):
     )
 
 
+class WebSearchHit(TypedDict):
+    title: str
+    url: str
+    snippet: str
+
+
+class WebSearchResult(TypedDict):
+    provider: Literal["duckduckgo"]
+    query: str
+    results: list[WebSearchHit]
+
+
 def _preview(args: dict[str, Any]) -> str:
     return f"query: {args.get('query', '')}"
 
 
-def _ddgs_search(query: str, max_results: int) -> list[dict[str, Any]]:
+def _ddgs_search(query: str, max_results: int) -> list[WebSearchHit]:
     assert DDGS is not None
     rows = DDGS().text(query, max_results=max_results)
-    normalized: list[dict[str, Any]] = []
+    normalized: list[WebSearchHit] = []
     for row in rows or []:
         normalized.append(
             {
@@ -80,14 +92,14 @@ class WebSearch(BaseTool):
     )
     config: WebSearchConfig | None = None
 
-    def _run(self, query: str, max_results: int = 5) -> dict[str, Any]:
+    def _run(self, query: str, max_results: int = 5) -> WebSearchResult:
         raise NotImplementedError("web_search is async-only; use ainvoke")
 
     async def _arun(
         self,
         query: str,
         max_results: int = 5,
-    ) -> dict[str, Any]:
+    ) -> WebSearchResult:
         # Config's max_results only wins when the caller didn't pass an explicit value.
         effective_max = max_results
         if (
@@ -101,7 +113,7 @@ class WebSearch(BaseTool):
 
     async def _search_duckduckgo(
         self, query: str, max_results: int,
-    ) -> dict[str, Any]:
+    ) -> WebSearchResult:
         if not _HAS_DDGS:
             raise ToolError(_INSTALL_HINT)
         try:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -35,6 +35,12 @@ class SkillParams(BaseModel):
         default=None,
         description="Positional arg values matching the skill's declared arguments.",
     )
+
+
+class SkillResult(TypedDict):
+    skill: str
+    invoked: Literal[True]
+    source: str
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -95,17 +101,17 @@ class SkillTool(BaseTool):
 
     def _run(
         self, name: str, arguments: list[str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> SkillResult:
         return self._invoke(name, arguments)
 
     async def _arun(
         self, name: str, arguments: list[str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> SkillResult:
         return self._invoke(name, arguments)
 
     def _invoke(
         self, name: str, arguments: list[str] | None,
-    ) -> dict[str, Any]:
+    ) -> SkillResult:
         skill = self._registry.get(name)
         # disable_model_invocation skills surface as "missing" so retry can't tell hidden vs absent.
         if skill is not None and skill.disable_model_invocation:

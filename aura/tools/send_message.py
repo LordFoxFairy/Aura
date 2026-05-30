@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -36,6 +36,14 @@ class SendMessageParams(BaseModel):
         default="text",
         description="'text' for normal messages; 'shutdown_request' asks recipient to exit.",
     )
+
+
+class SendMessageResult(TypedDict):
+    msg_id: str
+    recipient: str
+    sender: str
+    sent_at: float
+    fanout: int
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -82,12 +90,12 @@ class SendMessage(BaseTool):
 
     def _run(
         self, to: str, body: str, kind: SendMessageKind = "text",
-    ) -> dict[str, Any]:
+    ) -> SendMessageResult:
         raise NotImplementedError("send_message is async-only; use ainvoke")
 
     async def _arun(
         self, to: str, body: str, kind: SendMessageKind = "text",
-    ) -> dict[str, Any]:
+    ) -> SendMessageResult:
         manager = self._team_provider()
         if manager is None or not manager.is_active:
             raise ToolError(

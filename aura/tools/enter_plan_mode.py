@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal, NotRequired, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -22,6 +22,14 @@ class EnterPlanModeParams(BaseModel):
         max_length=4000,
         description="The plan to propose to the user. Markdown OK.",
     )
+
+
+class EnterPlanModeResult(TypedDict):
+    previous_mode: str
+    new_mode: Literal["plan"]
+    plan: str
+    # Present only when re-entering plan mode (no-op).
+    note: NotRequired[str]
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -67,7 +75,7 @@ class EnterPlanMode(BaseTool):
         self._get_mode = mode_getter
         self._save_prior_mode = save_prior_mode
 
-    def _run(self, plan: str) -> dict[str, Any]:
+    def _run(self, plan: str) -> EnterPlanModeResult:
         previous = self._get_mode()
         if previous == "plan":
             # Re-enter is a no-op so the saved prior mode survives for exit_plan_mode to restore.

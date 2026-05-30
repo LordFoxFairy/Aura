@@ -9,7 +9,7 @@ import socket
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -83,7 +83,38 @@ def _reject_private_host(host: str) -> None:
             )
 
 
-def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
+class FetchedPage(TypedDict):
+    url: str
+    status: int
+    content_type: str
+    content: str
+    truncated: bool
+
+
+class WebFetchSuccess(TypedDict):
+    url: str
+    status: int | None
+    summary: str
+    original_size_bytes: int
+    truncated_for_summary: bool
+    summary_model_name: str
+    cached: bool
+
+
+class WebFetchFailure(TypedDict):
+    url: str
+    status: int | None
+    summary: None
+    error: str
+    raw_body_preview: str
+    truncated_for_summary: bool
+    summary_model_name: None
+
+
+WebFetchResult = WebFetchSuccess | WebFetchFailure
+
+
+def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> FetchedPage:
     if not (url.startswith("http://") or url.startswith("https://")):
         raise ToolError(f"not an http(s) URL: {url}")
 
@@ -121,14 +152,13 @@ def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
         data = data[:_MAX_BYTES]
     content = data.decode("utf-8", errors="replace")
 
-    output: dict[str, Any] = {
+    return {
         "url": url,
         "status": status,
         "content_type": content_type,
         "content": content,
         "truncated": truncated,
     }
-    return output
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -141,11 +171,11 @@ def _cache_key(url: str, prompt: str) -> str:
 
 class _Cache:
     def __init__(self, max_entries: int = _CACHE_MAX_ENTRIES, ttl: float = _CACHE_TTL_SEC) -> None:
-        self._entries: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+        self._entries: OrderedDict[str, tuple[float, WebFetchSuccess]] = OrderedDict()
         self._max = max_entries
         self._ttl = ttl
 
-    def get(self, key: str) -> dict[str, Any] | None:
+    def get(self, key: str) -> WebFetchSuccess | None:
         entry = self._entries.get(key)
         if entry is None:
             return None
@@ -156,7 +186,7 @@ class _Cache:
         self._entries.move_to_end(key)
         return payload
 
-    def put(self, key: str, payload: dict[str, Any]) -> None:
+    def put(self, key: str, payload: WebFetchSuccess) -> None:
         self._entries[key] = (time.time(), payload)
         self._entries.move_to_end(key)
         while len(self._entries) > self._max:
@@ -191,11 +221,9 @@ def _build_summary_prompt(prompt: str, body: str) -> str:
 
 
 def _model_name(model: BaseChatModel) -> str:
-    return (
-        getattr(model, "model_name", None)
-        or getattr(model, "model", None)
-        or type(model).__name__
-    )
+    # Feature-detection: provider subclasses expose the id under varying attrs.
+    name = getattr(model, "model_name", None) or getattr(model, "model", None)
+    return name if isinstance(name, str) else type(model).__name__
 
 
 async def _run_summary(
@@ -220,7 +248,7 @@ def _failure_payload(
     error: str,
     content: str,
     truncated_for_summary: bool,
-) -> dict[str, Any]:
+) -> WebFetchFailure:
     return {
         "url": url,
         "status": status,
@@ -298,7 +326,7 @@ class WebFetch(Tool):
         prompt: str,
         timeout: int = _DEFAULT_TIMEOUT,
         bypass_cache: bool = False,
-    ) -> dict[str, Any]:
+    ) -> WebFetchResult:
         raise NotImplementedError("web_fetch is async-only; use ainvoke")
 
     async def _arun(
@@ -307,13 +335,12 @@ class WebFetch(Tool):
         prompt: str,
         timeout: int = _DEFAULT_TIMEOUT,
         bypass_cache: bool = False,
-    ) -> dict[str, Any]:
+    ) -> WebFetchResult:
         key = _cache_key(url, prompt)
         if not bypass_cache:
             cached = _CACHE.get(key)
             if cached is not None:
-                hit = dict(cached)
-                hit["cached"] = True
+                hit: WebFetchSuccess = {**cached, "cached": True}
                 return hit
 
         try:
@@ -321,7 +348,7 @@ class WebFetch(Tool):
         except ToolError:
             raise
 
-        body = fetched.get("content", "")
+        body = fetched["content"]
 
         try:
             factory = self._resolve_factory()
@@ -332,7 +359,7 @@ class WebFetch(Tool):
         except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             return _failure_payload(
                 url=url,
-                status=fetched.get("status"),
+                status=fetched["status"],
                 error=f"summary factory failed: {type(exc).__name__}: {exc}",
                 content=body,
                 truncated_for_summary=False,
@@ -344,15 +371,15 @@ class WebFetch(Tool):
         except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             return _failure_payload(
                 url=url,
-                status=fetched.get("status"),
+                status=fetched["status"],
                 error=f"summary invoke failed: {type(exc).__name__}: {exc}",
                 content=body,
                 truncated_for_summary=False,
             )
 
-        result = {
+        result: WebFetchSuccess = {
             "url": url,
-            "status": fetched.get("status"),
+            "status": fetched["status"],
             "summary": summary_text,
             "original_size_bytes": len(body.encode("utf-8")),
             "truncated_for_summary": truncated,

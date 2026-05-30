@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -18,6 +18,13 @@ PriorModeGetter = Callable[[], str | None]
 
 _APPROVAL_QUESTION = "Exit plan mode and accept this plan?"
 _APPROVAL_HEADER = "Approve plan"
+
+
+class ExitPlanModeResult(TypedDict):
+    previous_mode: Literal["plan"]
+    new_mode: ExitTarget
+    plan: str
+    approved: Literal[True]
 
 
 class ExitPlanModeParams(BaseModel):
@@ -108,12 +115,12 @@ class ExitPlanMode(BaseTool):
 
     def _run(
         self, plan: str, to_mode: ExitTarget | None = None,
-    ) -> dict[str, Any]:
+    ) -> ExitPlanModeResult:
         raise NotImplementedError("exit_plan_mode is async-only; use ainvoke")
 
     async def _arun(
         self, plan: str, to_mode: ExitTarget | None = None,
-    ) -> dict[str, Any]:
+    ) -> ExitPlanModeResult:
         previous = self._get_mode()
         if previous != "plan":
             raise ToolError(

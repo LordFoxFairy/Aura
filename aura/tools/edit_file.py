@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +30,12 @@ class EditFileParams(BaseModel):
             "If False (default), exactly one match required."
         ),
     )
+
+
+class EditFileResult(TypedDict):
+    replacements: int
+    # Present only when the edit created a previously-missing file.
+    created: NotRequired[bool]
 
 
 def _preview(args: dict[str, Any]) -> str:

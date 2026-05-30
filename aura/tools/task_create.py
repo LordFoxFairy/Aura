@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
@@ -48,6 +48,14 @@ class TaskCreateParams(BaseModel):
             "None inherits the parent's model."
         ),
     )
+
+
+class TaskCreateResult(TypedDict):
+    task_id: str
+    description: str
+    status: str
+    agent_type: str
+    model_spec: str
 
 
 def _preview(args: dict[str, Any]) -> str:
@@ -102,7 +110,7 @@ class TaskCreate(BaseTool):
         prompt: str,
         agent_type: str = "general-purpose",
         model: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> TaskCreateResult:
         raise NotImplementedError("task_create is async-only; use ainvoke")
 
     async def _arun(
@@ -111,7 +119,7 @@ class TaskCreate(BaseTool):
         prompt: str,
         agent_type: str = "general-purpose",
         model: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> TaskCreateResult:
         # Validate before store insert so a bad agent_type can't leave an orphan record.
         try:
             get_agent_def(agent_type)

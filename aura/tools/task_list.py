@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,6 +30,20 @@ class TaskListParams(BaseModel):
     )
 
 
+class TaskRowDict(TypedDict):
+    id: str
+    status: TaskStatus
+    kind: TaskKind
+    description: str
+    started_at: float
+    observed_at: float | None
+
+
+class TaskListResult(TypedDict):
+    tasks: list[TaskRowDict]
+    counts: dict[TaskStatus, int]
+
+
 def _preview(args: dict[str, Any]) -> str:
     bits = [args.get("status", "all")]
     k = args.get("kind", "all")
@@ -38,7 +52,7 @@ def _preview(args: dict[str, Any]) -> str:
     return f"task_list: {', '.join(bits)}"
 
 
-def _row(rec: TaskRecord) -> dict[str, Any]:
+def _row(rec: TaskRecord) -> TaskRowDict:
     return {
         "id": rec.id,
         "status": rec.status,
@@ -80,7 +94,7 @@ class TaskList(BaseTool):
         status: _StatusFilter = "all",
         kind: _KindFilter = "all",
         limit: int = 20,
-    ) -> dict[str, Any]:
+    ) -> TaskListResult:
         return self._fetch(status, kind, limit)
 
     async def _arun(
@@ -88,7 +102,7 @@ class TaskList(BaseTool):
         status: _StatusFilter = "all",
         kind: _KindFilter = "all",
         limit: int = 20,
-    ) -> dict[str, Any]:
+    ) -> TaskListResult:
         return self._fetch(status, kind, limit)
 
     def _fetch(
@@ -96,7 +110,7 @@ class TaskList(BaseTool):
         status: _StatusFilter,
         kind: _KindFilter,
         limit: int,
-    ) -> dict[str, Any]:
+    ) -> TaskListResult:
         # Counts span the full fleet so a filtered view still surfaces overall state.
         all_records = self.store.list()
         counts = {

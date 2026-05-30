@@ -2,24 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from aura.application.compact.constants import KEEP_LAST_N_TURNS
-from aura.application.compact.microcompact import MicrocompactPolicy, apply_microcompact
+from aura.application.compact.microcompact import apply_microcompact
 from aura.application.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
 from aura.application.memory import project_memory, rules
 from aura.application.memory.context import ReadRecord
+from aura.domain.skill import Skill
 from aura.domain.tokens import estimate_text_tokens
 from aura.infrastructure.persistence import journal
 
 if TYPE_CHECKING:
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
 
 CompactSource = Literal["manual", "auto", "reactive"]
 
@@ -66,32 +66,26 @@ _MAX_TOKENS_PER_SKILL_BODY = 5_000
 
 
 def _build_skill_reinjection_messages(
-    invoked_skills: Sequence[object],
+    invoked_skills: list[Skill],
 ) -> list[HumanMessage]:
     max_chars = _MAX_TOKENS_PER_SKILL_BODY * 4
     out: list[HumanMessage] = []
     for skill in invoked_skills:
-        name = getattr(skill, "name", None)
-        body = getattr(skill, "body", None)
-        if not isinstance(name, str) or not isinstance(body, str):
-            continue
+        body = skill.body
         if len(body) > max_chars:
             body = body[:max_chars] + "\n… (truncated)"
         out.append(
             HumanMessage(
-                content=f'<skill-active name="{name}">\n{body}\n</skill-active>',
+                content=f'<skill-active name="{skill.name}">\n{body}\n</skill-active>',
             ),
         )
     return out
 
 
-def _build_active_task_messages(agent: Agent) -> list[HumanMessage]:
+def _build_active_task_messages(agent: AgentSession) -> list[HumanMessage]:
     """Surface still-running / un-observed subagent tasks across the compact boundary."""
-    store = getattr(agent, "_tasks_store", None)
-    if store is None:
-        return []
     out: list[HumanMessage] = []
-    for rec in store.list():
+    for rec in agent.tasks_store.list():
         if rec.status != "running" and rec.observed_at is not None:
             continue
         last_seen = (
@@ -123,7 +117,7 @@ class SummaryCaps:
 _DEFAULT_SUMMARY_CAPS = SummaryCaps()
 
 
-def _summary_caps_from_agent(agent: Agent) -> SummaryCaps:
+def _summary_caps_from_agent(agent: AgentSession) -> SummaryCaps:
     cfg = agent.config.compact
     return SummaryCaps(
         max_summary_message_chars=cfg.max_summary_message_chars,
@@ -161,7 +155,7 @@ def _serialize_history(
         content = str(m.content) if m.content else ""
         content = _cap_summary_text(content, max_chars=caps.max_summary_message_chars)
         lines.append(f"[{role}] {content}")
-        tool_calls = getattr(m, "tool_calls", None) or []
+        tool_calls = m.tool_calls if isinstance(m, AIMessage) else []
         for tc in tool_calls:
             lines.append(
                 "    -> tool_call "
@@ -187,18 +181,14 @@ def estimate_compact_summary_tokens(messages: list[BaseMessage]) -> int:
     return _summary_turn_estimated_tokens(messages)
 
 
-def compact_summary_messages(agent: Agent, history: list[BaseMessage]) -> list[BaseMessage]:
+def compact_summary_messages(
+    agent: AgentSession, history: list[BaseMessage],
+) -> list[BaseMessage]:
     """View the summary turn sees; stored history stays raw."""
-    policy = _microcompact_policy_for_agent(agent)
+    policy = agent.microcompact_policy
     if policy is None:
         return list(history)
     return apply_microcompact(list(history), policy).messages
-
-
-def _microcompact_policy_for_agent(agent: Agent) -> MicrocompactPolicy | None:
-    loop = getattr(agent, "_loop", None)
-    policy = getattr(loop, "_microcompact_policy", None)
-    return policy if isinstance(policy, MicrocompactPolicy) else None
 
 
 def _split_for_summary_budget(
@@ -224,7 +214,9 @@ def _split_for_summary_budget(
     return chunks
 
 
-async def run_compact(agent: Agent, *, source: CompactSource = "manual") -> CompactResult:
+async def run_compact(
+    agent: AgentSession, *, source: CompactSource = "manual",
+) -> CompactResult:
     before_tokens = agent.state.total_tokens_used
     history = agent.storage.load(agent.session_id)
 
@@ -344,8 +336,8 @@ def _is_prompt_too_long(exc: BaseException) -> bool:
 _MAX_COMPACT_SUMMARY_PROMPT_TOKENS = 16_000
 
 
-def _compact_summary_prompt_budget(agent: Agent) -> int:
-    window = getattr(agent, "context_window", 0) or 0
+def _compact_summary_prompt_budget(agent: AgentSession) -> int:
+    window = agent.context_window
     if window <= 0:
         return _MAX_COMPACT_SUMMARY_PROMPT_TOKENS
     return max(2_000, min(window - 13_000, _MAX_COMPACT_SUMMARY_PROMPT_TOKENS))

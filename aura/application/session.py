@@ -887,6 +887,11 @@ class AgentSession:
         return self._context
 
     @property
+    def microcompact_policy(self) -> MicrocompactPolicy | None:
+        """Live loop's microcompact policy; compact's summary view reuses it."""
+        return self._loop.microcompact_policy
+
+    @property
     def skill_registry(self) -> SkillRegistry:
         return self._skill_registry
 

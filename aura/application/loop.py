@@ -215,6 +215,10 @@ class AgentLoop:
         return self._state
 
     @property
+    def microcompact_policy(self) -> MicrocompactPolicy | None:
+        return self._microcompact_policy
+
+    @property
     def max_turns(self) -> int | None:
         return self._max_turns
 

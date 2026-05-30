@@ -23,7 +23,7 @@ from aura.infrastructure.persistence import journal
 from aura.infrastructure.wire.serialize import compact_event_to_wire
 
 if TYPE_CHECKING:
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
 
 EventEmitter = Callable[[dict[str, Any]], None]
 
@@ -33,7 +33,7 @@ class Compactor:
     def __init__(
         self,
         *,
-        agent: Agent,
+        agent: AgentSession,
         config: CompactConfig,
         summary_model: BaseChatModel,
         microcompact_policy: MicrocompactPolicy | None = None,
@@ -284,7 +284,7 @@ def _elapsed_ms(started_monotonic: float) -> float:
 
 
 def _msg_chars(message: BaseMessage) -> int:
-    content = getattr(message, "content", "")
+    content = message.content
     if isinstance(content, str):
         return len(content)
     if isinstance(content, list):

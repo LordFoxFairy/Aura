@@ -9,23 +9,45 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage
 
 from aura.application.tasks.store import TasksStore
 from aura.domain.events import Final, ToolCallStarted
-from aura.domain.task import TaskRecord
+from aura.domain.task import TaskRecord, TaskStatus
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 
 if TYPE_CHECKING:
+    from aura.application.hooks import PostModelHook
+    from aura.application.loop_state import LoopState
+    from aura.application.session import AgentSession
+    from aura.application.subagent_summary import AgentSummarizer
     from aura.application.tasks.spawn import SpawnPort
 
 
 # 5 minute defense-in-depth ceiling; ``AURA_SUBAGENT_TIMEOUT_SEC<=0`` disables.
 DEFAULT_SUBAGENT_TIMEOUT_SEC: float = 300.0
 _TIMEOUT_ENV_VAR = "AURA_SUBAGENT_TIMEOUT_SEC"
+
+
+class SubagentMeta(TypedDict):
+    """Fixed shape of the ``.meta.json`` companion written next to a transcript."""
+
+    agent_type: str
+    task_id: str
+    description: str
+    model_spec: str
+    parent_session_id: str
+    cwd: str
+    started_at: float
+    started_at_iso: str
+    ended_at: float | None
+    ended_at_iso: str | None
+    status: TaskStatus
+    input_tokens: int
+    output_tokens: int
 
 
 def resolve_timeout(override: float | None) -> float | None:
@@ -51,17 +73,17 @@ def resolve_timeout(override: float | None) -> float | None:
     return DEFAULT_SUBAGENT_TIMEOUT_SEC
 
 
-def make_token_observer(store: TasksStore, task_id: str) -> Any:
+def make_token_observer(store: TasksStore, task_id: str) -> PostModelHook:
     """post_model hook forwarding ``usage_metadata`` into the store; failures journaled."""
     async def _observe(
         *,
         ai_message: AIMessage,
         history: list[BaseMessage],  # noqa: ARG001 - protocol compliance
-        state: Any,  # noqa: ARG001
-        **_: Any,
+        state: LoopState,  # noqa: ARG001 - protocol compliance
+        **_: object,
     ) -> None:
         try:
-            usage = getattr(ai_message, "usage_metadata", None)
+            usage = ai_message.usage_metadata
             if not usage:
                 return
             in_t = int(usage.get("input_tokens", 0) or 0)
@@ -90,19 +112,14 @@ def flush_transcript(
 ) -> Path | None:
     """Write the child's transcript JSONL via the storage's path API."""
     try:
-        register = getattr(
-            transcript_storage, "write_subagent_transcript", None,
-        )
-        if not callable(register):
-            return None
         cwd_arg: Path | None = Path(cwd) if cwd else None
         parent_arg: str | None = parent_session_id or None
-        path = cast(Path, register(
+        path = transcript_storage.write_subagent_transcript(
             task_id,
             messages,
             parent_session_id=parent_arg,
             cwd=cwd_arg,
-        ))
+        )
         store.set_transcript_path(task_id, path)
         return path
     except Exception as exc:  # noqa: BLE001  # persistence failure is non-fatal best-effort
@@ -116,7 +133,7 @@ def flush_transcript(
 
 def maybe_cleanup_completed_transcript(
     *,
-    agent: Any,
+    agent: AgentSession,
     transcript_storage: SessionStorage,
     task_id: str,
     parent_session_id: str,
@@ -128,13 +145,14 @@ def maybe_cleanup_completed_transcript(
             return
         cwd_arg: Path | None = Path(cwd) if cwd else None
         parent_arg: str | None = parent_session_id or None
-        for fn_name in ("subagent_transcript_path", "subagent_metadata_path"):
-            path_fn = getattr(transcript_storage, fn_name, None)
-            if not callable(path_fn):
-                continue
-            target = cast(Path, path_fn(
+        path_resolvers = (
+            ("subagent_transcript_path", transcript_storage.subagent_transcript_path),
+            ("subagent_metadata_path", transcript_storage.subagent_metadata_path),
+        )
+        for fn_name, resolve_path in path_resolvers:
+            target = resolve_path(
                 task_id, parent_session_id=parent_arg, cwd=cwd_arg,
-            ))
+            )
             try:
                 target.unlink(missing_ok=True)
             except OSError as exc:
@@ -166,17 +184,9 @@ def flush_metadata(
 ) -> Path | None:
     """Write the ``.meta.json`` companion file alongside the transcript."""
     try:
-        path_fn = getattr(transcript_storage, "subagent_metadata_path", None)
-        if path_fn is None:
-            journal.write(
-                "subagent_metadata_skipped",
-                task_id=record.id,
-                reason="storage_missing_subagent_metadata_path",
-            )
-            return None
         cwd_arg: Path | None = Path(cwd) if cwd else None
         parent_arg: str | None = parent_session_id or None
-        meta_path: Path = path_fn(
+        meta_path = transcript_storage.subagent_metadata_path(
             record.id,
             parent_session_id=parent_arg,
             cwd=cwd_arg,
@@ -190,7 +200,7 @@ def flush_metadata(
             ended_iso = datetime.fromtimestamp(
                 record.finished_at, tz=UTC,
             ).isoformat()
-        meta = {
+        meta: SubagentMeta = {
             "agent_type": record.agent_type or "general-purpose",
             "task_id": record.id,
             "description": record.description,
@@ -222,7 +232,7 @@ def flush_metadata(
 
 
 async def capture_child_messages(
-    agent: Any, store: TasksStore, task_id: str,
+    agent: AgentSession | None, store: TasksStore, task_id: str,
 ) -> None:
     """Pull the child's full message list onto the TaskRecord."""
     if agent is None:
@@ -242,7 +252,7 @@ async def capture_child_messages(
 
 
 def load_child_messages(
-    agent: Any, store: TasksStore, task_id: str,
+    agent: AgentSession | None, store: TasksStore, task_id: str,
 ) -> list[BaseMessage]:
     """Read the child's transcript for transcript-flush."""
     rec = store.get(task_id)
@@ -357,9 +367,9 @@ async def run_local_agent(
         prompt_chars=len(record.prompt),
     )
     store.record_started(task_id)
-    agent: Any = None
+    agent: AgentSession | None = None
     final_text = ""
-    summarizer: Any = None
+    summarizer: AgentSummarizer | None = None
     try:
         # spawn() inside the try: spawn-time failure must flip the record to ``failed``.
         try:
@@ -380,33 +390,29 @@ async def run_local_agent(
                 raise
         agent.hooks.post_model.append(make_token_observer(store, task_id))
         from aura.application.subagent_summary import AgentSummarizer
-        from aura.infrastructure import llm as _llm_mod
+        from aura.infrastructure.llm import make_summary_model_factory
 
-        _make_summary_factory = getattr(
-            _llm_mod, "make_summary_model_factory", None,
+        summary_factory = make_summary_model_factory(
+            agent.config, agent.model, summary_spec=None,
         )
-        if _make_summary_factory is not None:
-            summary_factory = _make_summary_factory(
-                agent.config, agent.model, summary_spec=None,
-            )
-            child_storage = agent.storage
-            child_session_id = agent.session_id
+        child_storage = agent.storage
+        child_session_id = agent.session_id
 
-            def _transcript_provider() -> list[BaseMessage]:
-                try:
-                    return list(child_storage.load(child_session_id))
-                except Exception:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
-                    rec = store.get(task_id)
-                    return list(rec.messages) if rec is not None else []
+        def _transcript_provider() -> list[BaseMessage]:
+            try:
+                return list(child_storage.load(child_session_id))
+            except Exception:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
+                rec = store.get(task_id)
+                return list(rec.messages) if rec is not None else []
 
-            summarizer = AgentSummarizer(
-                task_id=task_id,
-                store=store,
-                transcript_provider=_transcript_provider,
-                summary_model_factory=summary_factory,
-                interval_sec=summary_interval_sec,
-            )
-            summarizer.start()
+        summarizer = AgentSummarizer(
+            task_id=task_id,
+            store=store,
+            transcript_provider=_transcript_provider,
+            summary_model_factory=summary_factory,
+            interval_sec=summary_interval_sec,
+        )
+        summarizer.start()
         async with asyncio.timeout(effective_timeout):
             async for event in agent.astream(record.prompt):
                 if isinstance(event, ToolCallStarted):

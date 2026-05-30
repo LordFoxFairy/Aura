@@ -149,7 +149,8 @@ class SubagentSpawner:
 
     @property
     def abort_event(self) -> asyncio.Event | None:
-        return getattr(self, "_parent_abort_event", None)
+        # Class-level default covers subclasses that skip __init__.
+        return self._parent_abort_event
 
     @property
     def parent_config(self) -> AuraConfig:

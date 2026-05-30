@@ -230,7 +230,7 @@ async def test_clear_session_wipes_read_state(tmp_path: Path) -> None:
     # regresses — state leaks across /clear or the hook keeps pointing at the
     # old Context — previously-read files would still pass the must-read gate
     # after /clear, silently weakening the invariant. Assert both halves.
-    from aura.schemas.state import LoopState
+    from aura.application.loop_state import LoopState
     from aura.tools.base import build_tool
 
     class _PathOldNew(BaseModel):

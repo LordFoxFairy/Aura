@@ -3,7 +3,7 @@ scratchpad dict.
 
 Phase 1 Task 7 deleted the legacy ``LoopState.custom: dict[str, Any]``
 field after Tasks 3-6 migrated every consumer onto a typed
-:class:`aura.schemas.state.LoopSlots` slot. This test pins the deletion
+:class:`aura.application.loop_state.LoopSlots` slot. This test pins the deletion
 so a future refactor can't silently re-introduce the dict (which would
 re-open the untyped escape hatch the migration spent five tasks
 closing).
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import dataclasses
 
-from aura.schemas.state import LoopState
+from aura.application.loop_state import LoopState
 
 
 def test_loop_state_has_no_custom_attribute() -> None:

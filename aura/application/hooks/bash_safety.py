@@ -8,13 +8,13 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 from aura.application.hooks import PreToolHook
+from aura.application.loop_state import LoopState
 from aura.application.permission.bash_safety import check_bash_safety
 from aura.domain.permission.decision import Decision
 from aura.domain.permission.denials import PermissionDenial
 from aura.domain.permission.mode import DEFAULT_MODE, Mode
 from aura.domain.permission.outcome import Allow, Replace
 from aura.domain.tool import ToolResult
-from aura.schemas.state import LoopState
 
 _BASH_TOOL_NAMES: frozenset[str] = frozenset({"bash", "bash_background"})
 

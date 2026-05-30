@@ -9,13 +9,13 @@ from typing import Any, cast
 
 import pytest
 
+from aura.application.loop_state import LoopSlots
 from aura.domain.events import AssistantDelta, Final, ToolCallStarted
 from aura.infrastructure.wire.stream import (
     encode_sse,
     stream_agent_wire,
     stream_agent_wire_sse,
 )
-from aura.schemas.state import LoopSlots
 
 
 class _FakeAgent:

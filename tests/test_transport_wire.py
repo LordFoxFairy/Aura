@@ -304,8 +304,8 @@ def test_task_notification_to_wire_rejects_running_status() -> None:
 
 
 def test_agent_state_to_wire_uses_stable_numeric_shape() -> None:
+    from aura.application.loop_state import LoopSlots
     from aura.domain.state_values import TokenStats
-    from aura.schemas.state import LoopSlots
 
     agent = SimpleNamespace(
         state=SimpleNamespace(slots=LoopSlots(

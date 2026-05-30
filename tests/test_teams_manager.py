@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from aura.application.loop_state import LoopState
 from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.manager import TeamError, TeamManager
@@ -24,7 +25,6 @@ from aura.domain.team import TEAM_LEADER_NAME, TeamRecord
 from aura.domain.tool import ToolMetadata
 from aura.infrastructure import llm
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.state import LoopState
 from tests.conftest import FakeChatModel, FakeTurn
 
 

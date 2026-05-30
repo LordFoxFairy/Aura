@@ -14,7 +14,7 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage
 
 from aura.application.hooks.budget import make_usage_tracking_hook
-from aura.schemas.state import LoopState
+from aura.application.loop_state import LoopState
 
 
 async def test_usage_hook_extracts_anthropic_style_token_metadata() -> None:

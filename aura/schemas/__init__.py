@@ -1,5 +1,6 @@
 """Cross-layer data types — the foundation leaf of the aura package."""
 
+from aura.application.loop_state import LoopSlots, LoopState
 from aura.domain.events import (
     AgentEvent,
     AssistantDelta,
@@ -26,7 +27,6 @@ from aura.domain.tool import (
     tool_metadata,
 )
 from aura.schemas.permissions import PermissionsConfig, StatusLineConfig
-from aura.schemas.state import LoopSlots, LoopState
 
 __all__ = [
     "AgentEvent",

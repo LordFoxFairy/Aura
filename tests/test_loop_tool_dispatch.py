@@ -14,6 +14,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
+from aura.application.loop_state import LoopState
 from aura.config.schema import AuraConfig
 from aura.core import journal as journal_module
 from aura.core.agent import Agent
@@ -28,7 +29,6 @@ from aura.domain.events import (
 from aura.domain.tool import ToolError, ToolResult
 from aura.domain.tool_registry import ToolRegistry
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.state import LoopState
 from aura.tools.base import build_tool
 from aura.tools.progress import get_progress_callback
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context

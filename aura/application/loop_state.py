@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TypeAlias
 
+from aura.domain.permission.decision import Decision
+from aura.domain.permission.denials import PermissionDenial as Denial
+from aura.domain.skill import Skill
 from aura.domain.state_values import (
     BuddyState,
     PermissionKey,
@@ -13,19 +16,7 @@ from aura.domain.state_values import (
 )
 from aura.domain.todos import TodoItem
 
-if TYPE_CHECKING:
-    from aura.domain.permission.decision import Decision
-    from aura.domain.permission.denials import PermissionDenial as Denial
-    from aura.domain.skill import Skill
-else:
-    # Runtime aliases so pydantic field-type introspection resolves without
-    # dragging the real modules into aura.schemas at import time.
-    Denial = Any
-    Decision = Any
-    Skill = Any
-
-
-PermissionDedupEntry: TypeAlias = "tuple[Decision, str]"
+PermissionDedupEntry: TypeAlias = tuple[Decision, str]
 
 
 @dataclass(frozen=True)

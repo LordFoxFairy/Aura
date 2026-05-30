@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from aura.application.hooks import FileChangeKind, HookChain
+from aura.application.loop_state import LoopState
 from aura.infrastructure.persistence import journal
-from aura.schemas.state import LoopState
 
 _DEFAULT_POLL_INTERVAL_SEC = 1.0
 

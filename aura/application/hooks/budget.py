@@ -12,11 +12,11 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
 from aura.application.hooks import HookChain, PostModelHook, PostToolHook
+from aura.application.loop_state import LoopState
 from aura.domain.state_values import TokenStats
 from aura.domain.tokens import estimate_message_tokens, estimate_text_tokens
 from aura.domain.tool import ToolResult
 from aura.domain.tool_meta_access import meta_dict
-from aura.schemas.state import LoopState
 
 
 def make_size_budget_hook(

@@ -14,13 +14,13 @@ from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
 from aura.application.hooks.permission import make_permission_hook
+from aura.application.loop_state import LoopState
 from aura.application.permission.asker import AskerResponse
 from aura.config.schema import AuraConfigError
 from aura.domain.permission.outcome import Ask, Outcome
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.domain.tool import ToolResult
-from aura.schemas.state import LoopState
 from aura.tools.base import build_tool
 
 

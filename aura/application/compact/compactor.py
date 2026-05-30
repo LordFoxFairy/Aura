@@ -17,10 +17,10 @@ from aura.application.compact.microcompact import (
     apply_microcompact,
 )
 from aura.application.compact.reactive import CompactResult
+from aura.application.loop_state import LoopSlots
 from aura.config.schema import CompactConfig
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.wire.serialize import compact_event_to_wire
-from aura.schemas.state import LoopSlots
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent

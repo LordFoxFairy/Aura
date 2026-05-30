@@ -23,6 +23,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.hooks.permission import make_permission_hook
+from aura.application.loop_state import LoopState
 from aura.application.permission.asker import AskerResponse, PermissionAsker
 from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
 from aura.domain.permission.outcome import Allow, Replace
@@ -30,7 +31,6 @@ from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.domain.tool import ToolResult
 from aura.infrastructure.permission_store import PermissionStoreError
-from aura.schemas.state import LoopState
 from aura.tools.base import build_tool
 
 

@@ -20,7 +20,7 @@ import pytest
 from aura.application.hooks import HookChain
 from aura.application.hooks.auto_reload import make_aura_md_reload_hook
 from aura.application.hooks.file_watcher import FileWatcher
-from aura.schemas.state import LoopState
+from aura.application.loop_state import LoopState
 
 # Use a tight polling interval so the tests don't drag — the watcher's
 # default interval is human-scale (1.0s), but unit tests should not be.

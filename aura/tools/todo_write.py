@@ -7,9 +7,9 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from aura.application.loop_state import LoopState
 from aura.domain.todos import TodoItem
 from aura.domain.tool import ToolMetadata
-from aura.schemas.state import LoopState
 
 
 class TodoWriteParams(BaseModel):

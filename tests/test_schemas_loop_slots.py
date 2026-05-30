@@ -12,9 +12,9 @@ import dataclasses
 
 import pytest
 
+from aura.application.loop_state import LoopSlots
 from aura.domain.state_values import BuddyState, SkillRestrictLease, TokenStats
 from aura.domain.todos import TodoItem
-from aura.schemas.state import LoopSlots
 
 
 def test_loop_slots_constructible_with_defaults() -> None:
@@ -168,15 +168,16 @@ def test_skill_restrict_lease_is_frozen_with_required_fields() -> None:
         lease.install_turn = 5  # type: ignore[misc]  # rebinding/mutating frozen field for test
 
 
-def test_loop_slots_exported_from_schemas_state_module() -> None:
-    """``LoopSlots`` must be importable from ``aura.schemas.state``
-    (its canonical home per spec §3.1)."""
-    from aura.schemas import state as state_mod
+def test_loop_slots_and_pure_values_at_canonical_homes() -> None:
+    """``LoopSlots`` lives in ``aura.application.loop_state``; the pure
+    value types it composes live in ``aura.domain.state_values``."""
+    from aura.application import loop_state as loop_mod
+    from aura.domain import state_values as values_mod
 
-    assert hasattr(state_mod, "LoopSlots")
-    assert hasattr(state_mod, "TokenStats")
-    assert hasattr(state_mod, "SkillRestrictLease")
-    assert hasattr(state_mod, "BuddyState")
+    assert hasattr(loop_mod, "LoopSlots")
+    assert hasattr(values_mod, "TokenStats")
+    assert hasattr(values_mod, "SkillRestrictLease")
+    assert hasattr(values_mod, "BuddyState")
 
 
 def test_buddy_state_defaults_match_idle_observer() -> None:

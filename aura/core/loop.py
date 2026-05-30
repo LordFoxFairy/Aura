@@ -24,6 +24,7 @@ from pydantic import BaseModel, ValidationError
 
 from aura.application.compact import Compactor, MicrocompactPolicy, apply_microcompact
 from aura.application.hooks import HookChain
+from aura.application.loop_state import LoopState
 from aura.application.memory.context import Context
 from aura.config.schema import RetryConfig
 from aura.domain.abort import AbortController, AbortException, current_abort_signal
@@ -43,7 +44,6 @@ from aura.domain.tool_meta_access import meta_dict
 from aura.domain.tool_registry import ToolRegistry
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.retry import with_retry
-from aura.schemas.state import LoopState
 from aura.tools.errors import hint_for_error
 from aura.tools.progress import (
     ProgressCallback,

@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aura.application.hooks import CwdChangedHook, FileChangedHook
+from aura.application.loop_state import LoopState
 from aura.infrastructure.persistence import journal
-from aura.schemas.state import LoopState
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent

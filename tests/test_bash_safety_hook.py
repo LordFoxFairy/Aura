@@ -14,9 +14,9 @@ import pytest
 from pydantic import BaseModel
 
 from aura.application.hooks.bash_safety import make_bash_safety_hook
+from aura.application.loop_state import LoopState
 from aura.domain.permission.outcome import Allow, Replace
 from aura.infrastructure.persistence import journal as journal_module
-from aura.schemas.state import LoopState
 from aura.tools.base import build_tool
 
 

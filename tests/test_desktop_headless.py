@@ -131,7 +131,7 @@ def test_event_to_dict_matches_frontend_contract_via_canonical_adapter() -> None
 
 
 def test_build_aura_state_uses_numeric_defaults() -> None:
-    from aura.schemas.state import LoopSlots
+    from aura.application.loop_state import LoopSlots
 
     agent = SimpleNamespace(
         state=SimpleNamespace(slots=LoopSlots()),
@@ -180,8 +180,8 @@ def test_build_aura_state_uses_numeric_defaults() -> None:
 
 
 def test_build_aura_state_preserves_typed_token_usage() -> None:
+    from aura.application.loop_state import LoopSlots
     from aura.domain.state_values import TokenStats
-    from aura.schemas.state import LoopSlots
 
     agent = SimpleNamespace(
         state=SimpleNamespace(slots=LoopSlots(
@@ -385,7 +385,7 @@ async def test_run_wires_permission_deny_ask_and_disable_bypass(
 
         return _hook
 
-    from aura.schemas.state import LoopSlots
+    from aura.application.loop_state import LoopSlots
 
     class FakeAgent:
         session_id = "session-1"
@@ -575,7 +575,7 @@ async def test_session_driver_emits_exited_after_final_when_turn_completes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cancel-and-await ordering: cancelled turn's final reaches the wire BEFORE exited."""
-    from aura.schemas.state import LoopSlots
+    from aura.application.loop_state import LoopSlots
 
     turn_started = asyncio.Event()
 
@@ -656,7 +656,7 @@ async def test_session_driver_emits_exited_exactly_once_on_clean_close(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No KeyboardInterrupt path means a single ``exited`` per session, not two."""
-    from aura.schemas.state import LoopSlots
+    from aura.application.loop_state import LoopSlots
 
     class FakeAgent:
         session_id = "session-1"

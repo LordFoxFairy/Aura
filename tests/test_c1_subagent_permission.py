@@ -36,6 +36,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
+from aura.application.loop_state import LoopState
 from aura.application.tasks.factory import (
     SUBAGENT_AUTO_DENY_FEEDBACK,
     SubagentFactory,
@@ -52,7 +53,6 @@ from aura.domain.tool import (
     ToolResult,  # noqa: F401  # import is the assertion / fixture side-effect
 )
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.state import LoopState
 from tests.conftest import FakeChatModel, FakeTurn
 
 

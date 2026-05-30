@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from aura.application.hooks.auto_reload import make_cwd_rules_reload_hook
-from aura.schemas.state import LoopState
+from aura.application.loop_state import LoopState
 
 
 def _minimal_agent(tmp_path: Path) -> Any:

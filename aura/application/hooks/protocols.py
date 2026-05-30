@@ -8,9 +8,9 @@ from typing import Any, Literal, Protocol
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
+from aura.application.loop_state import LoopState
 from aura.domain.permission.outcome import Outcome
 from aura.domain.tool import ToolResult
-from aura.schemas.state import LoopState
 
 FileChangeKind = Literal["created", "modified", "deleted"]
 

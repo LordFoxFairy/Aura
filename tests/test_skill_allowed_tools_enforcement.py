@@ -30,6 +30,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.hooks.permission import make_permission_hook
+from aura.application.loop_state import LoopState
 from aura.application.permission.asker import AskerResponse
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
@@ -40,7 +41,6 @@ from aura.domain.tool import ToolResult
 from aura.infrastructure.persistence import journal as journal_module
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills.command import SkillCommand
-from aura.schemas.state import LoopState
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel
 

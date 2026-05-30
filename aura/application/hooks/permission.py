@@ -15,6 +15,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 from aura.application.hooks import PreToolHook
+from aura.application.loop_state import LoopState
 from aura.application.permission.asker import AskerResponse, PermissionAsker
 from aura.application.permission.safety import is_protected
 from aura.domain.permission.decision import Decision
@@ -29,7 +30,6 @@ from aura.domain.tool_meta_access import meta_dict
 from aura.infrastructure.permission_store import PermissionStoreError, save_rule
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.skills.restrict import has_active_lease, tool_allowed_by_lease
-from aura.schemas.state import LoopState
 
 _EMPTY_RULESET = RuleSet()
 

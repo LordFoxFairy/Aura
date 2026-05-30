@@ -25,8 +25,8 @@ from langchain_core.messages import AIMessage
 
 from aura.application.commands.stats import StatsCommand
 from aura.application.hooks.budget import make_usage_tracking_hook
+from aura.application.loop_state import LoopState
 from aura.infrastructure.persistence import journal as journal_module
-from aura.schemas.state import LoopState
 
 
 class _StubAgent:

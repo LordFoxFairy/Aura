@@ -9,6 +9,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from aura.application.loop_state import LoopState
 from aura.domain.permission.session import SessionRuleSet
 from aura.domain.skill import Skill
 from aura.domain.tool import ToolError, ToolMetadata
@@ -17,7 +18,6 @@ from aura.infrastructure.skills.errors import format_missing_args_error
 from aura.infrastructure.skills.loader import render_skill_body
 from aura.infrastructure.skills.registry import SkillRegistry
 from aura.infrastructure.skills.restrict import install_restrict_lease
-from aura.schemas.state import LoopState
 
 SkillRecorder = Callable[[Skill], None]
 SessionIdProvider = Callable[[], str]

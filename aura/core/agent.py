@@ -32,6 +32,7 @@ from aura.application.hooks import HookChain
 from aura.application.hooks.bash_safety import make_bash_safety_hook
 from aura.application.hooks.budget import default_hooks
 from aura.application.hooks.must_read_first import make_must_read_first_hook
+from aura.application.loop_state import LoopState
 from aura.application.memory import project_memory, rules
 from aura.application.memory.context import Context
 from aura.application.memory.system_prompt import build_system_prompt
@@ -62,7 +63,6 @@ from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills import Skill, SkillRegistry, load_skills
 from aura.infrastructure.wire.events import WireEvent
-from aura.schemas.state import LoopState
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 from aura.tools.ask_user import FormQuestionDict, UserAsker
 

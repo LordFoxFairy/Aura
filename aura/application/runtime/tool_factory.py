@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
 
-from aura.schemas.state import LoopState
+from aura.application.loop_state import LoopState
 from aura.tools.ask_user import AskUserQuestion
 from aura.tools.send_message import SendMessage
 from aura.tools.task_create import TaskCreate

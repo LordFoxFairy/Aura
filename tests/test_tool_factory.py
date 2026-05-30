@@ -24,6 +24,7 @@ from pathlib import Path
 
 import pytest
 
+from aura.application.loop_state import LoopState
 from aura.application.runtime import (
     STATEFUL_TOOL_FACTORIES,
     AskUserQuestionFactory,
@@ -41,7 +42,6 @@ from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.domain.todos import TodoItem
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.state import LoopState
 from aura.tools.ask_user import AskUserQuestion, FormQuestionDict
 from aura.tools.send_message import SendMessage
 from aura.tools.task_create import TaskCreate

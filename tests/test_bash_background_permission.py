@@ -31,13 +31,13 @@ from langchain_core.messages import AIMessage, ToolMessage
 from pydantic import BaseModel
 
 from aura.application.hooks.bash_safety import make_bash_safety_hook
+from aura.application.loop_state import LoopState
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.domain.tool import ToolResult
 from aura.infrastructure.persistence import journal as journal_module
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.state import LoopState
 from aura.tools.bash_background import BashBackground
 from tests.conftest import FakeChatModel, FakeTurn
 

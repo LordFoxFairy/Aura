@@ -27,7 +27,7 @@ _AURA_MD = "AURA.md"
 _AURA_DIR = ".aura"
 _AURA_LOCAL_MD = "AURA.local.md"
 
-# Verbatim claude-code phrasing — makes project instructions outrank default behavior.
+# Makes project instructions outrank default behavior.
 _OVERRIDE_PREAMBLE = (
     "Codebase and user instructions are shown below. Be sure to adhere to "
     "these instructions. IMPORTANT: These instructions OVERRIDE any default "
@@ -80,7 +80,7 @@ class Context:
         # — lighter than content hash, equivalent in practice.
         self._read_records: dict[Path, ReadRecord] = {}
         if carryover is not None:
-            # Parent's full reads become non-partial seeds (spec §10 Q1).
+            # Parent's full reads become non-partial seeds.
             for path, record in carryover.records.items():
                 self._read_records[path] = ReadRecord(
                     mtime=record.mtime_at_read,

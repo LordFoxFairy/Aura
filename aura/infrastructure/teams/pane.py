@@ -82,7 +82,7 @@ class PaneHandle(BackendHandle):
     member_name: str
     # Held to post shutdown_request through the same code path the in-process backend uses.
     manager: TeamManager
-    # Subprocess can't see this event directly; we still fire it so in-leader observers stay parity.
+    # Subprocess can't see this event directly; we still fire it for in-leader observers.
     stop_event: asyncio.Event
     abort: AbortController
 
@@ -99,7 +99,7 @@ class PaneHandle(BackendHandle):
         from aura.application.teams.mailbox import Mailbox  # noqa: PLC0415
         mailbox = Mailbox(self.manager.storage, team.team_id)
         baseline = {m.msg_id for m in mailbox.read_all(TEAM_LEADER_NAME)}
-        # Reuse the manager's poster so journal events match the in-process path (/tasks parity).
+        # Reuse the manager's poster so journal events match the in-process path.
         with contextlib.suppress(Exception):
             self.manager.post_message(
                 TeamMessage(

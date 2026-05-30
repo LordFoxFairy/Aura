@@ -61,7 +61,7 @@ Recipients: a member name, the literal 'leader', or 'broadcast'.
 
 _TEAMMATE_TAIL_CAP: int = 50
 
-# Mirrors :data:`BackendType`; local check hints on typo before BackendUnavailable would raise.
+# Local check hints on typo before BackendUnavailable would raise.
 _VALID_BACKENDS: tuple[str, ...] = ("in_process", "pane")
 
 

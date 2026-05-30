@@ -31,8 +31,7 @@ def auto_compact_threshold_for(model_spec: str) -> int:
     return max(1_000, threshold)
 
 
-# Microcompact knobs — view-only payload compression. claude-code uses 8/5;
-# Aura's leaner turns warrant 5/3 to actually fire in realistic sessions.
+# Microcompact knobs — view-only payload compression; 5/3 fires in realistic sessions.
 MICROCOMPACT_TRIGGER_PAIRS = 5
 MICROCOMPACT_KEEP_RECENT = 3
 MICROCOMPACT_CLEAR_MARKER = "[Old tool result content cleared]"

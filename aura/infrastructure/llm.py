@@ -32,7 +32,7 @@ _PROTOCOLS: dict[str, tuple[str, str, str | None]] = {
 }
 
 
-# Over-stating defaults causes status-bar % drift; 128k floor mirrors claude-code.
+# Over-stating defaults causes status-bar % drift; 128k floor.
 _CONTEXT_WINDOWS: dict[str, int] = {
     "claude-3-5-sonnet": 200_000,
     "claude-3-5-haiku": 200_000,

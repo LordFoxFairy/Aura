@@ -43,11 +43,6 @@ class RulesBundle:
 _rules_cache: dict[Path, RulesBundle] = {}
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 def load_rules(cwd: Path, *, force_reload: bool = False) -> RulesBundle:
     resolved_cwd = cwd.resolve()
     if not force_reload and resolved_cwd in _rules_cache:
@@ -94,11 +89,6 @@ def match(bundle: RulesBundle, path: Path) -> list[Rule]:
 
     matched.sort(key=lambda r: r.source_path)
     return matched
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _scan_layer(rules_root: Path, *, base_dir: Path, bundle: RulesBundle) -> None:

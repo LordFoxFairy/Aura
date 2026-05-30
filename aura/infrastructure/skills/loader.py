@@ -119,8 +119,7 @@ issue against the diff before approving.
 """,
 }
 
-# Dual-namespace placeholders so a claude-code skill drops into Aura
-# without edits. New skills should prefer ``${AURA_*}``.
+# Dual-namespace placeholders; new skills should prefer ``${AURA_*}``.
 _PLACEHOLDER_PAIRS: tuple[tuple[str, str], ...] = (
     ("${AURA_SKILL_DIR}", "base_dir"),
     ("${CLAUDE_SKILL_DIR}", "base_dir"),
@@ -128,16 +127,15 @@ _PLACEHOLDER_PAIRS: tuple[tuple[str, str], ...] = (
     ("${CLAUDE_SESSION_ID}", "session_id"),
 )
 
-# Inline ``!`cmd` `` shell-exec syntax (claude-code feature). Aura does not
-# execute these; detected at load time so imported skills get a journal
-# warning, then neutralised at render time so the model doesn't see them
-# as live exec directives.
+# Inline ``!`cmd` `` shell-exec syntax. Aura does not execute these; detected
+# at load time so imported skills get a journal warning, then neutralised at
+# render time so the model doesn't see them as live exec directives.
 _INLINE_CMD_PATTERN = "!`"
 _INLINE_CMD_REGEX = re.compile(r"!`([^`]+)`")
 
 # Frontmatter keys ``_build_skill`` interprets. Anything else gets a
-# ``skill_unsupported_frontmatter`` journal event so importing a claude-code
-# skill with (e.g.) ``model:`` / ``hooks:`` has an audit trail.
+# ``skill_unsupported_frontmatter`` journal event so importing a skill with
+# (e.g.) ``model:`` / ``hooks:`` has an audit trail.
 _RECOGNIZED_FRONTMATTER_FIELDS: frozenset[str] = frozenset({
     "name", "description", "when_to_use", "when-to-use",
     "allowed-tools", "restrict-tools", "argument-hint", "arguments",
@@ -219,7 +217,7 @@ def load_skills(
     for skill in _load_layer(user_skills_root, layer="user"):
         _install_or_drop(skill, registry, seen_source_paths)
 
-    # Layer 1b: user (claude-code-compat). Realpath-dedup against 1a.
+    # Layer 1b: user (``~/.claude/skills``). Realpath-dedup against 1a.
     claude_user_skills_root = home_dir / _CLAUDE_DIR / _SKILLS_DIR
     if claude_user_skills_root.resolve() != user_skills_root.resolve():
         for skill in _load_layer(claude_user_skills_root, layer="user"):
@@ -294,10 +292,9 @@ def render_skill_body(
 ) -> str:
     """Substitute skill-dir / session-id / per-arg placeholders in the body.
 
-    Dual-namespace: ``${AURA_*}`` and ``${CLAUDE_*}`` both substitute so a
-    claude-code skill drops in without edits. Inline ``!`cmd` `` syntax is
-    neutralised first (Aura does not execute these); fenced code blocks are
-    preserved verbatim so example docs stay intact.
+    Dual-namespace: ``${AURA_*}`` and ``${CLAUDE_*}`` both substitute. Inline
+    ``!`cmd` `` syntax is neutralised first (Aura does not execute these);
+    fenced code blocks are preserved verbatim so example docs stay intact.
     """
     body, _ = _sanitize_inline_cmds(skill.body)
     base_dir = skill.base_dir if skill.base_dir is not None else skill.source_path.parent
@@ -448,8 +445,7 @@ def _build_skill(skill_file: Path, *, layer: SkillLayer) -> Skill | None:
         _emit_parse_failed(skill_file, "frontmatter is not a mapping")
         return None
 
-    # Unsupported fields (claude-code carries ``model`` / ``hooks`` etc.)
-    # journal an audit event so importing surfaces the parity gap.
+    # Unsupported fields (e.g. ``model`` / ``hooks``) get an audit event.
     present_fields = {k for k in parsed if isinstance(k, str)}
     unsupported_fields = sorted(present_fields - _RECOGNIZED_FRONTMATTER_FIELDS)
     if unsupported_fields:

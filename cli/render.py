@@ -13,7 +13,7 @@ from rich.markup import escape as rich_escape
 from rich.panel import Panel
 from rich.text import Text
 
-from aura.schemas.events import (
+from aura.domain.events import (
     AgentEvent,
     AssistantDelta,
     PermissionAudit,

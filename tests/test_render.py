@@ -6,7 +6,7 @@ import io
 
 from rich.console import Console
 
-from aura.schemas.events import (
+from aura.domain.events import (
     AssistantDelta,
     Final,
     PermissionAudit,
@@ -102,7 +102,7 @@ def test_tool_call_completed_after_progress_chunk_omits_duplicated_header() -> N
     # If a progress chunk flushed the ◆ header, completion should NOT
     # reprint the tool name — that would produce a visual duplicate.
     # Only the ✓ summary prints under the progress stream.
-    from aura.schemas.events import ToolCallProgress
+    from aura.domain.events import ToolCallProgress
 
     r, buf = _capture()
     r.on_event(ToolCallStarted(name="bash", input={"command": "ls /"}))

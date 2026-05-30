@@ -16,11 +16,11 @@ from typing import TYPE_CHECKING
 from aura.application.commands.types import CommandResult, CommandSource
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import SessionRuleSet
+from aura.domain.skill import Skill
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.skills.errors import format_missing_args_error
 from aura.infrastructure.skills.loader import render_skill_body
 from aura.infrastructure.skills.restrict import install_restrict_lease
-from aura.infrastructure.skills.types import Skill
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent

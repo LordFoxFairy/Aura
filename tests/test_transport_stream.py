@@ -9,12 +9,12 @@ from typing import Any, cast
 
 import pytest
 
+from aura.domain.events import AssistantDelta, Final, ToolCallStarted
 from aura.infrastructure.wire.stream import (
     encode_sse,
     stream_agent_wire,
     stream_agent_wire_sse,
 )
-from aura.schemas.events import AssistantDelta, Final, ToolCallStarted
 from aura.schemas.state import LoopSlots
 
 

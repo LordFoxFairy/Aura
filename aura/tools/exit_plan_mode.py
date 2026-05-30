@@ -8,7 +8,7 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.domain.tool import ToolError, ToolMetadata
 from aura.tools.ask_user import FormQuestionDict, UserAsker
 from aura.tools.enter_plan_mode import ModeGetter, ModeSetter
 

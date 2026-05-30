@@ -139,7 +139,7 @@ async def test_usage_hook_stores_stats_on_typed_slot() -> None:
 
     # Stats land on the typed ``LoopSlots.token_stats`` slot — not the
     # legacy untyped scratchpad dict (Phase 1 / Task 3 migration).
-    from aura.schemas.state import TokenStats
+    from aura.domain.state_values import TokenStats
 
     assert isinstance(state.slots.token_stats, TokenStats)
     assert state.slots.token_stats.last_input_tokens == 10

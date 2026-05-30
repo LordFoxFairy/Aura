@@ -15,8 +15,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.domain.skill import Skill
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.infrastructure.skills.types import Skill
 from tests.conftest import FakeChatModel, FakeTurn
 
 

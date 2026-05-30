@@ -26,8 +26,8 @@ from typing import Any
 import pathspec
 import yaml
 
+from aura.domain.skill import Skill, SkillLayer
 from aura.infrastructure.skills.registry import SkillRegistry
-from aura.infrastructure.skills.types import Skill, SkillLayer
 
 _AURA_DIR = ".aura"
 _CLAUDE_DIR = ".claude"

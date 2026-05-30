@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from aura.schemas.tool import ToolResult
+from aura.domain.tool import ToolResult
 
 if TYPE_CHECKING:
     # Runtime import would cycle aura.schemas → aura.application.

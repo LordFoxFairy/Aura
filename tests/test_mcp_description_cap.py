@@ -17,13 +17,13 @@ from typing import Any
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
+from aura.domain.tool_meta_access import meta_dict
 from aura.infrastructure.mcp.adapter import (
     _MCP_DESCRIPTION_CAP,
     _cap_description,
     add_aura_metadata,
 )
 from aura.infrastructure.persistence import journal
-from aura.schemas.tool_meta_access import meta_dict
 
 
 class _Params(BaseModel):

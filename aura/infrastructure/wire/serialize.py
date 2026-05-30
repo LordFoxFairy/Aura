@@ -6,6 +6,14 @@ import json
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from aura.domain.events import (
+    AssistantDelta,
+    Final,
+    PermissionAudit,
+    ToolCallCompleted,
+    ToolCallProgress,
+    ToolCallStarted,
+)
 from aura.domain.task import TaskNotification
 from aura.domain.team import TeamMessage
 from aura.infrastructure.wire.events import (
@@ -14,14 +22,6 @@ from aura.infrastructure.wire.events import (
     CoordinationEvent,
     PermissionRequestEvent,
     WireEvent,
-)
-from aura.schemas.events import (
-    AssistantDelta,
-    Final,
-    PermissionAudit,
-    ToolCallCompleted,
-    ToolCallProgress,
-    ToolCallStarted,
 )
 
 

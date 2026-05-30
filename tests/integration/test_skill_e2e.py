@@ -21,8 +21,8 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
+from aura.domain.events import ToolCallCompleted
 from aura.infrastructure.skills.loader import activate_conditional_skills_for_paths
-from aura.schemas.events import ToolCallCompleted
 from tests.conftest import FakeChatModel, FakeTurn
 from tests.integration.conftest import build_integration_agent, drain
 
@@ -234,7 +234,7 @@ async def test_skill_unknown_returns_tool_error_llm_pivots(
     assert "alpha" in err
 
     # Loop didn't crash — turn 2 ran to completion (Final event present).
-    from aura.schemas.events import Final
+    from aura.domain.events import Final
 
     finals = [e for e in events if isinstance(e, Final)]
     assert len(finals) == 1

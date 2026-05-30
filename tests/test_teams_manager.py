@@ -21,10 +21,10 @@ from aura.domain.permission.rule import Rule
 from aura.domain.permission.safety import DEFAULT_SAFETY
 from aura.domain.permission.session import RuleSet
 from aura.domain.team import TEAM_LEADER_NAME, TeamRecord
+from aura.domain.tool import ToolMetadata
 from aura.infrastructure import llm
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolMetadata
 from tests.conftest import FakeChatModel, FakeTurn
 
 

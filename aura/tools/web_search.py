@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aura.config.schema import WebSearchConfig
 from aura.domain.permission.matchers import exact_match_on
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.domain.tool import ToolError, ToolMetadata
 
 try:
     from ddgs import DDGS

@@ -13,7 +13,7 @@ from aura.domain.team import (
     MAX_BODY_CHARS,
     TEAM_LEADER_NAME,
 )
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.domain.tool import ToolError, ToolMetadata
 
 SendMessageKind = Literal["text", "shutdown_request"]
 

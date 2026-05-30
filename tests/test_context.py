@@ -22,10 +22,10 @@ from aura.application.memory.context import (
 )
 from aura.application.memory.context import _render_todos_body as render_todos_body
 from aura.application.memory.rules import Rule, RulesBundle
+from aura.domain.skill import Skill
+from aura.domain.state_values import ReadCarryover, ReadRecord
 from aura.domain.task import TaskNotification
-from aura.infrastructure.skills.types import Skill
-from aura.schemas.state import ReadCarryover, ReadRecord
-from aura.schemas.todos import TodoItem
+from aura.domain.todos import TodoItem
 
 
 def _rule(source: Path, base_dir: Path, globs: tuple[str, ...], body: str) -> Rule:

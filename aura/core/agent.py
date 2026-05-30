@@ -35,7 +35,6 @@ from aura.application.hooks.must_read_first import make_must_read_first_hook
 from aura.application.memory import project_memory, rules
 from aura.application.memory.context import Context
 from aura.application.memory.system_prompt import build_system_prompt
-from aura.application.permission.denials import PermissionDenial
 from aura.application.runtime.mcp import McpRuntime
 from aura.application.runtime.session import SessionRuntime
 from aura.application.runtime.tool_factory import (
@@ -48,10 +47,14 @@ from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core.loop import DEFAULT_SESSION as _DEFAULT_SESSION
 from aura.core.loop import AgentLoop
 from aura.domain.abort import AbortController, AbortException
+from aura.domain.events import AgentEvent, AssistantDelta, Final
+from aura.domain.permission.denials import PermissionDenial
 from aura.domain.permission.mode import Mode
 from aura.domain.permission.safety import SafetyPolicy
 from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.domain.state_values import ReadCarryover
 from aura.domain.tokens import estimate_message_tokens, estimate_text_tokens
+from aura.domain.tool import ToolError
 from aura.domain.tool_registry import ToolRegistry
 from aura.infrastructure import llm
 from aura.infrastructure.mcp import MCPManager
@@ -59,9 +62,7 @@ from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills import Skill, SkillRegistry, load_skills
 from aura.infrastructure.wire.events import WireEvent
-from aura.schemas.events import AgentEvent, AssistantDelta, Final
-from aura.schemas.state import LoopState, ReadCarryover
-from aura.schemas.tool import ToolError
+from aura.schemas.state import LoopState
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 from aura.tools.ask_user import FormQuestionDict, UserAsker
 
@@ -629,7 +630,7 @@ class Agent:
         self._state.reset()
         self._state.slots.turn_denials.clear()
         self._state.slots.todos.clear()
-        from aura.schemas.state import BuddyState as _BuddyState
+        from aura.domain.state_values import BuddyState as _BuddyState
         self._state.slots.perm_dedup_cache.clear()
         self._state.slots.invoked_skills.clear()
         self._state.slots.preserved_invoked_skills.clear()
@@ -1108,7 +1109,7 @@ class Agent:
 
     def _snapshot_read_carryover(self) -> ReadCarryover:
         """Build a ReadCarryover from live Context for SubagentFactory spawn."""
-        from aura.schemas.state import ReadRecord
+        from aura.domain.state_values import ReadRecord
 
         turn = self._state.turn_count
         records: dict[Path, ReadRecord] = {}

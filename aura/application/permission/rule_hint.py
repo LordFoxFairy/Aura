@@ -7,7 +7,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 
 from aura.domain.permission.rule import Rule
-from aura.schemas.tool_meta_access import meta_dict
+from aura.domain.tool_meta_access import meta_dict
 
 
 def derive_rule_hint(tool: BaseTool, args: dict[str, Any]) -> Rule | None:

@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aura.application.tasks.store import TasksStore
 from aura.domain.task import TaskRecord
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.domain.tool import ToolError, ToolMetadata
 
 
 class TaskGetParams(BaseModel):

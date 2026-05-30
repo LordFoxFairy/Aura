@@ -540,7 +540,7 @@ def test_render_skill_body_substitutes_claude_skill_dir_namespace(
         "aura: ${AURA_SKILL_DIR}/x\n"
         "claude: ${CLAUDE_SKILL_DIR}/y\n",
     )
-    from aura.infrastructure.skills.types import Skill
+    from aura.domain.skill import Skill
     skill = Skill(
         name="n",
         description="d",
@@ -559,7 +559,7 @@ def test_render_skill_body_substitutes_claude_skill_dir_namespace(
 def test_render_skill_body_substitutes_claude_session_id_namespace(
     tmp_path: Path,
 ) -> None:
-    from aura.infrastructure.skills.types import Skill
+    from aura.domain.skill import Skill
     skill = Skill(
         name="n",
         description="d",
@@ -605,7 +605,7 @@ def test_inline_cmd_in_body_emits_journal_warning(tmp_path: Path) -> None:
 # fake helper, type hints not needed
 def _make_skill_with_body(body: str, tmp_path: Path):  # type: ignore[no-untyped-def]
     """Construct a Skill dataclass directly so render tests don't have to round-trip yaml."""
-    from aura.infrastructure.skills.types import Skill
+    from aura.domain.skill import Skill
     return Skill(
         name="t",
         description="d",

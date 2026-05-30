@@ -16,11 +16,11 @@ import pytest
 
 from aura.application.teams.mailbox import Mailbox
 from aura.domain.abort import AbortController
+from aura.domain.events import Final
 from aura.domain.team import TEAM_LEADER_NAME, TeammateMember, TeamMessage
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.teams.in_process import InProcessBackend, InProcessHandle
 from aura.infrastructure.teams.registry import get_backend
-from aura.schemas.events import Final
 
 
 class _ScriptedAgent:

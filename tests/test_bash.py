@@ -11,8 +11,8 @@ import time
 import pytest
 from pydantic import ValidationError
 
-from aura.schemas.tool import ToolError, ValidationResult, resolve_is_destructive
-from aura.schemas.tool_meta_access import meta_dict
+from aura.domain.tool import ToolError, ValidationResult, resolve_is_destructive
+from aura.domain.tool_meta_access import meta_dict
 from aura.tools.bash import BashParams, bash
 
 

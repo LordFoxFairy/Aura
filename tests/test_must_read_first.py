@@ -20,10 +20,10 @@ from pydantic import BaseModel
 from aura.application.hooks.must_read_first import make_must_read_first_hook
 from aura.application.memory.context import Context
 from aura.application.memory.rules import RulesBundle
+from aura.domain.tool import ToolResult
 from aura.infrastructure.persistence import journal as journal_module
 from aura.schemas.permissions import Replace
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 
@@ -918,7 +918,7 @@ async def test_subagent_inherited_fresh_read_allows_edit(tmp_path: Path) -> None
     Pins the happy-path baseline for Task 5: an inherited fresh record
     behaves exactly like a live fresh record in the child's hook.
     """
-    from aura.schemas.state import ReadCarryover, ReadRecord
+    from aura.domain.state_values import ReadCarryover, ReadRecord
 
     target = tmp_path / "f.py"
     target.write_text("hello\n")
@@ -965,7 +965,7 @@ async def test_subagent_inherited_stale_read_is_blocked(tmp_path: Path) -> None:
     drifted on disk. Functionally equivalent to ``carryover.is_fresh(path)``
     being False.
     """
-    from aura.schemas.state import ReadCarryover, ReadRecord
+    from aura.domain.state_values import ReadCarryover, ReadRecord
 
     target = tmp_path / "f.py"
     target.write_text("hello\n")
@@ -1024,7 +1024,7 @@ async def test_subagent_inherited_read_blocked_when_file_deleted(
     → subagent edit blocked. ``read_status`` returns ``"stale"`` on missing
     file (matching ``ReadCarryover.is_fresh`` behavior on missing path).
     """
-    from aura.schemas.state import ReadCarryover, ReadRecord
+    from aura.domain.state_values import ReadCarryover, ReadRecord
 
     target = tmp_path / "f.py"
     target.write_text("hello\n")

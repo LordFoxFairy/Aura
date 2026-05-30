@@ -1,7 +1,7 @@
 """Public package surface for Aura tools."""
 
+from aura.domain.tool import ToolError, ToolResult, tool_metadata
 from aura.domain.tool_registry import ToolRegistry, ToolRegistryError
-from aura.schemas.tool import ToolError, ToolResult, tool_metadata
 from aura.tools.ask_user import AskUserQuestion
 from aura.tools.base import Tool, build_tool
 from aura.tools.bash import Bash, bash

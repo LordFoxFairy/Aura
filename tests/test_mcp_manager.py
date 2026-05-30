@@ -10,8 +10,8 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
 from aura.config.schema import MCPServerConfig
+from aura.domain.tool_meta_access import meta_dict
 from aura.infrastructure.mcp.manager import MCPManager, MCPServerStatus
-from aura.schemas.tool_meta_access import meta_dict
 
 
 class _P(BaseModel):

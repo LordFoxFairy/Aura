@@ -1,4 +1,4 @@
-"""Tests for ``aura.schemas.tool`` metadata resolvers.
+"""Tests for ``aura.domain.tool`` metadata resolvers.
 
 Covers the input-aware ``is_destructive`` / ``is_read_only`` path added
 to match claude-code's ``isDestructive(input)`` method pattern. Each
@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from aura.schemas.tool import (
+from aura.domain.tool import (
     resolve_is_destructive,
     resolve_is_read_only,
     tool_metadata,

@@ -24,8 +24,8 @@ import pytest
 from aura.application.hooks.bash_safety import make_bash_safety_hook
 from aura.application.tasks.store import TasksStore
 from aura.domain.task import SHELL_RECENT_ACTIVITIES_CAP
+from aura.domain.tool import ToolResult
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.bash_background import BashBackground
 from aura.tools.task_get import TaskGet
 from aura.tools.task_stop import TaskStop

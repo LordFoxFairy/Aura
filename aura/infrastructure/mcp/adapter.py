@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.tools import BaseTool
 
 from aura.application.commands.types import CommandResult, CommandSource
-from aura.schemas.tool import ToolMetadata
+from aura.domain.tool import ToolMetadata
 
 if TYPE_CHECKING:
     from langchain_mcp_adapters.client import MultiServerMCPClient

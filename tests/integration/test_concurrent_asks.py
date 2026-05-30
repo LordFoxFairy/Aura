@@ -34,8 +34,8 @@ from aura.application.permission.asker import AskerResponse, PermissionAsker
 from aura.application.permission.decision import Decision
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.domain.tool import ToolResult
 from aura.schemas.permissions import Outcome, Replace
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from cli._coordination import prompt_mutex
 from tests.conftest import FakeTurn

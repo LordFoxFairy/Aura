@@ -311,7 +311,7 @@ _ALLOWED_TOOLS_DRIVER = textwrap.dedent(
 
     from aura.domain.permission.session import SessionRuleSet
     from aura.infrastructure.skills.command import install_skill_allow_rules
-    from aura.infrastructure.skills.types import Skill
+    from aura.domain.skill import Skill
 
     out = Path(sys.argv[1])
 
@@ -370,7 +370,7 @@ _RESTRICT_TOOLS_DRIVER = textwrap.dedent(
     from aura.infrastructure.persistence import journal
     from aura.infrastructure.persistence.storage import SessionStorage
     from aura.infrastructure.skills.restrict import install_restrict_lease
-    from aura.infrastructure.skills.types import Skill
+    from aura.domain.skill import Skill
     from tests.conftest import FakeChatModel, FakeTurn
 
     db_path = sys.argv[1]
@@ -1382,7 +1382,7 @@ _INLINE_CMD_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.infrastructure.skills.loader import render_skill_body
-    from aura.infrastructure.skills.types import Skill
+    from aura.domain.skill import Skill
 
     out = Path(sys.argv[1])
 

@@ -8,6 +8,15 @@ from typing import get_args
 
 from rich.console import Console
 
+from aura.domain.events import (
+    AgentEvent,
+    AssistantDelta,
+    Final,
+    PermissionAudit,
+    ToolCallCompleted,
+    ToolCallProgress,
+    ToolCallStarted,
+)
 from aura.domain.task import TaskNotification
 from aura.domain.team import TeamMessage
 from aura.infrastructure.wire.events import (
@@ -33,15 +42,6 @@ from aura.infrastructure.wire.serialize import (
     task_progress_to_wire,
     task_started_to_wire,
     team_message_to_wire,
-)
-from aura.schemas.events import (
-    AgentEvent,
-    AssistantDelta,
-    Final,
-    PermissionAudit,
-    ToolCallCompleted,
-    ToolCallProgress,
-    ToolCallStarted,
 )
 from cli.render import Renderer
 from desktop.host import headless
@@ -304,7 +304,8 @@ def test_task_notification_to_wire_rejects_running_status() -> None:
 
 
 def test_agent_state_to_wire_uses_stable_numeric_shape() -> None:
-    from aura.schemas.state import LoopSlots, TokenStats
+    from aura.domain.state_values import TokenStats
+    from aura.schemas.state import LoopSlots
 
     agent = SimpleNamespace(
         state=SimpleNamespace(slots=LoopSlots(

@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from aura.application.tasks.store import TasksStore
 from aura.domain.abort import current_abort_signal
 from aura.domain.task import TaskRecord
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.domain.tool import ToolError, ToolMetadata
 
 _WAIT_TIMEOUT_MIN = 0.01
 _WAIT_TIMEOUT_MAX = 600.0

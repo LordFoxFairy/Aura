@@ -47,12 +47,12 @@ from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.safety import DEFAULT_SAFETY
 from aura.domain.permission.session import RuleSet, SessionRuleSet
-from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.state import LoopState
-from aura.schemas.tool import (
+from aura.domain.tool import (
     ToolMetadata,
     ToolResult,  # noqa: F401  # import is the assertion / fixture side-effect
 )
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.schemas.state import LoopState
 from tests.conftest import FakeChatModel, FakeTurn
 
 

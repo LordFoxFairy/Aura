@@ -15,7 +15,7 @@ from typing import Any, Literal, cast
 from langchain_core.tools import BaseTool
 
 from aura.domain.errors import AuraError
-from aura.schemas.tool_meta_access import meta_dict
+from aura.domain.tool_meta_access import meta_dict
 
 
 class InvalidRuleError(AuraError):

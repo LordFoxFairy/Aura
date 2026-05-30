@@ -34,9 +34,9 @@ from langchain_core.tools import BaseTool
 from aura.application.hooks import HookChain
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.domain.events import AgentEvent
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills.loader import clear_conditional_state
-from aura.schemas.events import AgentEvent
 from aura.tools.ask_user import FormQuestionDict, UserAsker
 from tests.conftest import FakeChatModel, FakeTurn
 

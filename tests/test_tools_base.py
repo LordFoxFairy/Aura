@@ -8,13 +8,13 @@ import pytest
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
-from aura.schemas.tool import (
+from aura.domain.tool import (
     ToolError,
     ToolMetadata,
     ToolResult,
     ValidationResult,
 )
-from aura.schemas.tool_meta_access import meta_dict
+from aura.domain.tool_meta_access import meta_dict
 from aura.tools.base import Tool, build_tool
 
 
@@ -85,14 +85,14 @@ def _noop() -> dict[str, Any]:
 
 
 def test_tool_metadata_defaults_rule_matcher_and_args_preview_to_none() -> None:
-    from aura.schemas.tool import tool_metadata
+    from aura.domain.tool import tool_metadata
     meta = tool_metadata()
     assert meta["rule_matcher"] is None
     assert meta["args_preview"] is None
 
 
 def test_tool_metadata_accepts_rule_matcher_callable() -> None:
-    from aura.schemas.tool import tool_metadata
+    from aura.domain.tool import tool_metadata
 
     def matcher(args: dict[str, Any], content: str) -> bool:
         return args.get("cmd") == content
@@ -102,7 +102,7 @@ def test_tool_metadata_accepts_rule_matcher_callable() -> None:
 
 
 def test_tool_metadata_accepts_args_preview_callable() -> None:
-    from aura.schemas.tool import tool_metadata
+    from aura.domain.tool import tool_metadata
 
     def preview(args: dict[str, Any]) -> str:
         return f"cmd: {args.get('command', '')}"

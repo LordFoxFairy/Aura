@@ -4,7 +4,7 @@ import dataclasses
 
 import pytest
 
-from aura.schemas.events import (
+from aura.domain.events import (
     AgentEvent,
     AssistantDelta,
     Final,

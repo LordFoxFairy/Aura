@@ -15,8 +15,8 @@ from aura.application.teams.manager import TeamManager
 from aura.config.schema import AuraConfig
 from aura.domain.permission.safety import DEFAULT_SAFETY
 from aura.domain.permission.session import RuleSet
+from aura.domain.tool import ToolError
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.tool import ToolError
 from aura.tools.send_message import SendMessage
 from tests.conftest import FakeChatModel, FakeTurn
 

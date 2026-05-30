@@ -14,7 +14,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from aura.application.tasks.store import TasksStore
-from aura.schemas.tool import ToolError
+from aura.domain.tool import ToolError
 from aura.tools.task_get import TaskGet
 
 

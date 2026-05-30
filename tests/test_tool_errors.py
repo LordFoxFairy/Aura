@@ -21,14 +21,14 @@ from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
 from aura.core.loop import AgentLoop
-from aura.domain.tool_registry import ToolRegistry
-from aura.schemas.events import (
+from aura.domain.events import (
     AgentEvent,
     ToolCallCompleted,
     ToolCallProgress,
     ToolCallStarted,
 )
-from aura.schemas.tool import ToolError
+from aura.domain.tool import ToolError
+from aura.domain.tool_registry import ToolRegistry
 from aura.tools.base import build_tool
 from aura.tools.errors import hint_for_error
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context

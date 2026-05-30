@@ -1,12 +1,27 @@
 """Cross-layer data types — the foundation leaf of the aura package."""
 
-from aura.schemas.events import (
+from aura.domain.events import (
     AgentEvent,
     AssistantDelta,
     Final,
     PermissionAudit,
     ToolCallCompleted,
     ToolCallStarted,
+)
+from aura.domain.state_values import (
+    PermissionKey,
+    ReadCarryover,
+    ReadRecord,
+    SkillRestrictLease,
+    TokenStats,
+)
+from aura.domain.todos import TodoItem, TodoStatus
+from aura.domain.tool import (
+    ToolError,
+    ToolMetadata,
+    ToolResult,
+    ValidationResult,
+    tool_metadata,
 )
 from aura.schemas.permissions import (
     Allow,
@@ -19,23 +34,7 @@ from aura.schemas.permissions import (
     Replace,
     StatusLineConfig,
 )
-from aura.schemas.state import (
-    LoopSlots,
-    LoopState,
-    PermissionKey,
-    ReadCarryover,
-    ReadRecord,
-    SkillRestrictLease,
-    TokenStats,
-)
-from aura.schemas.todos import TodoItem, TodoStatus
-from aura.schemas.tool import (
-    ToolError,
-    ToolMetadata,
-    ToolResult,
-    ValidationResult,
-    tool_metadata,
-)
+from aura.schemas.state import LoopSlots, LoopState
 
 __all__ = [
     "AgentEvent",

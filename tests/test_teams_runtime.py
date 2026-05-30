@@ -16,9 +16,9 @@ from aura.application.teams.runtime import _format_envelope, run_teammate
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.domain.abort import AbortController
+from aura.domain.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
 from aura.domain.team import TeamMessage
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
 from tests.conftest import FakeChatModel
 
 

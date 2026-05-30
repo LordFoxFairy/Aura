@@ -10,8 +10,8 @@ from langchain_core.messages import AIMessage
 
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.domain.events import Final
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.events import Final
 from tests.conftest import FakeChatModel, FakeTurn
 
 

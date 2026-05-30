@@ -39,9 +39,9 @@ from aura.application.runtime import (
 from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
+from aura.domain.todos import TodoItem
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import LoopState
-from aura.schemas.todos import TodoItem
 from aura.tools.ask_user import AskUserQuestion, FormQuestionDict
 from aura.tools.send_message import SendMessage
 from aura.tools.task_create import TaskCreate

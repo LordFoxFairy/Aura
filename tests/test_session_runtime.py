@@ -20,9 +20,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 from aura.application.runtime.session import SessionRuntime
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import SessionRuleSet
+from aura.domain.state_values import ReadCarryover, ReadRecord
 from aura.domain.task import TaskNotification
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.state import ReadCarryover, ReadRecord
 
 
 @pytest.fixture

@@ -8,8 +8,9 @@ of declared sets for the response chain processing the skill body.
 
 from __future__ import annotations
 
-from aura.infrastructure.skills.types import Skill
-from aura.schemas.state import LoopState, SkillRestrictLease
+from aura.domain.skill import Skill
+from aura.domain.state_values import SkillRestrictLease
+from aura.schemas.state import LoopState
 
 # Internal tools the restrict-tools lease never blocks: ``ask_user_question``
 # powers the permission asker UX; enter/exit_plan_mode are mode controls.

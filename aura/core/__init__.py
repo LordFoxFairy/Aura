@@ -14,10 +14,17 @@ from aura.application.hooks.budget import (
 )
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.permission.asker import AskerResponse, PermissionAsker
-from aura.application.permission.denials import PermissionDenial
 from aura.core.agent import Agent, build_agent
 from aura.core.loop import AgentLoop, ToolStep
 from aura.domain.errors import AuraError
+from aura.domain.events import (
+    AgentEvent,
+    AssistantDelta,
+    Final,
+    ToolCallCompleted,
+    ToolCallStarted,
+)
+from aura.domain.permission.denials import PermissionDenial
 from aura.domain.tool_registry import ToolRegistry
 from aura.infrastructure.llm import (
     MissingCredentialError,
@@ -26,13 +33,6 @@ from aura.infrastructure.llm import (
 )
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.events import (
-    AgentEvent,
-    AssistantDelta,
-    Final,
-    ToolCallCompleted,
-    ToolCallStarted,
-)
 from aura.schemas.state import LoopState
 
 __all__ = [

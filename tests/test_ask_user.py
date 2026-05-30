@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from aura.schemas.tool_meta_access import meta_dict
+from aura.domain.tool_meta_access import meta_dict
 from aura.tools.ask_user import (
     AskUserQuestion,
     AskUserQuestionParams,

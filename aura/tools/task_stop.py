@@ -10,7 +10,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from aura.application.tasks.store import TasksStore
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.domain.tool import ToolError, ToolMetadata
 
 _CANCEL_TIMEOUT_SECONDS = 2.0
 _SHELL_TERM_GRACE = 3.0

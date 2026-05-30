@@ -29,9 +29,9 @@ from pydantic import BaseModel
 
 from aura.application.runtime.mcp import McpRuntime
 from aura.config.schema import MCPServerConfig
+from aura.domain.tool import ToolMetadata
 from aura.domain.tool_registry import ToolRegistry
 from aura.infrastructure.persistence import journal
-from aura.schemas.tool import ToolMetadata
 
 
 # ``_FakeManager`` is a structural stand-in. mypy can't see the

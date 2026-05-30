@@ -26,8 +26,8 @@ from aura.application.memory.context import Context
 from aura.application.memory.rules import RulesBundle
 from aura.application.tasks.factory import SubagentFactory
 from aura.config.schema import AuraConfig
+from aura.domain.state_values import ReadCarryover, ReadRecord
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.state import ReadCarryover, ReadRecord
 from tests.conftest import FakeChatModel, FakeTurn
 
 # ---------------------------------------------------------------------------

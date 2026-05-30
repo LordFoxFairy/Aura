@@ -20,11 +20,11 @@ from aura.application.hooks.permission import make_permission_hook
 from aura.application.permission.asker import AskerResponse
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
-from aura.schemas.state import LoopState
-from aura.schemas.tool import (
+from aura.domain.tool import (
     ToolError,
     ToolResult,  # noqa: F401  # import is the assertion / fixture side-effect
 )
+from aura.schemas.state import LoopState
 from aura.tools.ask_user import FormQuestionDict
 from aura.tools.base import build_tool
 from aura.tools.exit_plan_mode import ExitPlanMode

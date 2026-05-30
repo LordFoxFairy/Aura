@@ -10,7 +10,7 @@ from __future__ import annotations
 import builtins
 from collections.abc import Iterable
 
-from aura.infrastructure.skills.types import Skill
+from aura.domain.skill import Skill
 
 # Alias so method annotations resolve to the builtin rather than the
 # ``list()`` method (mypy would complain ``Function is not a type``).

@@ -11,7 +11,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from aura.domain.permission.matchers import exact_match_on
-from aura.schemas.tool import ToolError, ToolMetadata
+from aura.domain.tool import ToolError, ToolMetadata
 
 
 class GlobParams(BaseModel):

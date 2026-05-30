@@ -19,7 +19,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from aura.domain.permission.matchers import exact_match_on
-from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
+from aura.domain.tool import ToolError, ToolMetadata, ValidationResult
 from aura.tools.base import Tool
 
 _DEFAULT_TIMEOUT = 30

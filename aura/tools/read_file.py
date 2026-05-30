@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from aura.domain.permission.matchers import path_prefix_on
-from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
+from aura.domain.tool import ToolError, ToolMetadata, ValidationResult
 from aura.tools.base import Tool
 
 _MAX_BYTES = 1024 * 1024

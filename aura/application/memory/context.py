@@ -18,10 +18,10 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from aura.application.memory import project_memory
 from aura.application.memory.rules import Rule, RulesBundle
 from aura.application.memory.rules import match as match_rules
+from aura.domain.skill import Skill
+from aura.domain.state_values import ReadCarryover
+from aura.domain.todos import TodoItem
 from aura.infrastructure.persistence import journal
-from aura.infrastructure.skills.types import Skill
-from aura.schemas.state import ReadCarryover
-from aura.schemas.todos import TodoItem
 
 _AURA_MD = "AURA.md"
 _AURA_DIR = ".aura"

@@ -12,8 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from aura.application.tasks.store import TasksStore
 from aura.domain.permission.matchers import exact_match_on
+from aura.domain.tool import ToolMetadata
 from aura.infrastructure.persistence import journal
-from aura.schemas.tool import ToolMetadata
 from aura.tools.bash import is_bash_destructive
 
 _MAX_TIMEOUT_SECONDS = 86_400

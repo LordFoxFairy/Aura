@@ -154,7 +154,7 @@ async def test_single_subagent_roundtrip_parent_sees_result(tmp_path: Path) -> N
 
     # Parent saw the result. Find the ToolCallCompleted for task_get and
     # verify the child's final result appears in its output payload.
-    from aura.schemas.events import ToolCallCompleted
+    from aura.domain.events import ToolCallCompleted
 
     task_get_events = [
         e
@@ -309,7 +309,7 @@ async def test_parallel_three_subagents_parent_reads_all(tmp_path: Path) -> None
     assert by_type["plan"].final_result == "plan: do X"
 
     # The parent's task_list call returned the fleet.
-    from aura.schemas.events import ToolCallCompleted
+    from aura.domain.events import ToolCallCompleted
 
     list_events = [
         e for e in events
@@ -476,7 +476,7 @@ async def test_compact_keeps_unobserved_tasks_after_parent_observes_one_terminal
     try:
         events = await drain(agent, "check the task fleet")
 
-        from aura.schemas.events import ToolCallCompleted
+        from aura.domain.events import ToolCallCompleted
 
         get_events = [
             e for e in events

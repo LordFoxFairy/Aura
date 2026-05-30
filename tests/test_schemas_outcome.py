@@ -19,8 +19,8 @@ import dataclasses
 import pytest
 
 from aura.application.permission.decision import Decision
+from aura.domain.tool import ToolResult
 from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
-from aura.schemas.tool import ToolResult
 
 
 def _allow_decision() -> Decision:

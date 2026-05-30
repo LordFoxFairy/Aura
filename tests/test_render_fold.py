@@ -12,8 +12,8 @@ import io
 
 from rich.console import Console
 
-from aura.schemas.events import ToolCallCompleted
-from aura.schemas.tool_meta_access import meta_dict
+from aura.domain.events import ToolCallCompleted
+from aura.domain.tool_meta_access import meta_dict
 from aura.tools.glob import glob
 from aura.tools.grep import grep
 from aura.tools.read_file import read_file

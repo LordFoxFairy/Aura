@@ -20,9 +20,9 @@ from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
 from aura.core.loop import AgentLoop
+from aura.domain.events import ToolCallCompleted
+from aura.domain.tool_meta_access import meta_dict
 from aura.domain.tool_registry import ToolRegistry
-from aura.schemas.events import ToolCallCompleted
-from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.base import build_tool
 from aura.tools.bash import bash
 from aura.tools.bash_background import BashBackground

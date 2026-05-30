@@ -27,10 +27,10 @@ from aura.application.permission.asker import AskerResponse, PermissionAsker
 from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.domain.tool import ToolResult
 from aura.infrastructure.permission_store import PermissionStoreError
 from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 

@@ -18,17 +18,17 @@ from aura.config.schema import AuraConfig
 from aura.core import journal as journal_module
 from aura.core.agent import Agent
 from aura.core.loop import AgentLoop
-from aura.domain.tool_registry import ToolRegistry
-from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.events import (
+from aura.domain.events import (
     AgentEvent,
     Final,
     ToolCallCompleted,
     ToolCallProgress,
     ToolCallStarted,
 )
+from aura.domain.tool import ToolError, ToolResult
+from aura.domain.tool_registry import ToolRegistry
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolError, ToolResult
 from aura.tools.base import build_tool
 from aura.tools.progress import get_progress_callback
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context

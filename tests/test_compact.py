@@ -14,10 +14,10 @@ from aura.application.compact.constants import MICROCOMPACT_CLEAR_MARKER
 from aura.application.compact.reactive import _is_prompt_too_long
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.domain.skill import Skill
+from aura.domain.todos import TodoItem
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.infrastructure.skills.types import Skill
-from aura.schemas.todos import TodoItem
 from tests.conftest import FakeChatModel, FakeTurn
 
 

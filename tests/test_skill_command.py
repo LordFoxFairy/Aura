@@ -9,9 +9,9 @@ import pytest
 from aura.application.commands import CommandRegistry
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.domain.skill import Skill
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills.command import SkillCommand
-from aura.infrastructure.skills.types import Skill
 from tests.conftest import FakeChatModel
 
 

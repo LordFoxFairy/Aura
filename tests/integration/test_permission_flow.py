@@ -24,10 +24,10 @@ from langchain_core.messages import AIMessage, ToolMessage
 from aura.application.hooks import HookChain
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.permission.asker import AskerResponse
+from aura.domain.events import ToolCallCompleted
 from aura.domain.permission.mode import Mode
 from aura.domain.permission.session import SessionRuleSet
 from aura.infrastructure import permission_store as perm_store
-from aura.schemas.events import ToolCallCompleted
 from tests.conftest import FakeChatModel, FakeTurn
 from tests.integration.conftest import (
     ScriptedAsker,

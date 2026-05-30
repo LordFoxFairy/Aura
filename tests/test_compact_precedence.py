@@ -265,7 +265,7 @@ async def test_auto_fires_post_turn_only(tmp_path: Path) -> None:
             source=source,  # type: ignore[arg-type]
         )
 
-    from aura.schemas.events import Final
+    from aura.domain.events import Final
 
     with patch.object(Agent, "compact", _spy_auto):
         async for ev in agent.astream("hi"):

@@ -12,8 +12,8 @@ from pydantic import BaseModel
 
 from aura.application.hooks import PostToolHook
 from aura.application.hooks.budget import make_size_budget_hook
+from aura.domain.tool import ToolResult
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 

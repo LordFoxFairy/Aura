@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from aura.schemas.tool import (
+from aura.domain.tool import (
     ToolArgsPreview,
     ToolMetadata,
     ToolRuleMatcher,

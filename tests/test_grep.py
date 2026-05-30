@@ -8,8 +8,8 @@ from unittest.mock import patch
 import pytest
 from pydantic import ValidationError
 
-from aura.schemas.tool import ToolError
-from aura.schemas.tool_meta_access import meta_dict
+from aura.domain.tool import ToolError
+from aura.domain.tool_meta_access import meta_dict
 from aura.tools.grep import grep
 
 

@@ -431,7 +431,7 @@ _SUBAGENT_READS_DRIVER = textwrap.dedent(
     from aura.config.schema import AuraConfig
     from aura.infrastructure.persistence.storage import SessionStorage
     from aura.application.tasks.factory import SubagentFactory
-    from aura.schemas.state import ReadCarryover, ReadRecord
+    from aura.domain.state_values import ReadCarryover, ReadRecord
     from tests.conftest import FakeChatModel, FakeTurn
 
     file_x = Path(sys.argv[1])

@@ -16,10 +16,10 @@ from aura.application.hooks import HookChain
 from aura.application.memory import project_memory, rules
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core.agent import Agent, build_agent
+from aura.domain.events import Final
+from aura.domain.tool import ToolError, ToolResult
 from aura.infrastructure.llm import UnknownModelSpecError
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.events import Final
-from aura.schemas.tool import ToolError, ToolResult
 from aura.tools.ask_user import FormQuestionDict
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn
@@ -1129,7 +1129,7 @@ async def test_agent_skills_loaded_at_init_from_cwd_and_home(
 async def test_agent_record_skill_invocation_reaches_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from aura.infrastructure.skills.types import Skill
+    from aura.domain.skill import Skill
 
     _chdir(monkeypatch, tmp_path)
     agent = _agent(tmp_path, turns=[])
@@ -1173,8 +1173,8 @@ async def test_agent_aconnect_registers_tools_into_registry(
     from langchain_core.tools import StructuredTool
 
     from aura.config.schema import MCPServerConfig
+    from aura.domain.tool import ToolMetadata
     from aura.infrastructure.mcp import manager as manager_mod
-    from aura.schemas.tool import ToolMetadata
 
     class _McpArgs(BaseModel):
         q: str = ""

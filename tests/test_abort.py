@@ -28,9 +28,9 @@ from aura.domain.abort import (
     AbortException,
     current_abort_signal,
 )
+from aura.domain.events import AgentEvent, AssistantDelta, Final
 from aura.domain.tool_registry import ToolRegistry
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.events import AgentEvent, AssistantDelta, Final
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 

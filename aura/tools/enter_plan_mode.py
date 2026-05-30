@@ -8,7 +8,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.schemas.tool import ToolMetadata
+from aura.domain.tool import ToolMetadata
 
 ModeSetter = Callable[[str], None]
 ModeGetter = Callable[[], str]

@@ -8,7 +8,7 @@ from typing import Any, TypedDict
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
-from aura.schemas.tool import ToolMetadata
+from aura.domain.tool import ToolMetadata
 
 
 class FormOptionDict(TypedDict, total=False):

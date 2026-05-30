@@ -17,19 +17,19 @@ from langchain_core.tools import BaseTool
 from aura.application.hooks import PreToolHook
 from aura.application.permission.asker import AskerResponse, PermissionAsker
 from aura.application.permission.decision import Decision
-from aura.application.permission.denials import PermissionDenial
 from aura.application.permission.safety import is_protected
+from aura.domain.permission.denials import PermissionDenial
 from aura.domain.permission.mode import DEFAULT_MODE, Mode
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.safety import DEFAULT_SAFETY, SafetyPolicy
 from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.domain.tool import ToolResult, resolve_is_destructive
+from aura.domain.tool_meta_access import meta_dict
 from aura.infrastructure.permission_store import PermissionStoreError, save_rule
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.skills.restrict import has_active_lease, tool_allowed_by_lease
 from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult, resolve_is_destructive
-from aura.schemas.tool_meta_access import meta_dict
 
 _EMPTY_RULESET = RuleSet()
 

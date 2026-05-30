@@ -6,7 +6,7 @@ import io
 
 from rich.console import Console
 
-from aura.schemas.events import PermissionAudit, ToolCallCompleted, ToolCallStarted
+from aura.domain.events import PermissionAudit, ToolCallCompleted, ToolCallStarted
 from cli.render import Renderer, _hint_for_error, _render_tool_error
 
 

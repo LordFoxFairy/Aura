@@ -11,9 +11,9 @@ import pytest
 from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
+from aura.domain.tool import ToolError
 from aura.infrastructure import llm
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.tool import ToolError
 from aura.tools.task_create import TaskCreate
 from aura.tools.task_get import TaskGet
 

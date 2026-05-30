@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from aura.schemas.tool import ToolMetadata
+from aura.domain.tool import ToolMetadata
 
 
 def meta_dict(tool: Any) -> dict[str, Any]:

@@ -10,7 +10,7 @@ from __future__ import annotations
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePath
 
-from aura.schemas.tool import ToolRuleMatcher
+from aura.domain.tool import ToolRuleMatcher
 
 
 def exact_match_on(key: str) -> ToolRuleMatcher:

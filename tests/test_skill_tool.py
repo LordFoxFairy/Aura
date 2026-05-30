@@ -24,11 +24,11 @@ from pydantic import ValidationError
 
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.domain.skill import Skill
+from aura.domain.tool import ToolError
+from aura.domain.tool_meta_access import meta_dict
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills.registry import SkillRegistry
-from aura.infrastructure.skills.types import Skill
-from aura.schemas.tool import ToolError
-from aura.schemas.tool_meta_access import meta_dict
 from aura.tools.skill import SkillTool
 from tests.conftest import FakeChatModel
 

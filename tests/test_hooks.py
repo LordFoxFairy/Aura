@@ -12,9 +12,9 @@ from pydantic import BaseModel
 from aura.application.hooks import HookChain
 from aura.application.permission.decision import Decision
 from aura.domain.permission.rule import Rule
+from aura.domain.tool import ToolResult
 from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 
@@ -302,8 +302,8 @@ async def test_pre_tool_per_hook_decision_journaled_for_block_replace(
     """
     import json
 
+    from aura.domain.tool import ToolResult
     from aura.infrastructure.persistence import journal
-    from aura.schemas.tool import ToolResult
 
     sc = ToolResult(ok=False, error="canned")
 

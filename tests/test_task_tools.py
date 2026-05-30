@@ -27,10 +27,10 @@ from aura.application.tasks.run import run_task
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.domain.skill import Skill
+from aura.domain.tool import ToolError
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills.registry import SkillRegistry
-from aura.infrastructure.skills.types import Skill
-from aura.schemas.tool import ToolError
 from aura.tools.task_create import TaskCreate
 from aura.tools.task_output import TaskOutput
 from tests.conftest import FakeChatModel, FakeTurn

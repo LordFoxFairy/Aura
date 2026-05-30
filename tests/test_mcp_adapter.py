@@ -10,8 +10,8 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
+from aura.domain.tool_meta_access import meta_dict
 from aura.infrastructure.mcp.adapter import add_aura_metadata, make_mcp_command
-from aura.schemas.tool_meta_access import meta_dict
 
 
 class _Params(BaseModel):

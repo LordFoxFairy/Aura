@@ -16,10 +16,10 @@ from aura.application.commands.registry import build_default_registry
 from aura.application.commands.types import CommandResult, CommandSource
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.domain.skill import Skill
 from aura.infrastructure.persistence import journal as journal_module
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills.command import SkillCommand
-from aura.infrastructure.skills.types import Skill
 from aura.tools.skill import SkillTool
 from tests.conftest import FakeChatModel
 
@@ -142,7 +142,7 @@ def test_disable_model_invocation_true_skill_hidden_from_tool(
             registry=agent._skill_registry,
             session_id_provider=lambda: "sid",
         )
-        from aura.schemas.tool import ToolError
+        from aura.domain.tool import ToolError
 
         with pytest.raises(ToolError):
             tool._run(name="user-only")
@@ -166,7 +166,7 @@ def test_fully_hidden_skill(tmp_path: Path) -> None:
             registry=agent._skill_registry,
             session_id_provider=lambda: "sid",
         )
-        from aura.schemas.tool import ToolError
+        from aura.domain.tool import ToolError
 
         with pytest.raises(ToolError):
             tool._run(name="ghost")
@@ -241,7 +241,7 @@ async def test_tool_and_slash_paths_share_error_format(
         assert slash_result.kind == "print"
 
         # Tool path: raises ToolError with the same message.
-        from aura.schemas.tool import ToolError
+        from aura.domain.tool import ToolError
 
         tool = SkillTool(
             recorder=lambda _s: None,

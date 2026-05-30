@@ -655,7 +655,7 @@ async def test_task_output_wait_true_returns_immediately_for_terminal_task(
 async def test_task_output_unknown_id_still_raises(tmp_path: Path) -> None:
     store = TasksStore()
     tool = TaskOutput(store=store)
-    from aura.schemas.tool import ToolError
+    from aura.domain.tool import ToolError
     with pytest.raises(ToolError, match="unknown task_id"):
         await tool.ainvoke({"task_id": "no-such", "wait": True, "timeout": 0.1})
 

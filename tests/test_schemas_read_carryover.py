@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from aura.schemas.state import ReadCarryover, ReadRecord
+from aura.domain.state_values import ReadCarryover, ReadRecord
 
 
 def _make_record(path: Path, *, turn: int = 1) -> ReadRecord:

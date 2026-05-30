@@ -11,10 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.run import run_task
 from aura.application.tasks.store import TasksStore
+from aura.domain.tool import ToolError, ToolMetadata
 from aura.infrastructure import llm
 from aura.infrastructure.agents import all_agent_defs, get_agent_def
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.tool import ToolError, ToolMetadata
 
 
 def _agent_type_field_description() -> str:

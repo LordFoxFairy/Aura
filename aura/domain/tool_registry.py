@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from langchain_core.tools import BaseTool
 
 from aura.domain.errors import AuraError
-from aura.schemas.tool import ToolMetadata
+from aura.domain.tool import ToolMetadata
 
 
 class ToolRegistryError(AuraError):

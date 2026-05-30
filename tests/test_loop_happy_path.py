@@ -11,8 +11,8 @@ from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
 from aura.core.loop import AgentLoop
+from aura.domain.events import AgentEvent, AssistantDelta, Final
 from aura.domain.tool_registry import ToolRegistry
-from aura.schemas.events import AgentEvent, AssistantDelta, Final
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 

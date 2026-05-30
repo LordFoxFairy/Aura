@@ -14,10 +14,10 @@ from typing import TYPE_CHECKING, Any, cast
 from langchain_core.messages import AIMessage, BaseMessage
 
 from aura.application.tasks.store import TasksStore
+from aura.domain.events import Final, ToolCallStarted
 from aura.domain.task import TaskRecord
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.events import Final, ToolCallStarted
 
 if TYPE_CHECKING:
     from aura.application.tasks.factory import SubagentFactory

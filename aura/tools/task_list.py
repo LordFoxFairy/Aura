@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aura.application.tasks.store import TasksStore
 from aura.domain.task import TaskKind, TaskRecord, TaskStatus
-from aura.schemas.tool import ToolMetadata
+from aura.domain.tool import ToolMetadata
 
 _StatusFilter = Literal["all", "running", "completed", "failed", "cancelled"]
 _KindFilter = Literal["all", "subagent", "shell", "teammate"]

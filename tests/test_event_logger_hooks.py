@@ -13,9 +13,9 @@ from pydantic import BaseModel
 from aura.application.hooks import HookChain
 from aura.application.hooks.logging import make_event_logger_hooks, wrap_with_event_logger
 from aura.core import journal as journal_module
+from aura.domain.tool import ToolResult
 from aura.schemas.permissions import Allow
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 

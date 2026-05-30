@@ -25,8 +25,8 @@ from pydantic import ConfigDict
 
 from aura.application.memory.context import Context
 from aura.application.memory.rules import Rule, RulesBundle
+from aura.domain.skill import Skill
 from aura.infrastructure.persistence import journal
-from aura.infrastructure.skills.types import Skill
 
 
 class _AnthropicLikeModel(BaseChatModel):

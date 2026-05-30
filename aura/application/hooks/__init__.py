@@ -19,9 +19,9 @@ from aura.domain.hook import (
     PreModelHook,
     PreToolHook,
 )
+from aura.domain.tool import ToolResult
 from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 
 _ASK_RESOLVED_REASONS = frozenset({"user_accept", "user_always"})
 

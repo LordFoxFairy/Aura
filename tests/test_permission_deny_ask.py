@@ -22,6 +22,7 @@ from aura.application.hooks.permission import make_permission_hook
 from aura.application.permission.asker import AskerResponse
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.domain.tool import ToolResult
 from aura.infrastructure.permission_store import (
     load,
     load_ask_ruleset,
@@ -29,7 +30,6 @@ from aura.infrastructure.permission_store import (
 )
 from aura.schemas.permissions import PermissionsConfig
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 

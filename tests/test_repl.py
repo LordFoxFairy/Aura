@@ -498,7 +498,7 @@ def test_post_turn_status_is_slim_done_marker(tmp_path: Path) -> None:
     # else should appear in scrollback per turn.
     import dataclasses
 
-    from aura.schemas.state import TokenStats
+    from aura.domain.state_values import TokenStats
     from cli.repl import _print_post_turn_status
 
     agent = _agent(tmp_path)

@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from aura.schemas.tool import ToolError, ToolMetadata, ValidationResult
-from aura.schemas.tool_meta_access import meta_dict
+from aura.domain.tool import ToolError, ToolMetadata, ValidationResult
+from aura.domain.tool_meta_access import meta_dict
 from aura.tools.read_file import ReadFileParams, read_file
 
 
@@ -101,7 +101,7 @@ def test_read_file_aura_metadata_is_typed() -> None:
     """Phase 2 Task 2 pilot — ``read_file`` ships the typed
     ``ToolMetadata`` (the legacy ``metadata`` dict has been retired
     on this tool; consumers reach the values via
-    ``aura.schemas.tool_meta_access.meta_dict``). Asserting the
+    ``aura.domain.tool_meta_access.meta_dict``). Asserting the
     dataclass type AND each capability flag pins both halves of the
     migration: a future tool that flips off ``aura_metadata`` would
     fail this test before silently degrading to legacy semantics.

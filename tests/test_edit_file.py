@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from aura.schemas.tool import ToolError, ValidationResult
-from aura.schemas.tool_meta_access import meta_dict
+from aura.domain.tool import ToolError, ValidationResult
+from aura.domain.tool_meta_access import meta_dict
 from aura.tools.edit_file import _MAX_EDIT_SIZE, edit_file
 
 

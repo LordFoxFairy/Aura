@@ -11,10 +11,10 @@ from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
 from aura.core.loop import AgentLoop
+from aura.domain.events import AgentEvent, Final, ToolCallCompleted
+from aura.domain.tool import ToolResult
 from aura.domain.tool_registry import ToolRegistry
-from aura.schemas.events import AgentEvent, Final, ToolCallCompleted
 from aura.schemas.permissions import Allow, Outcome
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 

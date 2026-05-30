@@ -18,9 +18,9 @@ from aura.application.permission.asker import AskerResponse
 from aura.config.schema import AuraConfigError
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.domain.tool import ToolResult
 from aura.schemas.permissions import Ask, Outcome
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 
 

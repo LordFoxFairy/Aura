@@ -6,7 +6,7 @@ from pathlib import Path
 
 from aura.application.memory.context import Context
 from aura.application.memory.rules import RulesBundle
-from aura.infrastructure.skills.types import Skill
+from aura.domain.skill import Skill
 
 
 def _skill(

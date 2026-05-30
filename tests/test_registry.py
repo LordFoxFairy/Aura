@@ -13,10 +13,10 @@ from pydantic import BaseModel
 from aura.application.tools_catalog import assemble_tool_pool
 from aura.application.tools_catalog import assemble_tool_pool as assemble_capability_tool_pool
 from aura.core.loop import ToolStep, partition_batches
+from aura.domain.tool import ToolResult
 from aura.domain.tool_registry import ToolRegistry, ToolRegistryError
 from aura.domain.tool_registry import ToolRegistry as CapabilityToolRegistry
 from aura.domain.tool_registry import ToolRegistryError as CapabilityToolRegistryError
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from aura.tools.read_file import read_file
 

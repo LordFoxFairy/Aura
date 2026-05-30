@@ -12,13 +12,9 @@ import dataclasses
 
 import pytest
 
-from aura.schemas.state import (
-    BuddyState,
-    LoopSlots,
-    SkillRestrictLease,
-    TokenStats,
-)
-from aura.schemas.todos import TodoItem
+from aura.domain.state_values import BuddyState, SkillRestrictLease, TokenStats
+from aura.domain.todos import TodoItem
+from aura.schemas.state import LoopSlots
 
 
 def test_loop_slots_constructible_with_defaults() -> None:

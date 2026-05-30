@@ -43,13 +43,13 @@ from aura.application.permission.asker import AskerResponse
 from aura.application.permission.decision import Decision
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.domain.events import ToolCallCompleted
 from aura.domain.permission.session import SessionRuleSet
+from aura.domain.tool import ToolResult
 from aura.infrastructure import permission_store as perm_store
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.events import ToolCallCompleted
 from aura.schemas.permissions import Allow, Block, Outcome, Replace
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 

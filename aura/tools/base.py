@@ -8,7 +8,7 @@ from typing import Any, TypeVar
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from aura.schemas.tool import (
+from aura.domain.tool import (
     ToolArgsPreview,
     ToolMetadata,
     ToolRuleMatcher,

@@ -10,11 +10,11 @@ from langchain_core.tools import BaseTool
 from aura.application.hooks import PreToolHook
 from aura.application.permission.bash_safety import check_bash_safety
 from aura.application.permission.decision import Decision
-from aura.application.permission.denials import PermissionDenial
+from aura.domain.permission.denials import PermissionDenial
 from aura.domain.permission.mode import DEFAULT_MODE, Mode
+from aura.domain.tool import ToolResult
 from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
-from aura.schemas.tool import ToolResult
 
 _BASH_TOOL_NAMES: frozenset[str] = frozenset({"bash", "bash_background"})
 

@@ -14,17 +14,17 @@ from pydantic import BaseModel
 from aura.application.hooks.permission import make_permission_hook
 from aura.config.loader import load_config
 from aura.core.agent import Agent
-from aura.domain.permission.rule import Rule
-from aura.domain.permission.session import RuleSet
-from aura.infrastructure import permission_store as perm_store
-from aura.infrastructure.llm import make_model_for_spec
-from aura.schemas.events import (
+from aura.domain.events import (
     AssistantDelta,
     Final,
     ToolCallCompleted,
     ToolCallProgress,
     ToolCallStarted,
 )
+from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet
+from aura.infrastructure import permission_store as perm_store
+from aura.infrastructure.llm import make_model_for_spec
 from aura.schemas.permissions import PermissionsConfig
 from aura.tools.base import build_tool
 from desktop.host import headless, session_service
@@ -180,7 +180,8 @@ def test_build_aura_state_uses_numeric_defaults() -> None:
 
 
 def test_build_aura_state_preserves_typed_token_usage() -> None:
-    from aura.schemas.state import LoopSlots, TokenStats
+    from aura.domain.state_values import TokenStats
+    from aura.schemas.state import LoopSlots
 
     agent = SimpleNamespace(
         state=SimpleNamespace(slots=LoopSlots(

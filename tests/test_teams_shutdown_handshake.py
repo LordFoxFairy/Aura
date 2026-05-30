@@ -34,11 +34,11 @@ from aura.application.teams.manager import TeamError, TeamManager
 from aura.application.teams.runtime import run_teammate
 from aura.config.schema import AuraConfig
 from aura.domain.abort import AbortController
+from aura.domain.events import Final
 from aura.domain.permission.safety import DEFAULT_SAFETY
 from aura.domain.permission.session import RuleSet
 from aura.domain.team import TEAM_LEADER_NAME, TeamMessage
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.schemas.events import Final
 from tests.conftest import FakeChatModel, FakeTurn
 
 

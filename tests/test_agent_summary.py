@@ -28,8 +28,8 @@ from aura.application.subagent_summary import (
     _resolve_interval,
     run_summary_loop,
 )
-from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.run import run_task
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.infrastructure import llm
@@ -293,14 +293,14 @@ def test_summary_factory_uses_summary_spec_when_configured(
 
 def _spawn_factory(
     *, sub_response: AIMessage,
-) -> tuple[TasksStore, SubagentFactory, Callable[[], FakeChatModel]]:
+) -> tuple[TasksStore, SubagentSpawner, Callable[[], FakeChatModel]]:
     store = TasksStore()
     main_model = FakeChatModel(turns=[FakeTurn(sub_response)])
 
     def _factory_callable() -> FakeChatModel:
         return main_model
 
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=_factory_callable,

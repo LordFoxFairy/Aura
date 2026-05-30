@@ -27,16 +27,16 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.run import run_task
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.infrastructure.persistence.storage import SessionStorage, TranscriptMeta
 from tests.conftest import FakeChatModel, FakeTurn
 
 
-def _make_factory() -> SubagentFactory:
-    return SubagentFactory(
+def _make_factory() -> SubagentSpawner:
+    return SubagentSpawner(
         parent_config=AuraConfig.model_validate({
             "providers": [{"name": "openai", "protocol": "openai"}],
             "router": {"default": "openai:gpt-4o-mini"},

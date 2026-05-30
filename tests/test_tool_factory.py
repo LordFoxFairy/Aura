@@ -37,7 +37,7 @@ from aura.application.runtime import (
     TodoWriteFactory,
     ToolRuntime,
 )
-from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.domain.todos import TodoItem
@@ -132,7 +132,7 @@ def test_tool_runtime_optional_fields_default_to_none() -> None:
     assert runtime.state is state
     assert runtime.asker is None
     assert runtime.tasks_store is None
-    assert runtime.subagent_factory is None
+    assert runtime.spawner is None
     assert runtime.running_tasks is None
     assert runtime.running_shells is None
     assert runtime.transcript_storage is None
@@ -154,14 +154,14 @@ def _cfg() -> AuraConfig:
     )
 
 
-def _stub_subagent_factory() -> SubagentFactory:
-    """Minimal SubagentFactory just for identity checks on the wiring.
+def _stub_subagent_factory() -> SubagentSpawner:
+    """Minimal SubagentSpawner just for identity checks on the wiring.
 
     The factory is not actually invoked in these tests; we only need a
     real instance so :meth:`TaskCreateFactory.build` can hand it to
     :class:`TaskCreate`.
     """
-    return SubagentFactory(
+    return SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(),
@@ -209,7 +209,7 @@ def test_task_create_factory_wires_store_factory_running_storage() -> None:
     running_tasks, transcript_storage straight through.
 
     Mirrors the historical
-    ``TaskCreate(store=..., factory=..., running=..., transcript_storage=...)``.
+    ``TaskCreate(store=..., spawner=..., running=..., transcript_storage=...)``.
     """
     store = TasksStore()
     sub_factory = _stub_subagent_factory()
@@ -218,7 +218,7 @@ def test_task_create_factory_wires_store_factory_running_storage() -> None:
     runtime = ToolRuntime(
         state=LoopState(),
         tasks_store=store,
-        subagent_factory=sub_factory,
+        spawner=sub_factory,
         running_tasks=running,
         transcript_storage=storage,
     )
@@ -228,7 +228,7 @@ def test_task_create_factory_wires_store_factory_running_storage() -> None:
     assert isinstance(tool, TaskCreate)
     assert TaskCreateFactory().name == "task_create"
     assert tool.store is store
-    assert tool.factory is sub_factory
+    assert tool.spawner is sub_factory
     # ``running`` is a PrivateAttr forwarded via the .running property.
     assert tool.running is running
 

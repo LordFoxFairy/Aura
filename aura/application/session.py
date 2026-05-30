@@ -46,7 +46,7 @@ from aura.application.runtime.tool_factory import (
     STATEFUL_TOOL_FACTORIES,
     ToolRuntime,
 )
-from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.domain.abort import AbortController, AbortException
@@ -231,7 +231,7 @@ class AgentSession:
         self._tasks_store = TasksStore()
         # parent_mode_provider closes over self so mid-session mode changes
         # are visible to every spawn.
-        self._subagent_factory = SubagentFactory(
+        self._subagent_factory = SubagentSpawner(
             parent_config=self._config,
             parent_model_spec=self._config.router.get("default", ""),
             parent_skills=self._skill_registry,
@@ -250,7 +250,7 @@ class AgentSession:
         # Each child registers an AbortController so a single Ctrl+C cascades.
         original_spawn = self._subagent_factory.spawn
 
-        def _spawn_with_abort(*args, **kwargs):  # type: ignore[no-untyped-def]  # variadic spawn signature varies across SubagentFactory revisions
+        def _spawn_with_abort(*args, **kwargs):  # type: ignore[no-untyped-def]  # variadic spawn signature varies across SubagentSpawner revisions
             task_id = kwargs.get("task_id")
             try:
                 child = original_spawn(*args, **kwargs)
@@ -344,7 +344,7 @@ class AgentSession:
             state=self._state,
             asker=question_asker or _unavailable_question_asker,
             tasks_store=self._tasks_store,
-            subagent_factory=self._subagent_factory,
+            spawner=self._subagent_factory,
             running_tasks=self._running_tasks,
             running_shells=self._running_shells,
             transcript_storage=self._storage,
@@ -911,7 +911,7 @@ class AgentSession:
         return self._running_aborts
 
     @property
-    def subagent_factory(self) -> SubagentFactory:
+    def subagent_factory(self) -> SubagentSpawner:
         return self._subagent_factory
 
     @property
@@ -1092,7 +1092,7 @@ class AgentSession:
         )
 
     def _snapshot_read_carryover(self) -> ReadCarryover:
-        """Build a ReadCarryover from live Context for SubagentFactory spawn."""
+        """Build a ReadCarryover from live Context for SubagentSpawner spawn."""
         from aura.domain.state_values import ReadRecord
 
         turn = self._state.turn_count

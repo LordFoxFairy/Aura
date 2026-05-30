@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import Mailbox, QueueMailboxNotifier
 from aura.domain.abort import AbortController
@@ -80,7 +80,7 @@ class TeamManager:
         *,
         leader: Agent,
         storage: SessionStorage,
-        factory: SubagentFactory,
+        factory: SubagentSpawner,
         running_aborts: dict[str, AbortController],
         tasks_store: TasksStore,
         runtime_runner: Any = None,

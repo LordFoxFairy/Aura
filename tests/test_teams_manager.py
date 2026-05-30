@@ -13,7 +13,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.loop_state import LoopState
-from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.manager import TeamError, TeamManager
 from aura.config.schema import AuraConfig
@@ -72,8 +72,8 @@ class _AskTool(BaseTool):
         return value
 
 
-def _factory(*, parent_ruleset: RuleSet | None = None) -> SubagentFactory:
-    return SubagentFactory(
+def _factory(*, parent_ruleset: RuleSet | None = None) -> SubagentSpawner:
+    return SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         parent_ruleset=parent_ruleset or RuleSet(),
@@ -106,7 +106,7 @@ def _mgr(
     tmp_path: Path,
     *,
     runtime_runner: Any = _no_runtime,
-    factory: SubagentFactory | None = None,
+    factory: SubagentSpawner | None = None,
     running_aborts: dict[str, AbortController] | None = None,
 ) -> tuple[TeamManager, SessionStorage]:
     storage = SessionStorage(tmp_path / "sessions.db")

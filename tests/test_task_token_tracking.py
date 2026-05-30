@@ -3,7 +3,7 @@
 Pins the wiring between LangChain's ``ai_message.usage_metadata`` and
 :attr:`TaskProgress.token_count` / ``input_tokens`` / ``output_tokens``.
 The producer is a post_model hook installed on the child Agent's
-HookChain by ``run_task`` after :meth:`SubagentFactory.spawn` returns;
+HookChain by ``run_task`` after :meth:`SubagentSpawner.spawn` returns;
 each tick of ``ai = ainvoke(...)`` fires the hook, which forwards
 usage to :meth:`TasksStore.record_token_usage`.
 """
@@ -16,8 +16,8 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage
 
-from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.run import run_task
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -35,7 +35,7 @@ def _cfg() -> AuraConfig:
 
 def _make_factory_with_usage(
     *, input_tokens: int, output_tokens: int,
-) -> tuple[TasksStore, SubagentFactory]:
+) -> tuple[TasksStore, SubagentSpawner]:
     store = TasksStore()
     ai = AIMessage(
         content="child-final",
@@ -45,7 +45,7 @@ def _make_factory_with_usage(
             "total_tokens": input_tokens + output_tokens,
         },
     )
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(turns=[FakeTurn(ai)]),
@@ -88,7 +88,7 @@ async def test_no_usage_metadata_does_not_crash() -> None:
     """A FakeChatModel that returns no usage_metadata leaves token_count==0."""
     store = TasksStore()
     ai = AIMessage(content="no-usage")  # usage_metadata defaults to None
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(turns=[FakeTurn(ai)]),

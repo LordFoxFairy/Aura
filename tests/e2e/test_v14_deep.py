@@ -755,7 +755,7 @@ _SUBAGENT_LIFECYCLE_DRIVER = textwrap.dedent(
     from aura.config.schema import AuraConfig
     from aura.infrastructure.persistence import journal
     from aura.infrastructure.persistence.storage import SessionStorage
-    from aura.application.tasks.factory import SubagentFactory
+    from aura.application.tasks.spawn import SubagentSpawner
     from aura.application.tasks.run import run_task
     from aura.application.tasks.store import TasksStore
     from tests.conftest import FakeChatModel, FakeTurn
@@ -769,7 +769,7 @@ _SUBAGENT_LIFECYCLE_DRIVER = textwrap.dedent(
         "tools": {{"enabled": []}},
     }})
 
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(
@@ -841,7 +841,7 @@ _SUBAGENT_ISOLATION_DRIVER = textwrap.dedent(
     from aura.config.schema import AuraConfig
     from aura.infrastructure.persistence import journal
     from aura.infrastructure.persistence.storage import SessionStorage
-    from aura.application.tasks.factory import SubagentFactory
+    from aura.application.tasks.spawn import SubagentSpawner
     from aura.application.tasks.run import run_task
     from aura.application.tasks.store import TasksStore
     from tests.conftest import FakeChatModel, FakeTurn
@@ -858,7 +858,7 @@ _SUBAGENT_ISOLATION_DRIVER = textwrap.dedent(
 
     storage = SessionStorage(Path(":memory:"))
 
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(

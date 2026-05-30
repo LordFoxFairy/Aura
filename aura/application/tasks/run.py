@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.runners.local_agent import (
     DEFAULT_SUBAGENT_TIMEOUT_SEC,
     LocalAgentTask,
     run_local_agent,
 )
+from aura.application.tasks.spawn import SpawnPort
 from aura.application.tasks.store import TasksStore
 from aura.infrastructure.persistence.storage import SessionStorage
 
 
 async def run_task(
     store: TasksStore,
-    factory: SubagentFactory,
+    factory: SpawnPort,
     task_id: str,
     *,
     timeout_sec: float | None = None,

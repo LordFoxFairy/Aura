@@ -22,8 +22,8 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatResult
 
-from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.run import run_task
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
@@ -46,11 +46,11 @@ def _cfg(enabled: list[str] | None = None) -> AuraConfig:
     })
 
 
-def _make_factory(tmp_path: Path) -> tuple[TasksStore, SubagentFactory]:
+def _make_factory(tmp_path: Path) -> tuple[TasksStore, SubagentSpawner]:
     store = TasksStore()
     # Subagent gets a FakeChatModel with one Final turn.
     sub_model = FakeChatModel(turns=[FakeTurn(AIMessage(content="subagent-final"))])
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(enabled=[]),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: sub_model,
@@ -63,7 +63,7 @@ def _make_factory(tmp_path: Path) -> tuple[TasksStore, SubagentFactory]:
 async def test_task_create_returns_running_id(tmp_path: Path) -> None:
     store, factory = _make_factory(tmp_path)
     tasks: dict[str, asyncio.Task[None]] = {}
-    tool = TaskCreate(store=store, factory=factory, running=tasks)
+    tool = TaskCreate(store=store, spawner=factory, running=tasks)
     out = await tool.ainvoke({"description": "scan", "prompt": "find TODOs"})
     assert out["description"] == "scan"
     assert out["status"] == "running"
@@ -94,7 +94,7 @@ async def test_task_create_spawns_task_that_completes(tmp_path: Path) -> None:
             snapshot[k] = v
 
     tracked: _SnapshotDict = _SnapshotDict()
-    tool = TaskCreate(store=store, factory=factory, running=tracked)
+    tool = TaskCreate(store=store, spawner=factory, running=tracked)
     out = await tool.ainvoke({"description": "d", "prompt": "p"})
     task_id: str = out["task_id"]
     # Wait for the detached task to finish.
@@ -141,7 +141,7 @@ async def test_task_output_reflects_final_result_after_subagent_finishes(
             snapshot[k] = v
 
     tracked: _SnapshotDict = _SnapshotDict()
-    tc = TaskCreate(store=store, factory=factory, running=tracked)
+    tc = TaskCreate(store=store, spawner=factory, running=tracked)
     out = await tc.ainvoke({"description": "d", "prompt": "p"})
     task_id = out["task_id"]
     await asyncio.wait_for(snapshot[task_id], timeout=2.0)
@@ -170,7 +170,7 @@ def test_subagent_inherits_parent_mcp_servers() -> None:
         "tools": {"enabled": []},
         "mcp_servers": [mcp_entry],
     })
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=parent_config,
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(turns=[]),
@@ -208,7 +208,7 @@ def test_subagent_inherits_parent_skills(tmp_path: Path) -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=parent_config,
         parent_model_spec="openai:gpt-4o-mini",
         parent_skills=parent_skills,
@@ -221,16 +221,15 @@ def test_subagent_inherits_parent_skills(tmp_path: Path) -> None:
     child_agent.close()
 
 
-def test_subagent_at_depth_one_still_has_task_create() -> None:
-    # F-07-004 — controlled recursion. Depth-1 children retain task_create
-    # (and task_output) so they can dispatch their own grandchildren; only
-    # depth >= cap (=2) strips those tools.
+def test_subagent_has_no_spawn_tools() -> None:
+    # One-level recursion: a spawned subagent never receives task_create /
+    # task_output, so it can never spawn another subagent.
     parent_config = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
     })
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=parent_config,
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(turns=[]),
@@ -238,74 +237,58 @@ def test_subagent_at_depth_one_still_has_task_create() -> None:
     )
     child_agent = factory.spawn("sub-prompt")
     enabled = child_agent._config.tools.enabled
-    assert "task_create" in enabled
-    assert "task_output" in enabled
-    # Child's own factory carries depth=1 so its spawn produces depth=2.
-    assert child_agent._subagent_factory.depth == 1
+    assert "task_create" not in enabled
+    assert "task_output" not in enabled
     child_agent.close()
 
 
 def _wire_fake_model_chain(child_agent: Agent) -> None:
-    # Test ergonomics — Agent.__init__ builds the child's own factory with
-    # no model_factory, so a grandchild spawn would try to resolve a real
-    # provider key. Inject a FakeChatModel so the depth chain works under
-    # unit-test conditions.
+    # Test ergonomics — Agent.__init__ builds the child's own spawner with no
+    # model_factory; inject a FakeChatModel so a direct spawn works in unit tests.
     child_agent._subagent_factory._model_factory = lambda: FakeChatModel(turns=[])
     child_agent._subagent_factory._storage_factory = (
         lambda: SessionStorage(Path(":memory:"))
     )
 
 
-def test_subagent_at_depth_cap_strips_task_create() -> None:
-    # F-07-004 — at the depth cap (2), spawning a child strips task_create
-    # so the LLM doesn't see a tool it cannot use, AND any direct call to
-    # spawn from a capped factory raises ToolError.
+def test_subagent_strips_spawn_tools_unconditionally() -> None:
+    # Defense in depth: even a direct spawn from a child's own spawner strips
+    # the disallowed tools — there is no depth at which they reappear.
     parent_config = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
     })
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=parent_config,
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(turns=[]),
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
-    # Depth-1 child first.
     child = factory.spawn("d1")
-    assert child._subagent_factory.depth == 1
     _wire_fake_model_chain(child)
-    # Grandchild at depth=2 — task_create stripped.
     grand = child._subagent_factory.spawn("d2")
     assert "task_create" not in grand._config.tools.enabled
     assert "task_output" not in grand._config.tools.enabled
-    assert grand._subagent_factory.depth == 2
-    _wire_fake_model_chain(grand)
-    # Great-grandchild attempt — capped factory refuses.
-    with pytest.raises(ToolError, match="depth cap"):
-        grand._subagent_factory.spawn("d3")
     child.close()
     grand.close()
 
 
-def test_subagent_inherits_allowed_tools_at_depth_one() -> None:
-    # Below the depth cap, the child sees the FULL parent set (including
-    # task_create / task_output) so it can dispatch grandchildren.
+def test_subagent_inherits_non_spawn_tools() -> None:
+    # The child sees the parent's tool set minus the disallowed spawn tools.
     parent_config = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
     })
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=parent_config,
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(turns=[]),
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
     child_agent = factory.spawn("sub-prompt")
-    assert child_agent._config.tools.enabled == [
-        "bash", "read_file", "task_create", "task_output",
-    ]
+    assert child_agent._config.tools.enabled == ["bash", "read_file"]
     child_agent.close()
 
 
@@ -317,7 +300,7 @@ async def test_task_create_default_agent_type_is_general_purpose(
     # parent tools and adds no system-prompt suffix.
     store, factory = _make_factory(tmp_path)
     tasks: dict[str, asyncio.Task[None]] = {}
-    tool = TaskCreate(store=store, factory=factory, running=tasks)
+    tool = TaskCreate(store=store, spawner=factory, running=tasks)
     out = await tool.ainvoke({"description": "d", "prompt": "p"})
     rec = store.get(out["task_id"])
     assert rec is not None
@@ -335,7 +318,7 @@ async def test_task_create_unknown_agent_type_returns_tool_error(
     tmp_path: Path,
 ) -> None:
     store, factory = _make_factory(tmp_path)
-    tool = TaskCreate(store=store, factory=factory, running={})
+    tool = TaskCreate(store=store, spawner=factory, running={})
     with pytest.raises(ToolError) as ei:
         await tool.ainvoke(
             {"description": "d", "prompt": "p", "agent_type": "bogus"},
@@ -368,7 +351,7 @@ async def test_task_create_explore_restricts_child_tools(tmp_path: Path) -> None
     def _cap_model_factory() -> FakeChatModel:
         return FakeChatModel(turns=[FakeTurn(AIMessage(content="done"))])
 
-    class _ProbeFactory(SubagentFactory):
+    class _ProbeFactory(SubagentSpawner):
         def spawn(
             self,
             prompt: str,
@@ -395,7 +378,7 @@ async def test_task_create_explore_restricts_child_tools(tmp_path: Path) -> None
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
     tasks: dict[str, asyncio.Task[None]] = {}
-    tool = TaskCreate(store=store, factory=factory, running=tasks)
+    tool = TaskCreate(store=store, spawner=factory, running=tasks)
     out = await tool.ainvoke({
         "description": "scan",
         "prompt": "find TODOs",
@@ -431,7 +414,7 @@ def test_factory_spawn_verify_appends_verdict_system_prompt() -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["read_file", "grep", "glob", "web_fetch", "web_search"]},
     })
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=parent_config,
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(turns=[]),
@@ -454,7 +437,7 @@ def test_factory_spawn_plan_includes_plan_mode_tools() -> None:
             ],
         },
     })
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=parent_config,
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(turns=[]),
@@ -479,7 +462,7 @@ def test_factory_spawn_rejects_type_requiring_missing_parent_tools() -> None:
         # Deliberately missing read_file / grep / glob / web_*.
         "tools": {"enabled": ["bash"]},
     })
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=parent_config,
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(turns=[]),
@@ -489,15 +472,15 @@ def test_factory_spawn_rejects_type_requiring_missing_parent_tools() -> None:
         factory.spawn("p", agent_type="explore")
 
 
-def test_factory_spawn_general_purpose_does_not_filter_tools() -> None:
-    # General-purpose sentinel → inherit all parent tools, including
-    # task_create up to the depth cap (controlled recursion).
+def test_factory_spawn_general_purpose_inherits_all_but_spawn_tools() -> None:
+    # General-purpose sentinel → inherit all parent tools EXCEPT the disallowed
+    # spawn tools (one-level recursion).
     parent_config = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["bash", "read_file", "write_file", "task_create"]},
     })
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=parent_config,
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(turns=[]),
@@ -505,8 +488,8 @@ def test_factory_spawn_general_purpose_does_not_filter_tools() -> None:
     )
     child = factory.spawn("p", agent_type="general-purpose")
     enabled = set(child._config.tools.enabled)
-    # All four parent tools cross the boundary at depth=1 (below the cap).
-    assert enabled == {"bash", "read_file", "write_file", "task_create"}
+    # task_create stripped; the rest cross the boundary.
+    assert enabled == {"bash", "read_file", "write_file"}
     # No suffix added to the prompt.
     assert "Subagent context" not in child._system_prompt
     child.close()
@@ -528,7 +511,7 @@ async def test_parent_cancel_cascades_to_subagent(tmp_path: Path) -> None:
             await asyncio.sleep(10)
             raise RuntimeError("should not get here")
 
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(enabled=[]),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: _HangingFake(),
@@ -566,7 +549,7 @@ async def test_parent_abort_event_cascades_to_subagent(tmp_path: Path) -> None:
             raise RuntimeError("unreachable")
 
     parent_abort = asyncio.Event()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(enabled=[]),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: _HangingFake(),
@@ -590,30 +573,27 @@ async def test_parent_abort_event_cascades_to_subagent(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_child_factory_inherits_parent_abort_event(tmp_path: Path) -> None:
-    # The cascade must reach grandchildren too: when a depth-1 subagent
-    # spawns a depth-2 grandchild, that grandchild's factory carries the
-    # SAME parent_abort_event so the root's abort still cancels it.
+async def test_subagent_spawner_does_not_propagate_abort_event_to_children() -> None:
+    # One-level recursion removed the spawn chain: a child's spawner is
+    # independent and does NOT carry the root's abort_event (cascade now rides
+    # the per-spawn fork AbortController, not a propagated Event).
     parent_abort = asyncio.Event()
     parent_config = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
     })
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=parent_config,
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(turns=[]),
         storage_factory=lambda: SessionStorage(Path(":memory:")),
         parent_abort_event=parent_abort,
     )
+    assert factory.abort_event is parent_abort
     child = factory.spawn("d1")
-    _wire_fake_model_chain(child)
-    grand = child._subagent_factory.spawn("d2")
-    assert child._subagent_factory.abort_event is parent_abort
-    assert grand._subagent_factory.abort_event is parent_abort
+    assert child._subagent_factory.abort_event is None
     child.close()
-    grand.close()
 
 
 # ---------------------------------------------------------------------------
@@ -644,7 +624,7 @@ async def test_run_task_wallclock_timeout_marks_failed(tmp_path: Path) -> None:
             await asyncio.sleep(30)
             raise RuntimeError("should not get here")
 
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(enabled=[]),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: _HangingFake(),
@@ -684,7 +664,7 @@ async def test_run_task_timeout_disabled_by_zero(
     # naturally must still reach ``completed`` even with the timeout
     # switched off.
     store = TasksStore()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(enabled=[]),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(
@@ -727,7 +707,7 @@ async def test_run_task_timeout_env_override(
             await asyncio.sleep(30)
             raise RuntimeError("unreachable")
 
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(enabled=[]),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: _HangingFake(),

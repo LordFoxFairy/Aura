@@ -18,8 +18,8 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatResult
 
-from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.run import run_task
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.domain.tool import ToolError
@@ -48,8 +48,8 @@ class _HangingFake(FakeChatModel):
         raise RuntimeError("should not reach here")
 
 
-def _hanging_factory() -> SubagentFactory:
-    return SubagentFactory(
+def _hanging_factory() -> SubagentSpawner:
+    return SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: _HangingFake(),

@@ -8,8 +8,8 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.run import run_task
+from aura.application.tasks.spawn import SpawnPort
 from aura.application.tasks.store import TasksStore
 from aura.domain.tool import ToolError, ToolMetadata
 from aura.infrastructure import llm
@@ -74,7 +74,7 @@ class TaskCreate(BaseTool):
         timeout_sec=None,
     )
     store: TasksStore
-    factory: SubagentFactory
+    spawner: SpawnPort
     # PrivateAttr: pydantic v2 deep-copies regular dict fields, breaking identity-share with Agent.
     _running: dict[str, asyncio.Task[None]] = PrivateAttr()
     _transcript_storage: SessionStorage | None = PrivateAttr(default=None)
@@ -83,12 +83,12 @@ class TaskCreate(BaseTool):
         self,
         *,
         store: TasksStore,
-        factory: SubagentFactory,
+        spawner: SpawnPort,
         running: dict[str, asyncio.Task[None]],
         transcript_storage: SessionStorage | None = None,
         **kwargs: Any,
     ) -> None:
-        super().__init__(store=store, factory=factory, **kwargs)
+        super().__init__(store=store, spawner=spawner, **kwargs)
         self._running = running
         self._transcript_storage = transcript_storage
 
@@ -119,11 +119,11 @@ class TaskCreate(BaseTool):
             raise ToolError(str(exc)) from exc
         if model is not None:
             try:
-                self.factory.validate_model_spec(model)
+                self.spawner.validate_model_spec(model)
             except llm.UnknownModelSpecError as exc:
                 raise ToolError(f"invalid model spec: {exc}") from exc
         resolved_spec = (
-            model if model is not None else self.factory.parent_model_spec
+            model if model is not None else self.spawner.parent_model_spec
         )
         record = self.store.create(
             description=description,
@@ -134,7 +134,7 @@ class TaskCreate(BaseTool):
         task: asyncio.Task[None] = asyncio.create_task(
             run_task(
                 self.store,
-                self.factory,
+                self.spawner,
                 record.id,
                 transcript_storage=self._transcript_storage,
             ),

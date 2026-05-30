@@ -1,6 +1,6 @@
 """Subagent session_id isolation (audit Tier S).
 
-Before this fix, :meth:`SubagentFactory.spawn` hardcoded
+Before this fix, :meth:`SubagentSpawner.spawn` hardcoded
 ``session_id="subagent"`` on every child :class:`Agent`. Two concurrent
 subagents under the same parent both wrote into
 :class:`SessionStorage` keyed by the same ``"subagent"`` literal, and
@@ -33,8 +33,8 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.run import run_task
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.infrastructure.persistence import journal
@@ -71,7 +71,7 @@ def _reset_journal() -> Any:
 async def test_two_subagents_get_distinct_session_ids(tmp_path: Path) -> None:
     """Spawn two subagents via ``factory.spawn(..., task_id=...)`` and verify
     each child's ``_session_id`` is ``subagent-<their-task-id>``."""
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(
@@ -101,7 +101,7 @@ async def test_subagents_storage_does_not_cross_contaminate(tmp_path: Path) -> N
     db = tmp_path / "sessions.sqlite"
     shared_storage = SessionStorage(db)
 
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(
@@ -153,7 +153,7 @@ async def test_subagent_journal_events_carry_distinct_session_ids(
     journal.configure(journal_path)
 
     store = TasksStore()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(
@@ -195,7 +195,7 @@ async def test_subagent_journal_events_carry_distinct_session_ids(
 async def test_spawn_without_task_id_falls_back_to_unique_id(tmp_path: Path) -> None:
     """Legacy callers that don't pass ``task_id`` still get a unique session
     (not the hardcoded ``"subagent"``). Two such spawns must differ."""
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(

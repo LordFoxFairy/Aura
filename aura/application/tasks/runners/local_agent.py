@@ -20,7 +20,7 @@ from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 
 if TYPE_CHECKING:
-    from aura.application.tasks.factory import SubagentFactory
+    from aura.application.tasks.spawn import SpawnPort
 
 
 # 5 minute defense-in-depth ceiling; ``AURA_SUBAGENT_TIMEOUT_SEC<=0`` disables.
@@ -262,7 +262,7 @@ class LocalAgentTask:
         self,
         *,
         store: TasksStore,
-        factory: SubagentFactory,
+        factory: SpawnPort,
         task_id: str,
         timeout_sec: float | None = None,
         transcript_storage: SessionStorage | None = None,
@@ -317,7 +317,7 @@ class LocalAgentTask:
 async def run_local_agent(
     *,
     store: TasksStore,
-    factory: SubagentFactory,
+    factory: SpawnPort,
     task_id: str,
     timeout_sec: float | None,
     transcript_storage: SessionStorage | None,

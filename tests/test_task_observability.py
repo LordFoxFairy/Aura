@@ -21,8 +21,8 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatResult
 
-from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.run import run_task
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
@@ -44,8 +44,8 @@ def _cfg() -> AuraConfig:
     })
 
 
-def _make_factory() -> SubagentFactory:
-    return SubagentFactory(
+def _make_factory() -> SubagentSpawner:
+    return SubagentSpawner(
         parent_config=AuraConfig.model_validate({
             "providers": [{"name": "openai", "protocol": "openai"}],
             "router": {"default": "openai:gpt-4o-mini"},
@@ -380,9 +380,9 @@ async def test_notification_with_summary_when_subagent_returns_one(
     try:
         store = agent._tasks_store
 
-        class _CustomFactory(SubagentFactory):
+        class _CustomFactory(SubagentSpawner):
             def __init__(self) -> None:
-                # Skip parent SubagentFactory.__init__; we only ever call
+                # Skip parent SubagentSpawner.__init__; we only ever call
                 # spawn here and don't need its dependencies.
                 self._parent_config = AuraConfig.model_validate({
                     "providers": [{"name": "openai", "protocol": "openai"}],
@@ -425,7 +425,7 @@ async def test_notification_for_failed_subagent_includes_error(
     try:
         store = agent._tasks_store
 
-        class _BoomFactory(SubagentFactory):
+        class _BoomFactory(SubagentSpawner):
             def __init__(self) -> None:
                 pass
 
@@ -685,7 +685,7 @@ async def test_full_flow_task_create_then_wait(tmp_path: Path) -> None:
         return m
 
     store = TasksStore()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=AuraConfig.model_validate({
             "providers": [{"name": "openai", "protocol": "openai"}],
             "router": {"default": "openai:gpt-4o-mini"},
@@ -696,7 +696,7 @@ async def test_full_flow_task_create_then_wait(tmp_path: Path) -> None:
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
     create_tool = TaskCreate(
-        store=store, factory=factory, running={},
+        store=store, spawner=factory, running={},
     )
     out = await create_tool.ainvoke({"description": "d", "prompt": "p"})
     task_id = out["task_id"]

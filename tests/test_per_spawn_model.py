@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.domain.tool import ToolError
@@ -105,13 +105,13 @@ async def test_default_inherits_parent_model(
     captured = _patch_load_class(monkeypatch)
     cfg = _cfg()
     store = TasksStore()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
     tasks: dict[str, asyncio.Task[None]] = {}
-    tool = TaskCreate(store=store, factory=factory, running=tasks)
+    tool = TaskCreate(store=store, spawner=factory, running=tasks)
     out = await tool.ainvoke({"description": "d", "prompt": "p"})
     # Drain the detached task so it actually runs (and resolves a model).
     task_id = out["task_id"]
@@ -135,13 +135,13 @@ async def test_override_uses_specified_model(
     captured = _patch_load_class(monkeypatch)
     cfg = _cfg()
     store = TasksStore()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
     tasks: dict[str, asyncio.Task[None]] = {}
-    tool = TaskCreate(store=store, factory=factory, running=tasks)
+    tool = TaskCreate(store=store, spawner=factory, running=tasks)
     out = await tool.ainvoke({
         "description": "cheap-explore",
         "prompt": "find TODOs",
@@ -169,13 +169,13 @@ async def test_invalid_spec_raises_clear_error(
     _patch_load_class(monkeypatch)
     cfg = _cfg()
     store = TasksStore()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
     tasks: dict[str, asyncio.Task[None]] = {}
-    tool = TaskCreate(store=store, factory=factory, running=tasks)
+    tool = TaskCreate(store=store, spawner=factory, running=tasks)
     with pytest.raises(ToolError) as ei:
         await tool.ainvoke({
             "description": "d",
@@ -197,13 +197,13 @@ async def test_task_record_remembers_model_spec(
     _patch_load_class(monkeypatch)
     cfg = _cfg()
     store = TasksStore()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
     tasks: dict[str, asyncio.Task[None]] = {}
-    tool = TaskCreate(store=store, factory=factory, running=tasks)
+    tool = TaskCreate(store=store, spawner=factory, running=tasks)
     out = await tool.ainvoke({"description": "d", "prompt": "p"})
     rec = store.get(out["task_id"])
     assert rec is not None
@@ -218,13 +218,13 @@ async def test_task_get_returns_model_spec_in_payload(
     _patch_load_class(monkeypatch)
     cfg = _cfg()
     store = TasksStore()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
     tasks: dict[str, asyncio.Task[None]] = {}
-    tc = TaskCreate(store=store, factory=factory, running=tasks)
+    tc = TaskCreate(store=store, spawner=factory, running=tasks)
     out = await tc.ainvoke({
         "description": "d",
         "prompt": "p",
@@ -239,7 +239,7 @@ async def test_task_get_returns_model_spec_in_payload(
 
 def test_factory_validate_model_spec_passes_for_router_alias() -> None:
     cfg = _cfg()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
@@ -251,7 +251,7 @@ def test_factory_validate_model_spec_passes_for_router_alias() -> None:
 
 def test_factory_validate_model_spec_rejects_unknown_provider() -> None:
     cfg = _cfg()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
@@ -262,7 +262,7 @@ def test_factory_validate_model_spec_rejects_unknown_provider() -> None:
 
 def test_factory_parent_model_spec_property() -> None:
     cfg = _cfg()
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),

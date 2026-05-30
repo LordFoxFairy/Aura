@@ -127,7 +127,7 @@ async def test_team_delete_clears_team(tmp_path: Path) -> None:
 def _fake_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub OPENAI_API_KEY so the factory can build a model in tests.
 
-    The ``/team add`` path runs the SubagentFactory, which validates a
+    The ``/team add`` path runs the SubagentSpawner, which validates a
     provider's credential env var even when the resulting model never
     fires (these tests don't pump events). A literal placeholder is
     enough — no network is hit.

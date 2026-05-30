@@ -24,7 +24,7 @@ the scenario:
   surfaces a single ``safety_blocked`` record (G5 AC-G5-1 + part of the
   spec's row 7/8).
 - :func:`test_e2e_subagent_inherits_parent_read_records` — parent reads
-  file X, spawns a subagent via :class:`SubagentFactory`, child sees X
+  file X, spawns a subagent via :class:`SubagentSpawner`, child sees X
   as ``fresh`` (G8 AC-G8-1 + row 9).
 - :func:`test_e2e_plan_mode_switch_audit_records_live_mode` — switching
   the Agent's mode mid-session to ``plan`` and tripping a tool call
@@ -430,7 +430,7 @@ _SUBAGENT_READS_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.infrastructure.persistence.storage import SessionStorage
-    from aura.application.tasks.factory import SubagentFactory
+    from aura.application.tasks.spawn import SubagentSpawner
     from aura.domain.state_values import ReadCarryover, ReadRecord
     from tests.conftest import FakeChatModel, FakeTurn
 
@@ -461,7 +461,7 @@ _SUBAGENT_READS_DRIVER = textwrap.dedent(
             generated_at_turn=1,
         )
 
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         parent_carryover_provider=_carryover_provider,

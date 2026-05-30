@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.run import run_task
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -20,9 +20,9 @@ from tests.conftest import FakeChatModel, FakeTurn
 def _make_factory(
     *,
     turns: list[FakeTurn] | None = None,
-) -> SubagentFactory:
-    """Build a SubagentFactory with a one-turn FakeChatModel by default."""
-    return SubagentFactory(
+) -> SubagentSpawner:
+    """Build a SubagentSpawner with a one-turn FakeChatModel by default."""
+    return SubagentSpawner(
         parent_config=AuraConfig.model_validate({
             "providers": [{"name": "openai", "protocol": "openai"}],
             "router": {"default": "openai:gpt-4o-mini"},
@@ -125,7 +125,7 @@ async def test_meta_json_written_on_terminal_failure(
         async def aclose(self) -> None:
             return None
 
-    class _StubFactory(SubagentFactory):
+    class _StubFactory(SubagentSpawner):
         def spawn(self, *_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401  # Any acceptable for test scaffolding
             return _MidStreamBoomAgent()
 
@@ -190,7 +190,7 @@ async def test_meta_json_written_on_terminal_cancelled(
         async def aclose(self) -> None:
             return None
 
-    class _ForeverFactory(SubagentFactory):
+    class _ForeverFactory(SubagentSpawner):
         def spawn(self, *_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401  # Any acceptable for test scaffolding
             return _ForeverAgent()
 

@@ -245,7 +245,7 @@ async def test_task_list_filters_by_shell_kind() -> None:
 
     tool, store, _, running_tasks = _make_tool()
     # Inject a fake subagent record directly into the store so we don't
-    # need to spin up a real SubagentFactory here.
+    # need to spin up a real SubagentSpawner here.
     store.create(description="sub", prompt="p")
     out = await tool.ainvoke({"command": "echo sh"})
     await asyncio.gather(*running_tasks.values())

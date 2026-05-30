@@ -27,7 +27,7 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import AIMessage
 
-from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import Mailbox
 from aura.application.teams.manager import TeamError, TeamManager
@@ -45,7 +45,7 @@ from tests.conftest import FakeChatModel, FakeTurn
 def _cfg() -> AuraConfig:
     # ``teams.enabled=True`` from v0.18 — see test_teams_manager.py for
     # the rationale (the gate would otherwise make spawned Agent.join_team
-    # raise inside SubagentFactory.spawn).
+    # raise inside SubagentSpawner.spawn).
     return AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
@@ -54,8 +54,8 @@ def _cfg() -> AuraConfig:
     })
 
 
-def _factory() -> SubagentFactory:
-    return SubagentFactory(
+def _factory() -> SubagentSpawner:
+    return SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         parent_ruleset=RuleSet(),

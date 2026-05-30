@@ -19,7 +19,7 @@ from tests.conftest import FakeChatModel
 
 @pytest.fixture(autouse=True)
 def _stub_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Provide a dummy OPENAI_API_KEY so the SubagentFactory's spawn —
+    """Provide a dummy OPENAI_API_KEY so the SubagentSpawner's spawn —
     which goes through the real ``llm.create`` path inside ``add_member``
     — doesn't blow up on missing credentials. The FakeChatModel never
     actually calls out, but the key is resolved at spawn time before

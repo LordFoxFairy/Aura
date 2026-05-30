@@ -18,7 +18,7 @@ from aura.tools.task_stop import TaskStop
 from aura.tools.todo_write import TodoWrite
 
 if TYPE_CHECKING:
-    from aura.application.tasks.factory import SubagentFactory
+    from aura.application.tasks.spawn import SpawnPort
     from aura.application.tasks.store import TasksStore
     from aura.application.teams.manager import TeamManager
     from aura.infrastructure.persistence.storage import SessionStorage
@@ -32,7 +32,7 @@ class ToolRuntime:
     state: LoopState
     asker: UserAsker | None = None
     tasks_store: TasksStore | None = None
-    subagent_factory: SubagentFactory | None = None
+    spawner: SpawnPort | None = None
     running_tasks: dict[str, asyncio.Task[None]] | None = None
     running_shells: dict[str, asyncio.subprocess.Process] | None = None
     transcript_storage: SessionStorage | None = None
@@ -75,16 +75,16 @@ class TaskCreateFactory:
     def build(self, runtime: ToolRuntime) -> BaseTool:
         if (
             runtime.tasks_store is None
-            or runtime.subagent_factory is None
+            or runtime.spawner is None
             or runtime.running_tasks is None
         ):
             raise RuntimeError(
                 "TaskCreateFactory.build requires tasks_store, "
-                "subagent_factory, and running_tasks on the runtime."
+                "spawner, and running_tasks on the runtime."
             )
         return TaskCreate(
             store=runtime.tasks_store,
-            factory=runtime.subagent_factory,
+            spawner=runtime.spawner,
             running=runtime.running_tasks,
             transcript_storage=runtime.transcript_storage,
         )

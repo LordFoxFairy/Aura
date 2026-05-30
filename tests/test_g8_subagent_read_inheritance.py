@@ -24,7 +24,7 @@ from langchain_core.messages import AIMessage
 
 from aura.application.memory.context import Context
 from aura.application.memory.rules import RulesBundle
-from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.config.schema import AuraConfig
 from aura.domain.state_values import ReadCarryover, ReadRecord
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -105,7 +105,7 @@ def test_context_carryover_none_is_empty_start() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC-G8-1 / AC-G8-2 / AC-G8-3 — end-to-end via SubagentFactory
+# AC-G8-1 / AC-G8-2 / AC-G8-3 — end-to-end via SubagentSpawner
 # ---------------------------------------------------------------------------
 
 
@@ -121,8 +121,8 @@ def _cfg() -> AuraConfig:
 
 def _factory_with_parent_reads(
     parent_records: dict[Path, ReadRecord],
-) -> SubagentFactory:
-    """Build a SubagentFactory whose carryover provider reflects the
+) -> SubagentSpawner:
+    """Build a SubagentSpawner whose carryover provider reflects the
     live ``parent_records`` dict — mutations between calls show up at
     the next ``spawn``.
     """
@@ -133,7 +133,7 @@ def _factory_with_parent_reads(
             generated_at_turn=1,
         )
 
-    return SubagentFactory(
+    return SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         parent_carryover_provider=_provider,
@@ -233,7 +233,7 @@ def test_subagent_factory_without_provider_starts_empty(tmp_path: Path) -> None:
     # Backward compat path: factory built without
     # ``parent_carryover_provider`` behaves exactly as before — child
     # Context starts with an empty _read_records dict.
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         model_factory=lambda: FakeChatModel(

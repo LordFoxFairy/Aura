@@ -24,8 +24,8 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
-from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.run import run_task
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
@@ -56,7 +56,7 @@ def _storage(root: Path) -> SessionStorage:
     return SessionStorage(root / "aura.db")
 
 
-class _CompletingFactory(SubagentFactory):
+class _CompletingFactory(SubagentSpawner):
     """Spawns a child that finishes its astream immediately."""
 
     def __init__(self, tmp_path: Path) -> None:
@@ -82,7 +82,7 @@ class _CompletingFactory(SubagentFactory):
         )
 
 
-class _FailingFactory(SubagentFactory):
+class _FailingFactory(SubagentSpawner):
     def __init__(self) -> None:
         pass
 
@@ -185,7 +185,7 @@ async def test_subagent_cancelled_carries_duration(tmp_path: Path) -> None:
     journal_module.reset()
     journal_module.configure(log)
 
-    class _SlowSpinFactory(SubagentFactory):
+    class _SlowSpinFactory(SubagentSpawner):
         def __init__(self) -> None:
             pass
 

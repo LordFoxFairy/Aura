@@ -37,9 +37,9 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.loop_state import LoopState
-from aura.application.tasks.factory import (
+from aura.application.tasks.spawn import (
     SUBAGENT_AUTO_DENY_FEEDBACK,
-    SubagentFactory,
+    SubagentSpawner,
     _SubagentPermissionAsker,
 )
 from aura.config.schema import AuraConfig
@@ -110,8 +110,8 @@ def _build_factory(
     parent_mode: str = "default",
     parent_deny_rules: RuleSet | None = None,
     parent_ask_rules: RuleSet | None = None,
-) -> SubagentFactory:
-    return SubagentFactory(
+) -> SubagentSpawner:
+    return SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         parent_ruleset=parent_ruleset,
@@ -280,7 +280,10 @@ async def test_agent_wiring_passes_deny_and_ask_rules_to_subagent_factory(
 
 
 @pytest.mark.asyncio
-async def test_nested_subagent_factory_inherits_permission_context() -> None:
+async def test_subagent_cannot_nest_so_permission_chain_is_one_level() -> None:
+    # One-level recursion: the child has no spawn tools, so there is no
+    # grandchild to inherit a permission chain. The single child still
+    # enforces the parent's inherited deny rule.
     parent_ruleset = RuleSet(rules=(Rule(tool="echo_tool", content=None),))
     parent_deny_rules = RuleSet(rules=(Rule(tool="echo_tool", content=None),))
     factory = _build_factory(
@@ -289,13 +292,10 @@ async def test_nested_subagent_factory_inherits_permission_context() -> None:
     )
 
     child = factory.spawn("prompt")
-    child._subagent_factory._model_factory = lambda: FakeChatModel(
-        turns=[FakeTurn(AIMessage(content="done"))]
-    )
-    child._subagent_factory._storage_factory = lambda: SessionStorage(Path(":memory:"))
-    grandchild = child._subagent_factory.spawn("nested prompt")
     try:
-        outcome = await grandchild._hooks.run_pre_tool(
+        assert "task_create" not in child._config.tools.enabled
+        assert "task_output" not in child._config.tools.enabled
+        outcome = await child._hooks.run_pre_tool(
             tool=_EchoTool(),
             args={"value": "x"},
             state=LoopState(),
@@ -305,7 +305,6 @@ async def test_nested_subagent_factory_inherits_permission_context() -> None:
         assert outcome.decision.allow is False  # type: ignore[union-attr]
         assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
     finally:
-        await grandchild.aclose()
         await child.aclose()
 
 
@@ -320,7 +319,7 @@ async def test_subagent_does_not_pollute_parent_session_rules() -> None:
     parent_session = SessionRuleSet()
     # Parent-state proxy for "session rules the parent knows about".
     parent_session.add(Rule(tool="bash", content="ls"))
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         parent_ruleset=RuleSet(),
@@ -383,7 +382,7 @@ async def test_subagent_inherits_bypass_mode_from_parent() -> None:
 async def test_subagent_freezes_parent_mode_at_spawn() -> None:
     """Parent mode flips after spawn do not change child hook behavior."""
     mode = "default"
-    factory = SubagentFactory(
+    factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         parent_ruleset=RuleSet(),

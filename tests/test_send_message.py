@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import AIMessage
 
-from aura.application.tasks.factory import SubagentFactory
+from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.manager import TeamManager
 from aura.config.schema import AuraConfig
@@ -31,8 +31,8 @@ def _cfg() -> AuraConfig:
     })
 
 
-def _factory() -> SubagentFactory:
-    return SubagentFactory(
+def _factory() -> SubagentSpawner:
+    return SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         parent_ruleset=RuleSet(),

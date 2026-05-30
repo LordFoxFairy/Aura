@@ -104,7 +104,7 @@ class ContextCommand:
     async def handle(self, arg: str, agent: Agent) -> CommandResult:
         from langchain_core.messages import SystemMessage
 
-        from aura.application.compact.compact import (
+        from aura.application.compact.reactive import (
             compact_summary_messages,
             estimate_compact_summary_tokens,
         )

@@ -43,6 +43,7 @@ class TeamRecord(BaseModel):
     members: list[TeammateMember] = Field(default_factory=list)
     created_at: float = Field(default_factory=time.time)
     cwd: str = "."
+    lifecycle_state: str = "active"
 
 
 class TeamMessage(BaseModel):

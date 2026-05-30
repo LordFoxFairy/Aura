@@ -110,33 +110,6 @@ class _SubagentProgressPayload(TypedDict):
     activity_count: int
 
 
-class SubagentProtocolEvent(TypedDict):
-    event: Literal["coordination"]
-    family: Literal["subagent"]
-    action: Literal["task_notification"]
-    subagent_id: str
-    payload: _SubagentPayload
-    parent_id: NotRequired[str]
-
-
-class SubagentStartedEvent(TypedDict):
-    event: Literal["coordination"]
-    family: Literal["subagent"]
-    action: Literal["task_started"]
-    subagent_id: str
-    payload: _SubagentStartedPayload
-    parent_id: NotRequired[str]
-
-
-class SubagentProgressEvent(TypedDict):
-    event: Literal["coordination"]
-    family: Literal["subagent"]
-    action: Literal["task_progress"]
-    subagent_id: str
-    payload: _SubagentProgressPayload
-    parent_id: NotRequired[str]
-
-
 class TeamMessagePayload(TypedDict):
     msg_id: str
     sender: str
@@ -146,13 +119,38 @@ class TeamMessagePayload(TypedDict):
     sent_at: float
 
 
-class TeamProtocolEvent(TypedDict):
+class LifecyclePayload(TypedDict):
+    state: str
+    previous_state: NotRequired[str]
+    reason: NotRequired[str]
+
+
+CoordinationPayload: TypeAlias = (
+    _SubagentPayload
+    | _SubagentStartedPayload
+    | _SubagentProgressPayload
+    | TeamMessagePayload
+    | LifecyclePayload
+)
+
+
+class CoordinationEvent(TypedDict):
     event: Literal["coordination"]
-    family: Literal["team"]
-    action: Literal["message_sent", "control_sent"]
-    team_id: str
-    member_id: str
-    payload: TeamMessagePayload
+    family: Literal["subagent", "team"]
+    action: Literal[
+        "task_started",
+        "task_progress",
+        "task_notification",
+        "message_sent",
+        "control_sent",
+        "team_lifecycle",
+        "member_lifecycle",
+    ]
+    payload: CoordinationPayload
+    subagent_id: NotRequired[str]
+    parent_id: NotRequired[str]
+    team_id: NotRequired[str]
+    member_id: NotRequired[str]
 
 
 WireEvent: TypeAlias = (
@@ -167,8 +165,5 @@ WireEvent: TypeAlias = (
     | CompactEvent
     | ErrorEvent
     | UnknownEvent
-    | SubagentProtocolEvent
-    | SubagentStartedEvent
-    | SubagentProgressEvent
-    | TeamProtocolEvent
+    | CoordinationEvent
 )

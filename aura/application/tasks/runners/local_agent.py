@@ -379,7 +379,7 @@ async def run_local_agent(
             else:
                 raise
         agent.hooks.post_model.append(make_token_observer(store, task_id))
-        from aura.application.services.agent_summary import AgentSummarizer
+        from aura.application.subagent_summary import AgentSummarizer
         from aura.infrastructure import llm as _llm_mod
 
         _make_summary_factory = getattr(

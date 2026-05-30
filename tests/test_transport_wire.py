@@ -9,30 +9,30 @@ from typing import get_args
 from rich.console import Console
 
 from aura.domain.task import TaskNotification
-from aura.infrastructure.wire.event_dto import (
+from aura.domain.team import TeamMessage
+from aura.infrastructure.wire.events import (
     AssistantDeltaEvent,
+    AuraStateEvent,
     CompactEvent,
+    CoordinationEvent,
     ErrorEvent,
     FinalEvent,
     PermissionAuditEvent,
     PermissionRequestEvent,
-    SubagentProgressEvent,
-    SubagentProtocolEvent,
-    SubagentStartedEvent,
-    TeamProtocolEvent,
     ToolCallCompletedEvent,
     ToolCallProgressEvent,
     ToolCallStartedEvent,
     UnknownEvent,
     WireEvent,
 )
-from aura.infrastructure.wire.wire import (
+from aura.infrastructure.wire.serialize import (
     agent_state_to_wire,
     event_to_wire,
     permission_request_to_wire,
     task_notification_to_wire,
     task_progress_to_wire,
     task_started_to_wire,
+    team_message_to_wire,
 )
 from aura.schemas.events import (
     AgentEvent,
@@ -62,17 +62,15 @@ def test_wire_event_is_explicit_union_of_protocol_families() -> None:
     assert PermissionRequestEvent in members
     assert PermissionAuditEvent in members
     assert FinalEvent in members
+    assert AuraStateEvent in members
     assert CompactEvent in members
     assert ErrorEvent in members
-    assert SubagentProtocolEvent in members
-    assert SubagentStartedEvent in members
-    assert SubagentProgressEvent in members
-    assert TeamProtocolEvent in members
+    assert CoordinationEvent in members
     assert UnknownEvent in members
 
 
 def test_event_to_wire_preserves_desktop_event_shapes() -> None:
-    assert event_to_wire.__module__ == "aura.infrastructure.wire.wire"
+    assert event_to_wire.__module__ == "aura.infrastructure.wire.serialize"
     assert event_to_wire(AssistantDelta("hi")) == {
         "event": "assistant_delta",
         "text": "hi",
@@ -226,6 +224,83 @@ def test_task_progress_to_wire_carries_tool_name_and_count() -> None:
             "activity_count": 3,
         },
     }
+
+
+def test_team_message_to_wire_maps_text_message_as_message_sent() -> None:
+    payload = team_message_to_wire(
+        TeamMessage(
+            msg_id="msg_1",
+            sender="leader",
+            recipient="worker",
+            body="hello",
+            kind="text",
+            sent_at=123.0,
+        ),
+        team_id="team_alpha",
+    )
+
+    assert payload == {
+        "event": "coordination",
+        "family": "team",
+        "action": "message_sent",
+        "team_id": "team_alpha",
+        "member_id": "worker",
+        "payload": {
+            "msg_id": "msg_1",
+            "sender": "leader",
+            "recipient": "worker",
+            "body": "hello",
+            "kind": "text",
+            "sent_at": 123.0,
+        },
+    }
+
+
+def test_team_message_to_wire_maps_control_message_as_control_sent() -> None:
+    payload = team_message_to_wire(
+        TeamMessage(
+            msg_id="msg_2",
+            sender="leader",
+            recipient="worker",
+            body="shutdown now",
+            kind="shutdown_request",
+            sent_at=456.0,
+        ),
+        team_id="team_alpha",
+    )
+
+    assert payload == {
+        "event": "coordination",
+        "family": "team",
+        "action": "control_sent",
+        "team_id": "team_alpha",
+        "member_id": "worker",
+        "payload": {
+            "msg_id": "msg_2",
+            "sender": "leader",
+            "recipient": "worker",
+            "body": "shutdown now",
+            "kind": "shutdown_request",
+            "sent_at": 456.0,
+        },
+    }
+
+
+def test_task_notification_to_wire_rejects_running_status() -> None:
+    import pytest
+
+    with pytest.raises(
+        ValueError,
+        match="task_notification_to_wire requires a terminal status",
+    ):
+        task_notification_to_wire(
+            TaskNotification(
+                task_id="task_running",
+                status="running",
+                summary=None,
+                description="still running",
+            ),
+        )
 
 
 def test_agent_state_to_wire_uses_stable_numeric_shape() -> None:

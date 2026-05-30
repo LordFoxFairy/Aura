@@ -29,7 +29,7 @@ from aura.core.agent import Agent
 from aura.domain.abort import AbortController, current_abort_signal
 from aura.domain.task import TaskNotification
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.infrastructure.wire.wire import task_notification_to_wire
+from aura.infrastructure.wire.serialize import task_notification_to_wire
 from aura.tools.task_create import TaskCreate
 from aura.tools.task_get import TaskGet
 from aura.tools.task_output import TaskOutput

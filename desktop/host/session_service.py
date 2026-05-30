@@ -27,8 +27,8 @@ from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.infrastructure import permission_store as perm_store
 from aura.infrastructure.llm import make_model_for_spec
 from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.wire.serialize import agent_state_to_wire, permission_request_to_wire
 from aura.infrastructure.wire.stream import stream_agent_wire
-from aura.infrastructure.wire.wire import agent_state_to_wire, permission_request_to_wire
 from aura.schemas.tool_meta_access import meta_dict
 
 

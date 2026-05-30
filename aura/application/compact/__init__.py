@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from aura.application.compact.compact import CompactResult, CompactSource, run_compact
 from aura.application.compact.compactor import Compactor
 from aura.application.compact.constants import (
     AUTO_COMPACT_THRESHOLD,
@@ -23,6 +22,7 @@ from aura.application.compact.microcompact import (
     select_clear_ids,
 )
 from aura.application.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
+from aura.application.compact.reactive import CompactResult, CompactSource, run_compact
 
 __all__ = [
     "AUTO_COMPACT_THRESHOLD",

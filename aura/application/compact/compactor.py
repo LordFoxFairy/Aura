@@ -11,15 +11,15 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 
-from aura.application.compact.compact import CompactResult
 from aura.application.compact.constants import CompactionTrigger
 from aura.application.compact.microcompact import (
     MicrocompactPolicy,
     apply_microcompact,
 )
+from aura.application.compact.reactive import CompactResult
 from aura.config.schema import CompactConfig
 from aura.infrastructure.persistence import journal
-from aura.infrastructure.wire.wire import compact_event_to_wire
+from aura.infrastructure.wire.serialize import compact_event_to_wire
 from aura.schemas.state import LoopSlots
 
 if TYPE_CHECKING:

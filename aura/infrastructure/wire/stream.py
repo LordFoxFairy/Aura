@@ -7,8 +7,8 @@ import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any, cast
 
-from aura.infrastructure.wire.event_dto import WireEvent
-from aura.infrastructure.wire.wire import agent_state_to_wire, event_to_wire
+from aura.infrastructure.wire.events import WireEvent
+from aura.infrastructure.wire.serialize import agent_state_to_wire, event_to_wire
 
 
 async def stream_agent_wire(

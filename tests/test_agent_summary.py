@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from aura.application.services.agent_summary import (
+from aura.application.subagent_summary import (
     AgentSummarizer,
     _resolve_interval,
     run_summary_loop,

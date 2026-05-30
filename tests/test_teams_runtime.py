@@ -11,11 +11,21 @@ import pytest
 
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import Mailbox
+from aura.application.teams.manager import TeamManager
 from aura.application.teams.runtime import _format_envelope, run_teammate
+from aura.config.schema import AuraConfig
+from aura.core.agent import Agent
 from aura.domain.abort import AbortController
 from aura.domain.team import TeamMessage
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.schemas.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
+from tests.conftest import FakeChatModel
+
+
+@pytest.fixture(autouse=True)
+def _stub_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # add_member spawns a real teammate; llm.create resolves $OPENAI_API_KEY at construction time.
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-for-tests")
 
 
 def _msg(body: str = "hi", kind: str = "text", sender: str = "leader") -> TeamMessage:
@@ -30,6 +40,32 @@ def _msg(body: str = "hi", kind: str = "text", sender: str = "leader") -> TeamMe
 
 def _storage(tmp_path: Path) -> SessionStorage:
     return SessionStorage(tmp_path / "sessions.db")
+
+
+def _leader_agent(tmp_path: Path) -> Agent:
+    cfg = AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+        "teams": {"enabled": True},
+    })
+    return Agent(
+        config=cfg,
+        model=FakeChatModel(turns=[]),
+        storage=_storage(tmp_path),
+    )
+
+
+def _manager(tmp_path: Path) -> TeamManager:
+    leader = _leader_agent(tmp_path)
+    return TeamManager(
+        leader=leader,
+        storage=leader.storage,
+        factory=leader.subagent_factory,
+        running_aborts=leader.running_aborts,
+        tasks_store=leader.tasks_store,
+        runtime_runner=run_teammate,
+    )
 
 
 class _ScriptedAgent:
@@ -208,3 +244,79 @@ async def test_runtime_abort_stops_loop(tmp_path: Path) -> None:
     await asyncio.sleep(0.1)
     abort.abort("test")
     await asyncio.wait_for(task, timeout=15)
+
+
+@pytest.mark.asyncio
+async def test_team_lifecycle_events_create_add_remove_timeout_path(
+    tmp_path: Path,
+) -> None:
+    mgr = _manager(tmp_path)
+    mgr.create_team("demo")
+    created_events = mgr.drain_protocol_events()
+    assert [e["action"] for e in created_events] == ["team_lifecycle"]
+    assert created_events[0]["payload"] == {"state": "active"}
+
+    mgr.add_member("alice")
+    add_events = mgr.drain_protocol_events()
+    add_actions = [e["action"] for e in add_events]
+    assert add_actions == [
+        "member_lifecycle",
+        "member_lifecycle",
+        "member_lifecycle",
+    ]
+    assert [e["payload"] for e in add_events] == [
+        {"state": "starting"},
+        {"state": "ready", "previous_state": "starting"},
+        {"state": "idle", "previous_state": "ready"},
+    ]
+
+    acked = await mgr.aremove_member("alice", timeout_sec=0.01)
+    assert acked is False
+    remove_events = mgr.drain_protocol_events()
+    remove_actions = [e["action"] for e in remove_events]
+    assert remove_actions == ["member_lifecycle", "member_lifecycle"]
+    assert remove_events[0]["payload"] == {
+        "state": "draining",
+        "previous_state": "idle",
+    }
+    assert remove_events[1]["payload"] == {
+        "state": "terminated",
+        "previous_state": "draining",
+        "reason": "forced_timeout",
+    }
+
+
+@pytest.mark.asyncio
+async def test_team_lifecycle_events_delete_emits_draining_then_terminated(
+    tmp_path: Path,
+) -> None:
+    mgr = _manager(tmp_path)
+    mgr.create_team("demo")
+    mgr.drain_protocol_events()
+
+    mgr.delete_team()
+    events = mgr.drain_protocol_events()
+    assert [e["action"] for e in events] == ["team_lifecycle", "team_lifecycle"]
+    assert events[0]["payload"] == {
+        "state": "draining",
+        "previous_state": "active",
+    }
+    assert events[1]["payload"] == {
+        "state": "terminated",
+        "previous_state": "draining",
+    }
+
+
+@pytest.mark.asyncio
+async def test_team_view_snapshot_includes_additive_lifecycle_state(
+    tmp_path: Path,
+) -> None:
+    mgr = _manager(tmp_path)
+    record = mgr.create_team("demo")
+    assert record.lifecycle_state == "active"
+
+    mgr.add_member("alice")
+    snap = mgr.view_state("demo")
+    member = next(m for m in snap.members if m.name == "alice")
+    assert member.status == "active"
+    assert member.lifecycle_state == "idle"

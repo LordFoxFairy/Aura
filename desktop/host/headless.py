@@ -12,8 +12,8 @@ from aura.config.loader import load_config
 from aura.core.agent import Agent
 from aura.infrastructure import permission_store as perm_store
 from aura.infrastructure.llm import make_model_for_spec
+from aura.infrastructure.wire.serialize import agent_state_to_wire, event_to_wire
 from aura.infrastructure.wire.stream import encode_sse
-from aura.infrastructure.wire.wire import agent_state_to_wire, event_to_wire
 from desktop.host import session_service
 
 

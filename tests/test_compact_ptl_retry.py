@@ -16,7 +16,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import ConfigDict
 
-from aura.application.compact.compact import (
+from aura.application.compact.reactive import (
     _is_prompt_too_long,
     _run_summary_turn_with_retry,
 )

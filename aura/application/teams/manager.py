@@ -30,7 +30,7 @@ from aura.domain.team import (
 from aura.domain.team_memory import redact_secrets
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.infrastructure.wire.event_dto import WireEvent
+from aura.infrastructure.wire.events import CoordinationEvent, LifecyclePayload
 
 if TYPE_CHECKING:
     from aura.core.agent import Agent
@@ -47,6 +47,7 @@ class TeammateMemberStatus:
     status: str
     tokens_used: int
     last_active: float | None
+    lifecycle_state: str
 
 
 @dataclass(frozen=True)
@@ -106,7 +107,9 @@ class TeamManager:
         self._member_backends: dict[str, BackendHandle] = {}
         self._teammate_terminal_intents: dict[str, str] = {}
         self._session_created_teams: set[str] = set()
-        self._pending_protocol_events: list[WireEvent] = []
+        self._pending_protocol_events: list[CoordinationEvent] = []
+        self._team_lifecycle_state: str | None = None
+        self._member_lifecycle_states: dict[str, str] = {}
 
     @property
     def team(self) -> TeamRecord | None:
@@ -117,8 +120,44 @@ class TeamManager:
         return self._team is not None
 
     @property
-    def pending_protocol_events(self) -> tuple[WireEvent, ...]:
+    def pending_protocol_events(self) -> tuple[CoordinationEvent, ...]:
         return tuple(self._pending_protocol_events)
+
+    def _emit_team_lifecycle(self, state: str) -> None:
+        if self._team is None:
+            return
+        payload: LifecyclePayload = {"state": state}
+        if self._team_lifecycle_state is not None:
+            payload["previous_state"] = self._team_lifecycle_state
+        self._pending_protocol_events.append({
+            "event": "coordination",
+            "family": "team",
+            "action": "team_lifecycle",
+            "team_id": self._team.team_id,
+            "payload": payload,
+        })
+        self._team_lifecycle_state = state
+
+    def _emit_member_lifecycle(
+        self, name: str, state: str, *, reason: str | None = None,
+    ) -> None:
+        if self._team is None:
+            return
+        payload: LifecyclePayload = {"state": state}
+        previous = self._member_lifecycle_states.get(name)
+        if previous is not None:
+            payload["previous_state"] = previous
+        if reason is not None:
+            payload["reason"] = reason
+        self._pending_protocol_events.append({
+            "event": "coordination",
+            "family": "team",
+            "action": "member_lifecycle",
+            "team_id": self._team.team_id,
+            "member_id": name,
+            "payload": payload,
+        })
+        self._member_lifecycle_states[name] = state
 
     @property
     def storage(self) -> SessionStorage:
@@ -154,6 +193,9 @@ class TeamManager:
         self._team = record
         self._persist()
         self._session_created_teams.add(team_id)
+        self._team_lifecycle_state = None
+        self._member_lifecycle_states.clear()
+        self._emit_team_lifecycle("active")
         journal.write(
             "team_created",
             team_id=team_id,
@@ -170,11 +212,15 @@ class TeamManager:
             with contextlib.suppress(TeamError):
                 self.remove_member(member.name, force=True)
         team_id = self._team.team_id
+        self._emit_team_lifecycle("draining")
+        self._emit_team_lifecycle("terminated")
         self._session_created_teams.discard(team_id)
         team_dir = self._storage.team_root(team_id)
         with contextlib.suppress(FileNotFoundError):
             shutil.rmtree(team_dir)
         self._team = None
+        self._team_lifecycle_state = None
+        self._member_lifecycle_states.clear()
         journal.write("team_deleted", team_id=team_id, dir_removed=True)
 
     async def cleanup_session_teams(self) -> None:
@@ -311,6 +357,7 @@ class TeamManager:
                 "pane backend must be added via aadd_member() from an "
                 "async context (sync add_member supports in_process only)",
             )
+        self._emit_member_lifecycle(name, "starting")
         handle: BackendHandle
         if self._runtime_runner is not _default_runner:
             # Tests inject a runner directly; bypass the backend dispatch.
@@ -358,6 +405,8 @@ class TeamManager:
         if member.tmux_pane_id is not None:
             # Pane backend may have stamped tmux_pane_id during spawn.
             self._persist()
+        self._emit_member_lifecycle(name, "ready")
+        self._emit_member_lifecycle(name, "idle")
         journal.write(
             "team_member_added",
             team_id=self._team.team_id,
@@ -454,6 +503,7 @@ class TeamManager:
         abort = AbortController()
         self._running_aborts[record.id] = abort
         stop_event = asyncio.Event()
+        self._emit_member_lifecycle(name, "starting")
         handle = await backend.spawn(
             team_id=self._team.team_id,
             member=member,
@@ -475,6 +525,8 @@ class TeamManager:
         self._member_backends[name] = handle
         if member.tmux_pane_id is not None:
             self._persist()
+        self._emit_member_lifecycle(name, "ready")
+        self._emit_member_lifecycle(name, "idle")
         journal.write(
             "team_member_added",
             team_id=self._team.team_id,
@@ -551,6 +603,7 @@ class TeamManager:
         )
         self._team.members.pop(idx)
         self._persist()
+        self._emit_member_lifecycle(name, "draining")
         loop = asyncio.get_running_loop()
         ack_future: asyncio.Future[bool] = loop.create_future()
         self._shutdown_acks[name] = ack_future
@@ -582,6 +635,7 @@ class TeamManager:
                 team_id=team_id,
                 member=name,
             )
+            self._emit_member_lifecycle(name, "terminated")
             self._teardown_member(
                 name,
                 send_request=False,
@@ -595,6 +649,7 @@ class TeamManager:
             member=name,
             timeout_sec=timeout,
         )
+        self._emit_member_lifecycle(name, "terminated", reason="forced_timeout")
         self._teardown_member(name, send_request=False, journal_force=True)
         return False
 
@@ -771,6 +826,9 @@ class TeamManager:
                     status=status,
                     tokens_used=tokens,
                     last_active=last_active,
+                    lifecycle_state=self._member_lifecycle_states.get(
+                        m.name, "unknown",
+                    ),
                 ),
             )
         return out
@@ -844,24 +902,19 @@ class TeamManager:
             mailbox.append(msg)
             self._mailbox_notifier.signal(rcpt)
             sent.append(msg)
-            from aura.infrastructure.wire.wire import team_message_to_wire
+            from aura.infrastructure.wire.serialize import team_message_to_wire
             self._pending_protocol_events.append(
                 team_message_to_wire(msg, team_id=self._team.team_id),
             )
         return sent
 
     def _post(self, msg: TeamMessage) -> None:
-        # Control messages share redaction with text since bodies are LLM-generated.
+        # Internal shutdown plumbing; UI shows teardown via member_lifecycle, not raw mailbox.
         msg = msg.model_copy(update={"body": redact_secrets(msg.body)})
         self.mailbox().append(msg)
         self._mailbox_notifier.signal(msg.recipient)
-        if self._team is not None:
-            from aura.infrastructure.wire.wire import team_message_to_wire
-            self._pending_protocol_events.append(
-                team_message_to_wire(msg, team_id=self._team.team_id),
-            )
 
-    def drain_protocol_events(self) -> list[WireEvent]:
+    def drain_protocol_events(self) -> list[CoordinationEvent]:
         drained = list(self._pending_protocol_events)
         self._pending_protocol_events.clear()
         return drained

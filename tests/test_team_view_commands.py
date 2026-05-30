@@ -13,7 +13,7 @@ from aura.application.teams.manager import TeamManager
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.infrastructure.wire.wire import team_message_to_wire
+from aura.infrastructure.wire.serialize import team_message_to_wire
 from tests.conftest import FakeChatModel
 
 
@@ -211,6 +211,7 @@ async def test_team_send_enqueues_protocol_events_for_external_stream(
     await cmd.handle("enter demo", agent)
     await cmd.handle("add scout general-purpose", agent)
 
+    mgr.drain_protocol_events()  # create/add lifecycle events precede the send; isolate it
     sent = mgr.send(sender="leader", recipient="scout", body="ping")
 
     assert mgr.pending_protocol_events == (
@@ -229,6 +230,7 @@ async def test_agent_drain_protocol_events_includes_team_send_events(
     await cmd.handle("enter demo", agent)
     await cmd.handle("add scout general-purpose", agent)
 
+    agent.drain_protocol_events()  # create/add lifecycle events precede the send; isolate it
     sent = mgr.send(sender="leader", recipient="scout", body="ping")
 
     assert agent.drain_protocol_events() == [

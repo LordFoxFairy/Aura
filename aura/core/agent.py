@@ -58,7 +58,7 @@ from aura.infrastructure.mcp import MCPManager
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills import Skill, SkillRegistry, load_skills
-from aura.infrastructure.wire.event_dto import WireEvent
+from aura.infrastructure.wire.events import WireEvent
 from aura.schemas.events import AgentEvent, AssistantDelta, Final
 from aura.schemas.state import LoopState, ReadCarryover
 from aura.schemas.tool import ToolError
@@ -316,7 +316,7 @@ class Agent:
                 description=rec.description,
             )
             self._enqueue_task_notification(notification)
-            from aura.infrastructure.wire.wire import task_notification_to_wire
+            from aura.infrastructure.wire.serialize import task_notification_to_wire
             self._enqueue_protocol_event(
                 task_notification_to_wire(
                     notification,
@@ -329,7 +329,7 @@ class Agent:
             from aura.domain.task import TaskRecord
             if not isinstance(rec, TaskRecord):
                 return
-            from aura.infrastructure.wire.wire import task_started_to_wire
+            from aura.infrastructure.wire.serialize import task_started_to_wire
             self._enqueue_protocol_event(
                 task_started_to_wire(
                     task_id=rec.id,
@@ -345,7 +345,7 @@ class Agent:
             from aura.domain.task import TaskRecord
             if not isinstance(rec, TaskRecord):
                 return
-            from aura.infrastructure.wire.wire import task_progress_to_wire
+            from aura.infrastructure.wire.serialize import task_progress_to_wire
             self._enqueue_protocol_event(
                 task_progress_to_wire(
                     task_id=rec.id,

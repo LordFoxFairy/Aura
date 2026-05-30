@@ -8,14 +8,11 @@ from typing import Any, Literal, cast
 
 from aura.domain.task import TaskNotification
 from aura.domain.team import TeamMessage
-from aura.infrastructure.wire.event_dto import (
+from aura.infrastructure.wire.events import (
     AuraStateEvent,
     CompactEvent,
+    CoordinationEvent,
     PermissionRequestEvent,
-    SubagentProgressEvent,
-    SubagentProtocolEvent,
-    SubagentStartedEvent,
-    TeamProtocolEvent,
     WireEvent,
 )
 from aura.schemas.events import (
@@ -144,7 +141,7 @@ def task_notification_to_wire(
     notification: TaskNotification,
     *,
     parent_id: str | None = None,
-) -> SubagentProtocolEvent:
+) -> CoordinationEvent:
     """Map a terminal subagent task notification to coordination wire shape."""
     if notification.status == "running":
         raise ValueError("task_notification_to_wire requires a terminal status")
@@ -153,7 +150,7 @@ def task_notification_to_wire(
         else "failed" if notification.status == "failed"
         else "cancelled"
     )
-    payload: SubagentProtocolEvent = {
+    payload: CoordinationEvent = {
         "event": "coordination",
         "family": "subagent",
         "action": "task_notification",
@@ -178,9 +175,9 @@ def task_started_to_wire(
     parent_session_id: str,
     started_at: float,
     parent_id: str | None = None,
-) -> SubagentStartedEvent:
+) -> CoordinationEvent:
     """Build the live ``task_started`` coordination event."""
-    payload: SubagentStartedEvent = {
+    payload: CoordinationEvent = {
         "event": "coordination",
         "family": "subagent",
         "action": "task_started",
@@ -203,9 +200,9 @@ def task_progress_to_wire(
     tool_name: str,
     activity_count: int,
     parent_id: str | None = None,
-) -> SubagentProgressEvent:
+) -> CoordinationEvent:
     """Build a per-tool-start ``task_progress`` coordination event."""
-    payload: SubagentProgressEvent = {
+    payload: CoordinationEvent = {
         "event": "coordination",
         "family": "subagent",
         "action": "task_progress",
@@ -226,7 +223,7 @@ def team_message_to_wire(
     *,
     team_id: str,
     member_id: str | None = None,
-) -> TeamProtocolEvent:
+) -> CoordinationEvent:
     """Map a team mailbox send payload to coordination wire shape."""
     action: Literal["message_sent", "control_sent"] = (
         "message_sent" if message.kind == "text" else "control_sent"

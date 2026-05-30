@@ -9,7 +9,7 @@ from langchain_core.messages import BaseMessage
 from aura.domain.permission.session import SessionRuleSet
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
-from aura.infrastructure.wire.event_dto import WireEvent
+from aura.infrastructure.wire.events import WireEvent
 from aura.schemas.state import ReadCarryover
 
 if TYPE_CHECKING:

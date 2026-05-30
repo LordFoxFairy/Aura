@@ -14,6 +14,7 @@ status=cancelled.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 
@@ -594,6 +595,98 @@ async def test_subagent_spawner_does_not_propagate_abort_event_to_children() -> 
     child = factory.spawn("d1")
     assert child._subagent_factory.abort_event is None
     child.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_subagent_is_marked_cancelled_not_completed(
+    tmp_path: Path,
+) -> None:
+    # User-facing Ctrl+C path: a subagent whose wrapping asyncio.Task is
+    # cancelled must reach mark_cancelled, never mark_completed.
+    store = TasksStore()
+
+    class _HangingFake(FakeChatModel):
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
+            **_: Any,
+        ) -> ChatResult:
+            await asyncio.sleep(30)
+            raise RuntimeError("unreachable")
+
+    captured: dict[str, Any] = {}
+    factory = SubagentSpawner(
+        parent_config=_cfg(enabled=[]),
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: _HangingFake(),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        register_abort=lambda key, ctrl: captured.__setitem__(key, ctrl),
+    )
+
+    rec = store.create(description="cancel-me", prompt="hang")
+    bg = asyncio.create_task(run_task(store, factory, rec.id))
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not captured:
+        await asyncio.sleep(0.02)
+    assert captured, "spawner must register the inherited controller via DI"
+
+    bg.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await bg
+
+    r = store.get(rec.id)
+    assert r is not None
+    assert r.status == "cancelled", (
+        f"cancelled subagent must be mark_cancelled, not {r.status!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_inherited_abort_keeps_subagent_terminal_not_completed(
+    tmp_path: Path,
+) -> None:
+    # Load-bearing guard for the DI signal that replaced
+    # object.__setattr__(child, "_inherited_abort", ...): when a subagent's
+    # INHERITED AbortController fires, astream MUST re-raise (because
+    # self._parent_abort is not None) so run_local_agent lands on a terminal
+    # error status. If that re-raise signal is lost the child silently
+    # yields Final + returns normally and gets mark_completed — the exact
+    # regression this test fails on.
+    store = TasksStore()
+
+    captured: dict[str, Any] = {}
+
+    def _register(key: str, ctrl: Any) -> None:
+        captured[key] = ctrl
+        # Pre-abort before the child's first turn gate so astream raises
+        # AbortException deterministically (no hung model, no flake).
+        ctrl.abort("user_ctrl_c")
+
+    factory = SubagentSpawner(
+        parent_config=_cfg(enabled=[]),
+        parent_model_spec="openai:gpt-4o-mini",
+        model_factory=lambda: FakeChatModel(
+            turns=[FakeTurn(message=AIMessage(content="hi"))],
+        ),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        register_abort=_register,
+    )
+
+    rec = store.create(description="inherit-abort", prompt="go")
+    await asyncio.wait_for(run_task(store, factory, rec.id), timeout=3.0)
+
+    assert captured, "spawner must register the inherited controller via DI"
+    r = store.get(rec.id)
+    assert r is not None
+    assert r.status != "completed", (
+        "subagent whose inherited abort fired must NOT be mark_completed "
+        f"(re-raise signal lost); got {r.status!r}"
+    )
+    assert r.status == "failed", (
+        f"inherited-abort subagent should be terminal-failed, got {r.status!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

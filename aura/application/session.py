@@ -107,9 +107,13 @@ class AgentSession:
         deny_ruleset: RuleSet | None = None,
         ask_ruleset: RuleSet | None = None,
         safety: SafetyPolicy | None = None,
+        parent_abort: AbortController | None = None,
     ) -> None:
         self._config = config
         self._model = model
+        # Set when this session IS a subagent: the controller it inherits from the
+        # parent. Doubles as the "re-raise on abort so run_task sees terminal" signal.
+        self._parent_abort = parent_abort
         # switch_model mutates the live spec; config.router stays immutable.
         self._current_model_spec = config.router.get("default", "")
         self._session_runtime = SessionRuntime(
@@ -229,6 +233,10 @@ class AgentSession:
                 cwd=self._cwd, include_bundled=True,
             )
         self._tasks_store = TasksStore()
+        self._running_tasks: dict[str, asyncio.Task[None]] = {}
+        self._running_shells: dict[str, asyncio.subprocess.Process] = {}
+        # Each child registers its AbortController here so a single Ctrl+C cascades.
+        self._running_aborts: dict[str, AbortController] = {}
         # parent_mode_provider closes over self so mid-session mode changes
         # are visible to every spawn.
         self._subagent_factory = SubagentSpawner(
@@ -246,30 +254,8 @@ class AgentSession:
             parent_hooks=self._hooks,
             parent_model=self._model,
             parent_session_id=self._session_id,
+            register_abort=self._running_aborts.__setitem__,
         )
-        # Each child registers an AbortController so a single Ctrl+C cascades.
-        original_spawn = self._subagent_factory.spawn
-
-        def _spawn_with_abort(*args, **kwargs):  # type: ignore[no-untyped-def]  # variadic spawn signature varies across SubagentSpawner revisions
-            task_id = kwargs.get("task_id")
-            try:
-                child = original_spawn(*args, **kwargs)
-            except TypeError as exc:
-                if "model_spec" in str(exc) and "model_spec" in kwargs:
-                    kwargs.pop("model_spec", None)
-                    child = original_spawn(*args, **kwargs)
-                else:
-                    raise
-            controller = AbortController()
-            key = task_id if task_id is not None else child.session_id
-            self._running_aborts[key] = controller
-            object.__setattr__(child, "_inherited_abort", controller)
-            return child
-
-        self._subagent_factory.spawn = _spawn_with_abort  # type: ignore[method-assign]  # intentional method replacement on a per-Agent factory instance
-        self._running_tasks: dict[str, asyncio.Task[None]] = {}
-        self._running_shells: dict[str, asyncio.subprocess.Process] = {}
-        self._running_aborts: dict[str, AbortController] = {}
         # Typed loose so TeamManager doesn't trigger a circular import.
         self._team: object | None = None
         self._team_member_name: str | None = None
@@ -453,7 +439,7 @@ class AgentSession:
             self._state.turn_count = 0
 
             # Abort precedence: explicit kwarg > inherited from parent > own.
-            inherited = getattr(self, "_inherited_abort", None)
+            inherited = self._parent_abort
             local_abort = (
                 abort
                 if abort is not None
@@ -510,7 +496,7 @@ class AgentSession:
                         # Subagents re-raise so run_task sees a terminal status.
                         if isinstance(exc, asyncio.CancelledError):
                             raise
-                        if getattr(self, "_inherited_abort", None) is not None:
+                        if self._parent_abort is not None:
                             raise
                         return
                     yield Final(message="(cancelled)")

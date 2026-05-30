@@ -29,6 +29,7 @@ from aura.application.hooks import HookChain
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.permission.asker import AskerResponse
 from aura.config.schema import AuraConfig, ToolsConfig
+from aura.domain.abort import AbortController
 from aura.domain.agent_definition import AGENT_DISALLOWED_TOOLS
 from aura.domain.permission.mode import Mode
 from aura.domain.permission.rule import Rule
@@ -98,8 +99,9 @@ def _default_storage() -> SessionStorage:
 class SubagentSpawner:
     """Create a standalone Agent for a single subagent run."""
 
-    # Class-level default so subclasses that skip __init__ still see sane state.
+    # Class-level defaults so subclasses that skip __init__ still see sane state.
     _parent_abort_event: asyncio.Event | None = None
+    _register_abort: Callable[[str, AbortController], None] | None = None
 
     def __init__(
         self,
@@ -123,6 +125,7 @@ class SubagentSpawner:
         parent_hooks: HookChain | None = None,
         parent_model: BaseChatModel | None = None,
         parent_session_id: str | None = None,
+        register_abort: Callable[[str, AbortController], None] | None = None,
     ) -> None:
         self._parent_config = parent_config
         self._parent_storage = parent_storage
@@ -142,6 +145,7 @@ class SubagentSpawner:
         self._model_factory = model_factory
         self._storage_factory = storage_factory or _default_storage
         self._parent_abort_event = parent_abort_event
+        self._register_abort = register_abort
 
     @property
     def abort_event(self) -> asyncio.Event | None:
@@ -264,6 +268,9 @@ class SubagentSpawner:
             if task_id is not None
             else f"subagent-{uuid4().hex[:8]}"
         )
+        # The child's inherited controller: registered with the parent so a single
+        # Ctrl+C cascades, and injected so the child re-raises on abort.
+        child_abort = AbortController()
         child_agent = Agent(
             config=child_cfg,
             model=model,
@@ -275,5 +282,11 @@ class SubagentSpawner:
             system_prompt_suffix=type_def.system_prompt_suffix,
             carryover=carryover,
             mode=child_mode,
+            parent_abort=child_abort,
         )
+        if self._register_abort is not None:
+            self._register_abort(
+                task_id if task_id is not None else child_session_id,
+                child_abort,
+            )
         return child_agent

@@ -63,7 +63,10 @@ def _leader(storage: SessionStorage) -> Any:
 async def test_send_message_outside_team_raises(tmp_path: Path) -> None:
     agent = MagicMock()
     agent.team = None
-    tool = SendMessage(agent=agent)
+    tool = SendMessage(
+        team_provider=lambda: agent.team,
+        member_name_provider=lambda: agent._team_member_name,
+    )
     with pytest.raises(ToolError, match="not in a team"):
         await tool._arun(to="alice", body="hi")
 
@@ -82,7 +85,10 @@ async def test_send_message_unknown_recipient_raises(tmp_path: Path) -> None:
     )
     mgr.create_team("alpha")
     leader.team = mgr
-    tool = SendMessage(agent=leader)
+    tool = SendMessage(
+        team_provider=lambda: leader.team,
+        member_name_provider=lambda: leader._team_member_name,
+    )
     with pytest.raises(ToolError, match="unknown recipient"):
         await tool._arun(to="ghost", body="hi")
 
@@ -103,7 +109,10 @@ async def test_send_message_to_member_routes_to_mailbox(tmp_path: Path) -> None:
     mgr.add_member("alice")
     leader.team = mgr
     leader._team_member_name = None  # leader has no member name
-    tool = SendMessage(agent=leader)
+    tool = SendMessage(
+        team_provider=lambda: leader.team,
+        member_name_provider=lambda: leader._team_member_name,
+    )
     result = await tool._arun(to="alice", body="please scan")
     assert result["recipient"] == "alice"
     assert result["sender"] == "leader"
@@ -129,7 +138,10 @@ async def test_send_message_sender_is_team_member_when_set(tmp_path: Path) -> No
     teammate = MagicMock()
     teammate.team = mgr
     teammate._team_member_name = "alice"
-    tool = SendMessage(agent=teammate)
+    tool = SendMessage(
+        team_provider=lambda: teammate.team,
+        member_name_provider=lambda: teammate._team_member_name,
+    )
     result = await tool._arun(to="leader", body="here is my report")
     assert result["sender"] == "alice"
     assert result["recipient"] == "leader"

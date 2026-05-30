@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
@@ -64,11 +65,19 @@ class SendMessage(BaseTool):
         timeout_sec=None,
     )
 
-    _agent: Any = PrivateAttr()
+    _team_provider: Callable[[], Any] = PrivateAttr()
+    _member_name_provider: Callable[[], str | None] = PrivateAttr()
 
-    def __init__(self, *, agent: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        team_provider: Callable[[], Any],
+        member_name_provider: Callable[[], str | None],
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
-        self._agent = agent
+        self._team_provider = team_provider
+        self._member_name_provider = member_name_provider
 
     def _run(
         self, to: str, body: str, kind: SendMessageKind = "text",
@@ -78,13 +87,13 @@ class SendMessage(BaseTool):
     async def _arun(
         self, to: str, body: str, kind: SendMessageKind = "text",
     ) -> dict[str, Any]:
-        manager = getattr(self._agent, "team", None)
+        manager = self._team_provider()
         if manager is None or not getattr(manager, "is_active", False):
             raise ToolError(
                 "send_message: the calling agent is not in a team. "
                 "Create a team via /team create first.",
             )
-        sender = getattr(self._agent, "_team_member_name", None) or TEAM_LEADER_NAME
+        sender = self._member_name_provider() or TEAM_LEADER_NAME
         record = manager.team
         valid_names: set[str] = {TEAM_LEADER_NAME, BROADCAST_RECIPIENT}
         if record is not None:

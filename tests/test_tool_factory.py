@@ -136,8 +136,9 @@ def test_tool_runtime_optional_fields_default_to_none() -> None:
     assert runtime.running_tasks is None
     assert runtime.running_shells is None
     assert runtime.transcript_storage is None
-    assert runtime.agent is None
     assert runtime.team_manager is None
+    assert runtime.team_provider is None
+    assert runtime.member_name_provider is None
 
 
 # --- Task 6 factories ---------------------------------------------------
@@ -308,37 +309,31 @@ def test_task_stop_factory_rejects_missing_running_shells() -> None:
         TaskStopFactory().build(runtime)
 
 
-def test_send_message_factory_wires_runtime_agent() -> None:
-    """SendMessageFactory hands runtime.agent to SendMessage.
+def test_send_message_factory_wires_runtime_providers() -> None:
+    """SendMessageFactory wires live team/member providers into SendMessage.
 
-    The tool walks ``agent.team`` / ``agent._team_member_name`` at
-    invoke time, so the back-reference must be the SAME object the
-    Agent uses to track team membership.
+    Providers (not snapshots) so a join_team after tool construction is
+    reflected on the next invoke.
     """
-
-    class _AgentStub:
-        """Minimal stand-in — SendMessage.__init__ only needs an
-        attribute carrier (it reads ``.team`` lazily on each invoke,
-        not at construction)."""
-
-        team: object = None
-        _team_member_name: str | None = None
-
-    agent = _AgentStub()
-    runtime = ToolRuntime(state=LoopState(), agent=agent)
+    sentinel_team = object()
+    runtime = ToolRuntime(
+        state=LoopState(),
+        team_provider=lambda: sentinel_team,
+        member_name_provider=lambda: "alice",
+    )
 
     tool = SendMessageFactory().build(runtime)
 
     assert isinstance(tool, SendMessage)
     assert SendMessageFactory().name == "send_message"
-    # ``_agent`` is the PrivateAttr SendMessage stores the back-reference on.
-    assert tool._agent is agent
+    assert tool._team_provider() is sentinel_team
+    assert tool._member_name_provider() == "alice"
 
 
-def test_send_message_factory_rejects_missing_agent() -> None:
-    """Factory rejects when no Agent back-reference is wired."""
+def test_send_message_factory_rejects_missing_providers() -> None:
+    """Factory rejects when team/member providers are not wired."""
     runtime = ToolRuntime(state=LoopState())
-    with pytest.raises(RuntimeError, match="agent"):
+    with pytest.raises(RuntimeError, match="provider"):
         SendMessageFactory().build(runtime)
 
 

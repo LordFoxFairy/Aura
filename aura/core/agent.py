@@ -374,7 +374,8 @@ class Agent:
             running_tasks=self._running_tasks,
             running_shells=self._running_shells,
             transcript_storage=self._storage,
-            agent=self,
+            team_provider=lambda: self.team,
+            member_name_provider=lambda: self._team_member_name,
         )
         for factory in STATEFUL_TOOL_FACTORIES:
             self._available_tools[factory.name] = factory.build(tool_runtime)
@@ -825,7 +826,10 @@ class Agent:
         if "send_message" in self._registry:
             return
         from aura.tools.send_message import SendMessage
-        send_tool = SendMessage(agent=self)
+        send_tool = SendMessage(
+            team_provider=lambda: self.team,
+            member_name_provider=lambda: self._team_member_name,
+        )
         self._registry.register(send_tool)
         self._available_tools["send_message"] = send_tool
         self._loop.rebind_tools(self._registry.tools())

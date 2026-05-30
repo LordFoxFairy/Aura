@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
@@ -35,9 +36,10 @@ class ToolRuntime:
     running_tasks: dict[str, asyncio.Task[None]] | None = None
     running_shells: dict[str, asyncio.subprocess.Process] | None = None
     transcript_storage: SessionStorage | None = None
-    # Typed ``Any`` to break the agent <-> runtime import cycle.
-    agent: Any = None
     team_manager: TeamManager | None = None
+    # Providers (not snapshots): ToolRuntime is built once; team binding is set later by join_team.
+    team_provider: Callable[[], Any] | None = None
+    member_name_provider: Callable[[], str | None] | None = None
 
 
 @runtime_checkable
@@ -136,11 +138,14 @@ class SendMessageFactory:
     name: str = "send_message"
 
     def build(self, runtime: ToolRuntime) -> BaseTool:
-        if runtime.agent is None:
+        if runtime.team_provider is None or runtime.member_name_provider is None:
             raise RuntimeError(
-                "SendMessageFactory.build requires runtime.agent."
+                "SendMessageFactory.build requires team_provider + member_name_provider.",
             )
-        return SendMessage(agent=runtime.agent)
+        return SendMessage(
+            team_provider=runtime.team_provider,
+            member_name_provider=runtime.member_name_provider,
+        )
 
 
 STATEFUL_TOOL_FACTORIES: list[StatefulToolFactory] = [

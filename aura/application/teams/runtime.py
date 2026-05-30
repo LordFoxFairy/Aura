@@ -12,6 +12,7 @@ from aura.application.teams.mailbox import (
     Mailbox,
     MailboxNotifier,
 )
+from aura.application.teams.team_port import TeamPort
 from aura.domain.abort import AbortController, AbortException
 from aura.domain.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
 from aura.domain.team import TeamMessage
@@ -26,11 +27,10 @@ _WAIT_SLICE_SEC: float = 5.0
 
 
 def _task_tracking(agent: Agent) -> tuple[TasksStore, str] | None:
-    store = getattr(agent, "_teammate_tasks_store", None)
-    task_id = getattr(agent, "_teammate_task_id", None)
-    if store is None or not isinstance(task_id, str) or task_id == "":
+    binding = agent._teammate
+    if binding is None:
         return None
-    return store, task_id
+    return binding.tasks_store, binding.task_id
 
 
 def _record_teammate_note(agent: Agent, activity: str) -> None:
@@ -156,13 +156,11 @@ async def run_teammate(
                     "team_runtime_shutdown",
                     team_id=team_id, member=member_name, sender=shutdown.sender,
                 )
-                manager = getattr(agent, "team", None)
-                if manager is not None and getattr(manager, "is_active", False):
+                manager: TeamPort | None = agent.team
+                if manager is not None and manager.is_active:
                     # In-process: future ack; pane subprocess: inbox round-trip.
-                    confirm = getattr(manager, "confirm_shutdown", None)
-                    if callable(confirm):
-                        with contextlib.suppress(Exception):
-                            confirm(member_name, body=shutdown.body)
+                    with contextlib.suppress(Exception):
+                        manager.confirm_shutdown(member_name, body=shutdown.body)
                     with contextlib.suppress(Exception):
                         manager.send(
                             sender=member_name, recipient="leader",

@@ -336,9 +336,12 @@ class TeamManager:
             task_id=record.id,
             model_spec=model_name,
         )
-        child.join_team(manager=self, member_name=name)
-        object.__setattr__(child, "_teammate_task_id", record.id)
-        object.__setattr__(child, "_teammate_tasks_store", self._tasks_store)
+        child.join_team(
+            manager=self,
+            member_name=name,
+            task_id=record.id,
+            tasks_store=self._tasks_store,
+        )
         self._member_agents[name] = child
         self._member_task_ids[name] = record.id
         # Abort controller must register before runtime starts so a same-tick cascade finds it.
@@ -495,9 +498,12 @@ class TeamManager:
             task_id=record.id,
             model_spec=model_name,
         )
-        child.join_team(manager=self, member_name=name)
-        object.__setattr__(child, "_teammate_task_id", record.id)
-        object.__setattr__(child, "_teammate_tasks_store", self._tasks_store)
+        child.join_team(
+            manager=self,
+            member_name=name,
+            task_id=record.id,
+            tasks_store=self._tasks_store,
+        )
         self._member_agents[name] = child
         self._member_task_ids[name] = record.id
         abort = AbortController()

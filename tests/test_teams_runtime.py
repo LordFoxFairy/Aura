@@ -13,6 +13,7 @@ from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import Mailbox
 from aura.application.teams.manager import TeamManager
 from aura.application.teams.runtime import _format_envelope, run_teammate
+from aura.application.teams.team_port import TeammateBinding, TeamPort
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.domain.abort import AbortController
@@ -78,8 +79,11 @@ class _ScriptedAgent:
         self.replies = replies or ["ack"]
         self.prompts_seen: list[str] = []
         self._idx = 0
-        self._teammate_task_id: str | None = None
-        self._teammate_tasks_store: TasksStore | None = None
+        self._teammate: TeammateBinding | None = None
+
+    @property
+    def team(self) -> TeamPort | None:
+        return None
 
     async def astream(self, prompt: str, *, abort: Any = None) -> Any:
         self.prompts_seen.append(prompt)
@@ -149,8 +153,7 @@ async def test_runtime_records_teammate_task_progress(tmp_path: Path) -> None:
         kind="teammate",
     )
     agent = _ProgressAgent(replies=["got it"])
-    agent._teammate_task_id = record.id
-    agent._teammate_tasks_store = store
+    agent._teammate = TeammateBinding(task_id=record.id, tasks_store=store)
     abort = AbortController()
     stop = asyncio.Event()
     box.append(_msg(body="please work"))

@@ -48,6 +48,7 @@ from aura.application.runtime.tool_factory import (
 )
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
+from aura.application.teams.team_port import TeammateBinding, TeamPort
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.domain.abort import AbortController, AbortException
 from aura.domain.agent_definition import AgentDefinition
@@ -256,9 +257,9 @@ class AgentSession:
             parent_session_id=self._session_id,
             register_abort=self._running_aborts.__setitem__,
         )
-        # Typed loose so TeamManager doesn't trigger a circular import.
-        self._team: object | None = None
+        self._team: TeamPort | None = None
         self._team_member_name: str | None = None
+        self._teammate: TeammateBinding | None = None
 
         def _on_terminal(rec: object) -> None:
             from aura.domain.task import TaskNotification, TaskRecord
@@ -697,8 +698,8 @@ class AgentSession:
         return self._cwd
 
     @property
-    def team(self) -> object | None:
-        """Bound TeamManager (loose-typed to dodge an import cycle)."""
+    def team(self) -> TeamPort | None:
+        """Bound TeamManager, seen through its narrow structural contract."""
         return self._team
 
     @property
@@ -754,8 +755,10 @@ class AgentSession:
     def join_team(
         self,
         *,
-        manager: object,
+        manager: TeamPort,
         member_name: str | None = None,
+        task_id: str | None = None,
+        tasks_store: TasksStore | None = None,
     ) -> None:
         """Bind to a TeamManager; auto-enable send_message when allowed."""
         if not self._config.teams.enabled:
@@ -763,6 +766,8 @@ class AgentSession:
                 "teams disabled — set teams.enabled=true in "
                 ".aura/config.json to enable the multi-agent swarm subsystem"
             )
+        if task_id is not None and tasks_store is not None:
+            self._teammate = TeammateBinding(task_id=task_id, tasks_store=tasks_store)
         if self._team is manager and (
             member_name is None or self._team_member_name == member_name
         ):
@@ -776,6 +781,7 @@ class AgentSession:
         """Unbind and drop send_message iff we auto-added it."""
         self._team = None
         self._team_member_name = None
+        self._teammate = None
         self._auto_disable_send_message_for_team()
 
     def _auto_enable_send_message_for_team(self) -> None:

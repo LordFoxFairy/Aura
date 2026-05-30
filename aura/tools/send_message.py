@@ -8,6 +8,7 @@ from typing import Any, Literal
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
+from aura.application.teams.team_port import TeamPort
 from aura.domain.team import (
     BROADCAST_RECIPIENT,
     MAX_BODY_CHARS,
@@ -65,13 +66,13 @@ class SendMessage(BaseTool):
         timeout_sec=None,
     )
 
-    _team_provider: Callable[[], Any] = PrivateAttr()
+    _team_provider: Callable[[], TeamPort | None] = PrivateAttr()
     _member_name_provider: Callable[[], str | None] = PrivateAttr()
 
     def __init__(
         self,
         *,
-        team_provider: Callable[[], Any],
+        team_provider: Callable[[], TeamPort | None],
         member_name_provider: Callable[[], str | None],
         **kwargs: Any,
     ) -> None:
@@ -88,7 +89,7 @@ class SendMessage(BaseTool):
         self, to: str, body: str, kind: SendMessageKind = "text",
     ) -> dict[str, Any]:
         manager = self._team_provider()
-        if manager is None or not getattr(manager, "is_active", False):
+        if manager is None or not manager.is_active:
             raise ToolError(
                 "send_message: the calling agent is not in a team. "
                 "Create a team via /team create first.",

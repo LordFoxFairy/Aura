@@ -13,15 +13,15 @@ from pydantic import BaseModel
 from aura.application.hooks import HookChain
 from aura.application.hooks.logging import make_event_logger_hooks, wrap_with_event_logger
 from aura.core import journal as journal_module
+from aura.domain.permission.outcome import Allow
 from aura.domain.tool import ToolResult
-from aura.schemas.permissions import Allow
 from aura.schemas.state import LoopState
 from aura.tools.base import build_tool
 
 
 def _sc(outcome: object) -> ToolResult | None:
     """Extract the short-circuit result from Replace Outcome."""
-    from aura.schemas.permissions import Replace
+    from aura.domain.permission.outcome import Replace
     if isinstance(outcome, Replace):
         return outcome.result
     return getattr(outcome, "short_circuit", None)
@@ -247,8 +247,8 @@ def test_wrap_with_event_logger_preserves_inner_order() -> None:
         inner_calls.append("inner_post_model")
 
     async def _inner_pre_tool(**_: Any) -> Any:
-        from aura.application.permission.decision import Decision
-        from aura.schemas.permissions import Allow
+        from aura.domain.permission.decision import Decision
+        from aura.domain.permission.outcome import Allow
         inner_calls.append("inner_pre_tool")
         return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 

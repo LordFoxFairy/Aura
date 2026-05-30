@@ -25,11 +25,11 @@ from pydantic import BaseModel
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.permission.asker import AskerResponse, PermissionAsker
 from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
+from aura.domain.permission.outcome import Allow, Replace
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.domain.tool import ToolResult
 from aura.infrastructure.permission_store import PermissionStoreError
-from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
 from aura.tools.base import build_tool
 
@@ -611,7 +611,7 @@ async def test_asker_basexception_propagates_does_not_deny(
 
 async def test_hook_returns_decision_on_outcome() -> None:
     """The hook returns the Decision directly via Allow/Block/Replace (G4)."""
-    from aura.application.permission.decision import Decision
+    from aura.domain.permission.decision import Decision
 
     rules = RuleSet(rules=(Rule(tool="writer", content=None),))
     hook = make_permission_hook(

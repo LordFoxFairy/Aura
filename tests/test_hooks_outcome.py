@@ -34,10 +34,10 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.hooks import HookChain, PreToolHook
-from aura.application.permission.decision import Decision
+from aura.domain.permission.decision import Decision
+from aura.domain.permission.outcome import Allow, Ask, Block, Outcome, Replace
 from aura.domain.permission.rule import Rule
 from aura.domain.tool import ToolResult
-from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
 from aura.schemas.state import LoopState
 from aura.tools.base import build_tool
 

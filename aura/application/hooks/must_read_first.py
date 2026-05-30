@@ -15,9 +15,9 @@ from langchain_core.tools import BaseTool
 
 from aura.application.hooks import PreToolHook
 from aura.application.memory.context import Context
-from aura.application.permission.decision import Decision
+from aura.domain.permission.decision import Decision
+from aura.domain.permission.outcome import Allow, Replace
 from aura.domain.tool import ToolResult
-from aura.schemas.permissions import Allow, Replace
 from aura.schemas.state import LoopState
 
 _ReadStatus = Literal["never_read", "stale", "partial"]

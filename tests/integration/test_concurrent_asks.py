@@ -31,11 +31,11 @@ from pydantic import BaseModel
 from aura.application.hooks import HookChain
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.permission.asker import AskerResponse, PermissionAsker
-from aura.application.permission.decision import Decision
+from aura.domain.permission.decision import Decision
+from aura.domain.permission.outcome import Outcome, Replace
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.domain.tool import ToolResult
-from aura.schemas.permissions import Outcome, Replace
 from aura.tools.base import build_tool
 from cli._coordination import prompt_mutex
 from tests.conftest import FakeTurn

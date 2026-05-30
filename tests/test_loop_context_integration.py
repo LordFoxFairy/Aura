@@ -13,11 +13,11 @@ from pydantic import BaseModel
 from aura.application.hooks import HookChain
 from aura.application.memory.context import Context
 from aura.application.memory.rules import Rule, RulesBundle
-from aura.application.permission.decision import Decision
 from aura.core.loop import AgentLoop
+from aura.domain.permission.decision import Decision
+from aura.domain.permission.outcome import Outcome, Replace
 from aura.domain.tool import ToolResult
 from aura.domain.tool_registry import ToolRegistry
-from aura.schemas.permissions import Outcome, Replace
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn
 

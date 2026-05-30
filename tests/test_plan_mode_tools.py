@@ -42,7 +42,7 @@ from aura.tools.exit_plan_mode import ExitPlanMode
 
 def _sc(outcome: object) -> ToolResult | None:
     """Extract the short-circuit result from Replace Outcome."""
-    from aura.schemas.permissions import Replace
+    from aura.domain.permission.outcome import Replace
     if isinstance(outcome, Replace):
         return outcome.result
     return getattr(outcome, "short_circuit", None)

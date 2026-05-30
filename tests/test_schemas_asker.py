@@ -25,7 +25,7 @@ import dataclasses
 
 import pytest
 
-from aura.schemas.permissions import AskerPrompt, AskerResponse
+from aura.domain.permission.asker_io import AskerPrompt, AskerResponse
 
 
 def test_asker_prompt_constructs_with_all_fields() -> None:
@@ -113,11 +113,11 @@ def test_asker_response_rejects_unknown_choice() -> None:
         AskerResponse(choice="maybe", request_id="req-1")  # type: ignore[arg-type]
 
 
-def test_asker_types_exported_from_schemas_permissions() -> None:
-    from aura.schemas import permissions as perm_mod
+def test_asker_types_exported_from_domain_asker_io() -> None:
+    from aura.domain.permission import asker_io as asker_mod
 
-    assert hasattr(perm_mod, "AskerPrompt")
-    assert hasattr(perm_mod, "AskerResponse")
+    assert hasattr(asker_mod, "AskerPrompt")
+    assert hasattr(asker_mod, "AskerResponse")
 
 
 def test_asker_types_exported_from_schemas_init() -> None:

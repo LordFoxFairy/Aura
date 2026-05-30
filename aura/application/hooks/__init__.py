@@ -9,7 +9,6 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
-from aura.application.permission.decision import Decision
 from aura.domain.hook import (
     CwdChangedHook,
     FileChangedHook,
@@ -19,8 +18,9 @@ from aura.domain.hook import (
     PreModelHook,
     PreToolHook,
 )
+from aura.domain.permission.decision import Decision
+from aura.domain.permission.outcome import Allow, Ask, Block, Outcome, Replace
 from aura.domain.tool import ToolResult
-from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
 from aura.schemas.state import LoopState
 
 _ASK_RESOLVED_REASONS = frozenset({"user_accept", "user_always"})

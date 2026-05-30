@@ -12,9 +12,9 @@ from pydantic import BaseModel
 from aura.application.hooks import HookChain
 from aura.core.loop import AgentLoop
 from aura.domain.events import AgentEvent, Final, ToolCallCompleted
+from aura.domain.permission.outcome import Allow, Outcome
 from aura.domain.tool import ToolResult
 from aura.domain.tool_registry import ToolRegistry
-from aura.schemas.permissions import Allow, Outcome
 from aura.tools.base import build_tool
 from tests.conftest import FakeChatModel, FakeTurn, make_minimal_context
 
@@ -180,7 +180,7 @@ async def test_pre_tool_not_fired_for_unknown_tool() -> None:
     async def record(
         *, tool: BaseTool, args: dict[str, Any], state: object, **_: object
     ) -> Outcome:
-        from aura.application.permission.decision import Decision
+        from aura.domain.permission.decision import Decision
         calls.append(tool.name)
         return Allow(decision=Decision(allow=True, reason="mode_bypass"))
 

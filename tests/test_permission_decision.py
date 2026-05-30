@@ -1,10 +1,10 @@
-"""Tests for aura.application.permission.decision — Decision shape + invariants."""
+"""Tests for aura.domain.permission.decision — Decision shape + invariants."""
 
 from __future__ import annotations
 
 import pytest
 
-from aura.application.permission.decision import Decision
+from aura.domain.permission.decision import Decision
 from aura.domain.permission.rule import Rule
 
 

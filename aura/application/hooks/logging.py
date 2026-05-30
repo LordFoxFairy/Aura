@@ -9,11 +9,11 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 
 from aura.application.hooks import HookChain
-from aura.application.permission.decision import Decision
+from aura.domain.permission.decision import Decision
+from aura.domain.permission.outcome import Allow
 from aura.domain.tool import ToolResult
 from aura.domain.tool_meta_access import meta_dict
 from aura.infrastructure.persistence import journal
-from aura.schemas.permissions import Allow
 from aura.schemas.state import LoopState
 
 

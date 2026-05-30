@@ -25,7 +25,6 @@ from pydantic import BaseModel, ValidationError
 from aura.application.compact import Compactor, MicrocompactPolicy, apply_microcompact
 from aura.application.hooks import HookChain
 from aura.application.memory.context import Context
-from aura.application.permission.decision import Decision
 from aura.config.schema import RetryConfig
 from aura.domain.abort import AbortController, AbortException, current_abort_signal
 from aura.domain.events import (
@@ -37,12 +36,13 @@ from aura.domain.events import (
     ToolCallProgress,
     ToolCallStarted,
 )
+from aura.domain.permission.decision import Decision
+from aura.domain.permission.outcome import Allow, Ask, Block, Replace
 from aura.domain.tool import ToolError, ToolResult
 from aura.domain.tool_meta_access import meta_dict
 from aura.domain.tool_registry import ToolRegistry
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.retry import with_retry
-from aura.schemas.permissions import Allow, Ask, Block, Replace
 from aura.schemas.state import LoopState
 from aura.tools.errors import hint_for_error
 from aura.tools.progress import (

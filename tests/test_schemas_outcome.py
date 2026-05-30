@@ -18,9 +18,9 @@ import dataclasses
 
 import pytest
 
-from aura.application.permission.decision import Decision
+from aura.domain.permission.decision import Decision
+from aura.domain.permission.outcome import Allow, Ask, Block, Outcome, Replace
 from aura.domain.tool import ToolResult
-from aura.schemas.permissions import Allow, Ask, Block, Outcome, Replace
 
 
 def _allow_decision() -> Decision:
@@ -151,13 +151,13 @@ def test_outcome_union_accepts_each_variant() -> None:
     assert kinds == {"allow", "block", "ask", "replace"}
 
 
-def test_outcome_variants_exported_from_schemas_permissions() -> None:
-    """All four variant classes plus the ``Outcome`` alias must be
-    importable from the spec-mandated module path."""
-    from aura.schemas import permissions as perm_mod
+def test_outcome_variants_exported_from_domain_outcome() -> None:
+    """All four variant classes plus the ``Outcome`` alias live at the
+    domain permission home."""
+    from aura.domain.permission import outcome as outcome_mod
 
-    assert hasattr(perm_mod, "Allow")
-    assert hasattr(perm_mod, "Block")
-    assert hasattr(perm_mod, "Ask")
-    assert hasattr(perm_mod, "Replace")
-    assert hasattr(perm_mod, "Outcome")
+    assert hasattr(outcome_mod, "Allow")
+    assert hasattr(outcome_mod, "Block")
+    assert hasattr(outcome_mod, "Ask")
+    assert hasattr(outcome_mod, "Replace")
+    assert hasattr(outcome_mod, "Outcome")

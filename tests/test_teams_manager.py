@@ -310,7 +310,7 @@ async def test_add_member_teammate_uses_subagent_permission_contract(
     mgr.add_member("alice")
     child = mgr._member_agents["alice"]
     try:
-        from aura.schemas.permissions import Allow, Replace
+        from aura.domain.permission.outcome import Allow, Replace
 
         allowed = await child._hooks.run_pre_tool(
             tool=_AllowedTool(),

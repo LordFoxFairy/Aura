@@ -14,7 +14,7 @@ from aura.domain.state_values import (
 from aura.domain.todos import TodoItem
 
 if TYPE_CHECKING:
-    from aura.application.permission.decision import Decision
+    from aura.domain.permission.decision import Decision
     from aura.domain.permission.denials import PermissionDenial as Denial
     from aura.domain.skill import Skill
 else:

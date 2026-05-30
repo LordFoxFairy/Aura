@@ -8,6 +8,8 @@ from aura.domain.events import (
     ToolCallCompleted,
     ToolCallStarted,
 )
+from aura.domain.permission.asker_io import AskerPrompt, AskerResponse
+from aura.domain.permission.outcome import Allow, Ask, Block, Outcome, Replace
 from aura.domain.state_values import (
     PermissionKey,
     ReadCarryover,
@@ -23,17 +25,7 @@ from aura.domain.tool import (
     ValidationResult,
     tool_metadata,
 )
-from aura.schemas.permissions import (
-    Allow,
-    Ask,
-    AskerPrompt,
-    AskerResponse,
-    Block,
-    Outcome,
-    PermissionsConfig,
-    Replace,
-    StatusLineConfig,
-)
+from aura.schemas.permissions import PermissionsConfig, StatusLineConfig
 from aura.schemas.state import LoopSlots, LoopState
 
 __all__ = [

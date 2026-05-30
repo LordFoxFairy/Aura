@@ -5,10 +5,21 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Any, cast
+from typing import Any, Protocol, runtime_checkable
 
 from aura.infrastructure.wire.events import WireEvent
 from aura.infrastructure.wire.serialize import agent_state_to_wire, event_to_wire
+
+
+@runtime_checkable
+class _DrainsProtocolEvents(Protocol):
+    def drain_protocol_events(self) -> list[WireEvent]: ...
+
+
+@runtime_checkable
+class _HasPendingProtocolEvents(Protocol):
+    @property
+    def pending_protocol_events(self) -> tuple[WireEvent, ...]: ...
 
 
 async def stream_agent_wire(
@@ -55,11 +66,11 @@ async def stream_agent_wire_sse(
 
 
 def _drain_coordination_events(agent: Any) -> list[WireEvent]:
-    drain = getattr(agent, "drain_protocol_events", None)
-    if callable(drain):
-        return list(cast("list[WireEvent]", drain()))
-    pending = cast("tuple[WireEvent, ...]", getattr(agent, "pending_protocol_events", ()))
-    return list(pending)
+    if isinstance(agent, _DrainsProtocolEvents):
+        return list(agent.drain_protocol_events())
+    if isinstance(agent, _HasPendingProtocolEvents):
+        return list(agent.pending_protocol_events)
+    return []
 
 
 def _is_skipped_no_op_compact(payload: WireEvent) -> bool:

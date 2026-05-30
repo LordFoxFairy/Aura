@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import os
 from collections.abc import Callable
 from typing import Any
@@ -25,10 +24,10 @@ class MissingCredentialError(AuraConfigError):
     pass
 
 
-_PROTOCOLS: dict[str, tuple[str, str, str | None]] = {
-    "openai": ("langchain_openai", "ChatOpenAI", "OPENAI_API_KEY"),
-    "anthropic": ("langchain_anthropic", "ChatAnthropic", "ANTHROPIC_API_KEY"),
-    "ollama": ("langchain_ollama", "ChatOllama", None),
+_PROTOCOLS: dict[str, tuple[str, str | None]] = {
+    "openai": ("langchain_openai", "OPENAI_API_KEY"),
+    "anthropic": ("langchain_anthropic", "ANTHROPIC_API_KEY"),
+    "ollama": ("langchain_ollama", None),
 }
 
 
@@ -105,15 +104,21 @@ def get_context_window(model_spec: str) -> int:
 
 
 def _load_class(protocol: str) -> type[BaseChatModel]:
-    module_name, class_name, _ = _PROTOCOLS[protocol]
+    module_name = _PROTOCOLS[protocol][0]
     try:
-        module = importlib.import_module(module_name)
+        if protocol == "openai":
+            from langchain_openai import ChatOpenAI  # noqa: PLC0415  # lazy: optional provider SDK
+            return ChatOpenAI
+        if protocol == "anthropic":
+            from langchain_anthropic import ChatAnthropic  # noqa: PLC0415
+            return ChatAnthropic
+        from langchain_ollama import ChatOllama  # noqa: PLC0415
+        return ChatOllama
     except ModuleNotFoundError as exc:
         raise MissingProviderDependencyError(
             source="provider sdk",
             detail=f"{module_name} not installed. Run: pip install 'aura[{protocol}]'",
         ) from exc
-    return getattr(module, class_name)  # type: ignore[no-any-return]
 
 
 def _resolve_api_key(provider: ProviderConfig) -> str | None:
@@ -135,7 +140,7 @@ def _resolve_api_key(provider: ProviderConfig) -> str | None:
             )
         return key
 
-    default_env = _PROTOCOLS[provider.protocol][2]
+    default_env = _PROTOCOLS[provider.protocol][1]
     if default_env is None:
         return None  # ollama
 

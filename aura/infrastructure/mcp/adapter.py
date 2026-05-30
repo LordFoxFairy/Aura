@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
 
@@ -14,6 +14,32 @@ if TYPE_CHECKING:
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
     from aura.core.agent import Agent
+
+
+@runtime_checkable
+class _PromptArgLike(Protocol):
+    name: str
+    required: bool | None
+
+
+@runtime_checkable
+class _HasUri(Protocol):
+    uri: object
+
+
+@runtime_checkable
+class _HasMime(Protocol):
+    mimeType: object
+
+
+@runtime_checkable
+class _HasText(Protocol):
+    text: object
+
+
+@runtime_checkable
+class _HasBlob(Protocol):
+    blob: object
 
 
 _MCP_PREFIX = "mcp__"
@@ -39,21 +65,16 @@ def _cap_description(text: str) -> tuple[str, bool, int]:
 
 
 def _read_annotation_hints(tool: BaseTool) -> dict[str, bool | None]:
+    # langchain-mcp-adapters flattens MCP ToolAnnotations into BaseTool.metadata.
     hints: dict[str, bool | None] = {
         "readOnlyHint": None,
         "destructiveHint": None,
         "openWorldHint": None,
     }
-    md = getattr(tool, "metadata", None)
+    md = tool.metadata
     if isinstance(md, dict):
         for key in hints:
             val = md.get(key)
-            if isinstance(val, bool):
-                hints[key] = val
-    ann = getattr(tool, "annotations", None)
-    if ann is not None:
-        for key in hints:
-            val = getattr(ann, key, None)
             if isinstance(val, bool):
                 hints[key] = val
     return hints
@@ -263,7 +284,7 @@ def make_mcp_command(
     prompt_name: str,
     prompt_description: str,
     client: MultiServerMCPClient,
-    prompt_arguments: list[Any] | None = None,
+    prompt_arguments: list[_PromptArgLike] | None = None,
     op_timeout_sec: float = _DEFAULT_OP_TIMEOUT_SEC,
 ) -> _MCPPromptCommand:
     """Build a slash :class:`Command` that fetches and renders an MCP prompt."""
@@ -273,11 +294,13 @@ def make_mcp_command(
         names: list[str] = []
         required: set[str] = set()
         for pa in prompt_arguments:
-            name = getattr(pa, "name", None)
+            if not isinstance(pa, _PromptArgLike):
+                continue
+            name = pa.name
             if not isinstance(name, str) or not name:
                 continue
             names.append(name)
-            if getattr(pa, "required", False) is True:
+            if pa.required is True:
                 required.add(name)
         arg_names = tuple(names)
         required_args = frozenset(required)
@@ -300,18 +323,17 @@ def normalize_resource_contents(contents: Any) -> dict[str, Any]:
     """
     import base64
 
-    uri = getattr(contents, "uri", None)
-    mime = getattr(contents, "mimeType", None)
-    text = getattr(contents, "text", None)
-    if isinstance(text, str):
+    uri = contents.uri if isinstance(contents, _HasUri) else None
+    mime = contents.mimeType if isinstance(contents, _HasMime) else None
+    if isinstance(contents, _HasText) and isinstance(contents.text, str):
         return {
             "type": "text",
             "uri": None if uri is None else str(uri),
             "mime": mime,
-            "text": text,
+            "text": contents.text,
         }
-    blob = getattr(contents, "blob", None)
-    if isinstance(blob, str):
+    if isinstance(contents, _HasBlob) and isinstance(contents.blob, str):
+        blob = contents.blob
         try:
             size = len(base64.b64decode(blob, validate=False))
         except (ValueError, TypeError):

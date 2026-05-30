@@ -72,7 +72,7 @@ def event_to_wire(event: Any) -> WireEvent:
         return {
             "event": "final",
             "message": event.message,
-            "reason": getattr(event, "reason", "natural"),
+            "reason": event.reason,
         }
     return {"event": "unknown", "type": type(event).__name__}
 

@@ -162,9 +162,9 @@ def test_mcp_command_argument_hint_derived_from_prompt_args() -> None:
     """
 
     class _A:
-        def __init__(self, name: str, *, required: bool = False) -> None:
+        def __init__(self, name: str, *, required: bool | None = False) -> None:
             self.name = name
-            self.required = required
+            self.required: bool | None = required
 
     client = MagicMock()
     cmd = make_mcp_command(
@@ -201,16 +201,11 @@ async def test_make_mcp_command_handle_fetches_body_and_prints() -> None:
 
 
 class _PromptArg:
-    """Lightweight stand-in for ``mcp.types.PromptArgument``.
+    """Structural stand-in for ``mcp.types.PromptArgument`` (name + required)."""
 
-    The adapter reads ``.name`` and ``.required`` via ``getattr``; using a
-    plain class here avoids pulling the real pydantic model into the test
-    module (it would need importing ``mcp`` just for a duck-typed shape).
-    """
-
-    def __init__(self, name: str, *, required: bool = False) -> None:
+    def __init__(self, name: str, *, required: bool | None = False) -> None:
         self.name = name
-        self.required = required
+        self.required: bool | None = required
 
 
 @pytest.mark.asyncio

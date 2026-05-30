@@ -5,11 +5,36 @@ from __future__ import annotations
 import asyncio
 import random
 from collections.abc import Awaitable, Callable
-from typing import TypeVar
+from typing import Protocol, TypeVar, runtime_checkable
 
 from aura.infrastructure.persistence import journal
 
 T = TypeVar("T")
+
+
+@runtime_checkable
+class _Headers(Protocol):
+    def get(self, key: str, /) -> object | None: ...
+
+
+@runtime_checkable
+class _HasHeaders(Protocol):
+    headers: object
+
+
+@runtime_checkable
+class _HasResponse(Protocol):
+    response: object
+
+
+@runtime_checkable
+class _HasRetryAfter(Protocol):
+    retry_after: object
+
+
+@runtime_checkable
+class _HasRetryAfterMs(Protocol):
+    retry_after_ms: object
 
 # Class-name match — no SDK imports needed; covers openai + anthropic.
 _RETRIABLE_CLASS_NAMES: frozenset[str] = frozenset({
@@ -92,8 +117,9 @@ _RETRY_AFTER_MAX_S: float = 300.0
 
 
 def _extract_retry_after(exc: BaseException) -> float | None:
-    response = getattr(exc, "response", None)
-    headers = getattr(response, "headers", None)
+    response = exc.response if isinstance(exc, _HasResponse) else None
+    raw_headers = response.headers if isinstance(response, _HasHeaders) else None
+    headers = raw_headers if isinstance(raw_headers, _Headers) else None
     if headers is not None:
         raw: object | None = None
         try:
@@ -110,13 +136,15 @@ def _extract_retry_after(exc: BaseException) -> float | None:
             if seconds > 0:
                 return min(seconds, _RETRY_AFTER_MAX_S)
 
-    direct = getattr(exc, "retry_after", None)
-    if isinstance(direct, (int, float)) and direct > 0:
-        return min(float(direct), _RETRY_AFTER_MAX_S)
+    if isinstance(exc, _HasRetryAfter):
+        direct = exc.retry_after
+        if isinstance(direct, (int, float)) and direct > 0:
+            return min(float(direct), _RETRY_AFTER_MAX_S)
 
-    direct_ms = getattr(exc, "retry_after_ms", None)
-    if isinstance(direct_ms, (int, float)) and direct_ms > 0:
-        return min(float(direct_ms) / 1000.0, _RETRY_AFTER_MAX_S)
+    if isinstance(exc, _HasRetryAfterMs):
+        direct_ms = exc.retry_after_ms
+        if isinstance(direct_ms, (int, float)) and direct_ms > 0:
+            return min(float(direct_ms) / 1000.0, _RETRY_AFTER_MAX_S)
 
     return None
 

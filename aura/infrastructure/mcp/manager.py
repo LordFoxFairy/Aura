@@ -10,9 +10,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import os
+from collections.abc import Awaitable
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -27,6 +28,46 @@ from aura.infrastructure.mcp.types import MCPServerConfig
 
 if TYPE_CHECKING:
     from aura.application.commands.types import Command
+
+
+@runtime_checkable
+class _HasCode(Protocol):
+    code: object
+
+
+@runtime_checkable
+class _HasRoot(Protocol):
+    root: object
+
+
+@runtime_checkable
+class _HasMethod(Protocol):
+    method: object
+
+
+@runtime_checkable
+class _PromptLike(Protocol):
+    name: object
+    description: object
+    arguments: object
+
+
+@runtime_checkable
+class _ResourceLike(Protocol):
+    uri: object
+    name: object
+    description: object
+    mimeType: object
+
+
+@runtime_checkable
+class _AsyncClosable(Protocol):
+    def aclose(self) -> Awaitable[object]: ...
+
+
+@runtime_checkable
+class _Closable(Protocol):
+    def close(self) -> object: ...
 
 
 MCPServerState = Literal[
@@ -46,8 +87,7 @@ _NEEDS_AUTH_HINTS = ("oauth", "unauthorized", "401", "403")
 
 def _is_needs_auth_error(exc: BaseException) -> bool:
     """Return True iff *exc* indicates an MCP authentication failure."""
-    code = getattr(exc, "code", None)
-    if code == _NEEDS_AUTH_CODE:
+    if isinstance(exc, _HasCode) and exc.code == _NEEDS_AUTH_CODE:
         return True
     text = str(exc).lower()
     return any(hint in text for hint in _NEEDS_AUTH_HINTS)
@@ -124,8 +164,8 @@ def _make_list_changed_logger(server_name: str) -> Any:
     )
 
     async def _handler(message: Any) -> None:
-        root = getattr(message, "root", None) or message
-        method = getattr(root, "method", None)
+        root = message.root if isinstance(message, _HasRoot) and message.root else message
+        method = root.method if isinstance(root, _HasMethod) else None
         if isinstance(method, str) and method in _LIST_CHANGED_METHODS:
             journal.write(
                 "mcp_list_changed",
@@ -148,7 +188,7 @@ class MCPManager:
         self._configs_all: list[MCPServerConfig] = list(configs)
         self._configs: list[MCPServerConfig] = [c for c in configs if c.enabled]
         self._client: MultiServerMCPClient | None = None
-        self._resources: dict[tuple[str, str], Any] = {}
+        self._resources: dict[tuple[str, str], _ResourceLike] = {}
 
         self._state: dict[str, MCPServerState] = {}
         self._errors: dict[str, str] = {}
@@ -342,17 +382,20 @@ class MCPManager:
             prompts = []
         commands: list[Command] = []
         for p in prompts:
-            name = getattr(p, "name", None)
+            if not isinstance(p, _PromptLike):
+                continue
+            name = p.name
             if not isinstance(name, str) or not name:
                 continue
-            description = getattr(p, "description", None) or name
+            description = p.description or name
+            arguments = p.arguments if isinstance(p.arguments, list) else []
             commands.append(
                 make_mcp_command(
                     server_name=cfg.name,
                     prompt_name=name,
                     prompt_description=str(description),
                     client=self._client,
-                    prompt_arguments=getattr(p, "arguments", None) or [],
+                    prompt_arguments=arguments,
                     op_timeout_sec=self._op_timeout_sec,
                 )
             )
@@ -375,10 +418,9 @@ class MCPManager:
             k: v for k, v in self._resources.items() if k[0] != cfg.name
         }
         for r in resources:
-            uri_val = getattr(r, "uri", None)
-            if uri_val is None:
+            if not isinstance(r, _ResourceLike) or r.uri is None:
                 continue
-            self._resources[(cfg.name, str(uri_val))] = r
+            self._resources[(cfg.name, str(r.uri))] = r
 
         journal.write(
             "mcp_server_connected",
@@ -479,9 +521,10 @@ class MCPManager:
         """
         entries: list[tuple[str, str, str, str, str | None]] = []
         for (server, uri), resource in self._resources.items():
-            name = getattr(resource, "name", None) or uri.rsplit("/", 1)[-1] or uri
-            description = getattr(resource, "description", None) or ""
-            mime_type = getattr(resource, "mimeType", None)
+            name = resource.name or uri.rsplit("/", 1)[-1] or uri
+            description = resource.description or ""
+            mime = resource.mimeType
+            mime_type = mime if isinstance(mime, str) else None
             entries.append((server, uri, str(name), str(description), mime_type))
         entries.sort(key=lambda e: (e[0], e[1]))
         return entries
@@ -546,13 +589,17 @@ class MCPManager:
 
         if self._client is None:
             return
-        for attr in ("aclose", "close"):
-            fn = getattr(self._client, attr, None)
-            if callable(fn):
-                with suppress(Exception):
-                    result = fn()
-                    if inspect.isawaitable(result):
-                        await result
+        # The pinned library exposes no close hook; call one defensively if a
+        # future version adds aclose/close so sessions can't leak.
+        client: object = self._client
+        if isinstance(client, _AsyncClosable):
+            with suppress(Exception):
+                await client.aclose()
+        if isinstance(client, _Closable):
+            with suppress(Exception):
+                result = client.close()
+                if inspect.isawaitable(result):
+                    await result
         self._client = None
 
     def _build_connections(self) -> dict[str, Any]:

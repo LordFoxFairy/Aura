@@ -91,20 +91,21 @@ def test_aura_config_exports() -> None:
     assert callable(load_config)
 
 
-def test_aura_schemas_exports() -> None:
-    """Schemas package is the neutral leaf; its surface is stable and imported
-    by both core and tools. Lock the current set."""
-    from aura.schemas import (  # noqa: F401  # import is the assertion / fixture side-effect
+def test_layered_value_homes() -> None:
+    """The former ``aura.schemas`` surface, now sunk to its layered homes:
+    events/tool/todos in domain, LoopState in application, config in config."""
+    from aura.application.loop_state import LoopState
+    from aura.config.schema import PermissionsConfig
+    from aura.domain.events import (  # noqa: F401  # import is the assertion
         AgentEvent,
         AssistantDelta,
         Final,
-        LoopState,
         PermissionAudit,
-        PermissionsConfig,
-        TodoItem,
-        TodoStatus,
         ToolCallCompleted,
         ToolCallStarted,
+    )
+    from aura.domain.todos import TodoItem, TodoStatus  # noqa: F401
+    from aura.domain.tool import (  # noqa: F401
         ToolError,
         ToolResult,
         tool_metadata,

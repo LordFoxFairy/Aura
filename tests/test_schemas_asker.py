@@ -1,4 +1,4 @@
-"""Tests for ``AskerPrompt`` + ``AskerResponse`` in ``aura.schemas.permissions``.
+"""Tests for ``AskerPrompt`` + ``AskerResponse`` in ``aura.domain.permission.asker_io``.
 
 Phase 5 Task 3 — schema contracts only. The CLI / IPC / subagent askers
 migrate to consume / produce these in Tasks 4-6.
@@ -120,13 +120,13 @@ def test_asker_types_exported_from_domain_asker_io() -> None:
     assert hasattr(asker_mod, "AskerResponse")
 
 
-def test_asker_types_exported_from_schemas_init() -> None:
-    """``aura.schemas`` is the leaf layer — re-exporting keeps the
-    asker boundary discoverable from the top-level data namespace."""
-    import aura.schemas as schemas_mod
-
-    assert hasattr(schemas_mod, "AskerPrompt")
-    assert hasattr(schemas_mod, "AskerResponse")
+def test_asker_types_importable_from_domain_home() -> None:
+    """Both asker IO types are importable directly from their canonical
+    domain home."""
+    from aura.domain.permission.asker_io import (  # noqa: F401
+        AskerPrompt,
+        AskerResponse,
+    )
 
 
 def test_request_id_pairing_round_trip() -> None:

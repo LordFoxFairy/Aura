@@ -49,7 +49,7 @@ def test_mode_literal_accepts_all_four_values() -> None:
 
 def test_mode_alias_matches_schemas_permissions_mode_field() -> None:
     # Parallel type-equivalence with PermissionsConfig.mode: same Literal values.
-    from aura.schemas.permissions import PermissionsConfig
+    from aura.config.schema import PermissionsConfig
 
     schema_field = PermissionsConfig.model_fields["mode"].annotation
     assert set(get_args(schema_field)) == set(get_args(Mode))

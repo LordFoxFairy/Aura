@@ -125,7 +125,7 @@ def _ns(**kw: object) -> object:
 def test_resolve_mode_defaults_to_default() -> None:
     # Post-2026-04-21: _resolve_mode takes a PermissionsConfig, not AuraConfig.
     # No flag + default PermissionsConfig (mode="default") → "default".
-    from aura.schemas.permissions import PermissionsConfig
+    from aura.config.schema import PermissionsConfig
     from cli.__main__ import _resolve_mode
 
     args = _ns(bypass_permissions=False)
@@ -136,7 +136,7 @@ def test_resolve_mode_defaults_to_default() -> None:
 def test_resolve_mode_reads_permissions_config_mode() -> None:
     # PermissionsConfig comes from settings.json (via store.load), not from
     # AuraConfig. Mode set there should be honored when the flag is off.
-    from aura.schemas.permissions import PermissionsConfig
+    from aura.config.schema import PermissionsConfig
     from cli.__main__ import _resolve_mode
 
     perm_cfg = PermissionsConfig(mode="bypass")
@@ -146,7 +146,7 @@ def test_resolve_mode_reads_permissions_config_mode() -> None:
 
 
 def test_resolve_mode_cli_flag_wins_over_settings_default() -> None:
-    from aura.schemas.permissions import PermissionsConfig
+    from aura.config.schema import PermissionsConfig
     from cli.__main__ import _resolve_mode
 
     perm_cfg = PermissionsConfig(mode="default")
@@ -159,7 +159,7 @@ def test_resolve_mode_cli_flag_wins_even_over_settings_bypass() -> None:
     # Trivial but worth locking: flag True always wins regardless of the
     # settings value. (A user could explicitly set bypass in both places;
     # ordering must be predictable.)
-    from aura.schemas.permissions import PermissionsConfig
+    from aura.config.schema import PermissionsConfig
     from cli.__main__ import _resolve_mode
 
     perm_cfg = PermissionsConfig(mode="bypass")
@@ -231,7 +231,7 @@ def test_disable_bypass_false_allows_bypass_flag() -> None:
     # main() path requires an LLM client; the kill-switch check lives
     # AFTER _resolve_mode in main() and is covered by the subprocess
     # test above.
-    from aura.schemas.permissions import PermissionsConfig
+    from aura.config.schema import PermissionsConfig
     from cli.__main__ import _resolve_mode
 
     perm_cfg = PermissionsConfig(disable_bypass=False)

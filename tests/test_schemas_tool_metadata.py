@@ -183,16 +183,13 @@ def test_tool_metadata_helper_still_returns_dict_for_backwards_compat() -> None:
     assert legacy["is_concurrency_safe"] is True
 
 
-def test_tool_metadata_exported_from_aura_schemas() -> None:
-    """``ToolMetadata`` is part of the leaf package's public surface
-    so consumers in ``aura.core`` / ``aura.tools`` can import via
-    ``from aura.schemas import ToolMetadata``.
-    """
-    from aura import schemas
+def test_tool_metadata_exported_from_domain_tool() -> None:
+    """``ToolMetadata`` lives in ``aura.domain.tool`` — consumers in
+    ``aura.core`` / ``aura.tools`` import it from there."""
+    from aura.domain import tool as tool_mod
 
-    assert hasattr(schemas, "ToolMetadata")
-    assert schemas.ToolMetadata is ToolMetadata
-    assert "ToolMetadata" in schemas.__all__
+    assert hasattr(tool_mod, "ToolMetadata")
+    assert tool_mod.ToolMetadata is ToolMetadata
 
 
 def test_validation_result_default_reason_is_empty() -> None:
@@ -235,13 +232,10 @@ def test_validation_result_invalid_is_required() -> None:
         ValidationResult()  # type: ignore[call-arg]  # exercising missing/extra arg path
 
 
-def test_validation_result_exported_from_aura_schemas() -> None:
-    """``ValidationResult`` is part of the leaf package's public
-    surface — Task 8's permission gate imports via
-    ``from aura.schemas import ValidationResult``.
-    """
-    from aura import schemas
+def test_validation_result_exported_from_domain_tool() -> None:
+    """``ValidationResult`` lives in ``aura.domain.tool`` — the permission
+    gate imports it from there."""
+    from aura.domain import tool as tool_mod
 
-    assert hasattr(schemas, "ValidationResult")
-    assert schemas.ValidationResult is ValidationResult
-    assert "ValidationResult" in schemas.__all__
+    assert hasattr(tool_mod, "ValidationResult")
+    assert tool_mod.ValidationResult is ValidationResult

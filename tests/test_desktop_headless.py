@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from aura.application.hooks.permission import make_permission_hook
 from aura.config.loader import load_config
+from aura.config.schema import PermissionsConfig
 from aura.core.agent import Agent
 from aura.domain.events import (
     AssistantDelta,
@@ -25,7 +26,6 @@ from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet
 from aura.infrastructure import permission_store as perm_store
 from aura.infrastructure.llm import make_model_for_spec
-from aura.schemas.permissions import PermissionsConfig
 from aura.tools.base import build_tool
 from desktop.host import headless, session_service
 

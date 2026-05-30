@@ -1,4 +1,4 @@
-"""Tests for the ``Outcome`` tagged union in ``aura.schemas.permissions``.
+"""Tests for the ``Outcome`` tagged union in ``aura.domain.permission.outcome``.
 
 Phase 1 Task 1 — schema contracts only. Hooks migrate to return
 ``Outcome`` in Tasks 8-10. These tests assert the variant shapes,

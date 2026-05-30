@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from aura.config.schema import AuraConfigError
+from aura.config.schema import AuraConfigError, PermissionsConfig
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet
 from aura.infrastructure.permission_store import (
@@ -17,7 +17,6 @@ from aura.infrastructure.permission_store import (
     load_ruleset,
     save_rule,
 )
-from aura.schemas.permissions import PermissionsConfig
 
 
 def test_load_on_nonexistent_file_returns_defaults(tmp_path: Path) -> None:

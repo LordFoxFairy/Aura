@@ -1,7 +1,7 @@
 """Phase 1 Task 10 — Outcome is the only pre_tool hook return contract.
 
 Covers the spec §3.2 merge precedence matrix for two-hook chains where
-both hooks return :class:`aura.schemas.permissions.Outcome` variants
+both hooks return :class:`aura.domain.permission.outcome.Outcome` variants
 (``Allow`` / ``Block`` / ``Ask`` / ``Replace``):
 
     Block > Replace > Ask > Allow(authoritative) > Allow(mode_bypass)

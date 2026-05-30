@@ -12,10 +12,9 @@ from aura import __version__
 if TYPE_CHECKING:
     from rich.console import Console
 
-    from aura.config.schema import AuraConfig
+    from aura.config.schema import AuraConfig, PermissionsConfig
     from aura.core.agent import Agent
     from aura.domain.permission.mode import Mode
-    from aura.schemas.permissions import PermissionsConfig
 
 
 def _force_utf8_streams() -> None:

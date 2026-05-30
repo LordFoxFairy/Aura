@@ -22,7 +22,7 @@ from typing import Any, Literal
 import pathspec
 from pydantic import ValidationError
 
-from aura.config.schema import AuraConfigError
+from aura.config.schema import AuraConfigError, PermissionsConfig
 from aura.domain.errors import AuraError
 from aura.domain.permission.rule import InvalidRuleError, Rule
 from aura.domain.permission.safety import (
@@ -30,7 +30,6 @@ from aura.domain.permission.safety import (
     DEFAULT_PROTECTED_WRITES,
 )
 from aura.domain.permission.session import RuleSet
-from aura.schemas.permissions import PermissionsConfig
 
 
 class PermissionStoreError(AuraError):

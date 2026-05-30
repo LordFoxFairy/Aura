@@ -28,6 +28,7 @@ from aura.application.loop_state import LoopState
 from aura.application.memory.context import Context
 from aura.config.schema import RetryConfig
 from aura.domain.abort import AbortController, AbortException, current_abort_signal
+from aura.domain.context_overflow import is_context_overflow
 from aura.domain.events import (
     AgentEvent,
     AssistantDelta,
@@ -382,9 +383,6 @@ class AgentLoop:
         # Bump turn_count first so pre_model hooks see "the Nth turn about to run".
         self._state.turn_count += 1
         await self._hooks.run_pre_model(history=history, state=self._state)
-        # Deferred import breaks the agent ↔ loop cycle.
-        from aura.core.agent import is_context_overflow
-
         recompact_attempts = 0
         messages: list[BaseMessage]
         ai: AIMessage

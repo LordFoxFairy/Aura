@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from aura.core.agent import is_context_overflow
+from aura.domain.context_overflow import is_context_overflow
 
 
 class TestKnownPhrasings:

@@ -20,7 +20,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
-from aura.core.loop import AgentLoop
+from aura.application.loop import AgentLoop
 from aura.domain.events import (
     AgentEvent,
     ToolCallCompleted,

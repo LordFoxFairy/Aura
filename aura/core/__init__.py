@@ -13,10 +13,10 @@ from aura.application.hooks.budget import (
     make_usage_tracking_hook,
 )
 from aura.application.hooks.permission import make_permission_hook
+from aura.application.loop import AgentLoop, ToolStep
 from aura.application.loop_state import LoopState
 from aura.application.permission.asker import AskerResponse, PermissionAsker
 from aura.core.agent import Agent, build_agent
-from aura.core.loop import AgentLoop, ToolStep
 from aura.domain.errors import AuraError
 from aura.domain.events import (
     AgentEvent,

@@ -10,7 +10,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
-from aura.core.loop import AgentLoop
+from aura.application.loop import AgentLoop
 from aura.domain.events import AgentEvent, AssistantDelta, Final
 from aura.domain.tool_registry import ToolRegistry
 from aura.tools.base import build_tool

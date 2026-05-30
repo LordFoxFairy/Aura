@@ -20,9 +20,9 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
+from aura.application.loop import AgentLoop
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.core.loop import AgentLoop
 from aura.domain.abort import (
     AbortController,
     AbortException,

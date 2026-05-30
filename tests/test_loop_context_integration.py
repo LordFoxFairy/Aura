@@ -11,9 +11,9 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
+from aura.application.loop import AgentLoop
 from aura.application.memory.context import Context
 from aura.application.memory.rules import Rule, RulesBundle
-from aura.core.loop import AgentLoop
 from aura.domain.permission.decision import Decision
 from aura.domain.permission.outcome import Outcome, Replace
 from aura.domain.tool import ToolResult

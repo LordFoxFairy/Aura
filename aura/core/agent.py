@@ -32,6 +32,8 @@ from aura.application.hooks import HookChain
 from aura.application.hooks.bash_safety import make_bash_safety_hook
 from aura.application.hooks.budget import default_hooks
 from aura.application.hooks.must_read_first import make_must_read_first_hook
+from aura.application.loop import DEFAULT_SESSION as _DEFAULT_SESSION
+from aura.application.loop import AgentLoop
 from aura.application.loop_state import LoopState
 from aura.application.memory import project_memory, rules
 from aura.application.memory.context import Context
@@ -45,8 +47,6 @@ from aura.application.runtime.tool_factory import (
 from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core.loop import DEFAULT_SESSION as _DEFAULT_SESSION
-from aura.core.loop import AgentLoop
 from aura.domain.abort import AbortController, AbortException
 from aura.domain.events import AgentEvent, AssistantDelta, Final
 from aura.domain.permission.denials import PermissionDenial
@@ -65,36 +65,6 @@ from aura.infrastructure.skills import Skill, SkillRegistry, load_skills
 from aura.infrastructure.wire.events import WireEvent
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 from aura.tools.ask_user import FormQuestionDict, UserAsker
-
-# Match on stringified message so provider SDK types stay out of imports.
-_CONTEXT_OVERFLOW_PHRASES: tuple[str, ...] = (
-    "context length",
-    "context_length_exceeded",
-    "maximum context",
-    "prompt is too long",
-    "prompt exceeds max length",
-    "input too long",
-    "exceeds max length",
-    "request payload size exceeds",
-    "too many tokens",
-    "max_tokens exceeded",
-)
-
-# Structured codes survive SDK message localisation; phrase match would miss.
-_CONTEXT_OVERFLOW_CODES: tuple[str, ...] = (
-    "1261",
-)
-
-
-def is_context_overflow(exc: BaseException) -> bool:
-    """True iff ``exc`` matches a known provider context-overflow signature."""
-    msg = str(exc).lower()
-    if any(phrase in msg for phrase in _CONTEXT_OVERFLOW_PHRASES):
-        return True
-    for code in _CONTEXT_OVERFLOW_CODES:
-        if f"'code': '{code}'" in msg or f'"code": "{code}"' in msg:
-            return True
-    return False
 
 
 async def _unavailable_question_asker(

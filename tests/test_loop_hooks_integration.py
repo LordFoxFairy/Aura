@@ -13,8 +13,8 @@ from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
 from aura.application.hooks.budget import make_size_budget_hook
+from aura.application.loop import AgentLoop
 from aura.application.loop_state import LoopState
-from aura.core.loop import AgentLoop
 from aura.domain.events import (
     AgentEvent,
     PermissionAudit,
@@ -348,7 +348,7 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
         return Allow(decision=expected_decision)
 
     # Spy on the Loop's ToolStep to confirm the decision lands on it.
-    from aura.core.loop import ToolStep
+    from aura.application.loop import ToolStep
     captured_steps: list[ToolStep] = []
 
     orig_plan = AgentLoop._plan_tool_calls

@@ -18,7 +18,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
-from aura.core.loop import _MAX_LENGTH_RETRY, AgentLoop
+from aura.application.loop import _MAX_LENGTH_RETRY, AgentLoop
 from aura.domain.events import AgentEvent, Final, ToolCallStarted
 from aura.domain.tool_registry import ToolRegistry
 from aura.infrastructure.persistence import journal

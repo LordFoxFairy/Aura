@@ -14,11 +14,11 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
+from aura.application.loop import AgentLoop
 from aura.application.loop_state import LoopState
 from aura.config.schema import AuraConfig
 from aura.core import journal as journal_module
 from aura.core.agent import Agent
-from aura.core.loop import AgentLoop
 from aura.domain.events import (
     AgentEvent,
     Final,

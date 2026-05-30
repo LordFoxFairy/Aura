@@ -16,6 +16,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
+from aura.application.agent_context import AgentContext
 from aura.application.compact import (
     MICROCOMPACT_KEEP_RECENT,
     MICROCOMPACT_TRIGGER_PAIRS,
@@ -38,6 +39,7 @@ from aura.application.loop_state import LoopState
 from aura.application.memory import project_memory, rules
 from aura.application.memory.context import Context
 from aura.application.memory.system_prompt import build_system_prompt
+from aura.application.run_agent import run_agent
 from aura.application.runtime.mcp import McpRuntime
 from aura.application.runtime.session import SessionRuntime
 from aura.application.runtime.tool_factory import (
@@ -48,6 +50,7 @@ from aura.application.tasks.factory import SubagentFactory
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.domain.abort import AbortController, AbortException
+from aura.domain.agent_definition import AgentDefinition
 from aura.domain.events import AgentEvent, AssistantDelta, Final
 from aura.domain.permission.denials import PermissionDenial
 from aura.domain.permission.mode import Mode
@@ -463,8 +466,9 @@ class AgentSession:
             saw_ai_message = False
             try:
                 try:
-                    async for event in self._loop.run_turn(
-                        history=history, abort=local_abort,
+                    turn_context = AgentContext(loop=self._loop, abort=local_abort)
+                    async for event in run_agent(
+                        self.definition, history, turn_context,
                     ):
                         if isinstance(event, AssistantDelta):
                             self._partial_assistant_text += event.text
@@ -840,6 +844,16 @@ class AgentSession:
     @property
     def config(self) -> AuraConfig:
         return self._config
+
+    @property
+    def definition(self) -> AgentDefinition:
+        """Static config snapshot for this turn (model/mode are live, so rebuilt)."""
+        return AgentDefinition(
+            system_prompt=self._system_prompt,
+            model_spec=self._current_model_spec,
+            permission_mode=self._mode,
+            tool_names=frozenset(self._config.tools.enabled),
+        )
 
     @property
     def hooks(self) -> HookChain:

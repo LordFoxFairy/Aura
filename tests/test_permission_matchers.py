@@ -95,4 +95,4 @@ def test_custom_matcher_without_key_attribute_reads_as_none() -> None:
 def test_key_attribute_matches_constructor_arg_verbatim() -> None:
     # Any string key round-trips: the attribute is not normalized.
     m = exact_match_on("weirdly_named_arg_42")
-    assert m.key == "weirdly_named_arg_42"  # type: ignore[attr-defined]  # test sets attribute mypy can't see
+    assert m.key == "weirdly_named_arg_42"

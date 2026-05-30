@@ -7,6 +7,7 @@ from typing import Protocol, runtime_checkable
 
 from aura.application.tasks.store import TasksStore
 from aura.domain.team import TeamMessage, TeamMessageKind, TeamRecord
+from aura.infrastructure.wire.events import CoordinationEvent
 
 
 @dataclass(frozen=True)
@@ -35,3 +36,10 @@ class TeamPort(Protocol):
     ) -> list[TeamMessage]: ...
 
     def confirm_shutdown(self, member_name: str, *, body: str = "") -> None: ...
+
+    @property
+    def pending_protocol_events(self) -> tuple[CoordinationEvent, ...]: ...
+
+    def drain_protocol_events(self) -> list[CoordinationEvent]: ...
+
+    async def cleanup_session_teams(self) -> None: ...

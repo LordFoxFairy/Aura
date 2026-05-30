@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from langchain_core.tools import BaseTool
 
 from aura.domain.errors import AuraError
-from aura.domain.tool import ToolMetadata
+from aura.domain.tool import HasAuraMetadata, ToolMetadata
 
 
 class ToolRegistryError(AuraError):
@@ -15,11 +15,14 @@ class ToolRegistryError(AuraError):
 
 
 def _require_aura_metadata(tool: BaseTool) -> None:
-    aura_meta = getattr(tool, "aura_metadata", None)
-    if not isinstance(aura_meta, ToolMetadata):
+    if not (
+        isinstance(tool, HasAuraMetadata)
+        and isinstance(tool.aura_metadata, ToolMetadata)
+    ):
+        found = tool.aura_metadata if isinstance(tool, HasAuraMetadata) else None
         raise ToolRegistryError(
             f"tool {tool.name!r} is missing required aura_metadata: "
-            f"ToolMetadata (got {type(aura_meta).__name__}); every "
+            f"ToolMetadata (got {type(found).__name__}); every "
             f"Aura-registered tool must declare ToolMetadata so the "
             f"loop / permission hook / CLI can read its capability flags"
         )

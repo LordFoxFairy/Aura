@@ -70,7 +70,7 @@ def _format_transcript(messages: list[BaseMessage]) -> str:
         elif isinstance(msg, AIMessage):
             role = "assistant"
         elif isinstance(msg, ToolMessage):
-            role = f"tool({getattr(msg, 'name', '?')})"
+            role = f"tool({msg.name or '?'})"
         else:
             role = msg.type if hasattr(msg, "type") else "msg"
         content = msg.content if isinstance(msg.content, str) else str(msg.content)

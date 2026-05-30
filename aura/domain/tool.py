@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 ToolRuleMatcher = Callable[[dict[str, Any], str], bool]
 ToolArgsPreview = Callable[[dict[str, Any]], str]
 ToolFlagResolver = Callable[[dict[str, Any]], bool]
+
+
+@runtime_checkable
+class KeyedRuleMatcher(Protocol):
+    key: str
+
+    def __call__(self, args: dict[str, Any], content: str, /) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -35,6 +42,11 @@ class ToolMetadata:
     timeout_sec: float | None
     max_result_size_chars: int | None = None
     capability_flags: frozenset[str] = field(default_factory=frozenset)
+
+
+@runtime_checkable
+class HasAuraMetadata(Protocol):
+    aura_metadata: ToolMetadata
 
 
 class ToolError(Exception):

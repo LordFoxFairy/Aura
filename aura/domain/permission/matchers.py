@@ -1,8 +1,8 @@
 """Tool-agnostic rule matchers used by Rule.matches for pattern rules.
 
 Matchers carry a .key attribute naming the args slot they inspect; the CLI
-reads this to render precise rule hints. External matchers may omit it —
-callers must use getattr(matcher, "key", None).
+reads this to render precise rule hints (KeyedRuleMatcher). External matchers
+may be plain callables without a key.
 """
 
 from __future__ import annotations
@@ -10,25 +10,28 @@ from __future__ import annotations
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePath
 
-from aura.domain.tool import ToolRuleMatcher
+from aura.domain.tool import KeyedRuleMatcher
 
 
-def exact_match_on(key: str) -> ToolRuleMatcher:
-    def _matches(args: dict[str, object], content: str) -> bool:
-        value = args.get(key)
+class _ExactMatch:
+    def __init__(self, key: str) -> None:
+        self.key = key
+
+    def __call__(self, args: dict[str, object], content: str, /) -> bool:
+        value = args.get(self.key)
         if not isinstance(value, str):
             return False
         if "*" in content or "?" in content:
             return fnmatchcase(value, content)
         return value == content
 
-    _matches.key = key  # type: ignore[attr-defined]  # WHY: tests + CLI read this slot
-    return _matches
 
+class _PathPrefixMatch:
+    def __init__(self, key: str) -> None:
+        self.key = key
 
-def path_prefix_on(key: str) -> ToolRuleMatcher:
-    def _matches(args: dict[str, object], content: str) -> bool:
-        value = args.get(key)
+    def __call__(self, args: dict[str, object], content: str, /) -> bool:
+        value = args.get(self.key)
         if not isinstance(value, str):
             return False
         try:
@@ -43,8 +46,13 @@ def path_prefix_on(key: str) -> ToolRuleMatcher:
         except ValueError:
             return False
 
-    _matches.key = key  # type: ignore[attr-defined]  # WHY: tests + CLI read this slot
-    return _matches
+
+def exact_match_on(key: str) -> KeyedRuleMatcher:
+    return _ExactMatch(key)
+
+
+def path_prefix_on(key: str) -> KeyedRuleMatcher:
+    return _PathPrefixMatch(key)
 
 
 def _normalize_match_path(raw: str) -> PurePath:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
@@ -26,10 +26,15 @@ from aura.domain.tool import ToolResult
 _ASK_RESOLVED_REASONS = frozenset({"user_accept", "user_always"})
 
 
+# Hook closures expose __qualname__; arbitrary __call__ instances may not.
+@runtime_checkable
+class _QualNamed(Protocol):
+    __qualname__: str
+
+
 def _hook_name(hook: PreToolHook) -> str:
-    # Protocol callables aren't required to be functions; dunders are best-effort.
-    module = getattr(hook, "__module__", "")
-    qualname = getattr(hook, "__qualname__", repr(hook))
+    module = hook.__module__
+    qualname = hook.__qualname__ if isinstance(hook, _QualNamed) else repr(hook)
     return f"{module}.{qualname}".lstrip(".")
 
 

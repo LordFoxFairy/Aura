@@ -9,7 +9,7 @@ import socket
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from typing import Any, TypedDict
+from typing import Any, Protocol, TypedDict, runtime_checkable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -220,9 +220,25 @@ def _build_summary_prompt(prompt: str, body: str) -> str:
     )
 
 
+# Provider subclasses expose the model id under varying attrs:
+# Anthropic/others use model_name; OpenAI uses model.
+@runtime_checkable
+class _HasModelName(Protocol):
+    model_name: str
+
+
+@runtime_checkable
+class _HasModel(Protocol):
+    model: str
+
+
 def _model_name(model: BaseChatModel) -> str:
-    # Feature-detection: provider subclasses expose the id under varying attrs.
-    name = getattr(model, "model_name", None) or getattr(model, "model", None)
+    if isinstance(model, _HasModelName) and model.model_name:
+        name: object = model.model_name
+    elif isinstance(model, _HasModel) and model.model:
+        name = model.model
+    else:
+        name = None
     return name if isinstance(name, str) else type(model).__name__
 
 

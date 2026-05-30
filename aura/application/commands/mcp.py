@@ -76,8 +76,19 @@ class MCPCommand:
                 handled=True, kind="print",
                 text="no MCP manager attached (no servers configured)",
             )
-        method = getattr(manager, action)
-        text = await method(target)
+        match action:
+            case "enable":
+                text = await manager.enable(target)
+            case "disable":
+                text = await manager.disable(target)
+            case "reconnect":
+                text = await manager.reconnect(target)
+            case "approve":
+                text = await manager.approve(target)
+            case "revoke":
+                text = await manager.revoke(target)
+            case _:
+                return _unknown_subcommand(action)
         return CommandResult(handled=True, kind="print", text=text)
 
 

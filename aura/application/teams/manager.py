@@ -10,7 +10,7 @@ import re
 import shutil
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
@@ -37,6 +37,13 @@ if TYPE_CHECKING:
     from aura.infrastructure.teams.types import BackendHandle
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+# Only the in-process backend handle carries an asyncio task to await; pane
+# handles run out-of-process and expose none.
+@runtime_checkable
+class _HasTask(Protocol):
+    task: asyncio.Task[None]
 
 
 @dataclass(frozen=True)
@@ -521,8 +528,9 @@ class TeamManager:
             seed_prompt=seed_prompt,
             notifier=self._mailbox_notifier,
         )
-        task = getattr(handle, "task", None)
-        if isinstance(task, asyncio.Task):
+        if isinstance(handle, _HasTask):
+            task = handle.task
+
             def _cleanup(_t: asyncio.Task[None]) -> None:
                 self._finalize_runtime_task(record.id, _t, abort)
             task.add_done_callback(_cleanup)
@@ -815,9 +823,8 @@ class TeamManager:
                         tokens = int(rec.progress.token_count)
                         last_active = rec.progress.last_activity_at
                         # Resolved spec reflects the inherited default when override is empty.
-                        resolved = getattr(rec, "model_spec", None)
-                        if resolved:
-                            model_spec = resolved
+                        if rec.model_spec:
+                            model_spec = rec.model_spec
             if not m.is_active:
                 status = "dead"
             elif live and m.name in self._shutdown_waiters:

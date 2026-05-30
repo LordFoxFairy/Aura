@@ -158,7 +158,7 @@ def _resolve_journal_path(agent: Agent) -> Path | None:
     """Live journal path → config default → None."""
     from aura.infrastructure.persistence import journal as journal_mod
 
-    live = getattr(journal_mod, "_path", None)
+    live = journal_mod._path
     if isinstance(live, Path):
         return live
     cfg = agent.config

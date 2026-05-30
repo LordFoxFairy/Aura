@@ -143,10 +143,7 @@ class McpRuntime:
             entries = mgr.status()
         except Exception:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             return []
-        return [
-            e.name for e in entries
-            if getattr(e, "state", None) == "connected"
-        ]
+        return [e.name for e in entries if e.state == "connected"]
 
     async def disconnect_all(
         self,

@@ -29,7 +29,7 @@ def _members(agent: Agent) -> list[TeammateMember]:
     The manager is stored on a private attribute by ``_ensure_manager``;
     this helper centralizes the cast so the test bodies stay readable.
     """
-    mgr = cast(TeamManager, agent._team_manager)  # type: ignore[attr-defined]  # test sets attribute mypy can't see
+    mgr = cast(TeamManager, agent._team_manager)
     return mgr.list_members()
 
 

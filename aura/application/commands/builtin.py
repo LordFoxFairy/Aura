@@ -39,7 +39,7 @@ class HelpCommand:
             lines.append("")
             lines.append(f"  {heading}:")
             for cmd in group:
-                hint = getattr(cmd, "argument_hint", None)
+                hint = cmd.argument_hint
                 label = f"{cmd.name} {hint}" if hint else cmd.name
                 description = cmd.description.split("\n", 1)[0].strip()
                 lines.append(f"    {label:<24} {description}")
@@ -118,7 +118,7 @@ class ContextCommand:
             "other": 0,
         }
         for msg in agent.context.build([]):
-            content = getattr(msg, "content", "")
+            content = msg.content
             if not isinstance(content, str):
                 content = str(content)
             tokens = estimate_message_tokens(msg)

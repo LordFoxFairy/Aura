@@ -9,7 +9,7 @@ import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
@@ -76,13 +76,19 @@ _LENGTH_RESUME_PROMPT: str = (
 )
 
 
+# Anthropic surfaces stop_reason as a top-level attr; OpenAI omits it.
+@runtime_checkable
+class _HasStopReason(Protocol):
+    stop_reason: object
+
+
 def _length_truncated(ai: AIMessage) -> bool:
     """True iff ``ai`` was cut short by a provider's max-output-tokens cap."""
-    meta = getattr(ai, "response_metadata", None) or {}
+    meta = ai.response_metadata
     candidates: list[object] = [
         meta.get("finish_reason"),
         meta.get("stop_reason"),
-        getattr(ai, "stop_reason", None),
+        ai.stop_reason if isinstance(ai, _HasStopReason) else None,
     ]
     return any(
         isinstance(raw, str) and raw.lower() in _LENGTH_FINISH_REASONS
@@ -322,7 +328,7 @@ class AgentLoop:
         the next astream's history valid. Idempotent on answered ids.
         """
         for msg in reversed(history):
-            if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+            if isinstance(msg, AIMessage) and msg.tool_calls:
                 for tc in msg.tool_calls:
                     tc_id = tc.get("id")
                     if not tc_id or tc_id in answered_ids:
@@ -493,7 +499,7 @@ class AgentLoop:
         return AIMessage(
             content=ai.content,
             response_metadata={
-                **(getattr(ai, "response_metadata", None) or {}),
+                **ai.response_metadata,
                 "finish_reason": "length_recovery_exhausted",
             },
         )

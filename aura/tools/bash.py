@@ -10,7 +10,7 @@ import signal
 import subprocess
 import sys
 from asyncio.subprocess import Process
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, Protocol, TypedDict, runtime_checkable
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +25,17 @@ _HARD_CEILING_BYTES = 100 * 1024 * 1024
 _STREAM_CHUNK = 8192
 _SHUTDOWN_GRACE = 0.5
 _REAP_TIMEOUT = 2.0
+
+
+# The std event loop's Process exposes a closable _transport; some loops omit it.
+@runtime_checkable
+class _ClosableTransport(Protocol):
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class _HasTransport(Protocol):
+    _transport: _ClosableTransport
 
 
 class BashParams(BaseModel):
@@ -186,11 +197,9 @@ async def _drain_pipes(proc: Process) -> None:
             timeout=_REAP_TIMEOUT,
         )
 
-    # Private CPython asyncio attr; absent on some transports, so feature-detect.
-    transport = getattr(proc, "_transport", None)
-    if transport is not None:
+    if isinstance(proc, _HasTransport) and proc._transport is not None:
         with contextlib.suppress(Exception):  # pragma: no cover - defensive
-            transport.close()
+            proc._transport.close()
 
 
 class Bash(Tool):
@@ -231,10 +240,7 @@ class Bash(Tool):
         # Heterogeneous by-platform: creationflags(int) | start_new_session(bool).
         spawn_kwargs: dict[str, Any] = {}
         if sys.platform == "win32":
-            # Feature-detection: CREATE_NEW_PROCESS_GROUP is Windows-only on subprocess.
-            spawn_kwargs["creationflags"] = getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-            )
+            spawn_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             spawn_kwargs["start_new_session"] = True
         try:

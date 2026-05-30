@@ -42,7 +42,7 @@ def estimate_message_tokens(
     *,
     include_tool_calls: bool = True,
 ) -> int:
-    content = getattr(message, "content", "")
+    content = message.content
     total = estimate_text_tokens(content if isinstance(content, str) else str(content))
     if include_tool_calls and isinstance(message, AIMessage):
         for tool_call in message.tool_calls or []:

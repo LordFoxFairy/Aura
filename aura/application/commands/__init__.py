@@ -41,7 +41,7 @@ def __getattr__(name: str) -> Any:
     module_name = _EXPORTS.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    return getattr(import_module(module_name), name)
+    return vars(import_module(module_name))[name]
 
 
 def __dir__() -> list[str]:

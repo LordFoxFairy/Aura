@@ -66,7 +66,7 @@ def _install_no_runtime_manager(agent: Agent) -> TeamManager:
         tasks_store=agent._tasks_store,
         runtime_runner=_no_runtime,
     )
-    agent._team_manager = mgr  # type: ignore[attr-defined]  # test sets attribute mypy can't see
+    agent._team_manager = mgr
     return mgr
 
 

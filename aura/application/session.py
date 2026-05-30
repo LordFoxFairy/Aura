@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -48,6 +48,7 @@ from aura.application.runtime.tool_factory import (
 )
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
+from aura.application.teams.manager import TeamManager
 from aura.application.teams.team_port import TeammateBinding, TeamPort
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.domain.abort import AbortController, AbortException
@@ -69,6 +70,7 @@ from aura.infrastructure.skills import Skill, SkillRegistry, load_skills
 from aura.infrastructure.wire.events import WireEvent
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 from aura.tools.ask_user import FormQuestionDict, UserAsker
+from aura.tools.web_fetch import set_default_model_factory
 
 
 async def _unavailable_question_asker(
@@ -208,15 +210,9 @@ class AgentSession:
             list(self._config.tools.enabled)
             != list(_ShippedToolsConfig().enabled)
         )
-        try:
-            from aura.infrastructure import llm as _llm_mod
-            from aura.tools import web_fetch as _wf_mod
-            _make_factory = getattr(_llm_mod, "make_summary_model_factory", None)
-            _set_default = getattr(_wf_mod, "set_default_model_factory", None)
-            if _make_factory is not None and _set_default is not None:
-                _set_default(_make_factory(self._config, self._model))
-        except ImportError:
-            pass
+        set_default_model_factory(
+            llm.make_summary_model_factory(self._config, self._model)
+        )
     def _init_subagents(
         self,
         *,
@@ -258,6 +254,9 @@ class AgentSession:
             register_abort=self._running_aborts.__setitem__,
         )
         self._team: TeamPort | None = None
+        # Concrete manager the /team command stack caches across invocations;
+        # distinct from _team, which holds the narrow TeamPort contract.
+        self._team_manager: TeamManager | None = None
         self._team_member_name: str | None = None
         self._teammate: TeammateBinding | None = None
 
@@ -372,9 +371,7 @@ class AgentSession:
         self._available_tools["skill"] = BUILTIN_STATEFUL_TOOLS["skill"](
             recorder=self.record_skill_invocation,
             registry=self._skill_registry,
-            session_id_provider=(
-                lambda: getattr(self, "_session_id", _DEFAULT_SESSION)
-            ),
+            session_id_provider=lambda: self._session_id,
             session_rules_provider=lambda: self._session_rules,
             loop_state_provider=lambda: self._state,
         )
@@ -710,11 +707,10 @@ class AgentSession:
     @property
     def pending_protocol_events(self) -> tuple[WireEvent, ...]:
         """Snapshot of queued coordination wire events for transports."""
-        events = list(self._session_runtime.pending_protocol_events)
+        events: list[WireEvent] = list(self._session_runtime.pending_protocol_events)
         team = self._team
         if team is not None:
-            pending = getattr(team, "pending_protocol_events", ())
-            events.extend(cast("list[WireEvent]", list(pending)))
+            events.extend(team.pending_protocol_events)
         return tuple(events)
 
     def buffer_partial_assistant_text(self, text: str) -> None:
@@ -732,13 +728,10 @@ class AgentSession:
 
     def drain_protocol_events(self) -> list[WireEvent]:
         """Pop queued coordination wire events, oldest first."""
-        drained = self._session_runtime.drain_protocol_events()
+        drained: list[WireEvent] = self._session_runtime.drain_protocol_events()
         team = self._team
         if team is not None:
-            drain_team_events = getattr(team, "drain_protocol_events", None)
-            if callable(drain_team_events):
-                team_events = cast("list[WireEvent]", drain_team_events())
-                drained.extend(team_events)
+            drained.extend(team.drain_protocol_events())
         return drained
 
     async def _cascade_abort_to_children(self, reason: str) -> None:
@@ -993,7 +986,7 @@ class AgentSession:
 
         tokens = 0
         for message in self._context.build([]):
-            content = getattr(message, "content", "")
+            content = message.content
             if isinstance(content, str):
                 tokens += estimate_text_tokens(content)
         # Tool schemas count toward the cached prefix the provider bills.
@@ -1002,7 +995,7 @@ class AgentSession:
             tokens += estimate_text_tokens(tool.description or "")
             try:
                 schema = json.dumps(
-                    getattr(tool, "args", {}) or {},
+                    tool.args,
                     default=str,
                     ensure_ascii=False,
                 )
@@ -1140,13 +1133,8 @@ class AgentSession:
         # Only the leader fires team cleanup — teammates share the leader's
         # set and would cancel siblings mid-flight.
         if self._team is not None and self._team_member_name is None:
-            cleanup = cast(
-                "Callable[[], Awaitable[None]] | None",
-                getattr(self._team, "cleanup_session_teams", None),
-            )
-            if cleanup is not None:
-                with contextlib.suppress(Exception):
-                    await cleanup()
+            with contextlib.suppress(Exception):
+                await self._team.cleanup_session_teams()
 
         await self._mcp_runtime.disconnect_all(
             session_id=self._session_id,

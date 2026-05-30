@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from aura.domain.tool import ToolMetadata
+from aura.domain.tool import HasAuraMetadata, ToolMetadata
 
 
 def meta_dict(tool: Any) -> dict[str, Any]:
-    aura_meta = getattr(tool, "aura_metadata", None)
-    if isinstance(aura_meta, ToolMetadata):
+    if isinstance(tool, HasAuraMetadata) and isinstance(
+        tool.aura_metadata, ToolMetadata
+    ):
+        aura_meta = tool.aura_metadata
         return {
             "is_read_only": aura_meta.is_read_only,
             "is_destructive": aura_meta.is_destructive,

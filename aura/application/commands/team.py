@@ -98,9 +98,8 @@ def _parse_add_args(rest: str) -> tuple[list[str], BackendType]:
 
 
 def _ensure_manager(agent: Agent) -> TeamManager | None:
-    existing = getattr(agent, "_team_manager", None)
-    if existing is not None:
-        return existing  # type: ignore[no-any-return]  # fake returns Any from __dict__
+    if agent._team_manager is not None:
+        return agent._team_manager
     mgr = TeamManager(
         leader=agent,
         storage=agent.storage,
@@ -108,7 +107,7 @@ def _ensure_manager(agent: Agent) -> TeamManager | None:
         running_aborts=agent.running_aborts,
         tasks_store=agent.tasks_store,
     )
-    agent._team_manager = mgr  # type: ignore[attr-defined]  # test sets attribute mypy can't see
+    agent._team_manager = mgr
     return mgr
 
 

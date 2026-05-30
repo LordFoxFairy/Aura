@@ -24,7 +24,7 @@ from typing import Any
 
 import pytest
 
-from aura.core import agent as agent_module
+from aura.application import session as agent_module
 from tests.conftest import FakeChatModel
 from tests.integration.conftest import build_integration_agent
 

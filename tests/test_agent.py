@@ -457,7 +457,7 @@ async def test_agent_respects_custom_session_id(tmp_path: Path) -> None:
 def test_build_agent_forwards_available_tools(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    from aura.core import agent as agent_mod
+    from aura.application import session as agent_mod
     from aura.infrastructure import llm
 
     fake_model = FakeChatModel(turns=[])
@@ -1224,7 +1224,7 @@ async def test_agent_aconnect_registers_tools_into_registry(
     # Agent does ``from aura.infrastructure.mcp import MCPManager`` at module load,
     # so the name Agent resolves is the one in the agent module namespace.
     # Patch that (and the source modules for completeness).
-    from aura.core import agent as agent_mod
+    from aura.application import session as agent_mod
     monkeypatch.setattr(agent_mod, "MCPManager", _FakeManager)
     monkeypatch.setattr(manager_mod, "MCPManager", _FakeManager)
     import aura.infrastructure.mcp as mcp_pkg
@@ -1310,7 +1310,7 @@ async def test_agent_aconnect_graceful_on_manager_failure(
         async def stop_all(self) -> None:
             return None
 
-    from aura.core import agent as agent_mod
+    from aura.application import session as agent_mod
     monkeypatch.setattr(agent_mod, "MCPManager", _BrokenManager)
     monkeypatch.setattr(manager_mod, "MCPManager", _BrokenManager)
     import aura.infrastructure.mcp as mcp_pkg
@@ -1366,7 +1366,7 @@ def test_build_agent_plumbs_mode_through(tmp_path: Path, monkeypatch: pytest.Mon
     def _fake_create(provider: Any, model_name: str) -> Any:  # noqa: ARG001  # signature-matching stub; args unused
         return FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))])
 
-    monkeypatch.setattr("aura.core.agent.llm.create", _fake_create)
+    monkeypatch.setattr("aura.application.session.llm.create", _fake_create)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     agent = build_agent(cfg, mode="accept_edits")
@@ -1489,7 +1489,7 @@ def test_build_agent_plumbs_disable_bypass_through(
     def _fake_create(provider: Any, model_name: str) -> Any:  # noqa: ARG001  # signature-matching stub; args unused
         return FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))])
 
-    monkeypatch.setattr("aura.core.agent.llm.create", _fake_create)
+    monkeypatch.setattr("aura.application.session.llm.create", _fake_create)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
     with pytest.raises(AuraConfigError):

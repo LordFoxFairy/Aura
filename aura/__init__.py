@@ -1,5 +1,6 @@
 """Aura: a general-purpose Python agent with an explicit async loop."""
 
+from aura.application.session import AgentSession
 from aura.config.loader import load_config
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.core.agent import Agent, build_agent
@@ -9,6 +10,7 @@ __version__ = "0.11.0"
 
 __all__ = [
     "Agent",
+    "AgentSession",
     "AuraConfig",
     "AuraConfigError",
     "AuraError",

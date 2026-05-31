@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, Protocol, TypedDict
 
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
@@ -12,21 +12,33 @@ from aura.config.schema import WebSearchConfig
 from aura.domain.permission.matchers import exact_match_on
 from aura.domain.tool import ToolError, ToolMetadata
 
-try:
-    from ddgs import DDGS
-    from ddgs.exceptions import RatelimitException
 
-    _HAS_DDGS = True
-except ImportError:  # pragma: no cover — exercised via monkeypatch in tests
-    DDGS = None  # type: ignore[assignment,misc]  # ddgs absent: stub names so callers fail at runtime, not import
-    RatelimitException = Exception  # type: ignore[assignment,misc]  # ddgs absent: alias to Exception so except-clause still parses
-    _HAS_DDGS = False
+class DdgsClient(Protocol):
+    def text(self, query: str, *, max_results: int) -> list[dict[str, object]]: ...
 
 
 _INSTALL_HINT = (
     "web_search requires the 'ddgs' package. Install via: "
     "uv sync --extra web  (or: pip install ddgs)"
 )
+
+_RATE_LIMIT_EXCEPTIONS: tuple[type[Exception], ...]
+
+try:
+    from ddgs import DDGS
+    from ddgs.exceptions import RatelimitException
+
+    def _make_ddgs() -> DdgsClient:
+        return DDGS()
+
+    _RATE_LIMIT_EXCEPTIONS = (RatelimitException,)
+    _HAS_DDGS = True
+except ImportError:  # pragma: no cover — exercised via monkeypatch in tests
+    def _make_ddgs() -> DdgsClient:
+        raise RuntimeError(_INSTALL_HINT)
+
+    _RATE_LIMIT_EXCEPTIONS = ()
+    _HAS_DDGS = False
 
 
 class WebSearchParams(BaseModel):
@@ -56,16 +68,20 @@ def _preview(args: dict[str, Any]) -> str:
     return f"query: {args.get('query', '')}"
 
 
+def _text_cell(row: dict[str, object], key: str) -> str:
+    value = row.get(key, "")
+    return value if isinstance(value, str) else ""
+
+
 def _ddgs_search(query: str, max_results: int) -> list[WebSearchHit]:
-    assert DDGS is not None
-    rows = DDGS().text(query, max_results=max_results)
+    rows = _make_ddgs().text(query, max_results=max_results)
     normalized: list[WebSearchHit] = []
     for row in rows or []:
         normalized.append(
             {
-                "title": row.get("title", "") or "",
-                "url": row.get("href", "") or "",
-                "snippet": row.get("body", "") or "",
+                "title": _text_cell(row, "title"),
+                "url": _text_cell(row, "href"),
+                "snippet": _text_cell(row, "body"),
             }
         )
     return normalized
@@ -118,7 +134,7 @@ class WebSearch(BaseTool):
             raise ToolError(_INSTALL_HINT)
         try:
             results = await asyncio.to_thread(_ddgs_search, query, max_results)
-        except RatelimitException as exc:
+        except _RATE_LIMIT_EXCEPTIONS as exc:
             raise ToolError(
                 f"web_search rate-limited by DuckDuckGo, try again shortly: {exc}",
             ) from exc

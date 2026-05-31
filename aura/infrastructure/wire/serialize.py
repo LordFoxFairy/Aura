@@ -31,21 +31,36 @@ from aura.infrastructure.wire.events import (
 
 
 class HasTokenStats(Protocol):
-    last_input_tokens: int
-    last_output_tokens: int
-    last_cache_read_tokens: int
-    total_input_tokens: int
-    total_output_tokens: int
-    total_cache_read_tokens: int
-    turn_count: int
+    @property
+    def last_input_tokens(self) -> int: ...
+
+    @property
+    def last_output_tokens(self) -> int: ...
+
+    @property
+    def last_cache_read_tokens(self) -> int: ...
+
+    @property
+    def total_input_tokens(self) -> int: ...
+
+    @property
+    def total_output_tokens(self) -> int: ...
+
+    @property
+    def total_cache_read_tokens(self) -> int: ...
+
+    @property
+    def turn_count(self) -> int: ...
 
 
 class HasLoopSlots(Protocol):
-    token_stats: HasTokenStats
+    @property
+    def token_stats(self) -> HasTokenStats: ...
 
 
 class HasLoopState(Protocol):
-    slots: HasLoopSlots
+    @property
+    def slots(self) -> HasLoopSlots: ...
 
 
 class HasAgentState(Protocol):
@@ -53,16 +68,16 @@ class HasAgentState(Protocol):
     def state(self) -> HasLoopState: ...
 
     @property
-    def current_model(self) -> str: ...
+    def current_model(self) -> str | None: ...
 
     @property
     def mode(self) -> str: ...
 
     @property
-    def pinned_tokens_estimate(self) -> int: ...
+    def pinned_tokens_estimate(self) -> int | None: ...
 
     @property
-    def context_window(self) -> int: ...
+    def context_window(self) -> int | None: ...
 
 
 def _is_wire_event(event: object) -> TypeGuard[WireEvent]:
@@ -163,7 +178,7 @@ def agent_state_to_wire(agent: HasAgentState, last_turn_seconds: float) -> AuraS
     stats = agent.state.slots.token_stats
     return {
         "event": "aura_state",
-        "model": agent.current_model,
+        "model": agent.current_model or "",
         "mode": agent.mode,
         "cwd": str(Path.cwd()),
         "tokens": {
@@ -175,8 +190,8 @@ def agent_state_to_wire(agent: HasAgentState, last_turn_seconds: float) -> AuraS
             "total_cache_read": int(stats.total_cache_read_tokens),
             "turn_count": int(stats.turn_count),
         },
-        "pinned": int(agent.pinned_tokens_estimate),
-        "window": int(agent.context_window),
+        "pinned": int(agent.pinned_tokens_estimate or 0),
+        "window": int(agent.context_window or 0),
         "last_turn_seconds": float(last_turn_seconds),
     }
 

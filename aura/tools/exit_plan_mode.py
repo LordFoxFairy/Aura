@@ -16,6 +16,7 @@ ExitTarget = Literal["default", "accept_edits"]
 
 PriorModeGetter = Callable[[], str | None]
 
+_EXIT_TARGETS: frozenset[ExitTarget] = frozenset({"default", "accept_edits"})
 _APPROVAL_QUESTION = "Exit plan mode and accept this plan?"
 _APPROVAL_HEADER = "Approve plan"
 
@@ -60,6 +61,14 @@ def _build_question(plan: str) -> FormQuestionDict:
             {"label": "No", "description": "Stay in plan mode; revise the plan."},
         ],
     }
+
+
+def _as_exit_target(mode: str | None) -> ExitTarget | None:
+    if mode == "default":
+        return "default"
+    if mode == "accept_edits":
+        return "accept_edits"
+    return None
 
 
 class ExitPlanMode(BaseTool):
@@ -108,9 +117,9 @@ class ExitPlanMode(BaseTool):
             return to_mode
         # Saved prior may be bypass/plan; only restore the two valid exit targets.
         if self._get_prior_mode is not None:
-            prior = self._get_prior_mode()
-            if prior in ("default", "accept_edits"):
-                return prior  # type: ignore[return-value]  # narrowed by membership check
+            prior = _as_exit_target(self._get_prior_mode())
+            if prior is not None:
+                return prior
         return "default"
 
     def _run(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import Literal
 
 ProgressCallback = Callable[[Literal["stdout", "stderr"], str], None]
@@ -13,12 +13,12 @@ _progress_cb: ContextVar[ProgressCallback | None] = ContextVar(
 )
 
 
-def set_progress_callback(cb: ProgressCallback | None) -> object:
+def set_progress_callback(cb: ProgressCallback | None) -> Token[ProgressCallback | None]:
     return _progress_cb.set(cb)
 
 
-def reset_progress_callback(token: object) -> None:
-    _progress_cb.reset(token)  # type: ignore[arg-type]  # token opaque in public API, ContextVar wants its Token type
+def reset_progress_callback(token: Token[ProgressCallback | None]) -> None:
+    _progress_cb.reset(token)
 
 
 def get_progress_callback() -> ProgressCallback | None:

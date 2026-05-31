@@ -6,7 +6,6 @@ import dataclasses
 import json
 import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 
 from aura.application.commands.types import CommandKind, CommandResult, CommandSource
 from aura.application.teams.manager import (
@@ -14,11 +13,9 @@ from aura.application.teams.manager import (
     TeamManager,
     TeamViewSnapshot,
 )
+from aura.core.agent import Agent
 from aura.domain.team import BackendType, TeamRecord
 from aura.infrastructure.persistence.storage import SessionStorage
-
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
 
 
 def _set_active_team(agent: Agent, team_id: str | None) -> None:

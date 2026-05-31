@@ -5,23 +5,20 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from typing import TYPE_CHECKING
 
+from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import (
     FileMailboxNotifier,
     Mailbox,
     MailboxNotifier,
 )
 from aura.application.teams.team_port import TeamPort
+from aura.core.agent import Agent
 from aura.domain.abort import AbortController, AbortException
 from aura.domain.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
 from aura.domain.team import TeamMessage
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
-
-if TYPE_CHECKING:
-    from aura.application.tasks.store import TasksStore
-    from aura.core.agent import Agent
 
 _WAIT_SLICE_SEC: float = 5.0
 

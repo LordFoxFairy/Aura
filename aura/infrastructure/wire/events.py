@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any, Literal, NotRequired, TypeAlias, TypedDict
 
+JSONScalar: TypeAlias = str | int | float | bool | None
+JSONValue: TypeAlias = JSONScalar | dict[str, "JSONValue"] | list["JSONValue"]
+
 
 class AssistantDeltaEvent(TypedDict):
     event: Literal["assistant_delta"]
@@ -42,7 +45,7 @@ class PermissionRequestEvent(TypedDict):
     event: Literal["permission_request"]
     id: str
     tool: str
-    args: dict[str, Any]
+    args: JSONValue
     rule_hint: str
     is_destructive: bool
 

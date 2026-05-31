@@ -125,6 +125,14 @@ PATH_TRIGGER_TOOLS: dict[str, str] = {
     "glob": "path",
 }
 
+ProgressItem = tuple[str, str, Literal["stdout", "stderr"], str]
+
+
+def _validated_args_model(schema: object) -> type[BaseModel] | None:
+    if isinstance(schema, type) and issubclass(schema, BaseModel):
+        return schema
+    return None
+
 
 def _serialize(result: ToolResult, *, tool_name: str = "") -> str:
     # default=str avoids exceptions on datetime/Path/bytes — a raise here
@@ -532,9 +540,7 @@ class AgentLoop:
         for event in self._emit_started(batch):
             yield event
 
-        progress_queue: asyncio.Queue[
-            tuple[str, str, str, str] | None
-        ] = asyncio.Queue()
+        progress_queue: asyncio.Queue[ProgressItem | None] = asyncio.Queue()
         batch_deadline = (
             self._batch_timeout_sec if self._batch_timeout_sec > 0 else 0.0
         )
@@ -622,7 +628,7 @@ class AgentLoop:
 
     async def _drain_progress(
         self,
-        progress_queue: asyncio.Queue[tuple[str, str, str, str] | None],
+        progress_queue: asyncio.Queue[ProgressItem | None],
     ) -> AsyncIterator[AgentEvent]:
         while True:
             item = await progress_queue.get()
@@ -632,7 +638,7 @@ class AgentLoop:
             assert stream_name in ("stdout", "stderr")
             yield ToolCallProgress(
                 name=tool_name,
-                stream=stream_name,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+                stream=stream_name,
                 chunk=chunk,
                 id=tool_call_id,
             )
@@ -640,7 +646,7 @@ class AgentLoop:
     async def _gather_all_with_progress(
         self,
         batch: list[ToolStep],
-        progress_queue: asyncio.Queue[tuple[str, str, str, str] | None],
+        progress_queue: asyncio.Queue[ProgressItem | None],
         batch_deadline: float,
     ) -> list[ToolResult]:
         def make_cb(tool_call_id: str, tool_name: str) -> ProgressCallback:
@@ -755,8 +761,8 @@ class AgentLoop:
 
             # Validate args before pre_tool so hooks don't decide on bad input.
             raw_args = dict(tc["args"])
-            schema = tool.args_schema
-            if isinstance(schema, type) and issubclass(schema, BaseModel):  # pyright: ignore[reportUnnecessaryIsInstance]  # langchain's ArgsSchema includes non-BaseModel options (dict-form schemas); guard intentional.
+            schema = _validated_args_model(tool.args_schema)
+            if schema is not None:
                 try:
                     schema.model_validate(raw_args)
                 except ValidationError as exc:
@@ -845,10 +851,14 @@ class AgentLoop:
         Uses ``result.output`` (not args) so read_file's ``partial`` flag is
         honoured even when ``limit >= total_lines``.
         """
-        arg_name = PATH_TRIGGER_TOOLS.get(step.tool.name)  # type: ignore[union-attr]  # narrowed by asserts in caller
+        tool = step.tool
+        args = step.args
+        if tool is None or args is None:
+            return
+        arg_name = PATH_TRIGGER_TOOLS.get(tool.name)
         if arg_name is None:
             return
-        raw = step.args.get(arg_name)  # type: ignore[union-attr]  # narrowed by asserts in caller
+        raw = args.get(arg_name)
         if not isinstance(raw, str) or not raw:
             return
         try:
@@ -857,7 +867,7 @@ class AgentLoop:
             return
         self._context.on_tool_touched_path(resolved)
         # Record read_file targets so edit_file's must-read-first hook can verify.
-        if step.tool.name == "read_file":  # type: ignore[union-attr]  # narrowed by asserts in caller
+        if tool.name == "read_file":
             partial = False
             if isinstance(result.output, dict):
                 partial = bool(result.output.get("partial", False))

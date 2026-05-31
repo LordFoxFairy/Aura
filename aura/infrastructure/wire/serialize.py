@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Literal, Protocol, TypeGuard
 
 from aura.domain.events import (
+    AgentEvent,
     AssistantDelta,
     Final,
     PermissionAudit,
@@ -20,48 +21,91 @@ from aura.infrastructure.wire.events import (
     AuraStateEvent,
     CompactEvent,
     CoordinationEvent,
+    JSONValue,
     PermissionRequestEvent,
+    ToolCallCompletedEvent,
+    ToolCallProgressEvent,
+    ToolCallStartedEvent,
     WireEvent,
 )
 
 
-def event_to_wire(event: Any) -> WireEvent:
+class HasTokenStats(Protocol):
+    last_input_tokens: int
+    last_output_tokens: int
+    last_cache_read_tokens: int
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cache_read_tokens: int
+    turn_count: int
+
+
+class HasLoopSlots(Protocol):
+    token_stats: HasTokenStats
+
+
+class HasLoopState(Protocol):
+    slots: HasLoopSlots
+
+
+class HasAgentState(Protocol):
+    @property
+    def state(self) -> HasLoopState: ...
+
+    @property
+    def current_model(self) -> str: ...
+
+    @property
+    def mode(self) -> str: ...
+
+    @property
+    def pinned_tokens_estimate(self) -> int: ...
+
+    @property
+    def context_window(self) -> int: ...
+
+
+def _is_wire_event(event: object) -> TypeGuard[WireEvent]:
+    return isinstance(event, dict) and isinstance(event.get("event"), str)
+
+
+def event_to_wire(event: AgentEvent | WireEvent | object) -> WireEvent:
     """Convert one internal event into Aura's external wire shape."""
-    if isinstance(event, dict):
-        return cast(WireEvent, event)
+    if _is_wire_event(event):
+        return event
     if isinstance(event, AssistantDelta):
         return {"event": "assistant_delta", "text": event.text}
     if isinstance(event, ToolCallStarted):
-        payload: dict[str, Any] = {
+        started_event: ToolCallStartedEvent = {
             "event": "tool_call_started",
             "name": event.name,
             "input": event.input,
         }
         if event.id:
-            payload["id"] = event.id
-        return cast(WireEvent, payload)
+            started_event["id"] = event.id
+        return started_event
     if isinstance(event, ToolCallProgress):
-        payload = {
+        progress_event: ToolCallProgressEvent = {
             "event": "tool_call_progress",
             "name": event.name,
             "stream": event.stream,
             "chunk": event.chunk,
         }
         if event.id:
-            payload["id"] = event.id
-        return cast(WireEvent, payload)
+            progress_event["id"] = event.id
+        return progress_event
     if isinstance(event, ToolCallCompleted):
         # content.output is raw JSON so the frontend decodes once, not twice.
         is_error = event.error is not None
-        output: Any = str(event.error) if is_error else _json_safe(event.output)
-        payload = {
+        output: JSONValue = str(event.error) if is_error else _json_safe(event.output)
+        completed_event: ToolCallCompletedEvent = {
             "event": "tool_call_completed",
             "name": event.name,
             "content": {"output": output, "error": is_error},
         }
         if event.id:
-            payload["id"] = event.id
-        return cast(WireEvent, payload)
+            completed_event["id"] = event.id
+        return completed_event
     if isinstance(event, PermissionAudit):
         return {
             "event": "permission_audit",
@@ -81,7 +125,7 @@ def permission_request_to_wire(
     *,
     request_id: str,
     tool: str,
-    args: Any,
+    args: object,
     rule_hint: str,
     is_destructive: bool,
 ) -> PermissionRequestEvent:
@@ -114,12 +158,12 @@ def compact_event_to_wire(
     }
 
 
-def agent_state_to_wire(agent: Any, last_turn_seconds: float) -> AuraStateEvent:
+def agent_state_to_wire(agent: HasAgentState, last_turn_seconds: float) -> AuraStateEvent:
     """Snapshot agent state into the external ``aura_state`` event."""
     stats = agent.state.slots.token_stats
     return {
         "event": "aura_state",
-        "model": agent.current_model or "",
+        "model": agent.current_model,
         "mode": agent.mode,
         "cwd": str(Path.cwd()),
         "tokens": {
@@ -131,8 +175,8 @@ def agent_state_to_wire(agent: Any, last_turn_seconds: float) -> AuraStateEvent:
             "total_cache_read": int(stats.total_cache_read_tokens),
             "turn_count": int(stats.turn_count),
         },
-        "pinned": int(agent.pinned_tokens_estimate or 0),
-        "window": int(agent.context_window or 0),
+        "pinned": int(agent.pinned_tokens_estimate),
+        "window": int(agent.context_window),
         "last_turn_seconds": float(last_turn_seconds),
     }
 
@@ -245,8 +289,24 @@ def team_message_to_wire(
     }
 
 
-def _json_safe(value: Any) -> Any:
+def _is_json_value(value: object) -> TypeGuard[JSONValue]:
+    if value is None or isinstance(value, str | int | float | bool):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_value(item) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _is_json_value(item)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _json_safe(value: object) -> JSONValue:
     try:
-        return json.loads(json.dumps(value, default=str))
+        raw = json.loads(json.dumps(value, default=str))
     except (TypeError, ValueError):
         return {"_repr": repr(value)}
+    if _is_json_value(raw):
+        return raw
+    return {"_repr": repr(raw)}

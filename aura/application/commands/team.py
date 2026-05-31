@@ -6,7 +6,7 @@ import dataclasses
 import json
 import time
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from aura.application.commands.types import CommandKind, CommandResult, CommandSource
 from aura.application.teams.manager import (
@@ -62,7 +62,7 @@ Recipients: a member name, the literal 'leader', or 'broadcast'.
 _TEAMMATE_TAIL_CAP: int = 50
 
 # Local check hints on typo before BackendUnavailable would raise.
-_VALID_BACKENDS: tuple[str, ...] = ("in_process", "pane")
+_VALID_BACKENDS: tuple[BackendType, ...] = ("in_process", "pane")
 
 
 class _AddUsageError(ValueError):
@@ -89,7 +89,7 @@ def _parse_add_args(rest: str) -> tuple[list[str], BackendType]:
                     f"unknown backend {raw!r}; expected one of "
                     + "|".join(_VALID_BACKENDS),
                 )
-            backend_type = cast(BackendType, raw)
+            backend_type = raw
             i += 2
             continue
         positional.append(tok)
@@ -269,12 +269,12 @@ class TeamCommand:
                 handled=True, kind="print", text=f"team error: {exc}",
             )
         return CommandResult(
-            handled=True, kind=cast("CommandKind", kind), text=text,
+            handled=True, kind=kind, text=text,
         )
 
     async def _dispatch(  # noqa: PLR0911,PLR0912 — tight verb table
         self, verb: str, rest: str, agent: Agent,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, CommandKind]:
         mgr = _ensure_manager(agent)
         assert mgr is not None  # _ensure_manager only returns None pre-init
         if verb == "help":
@@ -379,7 +379,7 @@ class TeamCommand:
 
     async def _enter(
         self, agent: Agent, mgr: TeamManager, rest: str,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, CommandKind]:
         """Auto-join only when resolved team is the live one; off-record just sets pointer."""
         if not rest:
             return "usage: /team enter <name>", "print"
@@ -399,7 +399,7 @@ class TeamCommand:
             )
         return f"entered team {rest!r} (id={team_id}){joined_msg}", "print"
 
-    def _leave(self, agent: Agent, mgr: TeamManager) -> tuple[str, str]:
+    def _leave(self, agent: Agent, mgr: TeamManager) -> tuple[str, CommandKind]:
         prev = agent.state.slots.active_team
         _set_active_team(agent, None)
         joined = agent.team is not None
@@ -412,7 +412,7 @@ class TeamCommand:
 
     def _view(
         self, agent: Agent, mgr: TeamManager, rest: str,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, CommandKind]:
         if rest:
             target_team_id = _resolve_team_id(name=rest, manager=mgr, agent=agent)
             if target_team_id is None:
@@ -429,7 +429,7 @@ class TeamCommand:
 
     def _teammate(
         self, agent: Agent, mgr: TeamManager, rest: str,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, CommandKind]:
         if not rest:
             return "usage: /team teammate <member>", "print"
         member = rest.split()[0]

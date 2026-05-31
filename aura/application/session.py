@@ -7,7 +7,7 @@ import contextlib
 import dataclasses
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from aura.domain.task import TaskNotification
@@ -84,6 +84,25 @@ async def _unavailable_question_asker(
     )
 
 
+def _validated_mode(mode: str, *, disable_bypass: bool, source: str) -> Mode:
+    valid: tuple[Mode, ...] = ("default", "accept_edits", "plan", "bypass")
+    if mode not in valid:
+        raise ValueError(
+            f"invalid mode {mode!r}; expected one of {sorted(valid)}"
+        )
+    resolved: Mode = mode
+    if resolved == "bypass" and disable_bypass:
+        raise AuraConfigError(
+            source="PermissionsConfig",
+            detail=(
+                "bypass mode is disabled by config "
+                "(permissions.disable_bypass=true); "
+                f"refusing {source}('bypass')"
+            ),
+        )
+    return resolved
+
+
 class AgentSession:
     def __init__(
         self,
@@ -132,16 +151,11 @@ class AgentSession:
             self._state.slots, consecutive_compact_failures=0,
         )
         self._disable_bypass = disable_bypass
-        if disable_bypass and mode == "bypass":
-            raise AuraConfigError(
-                source="PermissionsConfig",
-                detail=(
-                    "bypass mode is disabled by config "
-                    "(permissions.disable_bypass=true); "
-                    "refusing to construct Agent(mode='bypass')"
-                ),
-            )
-        self._mode = mode
+        self._mode = _validated_mode(
+            mode,
+            disable_bypass=disable_bypass,
+            source="to construct Agent(mode=...)",
+        )
         # enter_plan_mode stashes the prior mode for exit_plan_mode to restore.
         self._prior_mode: str | None = None
         self._auto_compact_threshold = auto_compact_threshold
@@ -391,7 +405,7 @@ class AgentSession:
         # allow/deny/ask, and tracking it as a field lets clear_session
         # re-insert it idempotently.
         self._bash_safety_hook = make_bash_safety_hook(
-            mode_provider=lambda: cast("Mode", self._mode),
+            mode_provider=lambda: self._mode,
         )
         self._hooks.pre_tool.insert(0, self._bash_safety_hook)
         # Appended last so a denied tool doesn't also raise missing-read.
@@ -612,7 +626,7 @@ class AgentSession:
         # Re-anchor bash safety so "safety is first" survives future mutations.
         self._hooks.pre_tool.remove(self._bash_safety_hook)
         self._bash_safety_hook = make_bash_safety_hook(
-            mode_provider=lambda: cast("Mode", self._mode),
+            mode_provider=lambda: self._mode,
         )
         self._hooks.pre_tool.insert(0, self._bash_safety_hook)
         self._loop = self._build_loop()
@@ -937,22 +951,12 @@ class AgentSession:
 
     def set_mode(self, mode: str) -> None:
         """Update the permission mode; rejects ``bypass`` when disabled by config."""
-        valid = {"default", "accept_edits", "plan", "bypass"}
-        if mode not in valid:
-            raise ValueError(
-                f"invalid mode {mode!r}; expected one of {sorted(valid)}"
-            )
-        if mode == "bypass" and self._disable_bypass:
-            raise AuraConfigError(
-                source="PermissionsConfig",
-                detail=(
-                    "bypass mode is disabled by config "
-                    "(permissions.disable_bypass=true); "
-                    "refusing set_mode('bypass')"
-                ),
-            )
-        self._mode = mode
-        journal.write("mode_changed", session=self._session_id, mode=mode)
+        self._mode = _validated_mode(
+            mode,
+            disable_bypass=self._disable_bypass,
+            source="set_mode",
+        )
+        journal.write("mode_changed", session=self._session_id, mode=self._mode)
 
     @property
     def context_window(self) -> int:

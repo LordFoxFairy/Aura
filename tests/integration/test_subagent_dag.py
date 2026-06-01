@@ -78,7 +78,7 @@ async def test_single_subagent_roundtrip_parent_sees_result(tmp_path: Path) -> N
     # Swap the Subagent factory's model_factory to hand the child a scripted
     # FakeChatModel that finishes in one turn.
     child_final_text = "found 3 files: a.py, b.py, c.py"
-    agent._subagent_factory._model_factory = lambda: FakeChatModel(
+    agent.subagent_factory._model_factory = lambda: FakeChatModel(
         turns=[FakeTurn(message=AIMessage(content=child_final_text))]
     )
 
@@ -276,7 +276,7 @@ async def test_parallel_three_subagents_parent_reads_all(tmp_path: Path) -> None
 
         return _TypeAwareFake()
 
-    agent._subagent_factory._model_factory = _model_factory_for_child
+    agent.subagent_factory._model_factory = _model_factory_for_child
 
     try:
         events = await drain(agent, "fan out the work")
@@ -365,7 +365,7 @@ async def test_task_stop_cancels_running_subagent(tmp_path: Path) -> None:
             await asyncio.sleep(10.0)  # much longer than the test's timeout
             raise RuntimeError("child should have been cancelled")
 
-    agent._subagent_factory._model_factory = lambda: _SleepyChild()
+    agent.subagent_factory._model_factory = lambda: _SleepyChild()
 
     # Swap the parent model with one that emits turn 1, then turn 2
     # using the live task_id.

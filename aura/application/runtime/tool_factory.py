@@ -4,25 +4,21 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
 
 from aura.application.loop_state import LoopState
-from aura.tools.ask_user import AskUserQuestion
+from aura.application.tasks.spawn_port import SpawnPort
+from aura.application.tasks.store import TasksStore
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.tools.ask_user import AskUserQuestion, UserAsker
 from aura.tools.send_message import SendMessage
 from aura.tools.task_create import TaskCreate
 from aura.tools.task_get import TaskGet
 from aura.tools.task_list import TaskList
 from aura.tools.task_stop import TaskStop
 from aura.tools.todo_write import TodoWrite
-
-if TYPE_CHECKING:
-    from aura.application.tasks.spawn import SpawnPort
-    from aura.application.tasks.store import TasksStore
-    from aura.application.teams.manager import TeamManager
-    from aura.infrastructure.persistence.storage import SessionStorage
-    from aura.tools.ask_user import UserAsker
 
 
 @dataclass(frozen=True)
@@ -36,7 +32,6 @@ class ToolRuntime:
     running_tasks: dict[str, asyncio.Task[None]] | None = None
     running_shells: dict[str, asyncio.subprocess.Process] | None = None
     transcript_storage: SessionStorage | None = None
-    team_manager: TeamManager | None = None
     # Providers (not snapshots): ToolRuntime is built once; team binding is set later by join_team.
     team_provider: Callable[[], Any] | None = None
     member_name_provider: Callable[[], str | None] | None = None

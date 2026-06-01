@@ -1221,12 +1221,13 @@ async def test_agent_aconnect_registers_tools_into_registry(
         async def stop_all(self) -> None:
             return None
 
-    # Agent does ``from aura.infrastructure.mcp import MCPManager`` at module load,
-    # so the name Agent resolves is the one in the agent module namespace.
-    # Patch that (and the source modules for completeness).
+    # McpRuntime constructs the manager via its own module-level MCPManager
+    # binding; patch that plus the source modules for completeness.
     from aura.application import session as agent_mod
+    from aura.application.runtime import mcp as runtime_mcp
     monkeypatch.setattr(agent_mod, "MCPManager", _FakeManager)
     monkeypatch.setattr(manager_mod, "MCPManager", _FakeManager)
+    monkeypatch.setattr(runtime_mcp, "MCPManager", _FakeManager)
     import aura.infrastructure.mcp as mcp_pkg
     monkeypatch.setattr(mcp_pkg, "MCPManager", _FakeManager)
 

@@ -21,6 +21,7 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatResult
 
+from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
@@ -44,7 +45,7 @@ def _cfg() -> AuraConfig:
     })
 
 
-def _make_factory() -> SubagentSpawner:
+def _make_factory() -> SubagentSpawner[AgentSession]:
     return SubagentSpawner(
         parent_config=AuraConfig.model_validate({
             "providers": [{"name": "openai", "protocol": "openai"}],
@@ -52,6 +53,7 @@ def _make_factory() -> SubagentSpawner:
             "tools": {"enabled": []},
         }),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(
             turns=[FakeTurn(AIMessage(content="child-final"))],
         ),
@@ -380,7 +382,7 @@ async def test_notification_with_summary_when_subagent_returns_one(
     try:
         store = agent._tasks_store
 
-        class _CustomFactory(SubagentSpawner):
+        class _CustomFactory(SubagentSpawner[AgentSession]):
             def __init__(self) -> None:
                 # Skip parent SubagentSpawner.__init__; we only ever call
                 # spawn here and don't need its dependencies.
@@ -398,6 +400,7 @@ async def test_notification_with_summary_when_subagent_returns_one(
                 self._parent_safety = None
                 self._parent_mode_provider = None
                 self._parent_session = None
+                self._build_child = AgentSession
                 self._model_factory = lambda: FakeChatModel(
                     turns=[FakeTurn(AIMessage(content="found 3 issues"))],
                 )
@@ -425,7 +428,7 @@ async def test_notification_for_failed_subagent_includes_error(
     try:
         store = agent._tasks_store
 
-        class _BoomFactory(SubagentSpawner):
+        class _BoomFactory(SubagentSpawner[AgentSession]):
             def __init__(self) -> None:
                 pass
 
@@ -692,6 +695,7 @@ async def test_full_flow_task_create_then_wait(tmp_path: Path) -> None:
             "tools": {"enabled": []},
         }),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=_slow_fake_factory,
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )

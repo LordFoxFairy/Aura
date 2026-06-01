@@ -56,7 +56,7 @@ def _storage(root: Path) -> SessionStorage:
     return SessionStorage(root / "aura.db")
 
 
-class _CompletingFactory(SubagentSpawner):
+class _CompletingFactory(SubagentSpawner[Agent]):
     """Spawns a child that finishes its astream immediately."""
 
     def __init__(self, tmp_path: Path) -> None:
@@ -82,7 +82,7 @@ class _CompletingFactory(SubagentSpawner):
         )
 
 
-class _FailingFactory(SubagentSpawner):
+class _FailingFactory(SubagentSpawner[Agent]):
     def __init__(self) -> None:
         pass
 
@@ -185,7 +185,7 @@ async def test_subagent_cancelled_carries_duration(tmp_path: Path) -> None:
     journal_module.reset()
     journal_module.configure(log)
 
-    class _SlowSpinFactory(SubagentSpawner):
+    class _SlowSpinFactory(SubagentSpawner[Agent]):
         def __init__(self) -> None:
             pass
 

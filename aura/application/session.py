@@ -7,10 +7,7 @@ import contextlib
 import dataclasses
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
-
-if TYPE_CHECKING:
-    from aura.domain.task import TaskNotification
+from typing import Any, Literal
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -48,7 +45,6 @@ from aura.application.runtime.tool_factory import (
 )
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
-from aura.application.teams.manager import TeamManager
 from aura.application.teams.team_port import TeammateBinding, TeamPort
 from aura.config.schema import AuraConfig, AuraConfigError
 from aura.domain.abort import AbortController, AbortException
@@ -59,6 +55,7 @@ from aura.domain.permission.mode import Mode
 from aura.domain.permission.safety import SafetyPolicy
 from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.domain.state_values import ReadCarryover
+from aura.domain.task import TaskNotification
 from aura.domain.tokens import estimate_message_tokens, estimate_text_tokens
 from aura.domain.tool import ToolError
 from aura.domain.tool_registry import ToolRegistry
@@ -215,7 +212,6 @@ class AgentSession:
         self._mcp_runtime = McpRuntime(
             list(self._config.mcp_servers),
             mcp_overrides_builtin=self._config.tools.mcp_overrides_builtin,
-            manager_factory=lambda configs: MCPManager(configs),
         )
         # Anchor for providers that always return 0 cache_read_input_tokens.
         self._pinned_tokens_estimate = self._estimate_pinned_tokens()
@@ -250,7 +246,8 @@ class AgentSession:
         self._running_aborts: dict[str, AbortController] = {}
         # parent_mode_provider closes over self so mid-session mode changes
         # are visible to every spawn.
-        self._subagent_factory = SubagentSpawner(
+        self.subagent_factory = SubagentSpawner(
+            build_child=AgentSession,
             parent_config=self._config,
             parent_model_spec=self._config.router.get("default", ""),
             parent_skills=self._skill_registry,
@@ -270,7 +267,7 @@ class AgentSession:
         self._team: TeamPort | None = None
         # Concrete manager the /team command stack caches across invocations;
         # distinct from _team, which holds the narrow TeamPort contract.
-        self._team_manager: TeamManager | None = None
+        self._team_manager: TeamPort | None = None
         self._team_member_name: str | None = None
         self._teammate: TeammateBinding | None = None
 
@@ -344,7 +341,7 @@ class AgentSession:
             state=self._state,
             asker=question_asker or _unavailable_question_asker,
             tasks_store=self._tasks_store,
-            spawner=self._subagent_factory,
+            spawner=self.subagent_factory,
             running_tasks=self._running_tasks,
             running_shells=self._running_shells,
             transcript_storage=self._storage,
@@ -913,10 +910,6 @@ class AgentSession:
     @property
     def running_aborts(self) -> dict[str, AbortController]:
         return self._running_aborts
-
-    @property
-    def subagent_factory(self) -> SubagentSpawner:
-        return self._subagent_factory
 
     @property
     def current_model(self) -> str:

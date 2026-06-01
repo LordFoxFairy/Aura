@@ -2,24 +2,83 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import Literal, Protocol
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from aura.application.compact.constants import KEEP_LAST_N_TURNS
-from aura.application.compact.microcompact import apply_microcompact
+from aura.application.compact.microcompact import MicrocompactPolicy, apply_microcompact
 from aura.application.compact.prompt import SUMMARY_SYSTEM, SUMMARY_USER_PREFIX
+from aura.application.loop_state import LoopState
 from aura.application.memory import project_memory, rules
-from aura.application.memory.context import ReadRecord
+from aura.application.memory.context import Context, ReadRecord
+from aura.config.schema import AuraConfig
 from aura.domain.skill import Skill
 from aura.domain.tokens import estimate_text_tokens
 from aura.infrastructure.persistence import journal
+from aura.infrastructure.persistence.storage import SessionStorage
 
-if TYPE_CHECKING:
-    from aura.application.session import AgentSession
+
+class _TaskProgress(Protocol):
+    @property
+    def last_activity_at(self) -> float | None: ...
+
+
+class _TaskRecord(Protocol):
+    @property
+    def id(self) -> str: ...
+    @property
+    def status(self) -> str: ...
+    @property
+    def observed_at(self) -> float | None: ...
+    @property
+    def started_at(self) -> float: ...
+    @property
+    def description(self) -> str: ...
+    @property
+    def progress(self) -> _TaskProgress: ...
+
+
+class _TasksStore(Protocol):
+    def list(self) -> Iterable[_TaskRecord]: ...
+
+
+class _CompactSession(Protocol):
+    """Narrow contract reactive.py needs from AgentSession."""
+
+    @property
+    def tasks_store(self) -> _TasksStore: ...
+    @property
+    def config(self) -> AuraConfig: ...
+    @property
+    def microcompact_policy(self) -> MicrocompactPolicy | None: ...
+    @property
+    def context_window(self) -> int: ...
+    @property
+    def state(self) -> LoopState: ...
+    @property
+    def storage(self) -> SessionStorage: ...
+    @property
+    def session_id(self) -> str: ...
+    @property
+    def model(self) -> BaseChatModel: ...
+    @property
+    def context(self) -> Context: ...
+    @property
+    def cwd(self) -> Path: ...
+
+    def reload_memory_and_rules(self) -> None: ...
+    def apply_compaction(
+        self,
+        *,
+        new_history: list[BaseMessage],
+        new_context: Context,
+        preserved_skills: list[Skill],
+    ) -> None: ...
 
 CompactSource = Literal["manual", "auto", "reactive"]
 
@@ -82,7 +141,7 @@ def _build_skill_reinjection_messages(
     return out
 
 
-def _build_active_task_messages(agent: AgentSession) -> list[HumanMessage]:
+def _build_active_task_messages(agent: _CompactSession) -> list[HumanMessage]:
     """Surface still-running / un-observed subagent tasks across the compact boundary."""
     out: list[HumanMessage] = []
     for rec in agent.tasks_store.list():
@@ -117,7 +176,7 @@ class SummaryCaps:
 _DEFAULT_SUMMARY_CAPS = SummaryCaps()
 
 
-def _summary_caps_from_agent(agent: AgentSession) -> SummaryCaps:
+def _summary_caps_from_agent(agent: _CompactSession) -> SummaryCaps:
     cfg = agent.config.compact
     return SummaryCaps(
         max_summary_message_chars=cfg.max_summary_message_chars,
@@ -182,7 +241,7 @@ def estimate_compact_summary_tokens(messages: list[BaseMessage]) -> int:
 
 
 def compact_summary_messages(
-    agent: AgentSession, history: list[BaseMessage],
+    agent: _CompactSession, history: list[BaseMessage],
 ) -> list[BaseMessage]:
     """View the summary turn sees; stored history stays raw."""
     policy = agent.microcompact_policy
@@ -215,7 +274,7 @@ def _split_for_summary_budget(
 
 
 async def run_compact(
-    agent: AgentSession, *, source: CompactSource = "manual",
+    agent: _CompactSession, *, source: CompactSource = "manual",
 ) -> CompactResult:
     before_tokens = agent.state.total_tokens_used
     history = agent.storage.load(agent.session_id)
@@ -336,7 +395,7 @@ def _is_prompt_too_long(exc: BaseException) -> bool:
 _MAX_COMPACT_SUMMARY_PROMPT_TOKENS = 16_000
 
 
-def _compact_summary_prompt_budget(agent: AgentSession) -> int:
+def _compact_summary_prompt_budget(agent: _CompactSession) -> int:
     window = agent.context_window
     if window <= 0:
         return _MAX_COMPACT_SUMMARY_PROMPT_TOKENS

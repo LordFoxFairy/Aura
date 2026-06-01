@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, get_args, get_type_hints
 
 import pytest
 from langchain_core.tools import BaseTool, StructuredTool
@@ -311,3 +311,14 @@ async def test_connect_all_swallows_factory_exception(tmp_path: Path) -> None:
         assert "transport unavailable" in failed[0]["error"]
     finally:
         journal.reset()
+
+
+def test_runtime_type_hints_resolve_without_type_checking_imports() -> None:
+    """Runtime annotations should resolve without TYPE_CHECKING-only imports."""
+    manager_hints = get_type_hints(McpRuntime.__dict__["manager"].fget)
+    return_hint = manager_hints["return"]
+    assert any(member.__name__ == "MCPManager" for member in get_args(return_hint))
+    assert type(None) in get_args(return_hint)
+
+    connect_hints = get_type_hints(McpRuntime.connect_all)
+    assert connect_hints["return"] == dict[str, BaseTool] | None

@@ -5,14 +5,13 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 
 from aura.application.commands import CommandRegistry
 from aura.application.commands.builtin import HelpCommand
+from aura.application.commands.factory import build_default_registry
 from aura.application.commands.registry import CommandRegistry as _Reg
-from aura.application.commands.registry import build_default_registry
 from aura.application.commands.types import CommandResult, CommandSource
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
@@ -22,9 +21,6 @@ from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills.command import SkillCommand
 from aura.tools.skill import SkillTool
 from tests.conftest import FakeChatModel
-
-if TYPE_CHECKING:
-    pass
 
 
 def _skill(

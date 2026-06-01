@@ -9,6 +9,7 @@ Merge invariants (consumed by load()):
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Literal
@@ -16,6 +17,7 @@ from typing import Literal
 from pydantic import ValidationError
 
 from aura.config.schema import MCPServerConfig
+from aura.infrastructure.persistence import journal
 
 Scope = Literal["global", "project"]
 
@@ -82,15 +84,8 @@ def _load_layer(path: Path) -> list[MCPServerConfig]:
         else:
             expanded.append(item)
     if missing:
-        try:
-            from aura.core import journal  # noqa: PLC0415  # deferred to break import cycle
-            journal.write(
-                "mcp_env_var_missing",
-                path=str(path),
-                missing=sorted(set(missing)),
-            )
-        except Exception:  # noqa: BLE001  # logging path must never crash caller
-            pass
+        with contextlib.suppress(Exception):
+            journal.write("mcp_env_var_missing", path=str(path), missing=sorted(set(missing)))
     try:
         return [MCPServerConfig.model_validate(item) for item in expanded]
     except ValidationError as exc:

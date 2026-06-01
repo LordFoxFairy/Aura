@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
+from aura.application.session import AgentSession
 from aura.application.subagent_summary import (
     AgentSummarizer,
     _resolve_interval,
@@ -293,7 +294,7 @@ def test_summary_factory_uses_summary_spec_when_configured(
 
 def _spawn_factory(
     *, sub_response: AIMessage,
-) -> tuple[TasksStore, SubagentSpawner, Callable[[], FakeChatModel]]:
+) -> tuple[TasksStore, SubagentSpawner[AgentSession], Callable[[], FakeChatModel]]:
     store = TasksStore()
     main_model = FakeChatModel(turns=[FakeTurn(sub_response)])
 
@@ -303,6 +304,7 @@ def _spawn_factory(
     factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=_factory_callable,
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )

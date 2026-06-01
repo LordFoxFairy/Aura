@@ -13,13 +13,8 @@ import contextlib
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from aura.application.commands.types import CommandResult, CommandSource
-
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
-
+from aura.application.commands.types import AgentT, CommandResult, CommandSource
 
 Writer = Callable[[str], object]
 
@@ -88,7 +83,7 @@ class GitStatusCommand:
         # Symmetry with /diff /log; /status renders via CommandResult.text, never writes here.
         self._writer = writer
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentT) -> CommandResult:
         cwd = Path.cwd()
         try:
             code, stdout, stderr = await _git(
@@ -192,7 +187,7 @@ class GitDiffCommand:
     def __init__(self, *, writer: Writer | None = None) -> None:
         self._writer = writer
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentT) -> CommandResult:
         flags = arg.split()
         full = "--full" in flags
         staged = "--staged" in flags
@@ -262,7 +257,7 @@ class GitLogCommand:
     def __init__(self, *, writer: Writer | None = None) -> None:
         self._writer = writer
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentT) -> CommandResult:
         n = _parse_log_count(arg)
         if isinstance(n, str):
             return CommandResult(handled=True, kind="print", text=n)

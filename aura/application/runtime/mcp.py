@@ -3,30 +3,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from langchain_core.tools import BaseTool
 
 from aura.application.tools_catalog import assemble_tool_pool
+from aura.config.schema import MCPServerConfig
 from aura.domain.tool_registry import ToolRegistry
+from aura.infrastructure.mcp import MCPManager
 from aura.infrastructure.persistence import journal
 
-if TYPE_CHECKING:
-    from aura.config.schema import MCPServerConfig
-    from aura.infrastructure.mcp.manager import MCPManager
+McpManagerFactory = Callable[[list[MCPServerConfig]], MCPManager]
 
 
-McpManagerFactory = Callable[[list["MCPServerConfig"]], "MCPManager"]
-
-
-def _default_manager_factory(
-    configs: list[MCPServerConfig],
-) -> MCPManager:
-    """Lazy import keeps the MCP transport stack off the module-load path."""
-    from aura.infrastructure.mcp import (
-        MCPManager,  # noqa: PLC0415  # deferred import is intentional
-    )
-
+def _default_manager_factory(configs: list[MCPServerConfig]) -> MCPManager:
     return MCPManager(configs)
 
 

@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
-if TYPE_CHECKING:
-    from aura.application.teams.mailbox import MailboxNotifier
-    from aura.application.teams.manager import TeamManager
-    from aura.core.agent import Agent
-    from aura.domain.abort import AbortController
-    from aura.domain.team import BackendType, TeammateMember
-    from aura.infrastructure.persistence.storage import SessionStorage
+from aura.application.teams.mailbox import MailboxNotifier
+from aura.application.teams.manager import TeamManager
+from aura.core.agent import Agent
+from aura.domain.abort import AbortController
+from aura.domain.team import BackendType, TeammateMember
+from aura.infrastructure.persistence.storage import SessionStorage
 
 
 @runtime_checkable

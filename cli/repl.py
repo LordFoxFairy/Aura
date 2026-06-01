@@ -20,7 +20,8 @@ from rich.text import Text
 
 from aura import __version__
 from aura.application.commands import CommandRegistry
-from aura.application.commands.registry import build_default_registry, dispatch
+from aura.application.commands.factory import build_default_registry
+from aura.application.commands.registry import dispatch
 from aura.core.agent import Agent
 from aura.infrastructure.persistence import journal
 from cli.completion import SlashCommandCompleter, resolve_history_path

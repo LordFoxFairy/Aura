@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from aura.application.commands.types import CommandResult, CommandSource
+from aura.application.session import AgentSession
 from aura.infrastructure.mcp.manager import MCPServerStatus
-
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
-
 
 _VALID_SUBCOMMANDS = (
     "list", "enable", "disable", "reconnect", "approve", "revoke", "reload", "help",
@@ -25,7 +20,7 @@ class MCPCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = "[list|enable|disable|reconnect|approve|revoke|reload|help] [name]"
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         tokens = arg.split()
         if not tokens:
             return self._list(agent)
@@ -45,7 +40,7 @@ class MCPCommand:
             return await self._toggle(agent, sub, " ".join(rest).strip())
         return _unknown_subcommand(sub)
 
-    async def _reload(self, agent: Agent) -> CommandResult:
+    async def _reload(self, agent: AgentSession) -> CommandResult:
         manager = agent.mcp_manager
         if manager is None:
             return CommandResult(
@@ -60,7 +55,7 @@ class MCPCommand:
         text = await manager.reload(configs)
         return CommandResult(handled=True, kind="print", text=text)
 
-    def _list(self, agent: Agent) -> CommandResult:
+    def _list(self, agent: AgentSession) -> CommandResult:
         manager = agent.mcp_manager
         statuses: list[MCPServerStatus] = [] if manager is None else manager.status()
         if not statuses:
@@ -69,7 +64,7 @@ class MCPCommand:
             )
         return CommandResult(handled=True, kind="view", text=_render_table(statuses))
 
-    async def _toggle(self, agent: Agent, action: str, target: str) -> CommandResult:
+    async def _toggle(self, agent: AgentSession, action: str, target: str) -> CommandResult:
         manager = agent.mcp_manager
         if manager is None:
             return CommandResult(

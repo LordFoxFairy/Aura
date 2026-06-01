@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
@@ -20,7 +21,7 @@ from tests.conftest import FakeChatModel, FakeTurn
 def _make_factory(
     *,
     turns: list[FakeTurn] | None = None,
-) -> SubagentSpawner:
+) -> SubagentSpawner[AgentSession]:
     """Build a SubagentSpawner with a one-turn FakeChatModel by default."""
     return SubagentSpawner(
         parent_config=AuraConfig.model_validate({
@@ -29,6 +30,7 @@ def _make_factory(
             "tools": {"enabled": []},
         }),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(
             turns=turns or [FakeTurn(AIMessage(content="child-final"))],
         ),
@@ -125,7 +127,7 @@ async def test_meta_json_written_on_terminal_failure(
         async def aclose(self) -> None:
             return None
 
-    class _StubFactory(SubagentSpawner):
+    class _StubFactory(SubagentSpawner[AgentSession]):
         def spawn(self, *_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401  # Any acceptable for test scaffolding
             return _MidStreamBoomAgent()
 
@@ -136,6 +138,7 @@ async def test_meta_json_written_on_terminal_failure(
             "tools": {"enabled": []},
         }),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(),
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
@@ -190,7 +193,7 @@ async def test_meta_json_written_on_terminal_cancelled(
         async def aclose(self) -> None:
             return None
 
-    class _ForeverFactory(SubagentSpawner):
+    class _ForeverFactory(SubagentSpawner[AgentSession]):
         def spawn(self, *_args: Any, **_kwargs: Any) -> Any:  # noqa: ANN401  # Any acceptable for test scaffolding
             return _ForeverAgent()
 
@@ -201,6 +204,7 @@ async def test_meta_json_written_on_terminal_cancelled(
             "tools": {"enabled": []},
         }),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(),
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )

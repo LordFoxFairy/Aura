@@ -10,7 +10,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from aura.application.commands.export import ExportCommand
-from aura.application.commands.registry import build_default_registry
+from aura.application.commands.factory import build_default_registry
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage

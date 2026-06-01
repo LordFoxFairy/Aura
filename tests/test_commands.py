@@ -8,10 +8,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aura.application.commands.registry import build_default_registry, dispatch
-from aura.application.commands.registry import (
+from aura.application.commands.factory import build_default_registry
+from aura.application.commands.factory import (
     build_default_registry as build_capability_default_registry,
 )
+from aura.application.commands.registry import dispatch
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.infrastructure.llm import UnknownModelSpecError
@@ -35,9 +36,9 @@ def _agent(tmp_path: Path) -> Agent:
     )
 
 
-def test_cli_build_default_registry_facade_points_at_capabilities_module() -> None:
+def test_cli_build_default_registry_facade_points_at_factory_module() -> None:
     assert build_default_registry is build_capability_default_registry
-    spec = importlib.util.find_spec("aura.application.commands.registry")
+    spec = importlib.util.find_spec("aura.application.commands.factory")
     assert spec is not None
 
 

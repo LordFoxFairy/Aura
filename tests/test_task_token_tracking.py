@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage
 
+from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
@@ -35,7 +36,7 @@ def _cfg() -> AuraConfig:
 
 def _make_factory_with_usage(
     *, input_tokens: int, output_tokens: int,
-) -> tuple[TasksStore, SubagentSpawner]:
+) -> tuple[TasksStore, SubagentSpawner[AgentSession]]:
     store = TasksStore()
     ai = AIMessage(
         content="child-final",
@@ -48,6 +49,7 @@ def _make_factory_with_usage(
     factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(turns=[FakeTurn(ai)]),
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
@@ -91,6 +93,7 @@ async def test_no_usage_metadata_does_not_crash() -> None:
     factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(turns=[FakeTurn(ai)]),
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )

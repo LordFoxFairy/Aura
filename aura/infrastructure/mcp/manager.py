@@ -13,11 +13,12 @@ import os
 from collections.abc import Awaitable
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from aura.application.commands.types import Command
 from aura.config.schema import AuraConfigError
 from aura.infrastructure.mcp.adapter import (
     add_aura_metadata,
@@ -25,9 +26,7 @@ from aura.infrastructure.mcp.adapter import (
     normalize_resource_contents,
 )
 from aura.infrastructure.mcp.types import MCPServerConfig
-
-if TYPE_CHECKING:
-    from aura.application.commands.types import Command
+from aura.infrastructure.persistence import journal
 
 
 @runtime_checkable
@@ -159,10 +158,6 @@ _LIST_CHANGED_METHODS: frozenset[str] = frozenset({
 
 def _make_list_changed_logger(server_name: str) -> Any:
     """Return a ``message_handler`` closure that journals list-changed events."""
-    from aura.infrastructure.persistence import (
-        journal,  # noqa: PLC0415  # deferred import is intentional
-    )
-
     async def _handler(message: Any) -> None:
         root = message.root if isinstance(message, _HasRoot) and message.root else message
         method = root.method if isinstance(root, _HasMethod) else None
@@ -215,14 +210,13 @@ class MCPManager:
         from aura.config import (
             mcp_approvals as _approvals,  # noqa: PLC0415  # deferred import is intentional
         )
-        from aura.core import journal as _j  # noqa: PLC0415
         for cfg in self._configs_all:
             if cfg.name not in self._project_server_names:
                 continue
             if not _approvals.is_approved(cfg):
                 self._unapproved.add(cfg.name)
                 with suppress(Exception):
-                    _j.write(
+                    journal.write(
                         "mcp_server_unapproved",
                         server=cfg.name,
                         project=_approvals.project_key(),
@@ -291,7 +285,7 @@ class MCPManager:
         except Exception:  # noqa: BLE001  # missing resources capability must not block tool discovery
             return []
 
-    async def start_all(self) -> tuple[list[BaseTool], list[Command]]:
+    async def start_all(self) -> tuple[list[BaseTool], list[Command[object]]]:
         """Connect each enabled+approved server; return discovered tools + prompts."""
         approved_configs = [
             c for c in self._configs if c.name not in self._unapproved
@@ -305,7 +299,7 @@ class MCPManager:
         self._client = MultiServerMCPClient(connections)
 
         all_tools: list[BaseTool] = []
-        all_commands: list[Command] = []
+        all_commands: list[Command[object]] = []
 
         for cfg in approved_configs:
             tools, commands = await self._connect_one(cfg)
@@ -316,14 +310,12 @@ class MCPManager:
 
     async def _connect_one(
         self, cfg: MCPServerConfig
-    ) -> tuple[list[BaseTool], list[Command]]:
+    ) -> tuple[list[BaseTool], list[Command[object]]]:
         """Connect one server; flip state + counts; never raise.
 
         Remote-transport failures schedule an auto-reconnect; stdio failures
         do not (subprocess death needs operator intervention).
         """
-        from aura.core import journal
-
         if self._client is None:
             self._client = MultiServerMCPClient(self._build_connections())
         elif cfg.name not in self._client.connections:
@@ -380,7 +372,7 @@ class MCPManager:
                 timeout_sec=self._op_timeout_sec,
             )
             prompts = []
-        commands: list[Command] = []
+        commands: list[Command[object]] = []
         for p in prompts:
             if not isinstance(p, _PromptLike):
                 continue
@@ -469,8 +461,6 @@ class MCPManager:
 
     async def _reconnect_loop(self, cfg: MCPServerConfig) -> None:
         """Exponential-backoff reconnect loop for one remote-transport server."""
-        from aura.core import journal
-
         for attempt in range(1, _MAX_RECONNECT_ATTEMPTS + 1):
             # Sleep BEFORE each attempt to give the remote side time to recover.
             backoff = min(

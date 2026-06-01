@@ -37,6 +37,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.loop_state import LoopState
+from aura.application.session import AgentSession
 from aura.application.tasks.spawn import (
     SUBAGENT_AUTO_DENY_FEEDBACK,
     SubagentSpawner,
@@ -45,6 +46,7 @@ from aura.application.tasks.spawn import (
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
+from aura.domain.permission.outcome import Allow, Block, Replace
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.safety import DEFAULT_SAFETY
 from aura.domain.permission.session import RuleSet, SessionRuleSet
@@ -110,8 +112,8 @@ def _build_factory(
     parent_mode: str = "default",
     parent_deny_rules: RuleSet | None = None,
     parent_ask_rules: RuleSet | None = None,
-) -> SubagentSpawner:
-    return SubagentSpawner(
+) -> SubagentSpawner[AgentSession]:
+    return SubagentSpawner(build_child=AgentSession,
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         parent_ruleset=parent_ruleset,
@@ -145,15 +147,16 @@ async def test_subagent_denies_tool_requiring_user_prompt() -> None:
         assert _sc(outcome) is not None, (
             "subagent hook must short-circuit (deny) on the ask path"
         )
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.allow is False  # type: ignore[union-attr]
-        assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
-        # Model-facing error string identifies this as a subagent auto-deny
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "user_deny"
         # via the ``user_deny`` reason (the asker's ``feedback`` field
         # carries the marker string; deny formatter appends it so the LLM
         # sees "subagent_auto_deny").
-        assert _sc(outcome).ok is False  # type: ignore[union-attr]
-        assert "subagent_auto_deny" in (_sc(outcome).error or "")  # type: ignore[union-attr]
+        _sc_r = _sc(outcome)
+        assert _sc_r is not None
+        assert _sc_r.ok is False
+        assert "subagent_auto_deny" in (_sc_r.error or "")
     finally:
         await child.aclose()
 
@@ -181,9 +184,9 @@ async def test_subagent_honors_parent_allow_rule() -> None:
         )
         # Allow path: no short_circuit, decision.allow True, reason rule_allow.
         assert _sc(outcome) is None
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.allow is True  # type: ignore[union-attr]
-        assert outcome.decision.reason == "rule_allow"  # type: ignore[union-attr]
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision.allow is True
+        assert outcome.decision.reason == "rule_allow"
     finally:
         await child.aclose()
 
@@ -204,9 +207,9 @@ async def test_subagent_honors_parent_deny_rule_over_allow_rule() -> None:
             state=LoopState(),
         )
         assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.allow is False  # type: ignore[union-attr]
-        assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "rule_deny"
     finally:
         await child.aclose()
 
@@ -226,11 +229,12 @@ async def test_subagent_honors_parent_ask_rule_by_auto_denying_prompt() -> None:
             args={"value": "x"},
             state=LoopState(),
         )
-        assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.allow is False  # type: ignore[union-attr]
-        assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
-        assert "subagent_auto_deny" in (_sc(outcome).error or "")  # type: ignore[union-attr]
+        _sc_r = _sc(outcome)
+        assert _sc_r is not None
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "user_deny"
+        assert "subagent_auto_deny" in (_sc_r.error or "")
     finally:
         await child.aclose()
 
@@ -257,13 +261,13 @@ async def test_agent_wiring_passes_deny_and_ask_rules_to_subagent_factory(
         ask_ruleset=RuleSet(),
         safety=DEFAULT_SAFETY,
     )
-    agent._subagent_factory._model_factory = lambda: FakeChatModel(
+    agent.subagent_factory._model_factory = lambda: FakeChatModel(
         turns=[FakeTurn(AIMessage(content="done"))]
     )
-    agent._subagent_factory._storage_factory = lambda: SessionStorage(
+    agent.subagent_factory._storage_factory = lambda: SessionStorage(
         Path(":memory:")
     )
-    child = agent._subagent_factory.spawn("prompt")
+    child = agent.subagent_factory.spawn("prompt")
     try:
         write_tool = child._available_tools["write_file"]
         outcome = await child._hooks.run_pre_tool(
@@ -272,8 +276,8 @@ async def test_agent_wiring_passes_deny_and_ask_rules_to_subagent_factory(
             state=LoopState(),
         )
         assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision.reason == "rule_deny"
     finally:
         await child.aclose()
         await agent.aclose()
@@ -301,9 +305,9 @@ async def test_subagent_cannot_nest_so_permission_chain_is_one_level() -> None:
             state=LoopState(),
         )
         assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.allow is False  # type: ignore[union-attr]
-        assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "rule_deny"
     finally:
         await child.aclose()
 
@@ -319,7 +323,7 @@ async def test_subagent_does_not_pollute_parent_session_rules() -> None:
     parent_session = SessionRuleSet()
     # Parent-state proxy for "session rules the parent knows about".
     parent_session.add(Rule(tool="bash", content="ls"))
-    factory = SubagentSpawner(
+    factory = SubagentSpawner(build_child=AgentSession,
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         parent_ruleset=RuleSet(),
@@ -371,9 +375,9 @@ async def test_subagent_inherits_bypass_mode_from_parent() -> None:
             state=LoopState(),
         )
         assert _sc(outcome) is None
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.allow is True  # type: ignore[union-attr]
-        assert outcome.decision.reason == "mode_bypass"  # type: ignore[union-attr]
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision.allow is True
+        assert outcome.decision.reason == "mode_bypass"
     finally:
         await child.aclose()
 
@@ -382,7 +386,7 @@ async def test_subagent_inherits_bypass_mode_from_parent() -> None:
 async def test_subagent_freezes_parent_mode_at_spawn() -> None:
     """Parent mode flips after spawn do not change child hook behavior."""
     mode = "default"
-    factory = SubagentSpawner(
+    factory = SubagentSpawner(build_child=AgentSession,
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
         parent_ruleset=RuleSet(),
@@ -403,11 +407,12 @@ async def test_subagent_freezes_parent_mode_at_spawn() -> None:
             args={"value": "x"},
             state=LoopState(),
         )
-        assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.allow is False  # type: ignore[union-attr]
-        assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
-        assert "subagent_auto_deny" in (_sc(outcome).error or "")  # type: ignore[union-attr]
+        _sc_r = _sc(outcome)
+        assert _sc_r is not None
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "user_deny"
+        assert "subagent_auto_deny" in (_sc_r.error or "")
     finally:
         await child.aclose()
 
@@ -427,11 +432,12 @@ async def test_subagent_collapses_interactive_parent_modes_to_default(
             args={"value": "x"},
             state=LoopState(),
         )
-        assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.allow is False  # type: ignore[union-attr]
-        assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
-        assert "subagent_auto_deny" in (_sc(outcome).error or "")  # type: ignore[union-attr]
+        _sc_r = _sc(outcome)
+        assert _sc_r is not None
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "user_deny"
+        assert "subagent_auto_deny" in (_sc_r.error or "")
     finally:
         await child.aclose()
 
@@ -498,8 +504,8 @@ async def test_subagent_still_denies_on_safety_violation(tmp_path: Path) -> None
             state=LoopState(),
         )
         assert _sc(outcome) is not None
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.allow is False  # type: ignore[union-attr]
-        assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision.allow is False
+        assert outcome.decision.reason == "safety_blocked"
     finally:
         await child.aclose()

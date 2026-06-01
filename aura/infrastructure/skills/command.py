@@ -11,9 +11,10 @@ per-Agent and the binding removes the cross-Agent footgun.
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from aura.application.commands.types import CommandResult, CommandSource
+from aura.application.loop_state import LoopState
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import SessionRuleSet
 from aura.domain.skill import Skill
@@ -22,8 +23,22 @@ from aura.infrastructure.skills.errors import format_missing_args_error
 from aura.infrastructure.skills.loader import render_skill_body
 from aura.infrastructure.skills.restrict import install_restrict_lease
 
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
+
+class _SkillCommandAgent(Protocol):
+    @property
+    def session_id(self) -> str:
+        ...
+
+    @property
+    def session_rules(self) -> SessionRuleSet | None:
+        ...
+
+    @property
+    def state(self) -> LoopState:
+        ...
+
+    def record_skill_invocation(self, skill: Skill) -> None:
+        ...
 
 
 def install_skill_allow_rules(
@@ -54,7 +69,7 @@ def install_skill_allow_rules(
 class SkillCommand:
     source: CommandSource = "skill"
 
-    def __init__(self, *, skill: Skill, agent: Agent) -> None:
+    def __init__(self, *, skill: Skill, agent: _SkillCommandAgent) -> None:
         self._skill = skill
         self._agent = agent
         self.name = f"/{skill.name}"
@@ -64,7 +79,7 @@ class SkillCommand:
         self.allowed_tools: tuple[str, ...] = tuple(sorted(skill.allowed_tools))
         self.argument_hint: str | None = skill.argument_hint
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: _SkillCommandAgent) -> CommandResult:
         arg_values = arg.split() if arg.strip() else []
         declared = self._skill.arguments
         if declared and len(arg_values) < len(declared):

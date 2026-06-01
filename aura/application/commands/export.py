@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from langchain_core.messages import (
     AIMessage,
@@ -16,11 +16,8 @@ from langchain_core.messages import (
 )
 
 from aura.application.commands.types import CommandResult, CommandSource
+from aura.application.session import AgentSession
 from aura.infrastructure.persistence import journal
-
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
-
 
 Format = Literal["md", "json"]
 
@@ -36,7 +33,7 @@ class ExportCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = "[path] [--format md|json]"
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         try:
             path_arg, fmt_arg = _parse_args(arg)
         except ValueError as exc:
@@ -99,7 +96,7 @@ def _parse_args(arg: str) -> tuple[str | None, Format | None]:
                 raise ValueError(
                     f"unknown format {value!r}; expected 'md' or 'json'"
                 )
-            fmt = value  # type: ignore[assignment]  # narrowing branch mypy doesn't track
+            fmt = "md" if value == "md" else "json"
             i += 2
             continue
         if tok.startswith("--"):
@@ -144,7 +141,7 @@ def _resolve_target(
     return path, fmt, note
 
 
-def _envelope(agent: Agent, messages: list[BaseMessage]) -> dict[str, object]:
+def _envelope(agent: AgentSession, messages: list[BaseMessage]) -> dict[str, object]:
     turns = sum(1 for m in messages if isinstance(m, HumanMessage))
     return {
         "session_id": agent.session_id,
@@ -156,7 +153,7 @@ def _envelope(agent: Agent, messages: list[BaseMessage]) -> dict[str, object]:
     }
 
 
-def _render_json(agent: Agent, messages: list[BaseMessage]) -> str:
+def _render_json(agent: AgentSession, messages: list[BaseMessage]) -> str:
     msg_dicts: list[dict[str, object]] = []
     for m in messages:
         entry: dict[str, object] = {
@@ -175,7 +172,7 @@ def _render_json(agent: Agent, messages: list[BaseMessage]) -> str:
     return json.dumps(envelope, indent=2, ensure_ascii=False) + "\n"
 
 
-def _render_markdown(agent: Agent, messages: list[BaseMessage]) -> str:
+def _render_markdown(agent: AgentSession, messages: list[BaseMessage]) -> str:
     env = _envelope(agent, messages)
     lines: list[str] = [
         "# Aura session export", "",

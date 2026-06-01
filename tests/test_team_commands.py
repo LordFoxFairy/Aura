@@ -7,7 +7,8 @@ from typing import cast
 
 import pytest
 
-from aura.application.commands.registry import build_default_registry, dispatch
+from aura.application.commands.factory import build_default_registry
+from aura.application.commands.registry import dispatch
 from aura.application.commands.team import TeamCommand
 from aura.application.commands.team import TeamCommand as CapabilityTeamCommand
 from aura.application.teams.manager import TeamManager

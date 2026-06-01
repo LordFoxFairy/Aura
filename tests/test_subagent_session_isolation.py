@@ -33,6 +33,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
+from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
@@ -74,6 +75,7 @@ async def test_two_subagents_get_distinct_session_ids(tmp_path: Path) -> None:
     factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(
             turns=[FakeTurn(AIMessage(content="done"))]
         ),
@@ -104,6 +106,7 @@ async def test_subagents_storage_does_not_cross_contaminate(tmp_path: Path) -> N
     factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(
             turns=[FakeTurn(AIMessage(content="child-output"))]
         ),
@@ -156,6 +159,7 @@ async def test_subagent_journal_events_carry_distinct_session_ids(
     factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(
             turns=[FakeTurn(AIMessage(content="done"))]
         ),
@@ -198,6 +202,7 @@ async def test_spawn_without_task_id_falls_back_to_unique_id(tmp_path: Path) -> 
     factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(
             turns=[FakeTurn(AIMessage(content="done"))]
         ),

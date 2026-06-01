@@ -6,15 +6,27 @@ import asyncio
 import contextlib
 import os
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
+from aura.domain.task import TaskStatus
 from aura.infrastructure.persistence import journal
 
-if TYPE_CHECKING:
-    from aura.application.tasks.store import TasksStore
+
+class _TaskRecordLike(Protocol):
+    """Minimal task-record contract needed by summary loop."""
+
+    status: TaskStatus
+
+
+class TasksStore(Protocol):
+    """Minimal tasks-store contract needed by summary loop."""
+
+    def get(self, task_id: str) -> _TaskRecordLike | None: ...
+
+    def update_summary(self, task_id: str, summary: str) -> None: ...
 
 
 # 30s default: cheap-amortized over a multi-minute run, low parent-observability lag.

@@ -16,24 +16,21 @@ import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
+from aura.application.teams.mailbox import Mailbox, MailboxNotifier
+from aura.application.teams.manager import TeamManager
+from aura.core.agent import Agent
+from aura.domain.abort import AbortController
 from aura.domain.team import (
     TEAM_LEADER_NAME,
+    BackendType,
+    TeammateMember,
     TeamMessage,
 )
 from aura.infrastructure.persistence import journal
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.teams.detection import pane_backend_available
 from aura.infrastructure.teams.types import BackendHandle
-
-if TYPE_CHECKING:
-    from aura.application.teams.mailbox import MailboxNotifier
-    from aura.application.teams.manager import TeamManager
-    from aura.core.agent import Agent
-    from aura.domain.abort import AbortController
-    from aura.domain.team import BackendType, TeammateMember
-    from aura.infrastructure.persistence.storage import SessionStorage
-
 
 _TMUX_TIMEOUT_SEC: float = 5.0
 
@@ -95,8 +92,6 @@ class PaneHandle(BackendHandle):
         if team is None:
             await self.force_kill()
             return False
-        # Local import dodges the application↔infrastructure cycle.
-        from aura.application.teams.mailbox import Mailbox  # noqa: PLC0415
         mailbox = Mailbox(self.manager.storage, team.team_id)
         baseline = {m.msg_id for m in mailbox.read_all(TEAM_LEADER_NAME)}
         # Reuse the manager's poster so journal events match the in-process path.
@@ -118,7 +113,12 @@ class PaneHandle(BackendHandle):
         await self._kill_pane()
         return acked
 
-    def _wait_for_ack(self, mailbox: object, baseline: set[str], timeout: float) -> bool:
+    def _wait_for_ack(
+        self,
+        mailbox: object,
+        baseline: set[str],
+        timeout: float,
+    ) -> bool:
         # JSONL on disk is the IPC channel — the subprocess can't share an asyncio.Future.
         import time as _time  # noqa: PLC0415  # keep ad-hoc poll local
         deadline = _time.monotonic() + timeout

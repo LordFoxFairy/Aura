@@ -9,22 +9,33 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict
+from typing import Any, Protocol, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage
 
+from aura.application.tasks.spawn_port import SpawnedAgent, SpawnPort
 from aura.application.tasks.store import TasksStore
 from aura.domain.events import Final, ToolCallStarted
 from aura.domain.task import TaskRecord, TaskStatus
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 
-if TYPE_CHECKING:
-    from aura.application.hooks import PostModelHook
-    from aura.application.loop_state import LoopState
-    from aura.application.session import AgentSession
-    from aura.application.subagent_summary import AgentSummarizer
-    from aura.application.tasks.spawn import SpawnPort
+
+class _LoopState(Protocol):
+    """Narrow loop-state; Protocol compliance only — no members accessed at runtime."""
+
+
+class _PostModelHook(Protocol):
+    """Async hook receiving ai_message + history + state."""
+
+    async def __call__(
+        self,
+        *,
+        ai_message: AIMessage,
+        history: list[BaseMessage],
+        state: _LoopState,
+        **kwargs: Any,
+    ) -> None: ...
 
 
 # 5 minute defense-in-depth ceiling; ``AURA_SUBAGENT_TIMEOUT_SEC<=0`` disables.
@@ -73,13 +84,13 @@ def resolve_timeout(override: float | None) -> float | None:
     return DEFAULT_SUBAGENT_TIMEOUT_SEC
 
 
-def make_token_observer(store: TasksStore, task_id: str) -> PostModelHook:
+def make_token_observer(store: TasksStore, task_id: str) -> _PostModelHook:
     """post_model hook forwarding ``usage_metadata`` into the store; failures journaled."""
     async def _observe(
         *,
         ai_message: AIMessage,
         history: list[BaseMessage],  # noqa: ARG001 - protocol compliance
-        state: LoopState,  # noqa: ARG001 - protocol compliance
+        state: _LoopState,  # noqa: ARG001 - protocol compliance
         **_: object,
     ) -> None:
         try:
@@ -133,7 +144,7 @@ def flush_transcript(
 
 def maybe_cleanup_completed_transcript(
     *,
-    agent: AgentSession,
+    agent: SpawnedAgent,
     transcript_storage: SessionStorage,
     task_id: str,
     parent_session_id: str,
@@ -232,7 +243,7 @@ def flush_metadata(
 
 
 async def capture_child_messages(
-    agent: AgentSession | None, store: TasksStore, task_id: str,
+    agent: SpawnedAgent | None, store: TasksStore, task_id: str,
 ) -> None:
     """Pull the child's full message list onto the TaskRecord."""
     if agent is None:
@@ -252,7 +263,7 @@ async def capture_child_messages(
 
 
 def load_child_messages(
-    agent: AgentSession | None, store: TasksStore, task_id: str,
+    agent: SpawnedAgent | None, store: TasksStore, task_id: str,
 ) -> list[BaseMessage]:
     """Read the child's transcript for transcript-flush."""
     rec = store.get(task_id)
@@ -367,9 +378,9 @@ async def run_local_agent(
         prompt_chars=len(record.prompt),
     )
     store.record_started(task_id)
-    agent: AgentSession | None = None
+    agent: SpawnedAgent | None = None
     final_text = ""
-    summarizer: AgentSummarizer | None = None
+    summarizer = None
     try:
         # spawn() inside the try: spawn-time failure must flip the record to ``failed``.
         try:

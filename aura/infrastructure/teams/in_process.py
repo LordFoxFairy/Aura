@@ -13,18 +13,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
+from aura.application.teams.mailbox import MailboxNotifier
+from aura.application.teams.manager import TeamManager
 from aura.application.teams.runtime import run_teammate
+from aura.core.agent import Agent
+from aura.domain.abort import AbortController
+from aura.domain.team import BackendType, TeammateMember
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.teams.types import BackendHandle
-
-if TYPE_CHECKING:
-    from aura.application.teams.mailbox import MailboxNotifier
-    from aura.application.teams.manager import TeamManager
-    from aura.core.agent import Agent
-    from aura.domain.abort import AbortController
-    from aura.domain.team import BackendType, TeammateMember
-    from aura.infrastructure.persistence.storage import SessionStorage
 
 
 @dataclass

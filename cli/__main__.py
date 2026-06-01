@@ -5,16 +5,17 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from typing import TYPE_CHECKING
+from typing import TypeAlias, cast
+
+from rich.console import Console
 
 from aura import __version__
+from aura.config.schema import AuraConfig, PermissionsConfig
+from aura.core.agent import Agent
+from aura.domain.permission.mode import Mode
+from aura.infrastructure.persistence import journal
 
-if TYPE_CHECKING:
-    from rich.console import Console
-
-    from aura.config.schema import AuraConfig, PermissionsConfig
-    from aura.core.agent import Agent
-    from aura.domain.permission.mode import Mode
+AgentRef: TypeAlias = Agent | None
 
 
 def _force_utf8_streams() -> None:
@@ -141,8 +142,6 @@ def _warn_plaintext_api_keys(
     config: AuraConfig, console: Console, *, verbose: bool = False,
 ) -> None:
     # Always journal so audit trail survives even when --verbose suppresses the print.
-    from aura.core import journal
-
     for provider in config.providers:
         if provider.api_key:
             journal.write("plaintext_api_key_warning", provider=provider.name)
@@ -154,7 +153,6 @@ def _warn_plaintext_api_keys(
 
 
 def _fail_startup(console: Console, exc: BaseException) -> int:
-    from aura.core import journal
     from aura.domain.errors import AuraError
 
     if isinstance(exc, AuraError):
@@ -221,7 +219,6 @@ def main() -> int:
     from aura.application.hooks.permission import make_permission_hook
     from aura.config.loader import load_config
     from aura.config.schema import AuraConfigError
-    from aura.core import journal
     from aura.core.agent import build_agent
     from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
     from aura.domain.permission.safety import (
@@ -301,10 +298,9 @@ def main() -> int:
         session = SessionRuleSet()
         asker = make_cli_asker(timeout=perm_cfg.prompt_timeout_sec)
         # Forward-ref cell — hook reads Agent.mode live so shift+tab toggles propagate.
-        _agent_cell: list[Agent | None] = [None]
+        _agent_cell: list[AgentRef] = [None]
 
         def _live_mode() -> Mode:
-            from typing import cast
             a = _agent_cell[0]
             if a is None:
                 return mode

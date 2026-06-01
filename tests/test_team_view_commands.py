@@ -61,7 +61,7 @@ def _install_no_runtime_manager(agent: Agent) -> TeamManager:
     mgr = TeamManager(
         leader=agent,
         storage=agent.storage,
-        factory=agent._subagent_factory,
+        factory=agent.subagent_factory,
         running_aborts=agent._running_aborts,
         tasks_store=agent._tasks_store,
         runtime_runner=_no_runtime,

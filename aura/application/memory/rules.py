@@ -9,6 +9,8 @@ from typing import Any
 import pathspec
 import yaml
 
+from aura.infrastructure.persistence import journal
+
 _AURA_DIR = ".aura"
 _RULES_DIR = "rules"
 _MD_SUFFIX = ".md"
@@ -125,16 +127,10 @@ def _build_rule(md_path: Path, *, base_dir: Path) -> Rule | None:
         try:
             parsed = yaml.safe_load(frontmatter_text)
         except yaml.YAMLError as exc:
-            from aura.core import journal
-
-            journal.write(
-                "rule_yaml_parse_failed", path=str(md_path), error=str(exc)
-            )
+            journal.write("rule_yaml_parse_failed", path=str(md_path), error=str(exc))
             return None
         globs_or_skip = _extract_globs(parsed)
         if globs_or_skip is _SKIP:
-            from aura.core import journal
-
             actual_type = type(parsed["paths"]).__name__ if isinstance(
                 parsed, dict
             ) and "paths" in parsed else type(parsed).__name__
@@ -251,8 +247,6 @@ def _rule_matches_path(rule: Rule, resolved_path: Path) -> bool:
             if spec.match_file(match_target):
                 return True
         except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
-            from aura.core import journal
-
             journal.write(
                 "rule_glob_compile_failed",
                 path=str(rule.source_path),
@@ -277,8 +271,6 @@ def _warn_out_of_cwd_rules(bundle: RulesBundle, cwd: Path) -> None:
             except (OSError, ValueError):
                 offenders.append(glob)
         if offenders:
-            from aura.core import journal
-
             journal.write(
                 "out_of_cwd_rule_warning",
                 path=str(rule.source_path),

@@ -7,12 +7,9 @@ from collections import defaultdict
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from aura.application.commands.types import CommandResult, CommandSource
-
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
+from aura.application.session import AgentSession
 
 
 def _fmt(n: int) -> str:
@@ -26,7 +23,7 @@ class StatsCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = "[7d|all]"
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         mode = arg.strip().lower()
         if mode in {"7d", "7", "week"}:
             return self._historical(agent, days=7, label="last 7 days")
@@ -34,7 +31,7 @@ class StatsCommand:
             return self._historical(agent, days=None, label="all-time")
         return self._current_session(agent)
 
-    def _current_session(self, agent: Agent) -> CommandResult:
+    def _current_session(self, agent: AgentSession) -> CommandResult:
         stats = agent.state.slots.token_stats
         if stats.turn_count == 0:
             return CommandResult(
@@ -75,7 +72,7 @@ class StatsCommand:
         return CommandResult(handled=True, kind="view", text="\n".join(lines))
 
     def _historical(
-        self, agent: Agent, *, days: int | None, label: str,
+        self, agent: AgentSession, *, days: int | None, label: str,
     ) -> CommandResult:
         journal_path = _resolve_journal_path(agent)
         if journal_path is None:
@@ -154,7 +151,7 @@ def _safe_int(value: object) -> int:
     return 0
 
 
-def _resolve_journal_path(agent: Agent) -> Path | None:
+def _resolve_journal_path(agent: AgentSession) -> Path | None:
     """Live journal path → config default → None."""
     from aura.infrastructure.persistence import journal as journal_mod
 

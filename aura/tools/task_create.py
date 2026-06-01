@@ -9,7 +9,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from aura.application.tasks.run import run_task
-from aura.application.tasks.spawn import SpawnPort
+from aura.application.tasks.spawn_port import SpawnPort
 from aura.application.tasks.store import TasksStore
 from aura.domain.tool import ToolError, ToolMetadata
 from aura.infrastructure import llm

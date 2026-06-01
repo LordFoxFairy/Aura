@@ -7,7 +7,7 @@ commands migrated from the old hardcoded if-else dispatcher.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import get_type_hints
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,15 +24,14 @@ from aura.application.commands.builtin import (
     HelpCommand,
     ModelCommand,
 )
+from aura.application.commands.factory import build_default_registry
 from aura.application.commands.registry import CommandRegistry as CapabilityCommandRegistry
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.infrastructure.llm import UnknownModelSpecError
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
-
-if TYPE_CHECKING:
-    pass
 
 
 def _agent(tmp_path: Path) -> Agent:
@@ -49,6 +48,14 @@ def _agent(tmp_path: Path) -> Agent:
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "db"),
     )
+
+
+def test_command_protocol_references_agent_session_directly() -> None:
+    hints = get_type_hints(
+        Command.handle,
+        globalns={"AgentT": AgentSession, "CommandResult": CommandResult},
+    )
+    assert hints["agent"] is AgentSession
 
 
 class _StubCommand:
@@ -115,6 +122,17 @@ def test_list_returns_sorted_by_name() -> None:
     r.register(_StubCommand("/mango"))
     names = [c.name for c in r.list()]
     assert names == ["/apple", "/mango", "/zebra"]
+
+
+def test_default_registry_accepts_agent_mcp_commands_without_cast(tmp_path: Path) -> None:
+    agent = _agent(tmp_path)
+    stub = _StubCommand("/mcp-prompt", source="mcp", text="from mcp")
+    agent._mcp_commands = [stub]
+
+    registry = build_default_registry(agent)
+
+    commands = {cmd.name: cmd for cmd in registry.list()}
+    assert commands["/mcp-prompt"] is stub
 
 
 @pytest.mark.asyncio

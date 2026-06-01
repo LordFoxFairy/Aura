@@ -4,6 +4,8 @@ from collections.abc import Iterable
 
 from langchain_core.tools import BaseTool
 
+from aura.infrastructure.persistence import journal
+
 
 def assemble_tool_pool(
     builtins: Iterable[BaseTool],
@@ -17,8 +19,6 @@ def assemble_tool_pool(
     streams are pre-sorted by name so the result mapping has deterministic
     iteration order across runs.
     """
-    from aura.core import journal
-
     pool: dict[str, BaseTool] = {}
     builtin_names: set[str] = set()
     for tool in sorted(builtins, key=lambda t: t.name):

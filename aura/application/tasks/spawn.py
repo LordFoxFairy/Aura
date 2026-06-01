@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import Any, Generic, TypeVar
 from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
@@ -28,6 +28,7 @@ from langchain_core.tools import BaseTool
 from aura.application.hooks import HookChain
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.permission.asker import AskerResponse
+from aura.application.tasks.spawn_port import SpawnedAgent
 from aura.config.schema import AuraConfig, ToolsConfig
 from aura.domain.abort import AbortController
 from aura.domain.agent_definition import AGENT_DISALLOWED_TOOLS
@@ -41,32 +42,7 @@ from aura.infrastructure.agents import get_agent_def
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills import SkillRegistry
 
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
-
-
-@runtime_checkable
-class SpawnPort(Protocol):
-    """The spawn surface a dispatcher tool depends on — no concrete agent type."""
-
-    @property
-    def parent_model_spec(self) -> str: ...
-
-    @property
-    def abort_event(self) -> asyncio.Event | None: ...
-
-    def validate_model_spec(self, spec: str) -> None: ...
-
-    def spawn(
-        self,
-        prompt: str,
-        allowed_tools: list[str] | None = None,
-        *,
-        agent_type: str = "general-purpose",
-        task_id: str | None = None,
-        model_spec: str | None = None,
-    ) -> Agent: ...
-
+A = TypeVar("A", bound=SpawnedAgent)
 
 SUBAGENT_AUTO_DENY_FEEDBACK = "subagent_auto_deny"
 
@@ -96,8 +72,12 @@ def _default_storage() -> SessionStorage:
     return SessionStorage(Path(":memory:"))
 
 
-class SubagentSpawner:
-    """Create a standalone Agent for a single subagent run."""
+class SubagentSpawner(Generic[A]):
+    """Create a standalone Agent for a single subagent run.
+
+    ``build_child`` is injected so this module never imports the concrete
+    session type — the construction site binds ``A`` to its agent class.
+    """
 
     # Class-level defaults so subclasses that skip __init__ still see sane state.
     _parent_abort_event: asyncio.Event | None = None
@@ -108,6 +88,7 @@ class SubagentSpawner:
         parent_config: AuraConfig,
         parent_model_spec: str,
         *,
+        build_child: Callable[..., A],
         parent_skills: SkillRegistry | None = None,
         parent_carryover_provider: (
             Callable[[], ReadCarryover] | None
@@ -133,6 +114,7 @@ class SubagentSpawner:
         self._parent_model = parent_model
         self._parent_session_id = parent_session_id
         self._parent_model_spec = parent_model_spec
+        self._build_child = build_child
         self._parent_skills = parent_skills
         self._parent_carryover_provider = parent_carryover_provider
         self._parent_ruleset = parent_ruleset
@@ -188,10 +170,7 @@ class SubagentSpawner:
         agent_type: str = "general-purpose",
         task_id: str | None = None,
         model_spec: str | None = None,
-    ) -> Agent:
-        # Local import: Agent's module pulls in task_create which pulls in this module.
-        from aura.core.agent import Agent
-
+    ) -> A:
         type_def = get_agent_def(agent_type)
 
         # Restricted agent_type MUST raise on missing tools — silently dropping would
@@ -272,7 +251,7 @@ class SubagentSpawner:
         # The child's inherited controller: registered with the parent so a single
         # Ctrl+C cascades, and injected so the child re-raises on abort.
         child_abort = AbortController()
-        child_agent = Agent(
+        child_agent = self._build_child(
             config=child_cfg,
             model=model,
             storage=storage,

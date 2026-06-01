@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from aura.config.schema import MCPServerConfig
+from aura.infrastructure.persistence import journal
 
 _APPROVALS_FILENAME = "mcp-approvals.json"
 _SCHEMA_VERSION = 1
@@ -89,14 +90,8 @@ def _load_raw() -> dict[str, Any]:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError):
-        try:
-            from aura.core import journal  # noqa: PLC0415  # deferred to avoid import cycle
-            journal.write(
-                "mcp_approvals_load_failed",
-                path=str(path),
-            )
-        except Exception:  # noqa: BLE001  # logging path must never crash caller
-            pass
+        with contextlib.suppress(Exception):
+            journal.write("mcp_approvals_load_failed", path=str(path))
         return {}
     if not isinstance(data, dict):
         return {}

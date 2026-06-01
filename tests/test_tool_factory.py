@@ -37,6 +37,7 @@ from aura.application.runtime import (
     TodoWriteFactory,
     ToolRuntime,
 )
+from aura.application.session import AgentSession
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
@@ -136,7 +137,6 @@ def test_tool_runtime_optional_fields_default_to_none() -> None:
     assert runtime.running_tasks is None
     assert runtime.running_shells is None
     assert runtime.transcript_storage is None
-    assert runtime.team_manager is None
     assert runtime.team_provider is None
     assert runtime.member_name_provider is None
 
@@ -154,7 +154,7 @@ def _cfg() -> AuraConfig:
     )
 
 
-def _stub_subagent_factory() -> SubagentSpawner:
+def _stub_subagent_factory() -> SubagentSpawner[AgentSession]:
     """Minimal SubagentSpawner just for identity checks on the wiring.
 
     The factory is not actually invoked in these tests; we only need a
@@ -164,6 +164,7 @@ def _stub_subagent_factory() -> SubagentSpawner:
     return SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(),
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )

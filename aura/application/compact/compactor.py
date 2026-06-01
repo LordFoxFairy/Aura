@@ -6,7 +6,7 @@ import contextlib
 import dataclasses
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any, Literal, Protocol
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
@@ -17,13 +17,30 @@ from aura.application.compact.microcompact import (
     apply_microcompact,
 )
 from aura.application.compact.reactive import CompactResult
-from aura.application.loop_state import LoopSlots
+from aura.application.loop_state import LoopSlots, LoopState
 from aura.config.schema import CompactConfig
 from aura.infrastructure.persistence import journal
+from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.wire.serialize import compact_event_to_wire
 
-if TYPE_CHECKING:
-    from aura.application.session import AgentSession
+
+class _CompactorSession(Protocol):
+    """Narrow contract Compactor needs from AgentSession."""
+
+    @property
+    def state(self) -> LoopState: ...
+    @property
+    def storage(self) -> SessionStorage: ...
+    @property
+    def session_id(self) -> str: ...
+
+    async def compact(
+        self, *, source: Literal["manual", "auto", "reactive"] = "manual"
+    ) -> CompactResult: ...
+
+    def effective_auto_compact_threshold(self) -> int: ...
+    def estimate_history_tokens(self, history: list[BaseMessage]) -> int: ...
+
 
 EventEmitter = Callable[[dict[str, Any]], None]
 
@@ -33,7 +50,7 @@ class Compactor:
     def __init__(
         self,
         *,
-        agent: AgentSession,
+        agent: _CompactorSession,
         config: CompactConfig,
         summary_model: BaseChatModel,
         microcompact_policy: MicrocompactPolicy | None = None,

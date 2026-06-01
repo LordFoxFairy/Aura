@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from aura.application.commands.factory import build_default_registry
 from aura.application.commands.git import (
     GitDiffCommand,
     GitLogCommand,
@@ -29,7 +30,6 @@ from aura.application.commands.git import (
     _git,
     _GitTimeoutError,
 )
-from aura.application.commands.registry import build_default_registry
 from aura.core.agent import Agent
 
 

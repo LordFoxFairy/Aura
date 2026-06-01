@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 from prompt_toolkit.document import Document
@@ -11,9 +10,6 @@ from prompt_toolkit.document import Document
 from aura.application.commands import CommandRegistry
 from aura.application.commands.types import CommandResult
 from cli.completion import SlashCommandCompleter, resolve_history_path
-
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
 
 
 class _FakeCommand:
@@ -32,7 +28,7 @@ class _FakeCommand:
         self.description = description
         self.argument_hint = argument_hint
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: object) -> CommandResult:
         return CommandResult(handled=True, kind="print", text="")
 
 

@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
-from aura.application.commands.registry import build_default_registry, dispatch
+from aura.application.commands.factory import build_default_registry
+from aura.application.commands.registry import dispatch
 from aura.application.compact import CompactResult
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent

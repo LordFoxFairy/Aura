@@ -24,6 +24,7 @@ from langchain_core.messages import AIMessage
 
 from aura.application.memory.context import Context
 from aura.application.memory.rules import RulesBundle
+from aura.application.session import AgentSession
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.config.schema import AuraConfig
 from aura.domain.state_values import ReadCarryover, ReadRecord
@@ -121,7 +122,7 @@ def _cfg() -> AuraConfig:
 
 def _factory_with_parent_reads(
     parent_records: dict[Path, ReadRecord],
-) -> SubagentSpawner:
+) -> SubagentSpawner[AgentSession]:
     """Build a SubagentSpawner whose carryover provider reflects the
     live ``parent_records`` dict — mutations between calls show up at
     the next ``spawn``.
@@ -136,6 +137,7 @@ def _factory_with_parent_reads(
     return SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         parent_carryover_provider=_provider,
         model_factory=lambda: FakeChatModel(
             turns=[FakeTurn(AIMessage(content="done"))]
@@ -236,6 +238,7 @@ def test_subagent_factory_without_provider_starts_empty(tmp_path: Path) -> None:
     factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(
             turns=[FakeTurn(AIMessage(content="done"))]
         ),

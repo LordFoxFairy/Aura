@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
-from aura.application.commands.registry import build_default_registry, dispatch
+from aura.application.commands.factory import build_default_registry
+from aura.application.commands.registry import dispatch
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionMeta, SessionStorage

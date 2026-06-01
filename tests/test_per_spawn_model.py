@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from aura.application.session import AgentSession
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
@@ -105,7 +106,7 @@ async def test_default_inherits_parent_model(
     captured = _patch_load_class(monkeypatch)
     cfg = _cfg()
     store = TasksStore()
-    factory = SubagentSpawner(
+    factory = SubagentSpawner(build_child=AgentSession,
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
@@ -135,7 +136,7 @@ async def test_override_uses_specified_model(
     captured = _patch_load_class(monkeypatch)
     cfg = _cfg()
     store = TasksStore()
-    factory = SubagentSpawner(
+    factory = SubagentSpawner(build_child=AgentSession,
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
@@ -169,7 +170,7 @@ async def test_invalid_spec_raises_clear_error(
     _patch_load_class(monkeypatch)
     cfg = _cfg()
     store = TasksStore()
-    factory = SubagentSpawner(
+    factory = SubagentSpawner(build_child=AgentSession,
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
@@ -197,7 +198,7 @@ async def test_task_record_remembers_model_spec(
     _patch_load_class(monkeypatch)
     cfg = _cfg()
     store = TasksStore()
-    factory = SubagentSpawner(
+    factory = SubagentSpawner(build_child=AgentSession,
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
@@ -218,7 +219,7 @@ async def test_task_get_returns_model_spec_in_payload(
     _patch_load_class(monkeypatch)
     cfg = _cfg()
     store = TasksStore()
-    factory = SubagentSpawner(
+    factory = SubagentSpawner(build_child=AgentSession,
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
@@ -239,7 +240,7 @@ async def test_task_get_returns_model_spec_in_payload(
 
 def test_factory_validate_model_spec_passes_for_router_alias() -> None:
     cfg = _cfg()
-    factory = SubagentSpawner(
+    factory = SubagentSpawner(build_child=AgentSession,
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
@@ -251,7 +252,7 @@ def test_factory_validate_model_spec_passes_for_router_alias() -> None:
 
 def test_factory_validate_model_spec_rejects_unknown_provider() -> None:
     cfg = _cfg()
-    factory = SubagentSpawner(
+    factory = SubagentSpawner(build_child=AgentSession,
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),
@@ -262,7 +263,7 @@ def test_factory_validate_model_spec_rejects_unknown_provider() -> None:
 
 def test_factory_parent_model_spec_property() -> None:
     cfg = _cfg()
-    factory = SubagentSpawner(
+    factory = SubagentSpawner(build_child=AgentSession,
         parent_config=cfg,
         parent_model_spec="openai:gpt-4o-mini",
         storage_factory=lambda: SessionStorage(Path(":memory:")),

@@ -3,17 +3,25 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+import contextlib
+from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
 
 from aura.application.commands.types import CommandResult, CommandSource
 from aura.domain.tool import ToolMetadata
+from aura.infrastructure.persistence import journal
 
-if TYPE_CHECKING:
-    from langchain_mcp_adapters.client import MultiServerMCPClient
 
-    from aura.core.agent import Agent
+@runtime_checkable
+class _PromptClient(Protocol):
+    async def get_prompt(
+        self,
+        server_name: str,
+        prompt_name: str,
+        *,
+        arguments: dict[str, Any] | None = None,
+    ) -> list[Any]: ...
 
 
 @runtime_checkable
@@ -96,8 +104,7 @@ def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
     )
     if truncated:
         tool.description = capped_desc
-        try:
-            from aura.core import journal  # noqa: PLC0415  # deferred import is intentional
+        with contextlib.suppress(Exception):
             journal.write(
                 "mcp_description_truncated",
                 tool_name=tool.name,
@@ -105,8 +112,6 @@ def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
                 original_len=original_len,
                 truncated_len=len(capped_desc),
             )
-        except Exception:  # noqa: BLE001  # logging path must never crash caller
-            pass
     is_read_only = hints["readOnlyHint"] is True
     is_destructive = not (is_read_only or hints["destructiveHint"] is False)
     is_concurrency_safe = is_read_only or hints["openWorldHint"] is False
@@ -175,7 +180,7 @@ class _MCPPromptCommand:
         server_name: str,
         prompt_name: str,
         description: str,
-        client: MultiServerMCPClient,
+        client: _PromptClient,
         arg_names: tuple[str, ...] = (),
         required_args: frozenset[str] = frozenset(),
         op_timeout_sec: float = _DEFAULT_OP_TIMEOUT_SEC,
@@ -214,9 +219,8 @@ class _MCPPromptCommand:
             )
         return provided, None
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
-        from aura.core import journal
-
+    async def handle(self, arg: str, agent: object) -> CommandResult:
+        del agent
         arguments, error = self._build_arguments(arg)
         if arguments is None:
             # error is non-None whenever arguments is None per _build_arguments.
@@ -283,7 +287,7 @@ def make_mcp_command(
     server_name: str,
     prompt_name: str,
     prompt_description: str,
-    client: MultiServerMCPClient,
+    client: _PromptClient,
     prompt_arguments: list[_PromptArgLike] | None = None,
     op_timeout_sec: float = _DEFAULT_OP_TIMEOUT_SEC,
 ) -> _MCPPromptCommand:

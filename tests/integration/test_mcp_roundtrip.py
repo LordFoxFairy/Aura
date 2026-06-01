@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 
 from aura.application import session as agent_module
+from aura.application.runtime import mcp as runtime_mcp
 from tests.conftest import FakeChatModel
 from tests.integration.conftest import build_integration_agent
 
@@ -126,6 +127,7 @@ async def test_aconnect_exposes_manager_without_auto_registering_tool(
     }
     fake_cls = _make_manager_factory(resources)
     monkeypatch.setattr(agent_module, "MCPManager", fake_cls)
+    monkeypatch.setattr(runtime_mcp, "MCPManager", fake_cls)
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent
@@ -157,6 +159,7 @@ async def test_aconnect_empty_catalogue_still_exposes_manager(
 ) -> None:
     fake_cls = _make_manager_factory({})
     monkeypatch.setattr(agent_module, "MCPManager", fake_cls)
+    monkeypatch.setattr(runtime_mcp, "MCPManager", fake_cls)
 
     from aura.config.schema import AuraConfig
     from aura.core.agent import Agent

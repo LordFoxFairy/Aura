@@ -7,7 +7,7 @@ from aura.application.tasks.runners.local_agent import (
     LocalAgentTask,
     run_local_agent,
 )
-from aura.application.tasks.spawn import SpawnPort
+from aura.application.tasks.spawn_port import SpawnPort
 from aura.application.tasks.store import TasksStore
 from aura.infrastructure.persistence.storage import SessionStorage
 

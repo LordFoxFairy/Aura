@@ -28,7 +28,7 @@ _EXPORTS: dict[str, str] = {
     "TaskStopCommand": "aura.application.commands.tasks",
     "TasksCommand": "aura.application.commands.tasks",
     "TeamCommand": "aura.application.commands.team",
-    "build_default_registry": "aura.application.commands.registry",
+    "build_default_registry": "aura.application.commands.factory",
     "dispatch": "aura.application.commands.registry",
     "format_relative_time": "aura.application.commands.builtin",
     "session_label": "aura.application.commands.builtin",

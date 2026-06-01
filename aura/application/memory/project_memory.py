@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from aura.infrastructure.persistence import journal
+
 _AURA_MD = "AURA.md"
 _AURA_DIR = ".aura"
 _AURA_LOCAL_MD = "AURA.local.md"
@@ -214,21 +216,6 @@ def _resolve_import(raw: str, base_dir: Path) -> Path | None:
     if not resolved.is_file():
         return None
     if resolved.suffix.lower() not in _TEXT_IMPORT_EXTS:
-        try:
-            from aura.core import journal
-
-            journal.write(
-                "import_non_text_skipped",
-                path=str(resolved),
-                suffix=resolved.suffix,
-            )
-        except Exception:  # noqa: BLE001  # log + swallow; logging path must never crash caller
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "import_non_text_skipped: %s (suffix=%r)",
-                resolved,
-                resolved.suffix,
-            )
+        journal.write("import_non_text_skipped", path=str(resolved), suffix=resolved.suffix)
         return None
     return resolved

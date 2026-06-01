@@ -410,7 +410,7 @@ async def test_subagent_abort_cascades(tmp_path: Path) -> None:
         object.__setattr__(m, "_agenerate", _child_hanging_agen)
         return m
 
-    agent._subagent_factory._model_factory = _child_model_factory
+    agent.subagent_factory._model_factory = _child_model_factory
 
     async def _drive() -> None:
         try:

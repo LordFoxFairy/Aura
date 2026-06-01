@@ -2,18 +2,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from langchain_core.messages import BaseMessage
 
 from aura.domain.permission.session import SessionRuleSet
 from aura.domain.state_values import ReadCarryover
+from aura.domain.task import TaskNotification
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.wire.events import WireEvent
-
-if TYPE_CHECKING:
-    from aura.domain.task import TaskNotification
 
 
 class SessionRuntime:

@@ -38,6 +38,18 @@ def _agent(tmp_path: Path) -> Agent:
     )
 
 
+def test_skill_command_source_has_no_type_checking_or_core_agent_import() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "aura"
+        / "infrastructure"
+        / "skills"
+        / "command.py"
+    ).read_text(encoding="utf-8")
+    assert "TYPE_CHECKING" not in source
+    assert "aura.core.agent" not in source
+
+
 def test_skill_command_name_auto_prefixed_slash(tmp_path: Path) -> None:
     agent = _agent(tmp_path)
     cmd = SkillCommand(skill=_skill("bar"), agent=agent)

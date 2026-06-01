@@ -8,11 +8,9 @@ structurally typed without forcing inheritance from an Aura base class.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import Literal, Protocol, TypeVar, runtime_checkable
 
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
-
+AgentT = TypeVar("AgentT", contravariant=True)
 
 CommandKind = Literal["print", "view", "exit", "noop"]
 CommandSource = Literal["builtin", "skill", "mcp"]
@@ -27,7 +25,8 @@ class CommandResult:
     text: str
 
 
-class Command(Protocol):
+@runtime_checkable
+class Command(Protocol[AgentT]):
     """Structural type for a slash command."""
 
     name: str
@@ -37,12 +36,13 @@ class Command(Protocol):
     argument_hint: str | None
 
     async def handle(
-        self, arg: str, agent: Agent
+        self, arg: str, agent: AgentT,
     ) -> CommandResult:  # pragma: no cover - protocol stub
         ...
 
 
 __all__ = [
+    "AgentT",
     "Command",
     "CommandKind",
     "CommandResult",

@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, Protocol
 
 from aura.application.hooks import CwdChangedHook, FileChangedHook
 from aura.application.loop_state import LoopState
 from aura.infrastructure.persistence import journal
 
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
+
+class AutoReloadAgent(Protocol):
+    @property
+    def session_id(self) -> str: ...
+
+    def apply_aura_md_reload(self) -> None: ...
+
+    def change_cwd_and_reload(self, new_cwd: Path) -> None: ...
 
 
 _AURA_MD_NAMES = {"AURA.md", "AURA.local.md"}
@@ -20,7 +26,7 @@ def _is_aura_md_path(path: Path) -> bool:
     return path.name in _AURA_MD_NAMES
 
 
-def make_aura_md_reload_hook(agent: Agent) -> FileChangedHook:
+def make_aura_md_reload_hook(agent: AutoReloadAgent) -> FileChangedHook:
 
     async def _hook(
         *,
@@ -42,7 +48,7 @@ def make_aura_md_reload_hook(agent: Agent) -> FileChangedHook:
     return _hook
 
 
-def make_cwd_rules_reload_hook(agent: Agent) -> CwdChangedHook:
+def make_cwd_rules_reload_hook(agent: AutoReloadAgent) -> CwdChangedHook:
 
     async def _hook(
         *,

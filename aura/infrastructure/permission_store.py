@@ -30,6 +30,7 @@ from aura.domain.permission.safety import (
     DEFAULT_PROTECTED_WRITES,
 )
 from aura.domain.permission.session import RuleSet
+from aura.infrastructure.persistence import journal
 
 
 class PermissionStoreError(AuraError):
@@ -259,8 +260,6 @@ def _load_kind_ruleset(
     field: Literal["deny", "ask"],
 ) -> RuleSet:
     """Deny/ask loader; malformed entries journal + skip rather than raise."""
-    from aura.core import journal as _j  # noqa: PLC0415  # defer to dodge import cycle
-
     cfg = load(project_root)
     raw_list = cfg.deny if field == "deny" else cfg.ask
     parsed: list[Rule] = []
@@ -269,7 +268,7 @@ def _load_kind_ruleset(
             parsed.append(Rule.parse(raw, kind=field))
         except InvalidRuleError as exc:
             with contextlib.suppress(Exception):
-                _j.write(
+                journal.write(
                     "permission_rule_parse_failed",
                     kind=field,
                     rule=raw,

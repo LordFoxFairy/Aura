@@ -95,8 +95,9 @@ def _parse_add_args(rest: str) -> tuple[list[str], BackendType]:
 
 
 def _ensure_manager(agent: Agent) -> TeamManager | None:
-    if agent._team_manager is not None:
-        return agent._team_manager
+    cached = agent._team_manager
+    if isinstance(cached, TeamManager):
+        return cached
     mgr = TeamManager(
         leader=agent,
         storage=agent.storage,

@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
 
 from aura.application.commands.types import CommandResult, CommandSource
+from aura.application.session import AgentSession
 from aura.domain.task import TaskRecord
-
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
 
 _SHORT_ID = 8
 _STOP_TIMEOUT_SECONDS = 2.0
 
 
-def _resolve(agent: Agent, arg: str) -> TaskRecord | None:
+def _resolve(agent: AgentSession, arg: str) -> TaskRecord | None:
     """Resolve ``arg`` (full id or unique prefix) to a TaskRecord."""
     arg = arg.strip()
     if not arg:
@@ -35,7 +32,7 @@ class TasksCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = None
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         records = agent.tasks_store.list()
         if not records:
             return CommandResult(handled=True, kind="print", text="(no tasks)")
@@ -55,7 +52,7 @@ class TaskGetCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = "<id-prefix>"
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         if not arg.strip():
             return CommandResult(
                 handled=True, kind="print",
@@ -106,7 +103,7 @@ class TaskStopCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = "<id-prefix>"
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         if not arg.strip():
             return CommandResult(
                 handled=True, kind="print",

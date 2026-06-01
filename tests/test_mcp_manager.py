@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, get_type_hints
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
 from aura.config.schema import MCPServerConfig
@@ -596,3 +596,11 @@ async def test_list_changed_handler_journals_only_relevant_methods(
         }
     finally:
         journal_module.reset()
+
+
+def test_manager_start_all_type_hints_resolve_without_type_checking_imports() -> None:
+    """Public annotations stay resolvable after dropping TYPE_CHECKING helpers."""
+    hints = get_type_hints(MCPManager.start_all)
+    tools_t, commands_t = hints["return"].__args__
+    assert tools_t == list[BaseTool]
+    assert commands_t.__origin__ is list

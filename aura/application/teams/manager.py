@@ -10,8 +10,9 @@ import re
 import shutil
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
+from aura.application.session import AgentSession
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import Mailbox, QueueMailboxNotifier
@@ -32,9 +33,10 @@ from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.wire.events import CoordinationEvent, LifecyclePayload
 
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
-    from aura.infrastructure.teams.types import BackendHandle
+
+@runtime_checkable
+class _BackendHandleLike(Protocol):
+    async def force_kill(self) -> None: ...
 
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
@@ -85,9 +87,9 @@ class TeamManager:
     def __init__(
         self,
         *,
-        leader: Agent,
+        leader: AgentSession,
         storage: SessionStorage,
-        factory: SubagentSpawner,
+        factory: SubagentSpawner[AgentSession],
         running_aborts: dict[str, AbortController],
         tasks_store: TasksStore,
         runtime_runner: Any = None,
@@ -106,12 +108,12 @@ class TeamManager:
         self._team: TeamRecord | None = None
         self._runtimes: dict[str, asyncio.Task[None]] = {}
         self._member_task_ids: dict[str, str] = {}
-        self._member_agents: dict[str, Agent] = {}
+        self._member_agents: dict[str, AgentSession] = {}
         self._stop_events: dict[str, asyncio.Event] = {}
         self._shutdown_acks: dict[str, asyncio.Future[bool]] = {}
         self._shutdown_waiters: dict[str, asyncio.Task[bool]] = {}
         self._mailbox_notifier = QueueMailboxNotifier()
-        self._member_backends: dict[str, BackendHandle] = {}
+        self._member_backends: dict[str, _BackendHandleLike] = {}
         self._teammate_terminal_intents: dict[str, str] = {}
         self._session_created_teams: set[str] = set()
         self._pending_protocol_events: list[CoordinationEvent] = []
@@ -368,7 +370,7 @@ class TeamManager:
                 "async context (sync add_member supports in_process only)",
             )
         self._emit_member_lifecycle(name, "starting")
-        handle: BackendHandle
+        handle: _BackendHandleLike
         if self._runtime_runner is not _default_runner:
             # Tests inject a runner directly; bypass the backend dispatch.
             def _cleanup(_t: asyncio.Task[None]) -> None:

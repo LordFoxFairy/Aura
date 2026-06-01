@@ -347,7 +347,7 @@ async def test_mcp_toggle_without_manager_returns_friendly_error() -> None:
 
 def test_mcp_command_registered_in_default_registry() -> None:
     """``build_default_registry`` must include ``/mcp``."""
-    from aura.application.commands.registry import build_default_registry
+    from aura.application.commands.factory import build_default_registry
 
     reg = build_default_registry()
     names = [c.name for c in reg.list()]

@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from aura.application.commands.registry import CommandRegistry
 from aura.application.commands.types import CommandResult, CommandSource
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfigError
 from aura.infrastructure.persistence.storage import SessionMeta
-
-if TYPE_CHECKING:
-    from aura.core.agent import Agent
 
 
 class HelpCommand:
@@ -24,7 +21,7 @@ class HelpCommand:
     def __init__(self, *, registry: CommandRegistry) -> None:
         self._registry = registry
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         commands = self._registry.list()
         sections: list[tuple[str, CommandSource]] = [
             ("Builtins", "builtin"),
@@ -59,7 +56,7 @@ class ExitCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = None
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         return CommandResult(handled=True, kind="exit", text="")
 
 
@@ -70,7 +67,7 @@ class ClearCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = None
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         agent.clear_session()
         return CommandResult(handled=True, kind="print", text="session cleared")
 
@@ -82,7 +79,7 @@ class CompactCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = None
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         result = await agent.compact(source="manual")
         return CommandResult(
             handled=True,
@@ -101,7 +98,7 @@ class ContextCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = None
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         from langchain_core.messages import SystemMessage
 
         from aura.application.compact.reactive import (
@@ -176,7 +173,7 @@ class ModelCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = "[spec]"
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         if not arg:
             return CommandResult(handled=True, kind="print", text=_model_status(agent))
         old = agent.current_model or "?"
@@ -190,7 +187,7 @@ class ModelCommand:
         )
 
 
-def _model_status(agent: Agent) -> str:
+def _model_status(agent: AgentSession) -> str:
     current = agent.current_model or "?"
     aliases = sorted(agent.router_aliases)
     lines = [f"current: {current}"]
@@ -239,7 +236,7 @@ class ResumeCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = "[session_id]"
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         target = arg.strip()
         if not target:
             sessions = agent.storage.list_sessions(limit=10)

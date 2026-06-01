@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from aura.domain.team import BackendType
 from aura.infrastructure.teams.detection import pane_backend_available
 from aura.infrastructure.teams.in_process import InProcessBackend
 from aura.infrastructure.teams.pane import PaneBackend, PaneBackendError
-
-if TYPE_CHECKING:
-    from aura.domain.team import BackendType
-    from aura.infrastructure.teams.types import TeammateBackend
+from aura.infrastructure.teams.types import TeammateBackend
 
 
 class BackendUnavailable(RuntimeError):

@@ -15,6 +15,7 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
+from aura.application.session import AgentSession
 from aura.application.tasks.runners import LocalAgentTask
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
@@ -31,10 +32,11 @@ def _cfg() -> AuraConfig:
     })
 
 
-def _factory_with_reply(text: str) -> SubagentSpawner:
+def _factory_with_reply(text: str) -> SubagentSpawner[AgentSession]:
     return SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: FakeChatModel(
             turns=[FakeTurn(AIMessage(content=text))],
         ),
@@ -76,6 +78,7 @@ async def test_local_agent_task_abort_cancels_task() -> None:
     factory = SubagentSpawner(
         parent_config=_cfg(),
         parent_model_spec="openai:gpt-4o-mini",
+        build_child=AgentSession,
         model_factory=lambda: _Slow(),
         storage_factory=lambda: SessionStorage(Path(":memory:")),
     )

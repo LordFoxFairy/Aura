@@ -13,10 +13,12 @@ from typing import Any, Protocol, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage
 
+from aura.application.subagent_summary import AgentSummarizer
 from aura.application.tasks.spawn_port import SpawnedAgent, SpawnPort
 from aura.application.tasks.store import TasksStore
 from aura.domain.events import Final, ToolCallStarted
 from aura.domain.task import TaskRecord, TaskStatus
+from aura.infrastructure.llm import make_summary_model_factory
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 
@@ -400,9 +402,6 @@ async def run_local_agent(
             else:
                 raise
         agent.hooks.post_model.append(make_token_observer(store, task_id))
-        from aura.application.subagent_summary import AgentSummarizer
-        from aura.infrastructure.llm import make_summary_model_factory
-
         summary_factory = make_summary_model_factory(
             agent.config, agent.model, summary_spec=None,
         )

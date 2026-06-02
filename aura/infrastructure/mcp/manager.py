@@ -19,6 +19,8 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from aura.application.commands.types import Command
+from aura.config import mcp_approvals, mcp_store
+from aura.config.env import expand_env_vars
 from aura.config.schema import AuraConfigError
 from aura.infrastructure.mcp.adapter import (
     add_aura_metadata,
@@ -198,28 +200,22 @@ class MCPManager:
 
         if project_server_names is None:
             try:
-                from aura.config import (
-                    mcp_store as _store,  # noqa: PLC0415  # deferred import is intentional
-                )
-                project_server_names = _store.project_layer_names()
+                project_server_names = mcp_store.project_layer_names()
             except Exception:  # noqa: BLE001  # store failure degrades to empty approval set
                 project_server_names = set()
         self._project_server_names: set[str] = set(project_server_names)
 
         self._unapproved: set[str] = set()
-        from aura.config import (
-            mcp_approvals as _approvals,  # noqa: PLC0415  # deferred import is intentional
-        )
         for cfg in self._configs_all:
             if cfg.name not in self._project_server_names:
                 continue
-            if not _approvals.is_approved(cfg):
+            if not mcp_approvals.is_approved(cfg):
                 self._unapproved.add(cfg.name)
                 with suppress(Exception):
                     journal.write(
                         "mcp_server_unapproved",
                         server=cfg.name,
-                        project=_approvals.project_key(),
+                        project=mcp_approvals.project_key(),
                     )
 
         for cfg in self._configs_all:
@@ -605,10 +601,6 @@ class MCPManager:
         Invariant: an unresolved ``${VAR}`` with no default raises
         :class:`RuntimeError` rather than silently substituting empty.
         """
-        from aura.infrastructure.mcp.adapter import (
-            expand_env_vars,  # noqa: PLC0415  # deferred import is intentional
-        )
-
         missing: list[str] = []
 
         def _expand(text: str | None) -> str | None:
@@ -801,10 +793,7 @@ class MCPManager:
             return (
                 f"MCP server {name!r} is user-scope; approval is not required"
             )
-        from aura.config import (
-            mcp_approvals as _approvals,  # noqa: PLC0415  # deferred import is intentional
-        )
-        _approvals.approve(cfg)
+        mcp_approvals.approve(cfg)
         self._unapproved.discard(name)
         self._state[name] = "never_started"
         if cfg.enabled and cfg not in self._configs:
@@ -825,10 +814,7 @@ class MCPManager:
                 f"no MCP server named {name!r}; "
                 f"known: {known}"
             )
-        from aura.config import (
-            mcp_approvals as _approvals,  # noqa: PLC0415  # deferred import is intentional
-        )
-        _approvals.revoke(name)
+        mcp_approvals.revoke(name)
         self._unapproved.add(name)
         self._configs = [c for c in self._configs if c.name != name]
         if self._client is not None:
@@ -853,10 +839,7 @@ class MCPManager:
         """Re-seed from a freshly-loaded config list; returns ``"+N -M"`` summary."""
         if project_server_names is None:
             try:
-                from aura.config import (
-                    mcp_store as _store,  # noqa: PLC0415  # deferred import is intentional
-                )
-                project_server_names = _store.project_layer_names()
+                project_server_names = mcp_store.project_layer_names()
             except Exception:  # noqa: BLE001  # store failure degrades to empty approval set
                 project_server_names = set()
 
@@ -883,12 +866,11 @@ class MCPManager:
         self._configs = [c for c in configs if c.enabled]
         self._project_server_names = set(project_server_names)
 
-        from aura.config import mcp_approvals as _approvals  # noqa: PLC0415
         for cfg in self._configs_all:
             if cfg.name in added:
                 if (
                     cfg.name in self._project_server_names
-                    and not _approvals.is_approved(cfg)
+                    and not mcp_approvals.is_approved(cfg)
                 ):
                     self._unapproved.add(cfg.name)
                     self._state[cfg.name] = "unapproved"

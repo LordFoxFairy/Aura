@@ -16,6 +16,7 @@ from typing import Literal
 
 from pydantic import ValidationError
 
+from aura.config.env import expand_env_vars
 from aura.config.schema import MCPServerConfig
 from aura.infrastructure.persistence import journal
 
@@ -39,10 +40,6 @@ def project_path(cwd: Path | None = None) -> Path:
 def _expand_in_place(item: dict[str, object], missing: list[str]) -> dict[str, object]:
     # Recursively expand ${VAR} / ${VAR:-default} in string leaves on a fresh
     # copy; missing refs accumulate in `missing` (deduped by the expander).
-    from aura.infrastructure.mcp.adapter import (
-        expand_env_vars,  # noqa: PLC0415  # deferred to break import cycle
-    )
-
     def _walk(node: object) -> object:
         if isinstance(node, str):
             return expand_env_vars(node, _missing_log=missing)

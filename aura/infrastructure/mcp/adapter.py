@@ -129,40 +129,6 @@ def add_aura_metadata(tool: BaseTool, *, server_name: str) -> BaseTool:
     return tool
 
 
-def expand_env_vars(
-    text: str,
-    *,
-    _missing_log: list[str] | None = None,
-) -> str:
-    """Expand ``${VAR}`` / ``${VAR:-default}`` references in *text*.
-
-    Invariant: output is NOT recursively re-expanded — a value containing
-    ``${...}`` cannot read another env variable on use. Empty-string env
-    values count as missing (shell semantics).
-    """
-    import os
-    import re
-
-    if "${" not in text:
-        return text
-
-    pattern = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
-
-    def _sub(match: re.Match[str]) -> str:
-        name = match.group(1)
-        default = match.group(2)
-        val = os.environ.get(name, "")
-        if val:
-            return val
-        if default is not None:
-            return default
-        if _missing_log is not None and name not in _missing_log:
-            _missing_log.append(name)
-        return ""
-
-    return pattern.sub(_sub, text)
-
-
 class _MCPPromptCommand:
     """Slash-command that fetches an MCP prompt body on demand and prints it.
 

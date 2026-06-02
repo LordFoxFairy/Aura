@@ -314,18 +314,17 @@ def test_main_wires_allow_deny_and_ask_rules_into_permission_layers(
     async def fake_repl(*_args: object, **_kwargs: object) -> None:
         return None
 
-    import aura.application.hooks.file_watcher as watcher_mod
-    import aura.application.hooks.permission as permission_mod
-    import aura.core.agent as agent_mod
+    # Patch where main() looks them up: top-level imports bind into cli.__main__.
+    import cli.__main__ as main_mod
     import cli.repl as repl_mod
 
     monkeypatch.chdir(project_dir)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("FAKE_API_KEY", "dummy")
     monkeypatch.setattr(sys, "argv", ["aura"])
-    monkeypatch.setattr(permission_mod, "make_permission_hook", fake_permission_hook)
-    monkeypatch.setattr(agent_mod, "build_agent", fake_build_agent)
-    monkeypatch.setattr(watcher_mod, "FileWatcher", FakeWatcher)
+    monkeypatch.setattr(main_mod, "make_permission_hook", fake_permission_hook)
+    monkeypatch.setattr(main_mod, "build_agent", fake_build_agent)
+    monkeypatch.setattr(main_mod, "FileWatcher", FakeWatcher)
     monkeypatch.setattr(repl_mod, "run_repl_async", fake_repl)
 
     assert main() == 0

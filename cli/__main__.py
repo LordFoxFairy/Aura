@@ -5,14 +5,30 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
 from typing import TypeAlias, cast
 
 from rich.console import Console
 
 from aura import __version__
-from aura.config.schema import AuraConfig, PermissionsConfig
-from aura.core.agent import Agent
+from aura.application.hooks import HookChain
+from aura.application.hooks.file_watcher import FileWatcher, default_watch_paths
+from aura.application.hooks.logging import wrap_with_event_logger
+from aura.application.hooks.permission import make_permission_hook
+from aura.application.teams.runtime import run_teammate_main
+from aura.config.loader import load_config
+from aura.config.schema import AuraConfig, AuraConfigError, PermissionsConfig
+from aura.core.agent import Agent, build_agent
+from aura.domain.errors import AuraError
+from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
 from aura.domain.permission.mode import Mode
+from aura.domain.permission.safety import (
+    DEFAULT_PROTECTED_READS,
+    DEFAULT_PROTECTED_WRITES,
+    SafetyPolicy,
+)
+from aura.domain.permission.session import RuleSet, SessionRuleSet
+from aura.infrastructure import permission_store as store
 from aura.infrastructure.persistence import journal
 
 AgentRef: TypeAlias = Agent | None
@@ -153,8 +169,6 @@ def _warn_plaintext_api_keys(
 
 
 def _fail_startup(console: Console, exc: BaseException) -> int:
-    from aura.domain.errors import AuraError
-
     if isinstance(exc, AuraError):
         journal.write("startup_failed", reason=type(exc).__name__, detail=str(exc))
         console.print(f"[red]{type(exc).__name__}: {exc}[/red]")
@@ -173,9 +187,6 @@ def _split_dashdash(argv: list[str]) -> tuple[list[str], list[str]]:
 
 
 def run_as_teammate(args: argparse.Namespace) -> int:
-    # Lazy import keeps the parent ``aura`` invocation light.
-    from aura.application.teams.runtime import run_teammate_main
-
     try:
         return asyncio.run(
             run_teammate_main(
@@ -210,24 +221,6 @@ def main() -> int:
     if args.subcommand == "teammate":
         return run_as_teammate(args)
 
-    from pathlib import Path
-
-    from rich.console import Console
-
-    from aura.application.hooks import HookChain
-    from aura.application.hooks.logging import wrap_with_event_logger
-    from aura.application.hooks.permission import make_permission_hook
-    from aura.config.loader import load_config
-    from aura.config.schema import AuraConfigError
-    from aura.core.agent import build_agent
-    from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
-    from aura.domain.permission.safety import (
-        DEFAULT_PROTECTED_READS,
-        DEFAULT_PROTECTED_WRITES,
-        SafetyPolicy,
-    )
-    from aura.domain.permission.session import RuleSet, SessionRuleSet
-    from aura.infrastructure import permission_store as store
     from cli._permission_asker import make_cli_asker, print_bypass_banner
     from cli._user_asker import make_cli_user_asker
     from cli.repl import run_repl_async
@@ -347,7 +340,6 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
             console.print(f"[yellow]mcp connect error (continuing): {exc}[/yellow]")
             journal.write("mcp_connect_cli_error", error=str(exc))
-        from aura.application.hooks.file_watcher import FileWatcher, default_watch_paths
         watcher = FileWatcher(
             paths=default_watch_paths(Path.cwd()),
             chain=agent.hooks,

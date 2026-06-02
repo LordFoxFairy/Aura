@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass
 
 from aura.application.teams.mailbox import Mailbox, MailboxNotifier
-from aura.application.teams.manager import TeamManager
+from aura.application.teams.team_port import TeamPort
 from aura.core.agent import Agent
 from aura.domain.abort import AbortController
 from aura.domain.team import (
@@ -79,7 +79,7 @@ class PaneHandle(BackendHandle):
     pane_id: str | None
     member_name: str
     # Held to post shutdown_request through the same code path the in-process backend uses.
-    manager: TeamManager
+    manager: TeamPort
     # Subprocess can't see this event directly; we still fire it for in-leader observers.
     stop_event: asyncio.Event
     abort: AbortController
@@ -170,7 +170,7 @@ class PaneBackend:
         team_id: str,
         member: TeammateMember,
         agent: Agent,
-        manager: TeamManager,
+        manager: TeamPort,
         storage: SessionStorage,
         stop_event: asyncio.Event,
         abort: AbortController,

@@ -13,7 +13,8 @@ from aura.application.teams.mailbox import (
     MailboxNotifier,
 )
 from aura.application.teams.team_port import TeamPort
-from aura.core.agent import Agent
+from aura.config.loader import load_config
+from aura.core.agent import Agent, build_agent
 from aura.domain.abort import AbortController, AbortException
 from aura.domain.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
 from aura.domain.team import TeamMessage
@@ -200,19 +201,14 @@ async def run_teammate_main(
     system_prompt: str | None = None,
     seed_prompt: str | None = None,
 ) -> int:
-    # Lazy imports keep the in-process backend's hot path cold-start cheap.
     from pathlib import Path
-
-    from aura.config.loader import load_config
-    from aura.core.agent import build_agent
-    from aura.infrastructure.persistence.storage import SessionStorage as _Storage
 
     config = load_config()
     if model_name:
         config = config.model_copy(
             update={"router": {**config.router, "default": model_name}},
         )
-    storage = _Storage(Path(storage_root) / "index.sqlite")
+    storage = SessionStorage(Path(storage_root) / "index.sqlite")
     agent = build_agent(config, session_id=f"team-{team_id}-{member_name}")
     del agent_type, system_prompt
     stop_event = asyncio.Event()

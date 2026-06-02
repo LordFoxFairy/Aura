@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from aura.config import mcp_store
-from aura.infrastructure.mcp.adapter import expand_env_vars
+from aura.config.env import expand_env_vars
 
 
 def test_expand_passthrough_no_template(monkeypatch: pytest.MonkeyPatch) -> None:

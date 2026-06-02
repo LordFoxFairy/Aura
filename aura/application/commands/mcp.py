@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from aura.application.commands.types import CommandResult, CommandSource
 from aura.application.session import AgentSession
+from aura.config import mcp_store
 from aura.infrastructure.mcp.manager import MCPServerStatus
 
 _VALID_SUBCOMMANDS = (
@@ -47,7 +48,6 @@ class MCPCommand:
                 handled=True, kind="print",
                 text="no MCP manager attached (no servers configured)",
             )
-        from aura.config import mcp_store
         try:
             configs = mcp_store.load()
         except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate

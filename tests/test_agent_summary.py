@@ -331,8 +331,10 @@ async def test_summary_pulled_into_terminal_record(
         "reading config",
     ])
 
+    import aura.application.tasks.runners.local_agent as _local_agent
+
     monkeypatch.setattr(
-        llm,
+        _local_agent,
         "make_summary_model_factory",
         lambda cfg, main, *, summary_spec=None: (lambda: summary_model),
     )

@@ -27,6 +27,10 @@ from aura.application.compact.constants import (
     auto_compact_threshold_for,
 )
 from aura.application.hooks import HookChain
+from aura.application.hooks.auto_reload import (
+    make_aura_md_reload_hook,
+    make_cwd_rules_reload_hook,
+)
 from aura.application.hooks.bash_safety import make_bash_safety_hook
 from aura.application.hooks.budget import default_hooks
 from aura.application.hooks.must_read_first import make_must_read_first_hook
@@ -46,7 +50,7 @@ from aura.application.runtime.tool_factory import (
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.team_port import TeammateBinding, TeamPort
-from aura.config.schema import AuraConfig, AuraConfigError
+from aura.config.schema import AuraConfig, AuraConfigError, ToolsConfig
 from aura.domain.abort import AbortController, AbortException
 from aura.domain.agent_definition import AgentDefinition
 from aura.domain.events import AgentEvent, AssistantDelta, Final
@@ -54,8 +58,8 @@ from aura.domain.permission.denials import PermissionDenial
 from aura.domain.permission.mode import Mode
 from aura.domain.permission.safety import SafetyPolicy
 from aura.domain.permission.session import RuleSet, SessionRuleSet
-from aura.domain.state_values import ReadCarryover
-from aura.domain.task import TaskNotification
+from aura.domain.state_values import BuddyState, ReadCarryover, ReadRecord
+from aura.domain.task import TaskNotification, TaskRecord
 from aura.domain.tokens import estimate_message_tokens, estimate_text_tokens
 from aura.domain.tool import ToolError
 from aura.domain.tool_registry import ToolRegistry
@@ -65,8 +69,14 @@ from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills import Skill, SkillRegistry, load_skills
 from aura.infrastructure.wire.events import WireEvent
+from aura.infrastructure.wire.serialize import (
+    task_notification_to_wire,
+    task_progress_to_wire,
+    task_started_to_wire,
+)
 from aura.tools import BUILTIN_STATEFUL_TOOLS, BUILTIN_TOOLS
 from aura.tools.ask_user import FormQuestionDict, UserAsker
+from aura.tools.send_message import SendMessage
 from aura.tools.web_fetch import set_default_model_factory
 
 
@@ -215,10 +225,9 @@ class AgentSession:
         )
         # Anchor for providers that always return 0 cache_read_input_tokens.
         self._pinned_tokens_estimate = self._estimate_pinned_tokens()
-        from aura.config.schema import ToolsConfig as _ShippedToolsConfig
         self._user_pinned_tools_allowlist_value = (
             list(self._config.tools.enabled)
-            != list(_ShippedToolsConfig().enabled)
+            != list(ToolsConfig().enabled)
         )
         set_default_model_factory(
             llm.make_summary_model_factory(self._config, self._model)
@@ -272,7 +281,6 @@ class AgentSession:
         self._teammate: TeammateBinding | None = None
 
         def _on_terminal(rec: object) -> None:
-            from aura.domain.task import TaskNotification, TaskRecord
             if not isinstance(rec, TaskRecord):
                 return
             summary = (
@@ -287,7 +295,6 @@ class AgentSession:
                 description=rec.description,
             )
             self._enqueue_task_notification(notification)
-            from aura.infrastructure.wire.serialize import task_notification_to_wire
             self._enqueue_protocol_event(
                 task_notification_to_wire(
                     notification,
@@ -297,10 +304,8 @@ class AgentSession:
         self._tasks_store.add_terminal_listener(_on_terminal)
 
         def _on_started(rec: object) -> None:
-            from aura.domain.task import TaskRecord
             if not isinstance(rec, TaskRecord):
                 return
-            from aura.infrastructure.wire.serialize import task_started_to_wire
             self._enqueue_protocol_event(
                 task_started_to_wire(
                     task_id=rec.id,
@@ -313,10 +318,8 @@ class AgentSession:
         self._tasks_store.add_started_listener(_on_started)
 
         def _on_activity(rec: object, activity: str) -> None:
-            from aura.domain.task import TaskRecord
             if not isinstance(rec, TaskRecord):
                 return
-            from aura.infrastructure.wire.serialize import task_progress_to_wire
             self._enqueue_protocol_event(
                 task_progress_to_wire(
                     task_id=rec.id,
@@ -408,11 +411,6 @@ class AgentSession:
         # Appended last so a denied tool doesn't also raise missing-read.
         self._must_read_first_hook = make_must_read_first_hook(self._context)
         self._hooks.pre_tool.append(self._must_read_first_hook)
-        # auto_reload imports Agent — defer to break the cycle.
-        from aura.application.hooks.auto_reload import (
-            make_aura_md_reload_hook,
-            make_cwd_rules_reload_hook,
-        )
         self._hooks.file_changed.append(make_aura_md_reload_hook(self))
         self._hooks.cwd_changed.append(make_cwd_rules_reload_hook(self))
 
@@ -599,7 +597,6 @@ class AgentSession:
         self._state.reset()
         self._state.slots.turn_denials.clear()
         self._state.slots.todos.clear()
-        from aura.domain.state_values import BuddyState as _BuddyState
         self._state.slots.perm_dedup_cache.clear()
         self._state.slots.invoked_skills.clear()
         self._state.slots.preserved_invoked_skills.clear()
@@ -608,7 +605,7 @@ class AgentSession:
             self._state.slots,
             active_team=None,
             consecutive_compact_failures=0,
-            buddy=_BuddyState(),
+            buddy=BuddyState(),
         )
         self._prior_mode = None
         project_memory.clear_cache(self._cwd)
@@ -796,7 +793,6 @@ class AgentSession:
             return
         if "send_message" in self._registry:
             return
-        from aura.tools.send_message import SendMessage
         send_tool = SendMessage(
             team_provider=lambda: self.team,
             member_name_provider=lambda: self._team_member_name,
@@ -956,8 +952,7 @@ class AgentSession:
         """Effective context window; ``AuraConfig.context_window`` overrides."""
         if self._config.context_window is not None:
             return self._config.context_window
-        from aura.infrastructure.llm import get_context_window
-        return get_context_window(self.current_model)
+        return llm.get_context_window(self.current_model)
 
     @property
     def pinned_tokens_estimate(self) -> int:
@@ -1080,8 +1075,6 @@ class AgentSession:
 
     def _snapshot_read_carryover(self) -> ReadCarryover:
         """Build a ReadCarryover from live Context for SubagentSpawner spawn."""
-        from aura.domain.state_values import ReadRecord
-
         turn = self._state.turn_count
         records: dict[Path, ReadRecord] = {}
         for path, rec in self._context.read_records.items():

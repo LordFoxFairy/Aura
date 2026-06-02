@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import uuid
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -16,6 +17,7 @@ from aura.application.session import AgentSession
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import Mailbox, QueueMailboxNotifier
+from aura.application.teams.runtime import run_teammate
 from aura.domain.abort import AbortController
 from aura.domain.team import (
     BROADCAST_RECIPIENT,
@@ -31,7 +33,10 @@ from aura.domain.team import (
 from aura.domain.team_memory import redact_secrets
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.teams.in_process import InProcessBackend, InProcessHandle
+from aura.infrastructure.teams.registry import BackendUnavailable, get_backend
 from aura.infrastructure.wire.events import CoordinationEvent, LifecyclePayload
+from aura.infrastructure.wire.serialize import team_message_to_wire
 
 
 @runtime_checkable
@@ -92,19 +97,16 @@ class TeamManager:
         factory: SubagentSpawner[AgentSession],
         running_aborts: dict[str, AbortController],
         tasks_store: TasksStore,
-        runtime_runner: Any = None,
+        runtime_runner: Callable[..., Coroutine[Any, Any, None]] | None = None,
     ) -> None:
         self._leader = leader
         self._storage = storage
         self._factory = factory
         self._running_aborts = running_aborts
         self._tasks_store = tasks_store
-        if runtime_runner is None:
-            # Lazy import breaks the runtime↔manager import cycle.
-            from aura.application.teams.runtime import run_teammate
-            self._runtime_runner = run_teammate
-        else:
-            self._runtime_runner = runtime_runner
+        self._runtime_runner = (
+            run_teammate if runtime_runner is None else runtime_runner
+        )
         self._team: TeamRecord | None = None
         self._runtimes: dict[str, asyncio.Task[None]] = {}
         self._member_task_ids: dict[str, str] = {}
@@ -305,11 +307,7 @@ class TeamManager:
                 f"team has reached MAX_MEMBERS={MAX_MEMBERS}; "
                 "remove a member before adding another",
             )
-        # Resolve backend before state mutation so an unsupported pane env fails fast.
-        from aura.infrastructure.teams.registry import (
-            BackendUnavailable,
-            get_backend,
-        )
+        # Resolve before state mutation so an unsupported pane env fails fast.
         try:
             backend = get_backend(backend_type)
         except BackendUnavailable as exc:
@@ -357,13 +355,6 @@ class TeamManager:
         abort = AbortController()
         self._running_aborts[record.id] = abort
         stop_event = asyncio.Event()
-        from aura.application.teams.runtime import run_teammate as _default_runner
-        from aura.infrastructure.teams.in_process import (
-            InProcessBackend as _InProcessBackend,
-        )
-        from aura.infrastructure.teams.in_process import (
-            InProcessHandle as _InProcessHandle,
-        )
         if backend_type == "pane":
             raise TeamError(
                 "pane backend must be added via aadd_member() from an "
@@ -371,7 +362,7 @@ class TeamManager:
             )
         self._emit_member_lifecycle(name, "starting")
         handle: _BackendHandleLike
-        if self._runtime_runner is not _default_runner:
+        if self._runtime_runner is not run_teammate:
             # Tests inject a runner directly; bypass the backend dispatch.
             def _cleanup(_t: asyncio.Task[None]) -> None:
                 self._finalize_runtime_task(record.id, _t, abort)
@@ -389,13 +380,13 @@ class TeamManager:
             )
             task.add_done_callback(_cleanup)
             self._runtimes[record.id] = task
-            handle = _InProcessHandle(
+            handle = InProcessHandle(
                 task=task,
                 stop_event=stop_event,
                 abort=abort,
             )
         else:
-            assert isinstance(backend, _InProcessBackend)
+            assert isinstance(backend, InProcessBackend)
             handle = backend.spawn_sync(
                 team_id=self._team.team_id,
                 member=member,
@@ -468,10 +459,6 @@ class TeamManager:
                 f"team has reached MAX_MEMBERS={MAX_MEMBERS}; "
                 "remove a member before adding another",
             )
-        from aura.infrastructure.teams.registry import (
-            BackendUnavailable,
-            get_backend,
-        )
         try:
             backend = get_backend(backend_type)
         except BackendUnavailable as exc:
@@ -917,7 +904,6 @@ class TeamManager:
             mailbox.append(msg)
             self._mailbox_notifier.signal(rcpt)
             sent.append(msg)
-            from aura.infrastructure.wire.serialize import team_message_to_wire
             self._pending_protocol_events.append(
                 team_message_to_wire(msg, team_id=self._team.team_id),
             )

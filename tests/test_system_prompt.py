@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -35,5 +36,6 @@ def test_no_aura_md_content_even_when_present(tmp_path: Path) -> None:
 
 
 def test_registry_kwarg_rejected(tmp_path: Path) -> None:
+    bad_kwargs: dict[str, Any] = {"registry": "anything", "cwd": tmp_path}
     with pytest.raises(TypeError):
-        build_system_prompt(registry="anything", cwd=tmp_path)  # type: ignore[call-arg]
+        build_system_prompt(**bad_kwargs)

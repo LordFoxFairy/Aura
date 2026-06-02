@@ -36,7 +36,7 @@ def test_tool_result_full_fields() -> None:
 
 def test_tool_result_ok_is_required() -> None:
     with pytest.raises(TypeError):
-        ToolResult()  # type: ignore[call-arg]  # exercising missing/extra arg path
+        ToolResult(**{})  # exercising missing required arg path
 
 
 class _Empty(BaseModel):

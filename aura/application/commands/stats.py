@@ -10,6 +10,7 @@ from pathlib import Path
 
 from aura.application.commands.types import CommandResult, CommandSource
 from aura.application.session import AgentSession
+from aura.infrastructure.persistence import journal as journal_mod
 
 
 def _fmt(n: int) -> str:
@@ -153,8 +154,6 @@ def _safe_int(value: object) -> int:
 
 def _resolve_journal_path(agent: AgentSession) -> Path | None:
     """Live journal path → config default → None."""
-    from aura.infrastructure.persistence import journal as journal_mod
-
     live = journal_mod._path
     if isinstance(live, Path):
         return live

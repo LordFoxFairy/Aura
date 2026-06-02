@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from langchain_core.messages import SystemMessage
+
 from aura.application.commands.registry import CommandRegistry
 from aura.application.commands.types import CommandResult, CommandSource
+from aura.application.compact.reactive import (
+    compact_summary_messages,
+    estimate_compact_summary_tokens,
+)
 from aura.application.session import AgentSession
 from aura.config.schema import AuraConfigError
+from aura.domain.tokens import estimate_message_tokens
 from aura.infrastructure.persistence.storage import SessionMeta
 
 
@@ -99,14 +106,6 @@ class ContextCommand:
     argument_hint: str | None = None
 
     async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
-        from langchain_core.messages import SystemMessage
-
-        from aura.application.compact.reactive import (
-            compact_summary_messages,
-            estimate_compact_summary_tokens,
-        )
-        from aura.domain.tokens import estimate_message_tokens
-
         sections: dict[str, int] = {
             "system": 0,
             "memory": 0,

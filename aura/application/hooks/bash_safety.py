@@ -15,6 +15,7 @@ from aura.domain.permission.denials import PermissionDenial
 from aura.domain.permission.mode import DEFAULT_MODE, Mode
 from aura.domain.permission.outcome import Allow, Replace
 from aura.domain.tool import ToolResult
+from aura.infrastructure.persistence import journal
 
 _BASH_TOOL_NAMES: frozenset[str] = frozenset({"bash", "bash_background"})
 
@@ -51,8 +52,6 @@ def make_bash_safety_hook(
         violation = check_bash_safety(command)
         if violation is None:
             return Allow(decision=Decision(allow=True, reason="mode_bypass"))
-
-        from aura.infrastructure.persistence import journal
 
         journal.write(
             "permission_decision",

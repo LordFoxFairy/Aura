@@ -22,6 +22,7 @@ from aura.application.loop_state import LoopState
 from aura.domain.permission.decision import Decision
 from aura.domain.permission.outcome import Allow, Ask, Block, Outcome, Replace
 from aura.domain.tool import ToolResult
+from aura.infrastructure.persistence import journal
 
 _ASK_RESOLVED_REASONS = frozenset({"user_accept", "user_always"})
 
@@ -101,8 +102,6 @@ class HookChain:
         **kwargs: Any,
     ) -> Outcome:
         # ask_pending: once any hook returns Ask, downstream auto-allow demotes to asker.
-        from aura.infrastructure.persistence import journal
-
         outcomes: list[Outcome] = []
         ask_pending = False
         for hook in self.pre_tool:

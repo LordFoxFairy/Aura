@@ -17,6 +17,7 @@ from aura.domain.state_values import TokenStats
 from aura.domain.tokens import estimate_message_tokens, estimate_text_tokens
 from aura.domain.tool import ToolResult
 from aura.domain.tool_meta_access import meta_dict
+from aura.infrastructure.persistence import journal
 
 
 def make_size_budget_hook(
@@ -122,8 +123,6 @@ def make_usage_tracking_hook() -> PostModelHook:
             turn_count=prev.turn_count + 1,
         )
         state.slots = dataclasses.replace(state.slots, token_stats=new_stats)
-
-        from aura.infrastructure.persistence import journal
 
         model_name = ""
         for key in ("model_name", "model", "model_id"):

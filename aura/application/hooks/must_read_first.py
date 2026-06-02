@@ -19,6 +19,7 @@ from aura.application.memory.context import Context
 from aura.domain.permission.decision import Decision
 from aura.domain.permission.outcome import Allow, Replace
 from aura.domain.tool import ToolResult
+from aura.infrastructure.persistence import journal
 
 _ReadStatus = Literal["never_read", "stale", "partial"]
 
@@ -134,8 +135,6 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
     ) -> Allow | Replace:
         if tool.name not in ("edit_file", "write_file", "bash"):
             return Allow(decision=Decision(allow=True, reason="mode_bypass"))
-
-        from aura.infrastructure.persistence import journal
 
         if tool.name == "bash":
             command = args.get("command")

@@ -13,6 +13,7 @@ from aura.application.loop_state import LoopState
 from aura.domain.permission.session import SessionRuleSet
 from aura.domain.skill import Skill
 from aura.domain.tool import ToolError, ToolMetadata
+from aura.infrastructure.persistence import journal
 from aura.infrastructure.skills.command import install_skill_allow_rules
 from aura.infrastructure.skills.errors import format_missing_args_error
 from aura.infrastructure.skills.loader import render_skill_body
@@ -143,8 +144,6 @@ class SkillTool(BaseTool):
         loop_state = self._loop_state_provider()
         if loop_state is not None:
             install_restrict_lease(skill, loop_state)
-        from aura.infrastructure.persistence import journal
-
         journal.write(
             "skill_invoked",
             name=skill.name,

@@ -27,6 +27,7 @@ import pathspec
 import yaml
 
 from aura.domain.skill import Skill, SkillLayer
+from aura.infrastructure.persistence import journal
 from aura.infrastructure.skills.registry import SkillRegistry
 
 _AURA_DIR = ".aura"
@@ -343,8 +344,6 @@ def _install_or_drop(
     seen_source_paths: set[Path],
 ) -> None:
     """Register ``skill``, stash as conditional, or drop on dup."""
-    from aura.infrastructure.persistence import journal
-
     # Realpath dedup: same source reached via two paths (symlink overlap).
     if skill.source_path in seen_source_paths:
         journal.write(
@@ -404,7 +403,6 @@ def _load_layer(skills_root: Path, *, layer: SkillLayer) -> list[Skill]:
 
     legacy_files = [e for e in entries if e.is_file() and e.suffix == ".md"]
     if legacy_files:
-        from aura.infrastructure.persistence import journal
         journal.write(
             "skill_legacy_format_detected",
             layer=layer, root=str(skills_root),
@@ -426,8 +424,6 @@ def _load_layer(skills_root: Path, *, layer: SkillLayer) -> list[Skill]:
 
 def _build_skill(skill_file: Path, *, layer: SkillLayer) -> Skill | None:
     """Parse one ``SKILL.md`` file into a Skill, or silent-skip on failure."""
-    from aura.infrastructure.persistence import journal
-
     raw = _read_text(skill_file)
     if raw is None:
         _emit_parse_failed(skill_file, "unreadable")
@@ -568,7 +564,6 @@ def _relative_to_cwd(raw_path: str, cwd: Path) -> str | None:
 
 
 def _emit_parse_failed(skill_file: Path, error: str) -> None:
-    from aura.infrastructure.persistence import journal
     try:
         path_str = str(skill_file.resolve())
     except OSError:

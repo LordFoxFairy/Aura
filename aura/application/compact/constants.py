@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from aura.infrastructure.llm import get_context_window
+
 
 class CompactionTrigger(StrEnum):
     """Trigger taxonomy for ``compact_event`` records."""
@@ -24,8 +26,6 @@ AUTO_COMPACT_HEADROOM_TOKENS = 13_000
 
 def auto_compact_threshold_for(model_spec: str) -> int:
     """``ctx_window - AUTO_COMPACT_HEADROOM_TOKENS``, floored at 1000."""
-    from aura.infrastructure.llm import get_context_window
-
     window = get_context_window(model_spec)
     threshold = window - AUTO_COMPACT_HEADROOM_TOKENS
     return max(1_000, threshold)

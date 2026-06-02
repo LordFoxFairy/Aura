@@ -28,7 +28,7 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
-from aura.application.compact import CompactResult
+from aura.application.compact import CompactResult, CompactSource
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.infrastructure.persistence import journal
@@ -69,11 +69,11 @@ async def test_auto_compact_fires_when_threshold_crossed(tmp_path: Path) -> None
 
     compact_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+            source=source,
         )
 
     with patch.object(Agent, "compact", _spy):
@@ -91,11 +91,11 @@ async def test_auto_compact_not_fired_below_threshold(tmp_path: Path) -> None:
 
     compact_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+            source=source,
         )
 
     with patch.object(Agent, "compact", _spy):
@@ -114,11 +114,11 @@ async def test_auto_compact_disabled_when_threshold_zero(tmp_path: Path) -> None
 
     compact_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+            source=source,
         )
 
     with patch.object(Agent, "compact", _spy):
@@ -140,11 +140,11 @@ async def test_auto_compact_journal_event(tmp_path: Path) -> None:
 
         compact_calls: list[str] = []
 
-        async def _spy(self: Agent, *, source: str = "manual") -> CompactResult:
+        async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
             compact_calls.append(source)
             return CompactResult(
                 before_tokens=0, after_tokens=0,
-                source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+                source=source,
             )
 
         with patch.object(Agent, "compact", _spy):
@@ -175,6 +175,9 @@ async def test_auto_compact_skipped_on_cancel(tmp_path: Path) -> None:
     # compact against a half-torn-down state, which is exactly the footgun
     # we promise to avoid.
     class _SlowFake(FakeChatModel):
+        def __init__(self, turns: list[FakeTurn] | None = None, **kw: Any) -> None:
+            super().__init__(turns=turns, **kw)
+
         async def _agenerate(
             self,
             messages: list[BaseMessage],
@@ -187,10 +190,10 @@ async def test_auto_compact_skipped_on_cancel(tmp_path: Path) -> None:
                 messages, stop=stop, run_manager=run_manager, **_,
             )
 
+    slow_model: Any = _SlowFake(turns=[FakeTurn(AIMessage(content="never"))])
     agent = Agent(
         config=_minimal_config(),
-        # exercising missing/extra arg path
-        model=_SlowFake(turns=[FakeTurn(AIMessage(content="never"))]),  # type: ignore[call-arg]
+        model=slow_model,
         storage=_storage(tmp_path),
         auto_compact_threshold=10,
     )
@@ -199,11 +202,11 @@ async def test_auto_compact_skipped_on_cancel(tmp_path: Path) -> None:
 
     compact_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+            source=source,
         )
 
     with patch.object(Agent, "compact", _spy):

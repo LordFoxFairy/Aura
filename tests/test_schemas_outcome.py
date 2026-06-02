@@ -15,6 +15,7 @@ Spec §3.2 — four variants:
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 import pytest
 
@@ -48,8 +49,9 @@ def test_allow_rejects_allow_false_decision() -> None:
 
 def test_allow_is_frozen() -> None:
     outcome = Allow(decision=_allow_decision())
+    obj: Any = outcome
     with pytest.raises(dataclasses.FrozenInstanceError):
-        outcome.decision = _allow_decision()  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        obj.decision = _allow_decision()
 
 
 def test_block_accepts_allow_false_decision() -> None:
@@ -65,8 +67,9 @@ def test_block_rejects_allow_true_decision() -> None:
 
 def test_block_is_frozen() -> None:
     outcome = Block(decision=_deny_decision())
+    obj: Any = outcome
     with pytest.raises(dataclasses.FrozenInstanceError):
-        outcome.decision = _deny_decision()  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        obj.decision = _deny_decision()
 
 
 def test_ask_accepts_non_empty_reason() -> None:
@@ -88,8 +91,9 @@ def test_ask_rejects_whitespace_only_reason() -> None:
 
 def test_ask_is_frozen() -> None:
     outcome = Ask(reason="confirm please")
+    obj: Any = outcome
     with pytest.raises(dataclasses.FrozenInstanceError):
-        outcome.reason = "different"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        obj.reason = "different"
 
 
 def test_replace_accepts_deny_decision_with_result() -> None:
@@ -113,16 +117,18 @@ def test_replace_rejects_none_result() -> None:
     """``result is None`` would leave the loop with nothing to append
     as a ToolMessage — the substitution is meaningless without it."""
     with pytest.raises((ValueError, TypeError)):
-        # deliberately off-type arg to exercise path
-        Replace(result=None, decision=_deny_decision())  # type: ignore[arg-type]
+        # deliberately off-type arg to exercise path — None violates runtime None-check
+        none_result: Any = None
+        Replace(result=none_result, decision=_deny_decision())
 
 
 def test_replace_is_frozen() -> None:
     outcome = Replace(
         result=ToolResult(ok=True, output="x"), decision=_deny_decision(),
     )
+    obj: Any = outcome
     with pytest.raises(dataclasses.FrozenInstanceError):
-        outcome.decision = _deny_decision()  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        obj.decision = _deny_decision()
 
 
 def test_outcome_union_accepts_each_variant() -> None:

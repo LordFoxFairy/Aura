@@ -38,7 +38,7 @@ def _stub_asker(
 
 def test_instantiation_requires_asker_field() -> None:
     with pytest.raises(ValidationError):
-        AskUserQuestion()  # type: ignore[call-arg]  # exercising missing/extra arg path
+        AskUserQuestion.model_validate({})
 
 
 async def test_arun_returns_summary_text() -> None:

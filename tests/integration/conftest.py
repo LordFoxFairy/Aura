@@ -193,8 +193,7 @@ class ScriptedAsker:
         finished = time.monotonic()
         self.calls.append(
             AskerCall(
-                # rebinding/mutating frozen field for test
-                questions=[dict(q) for q in questions],  # type: ignore[misc]
+                questions=list(questions),
                 started_at=started,
                 finished_at=finished,
             )

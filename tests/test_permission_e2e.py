@@ -31,6 +31,7 @@ from aura.application.hooks.permission import make_permission_hook
 from aura.application.permission.asker import AskerResponse
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.domain.permission.mode import Mode
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import SessionRuleSet
 from aura.infrastructure import permission_store as store
@@ -46,10 +47,13 @@ class _BashParams(BaseModel):
 def _make_tool(run_counter: list[int]) -> BaseTool:
     """In-memory bash-shaped tool. Records every call, doesn't shell out."""
 
-    def _matcher(args: dict[str, object], content: str) -> bool:
-        return args.get("command") == content
+    class _Matcher:
+        key = "command"
 
-    _matcher.key = "command"  # type: ignore[attr-defined]  # test sets attribute mypy can't see
+        def __call__(self, args: dict[str, object], content: str) -> bool:
+            return args.get("command") == content
+
+    _matcher = _Matcher()
 
     def _run(command: str) -> dict[str, Any]:
         run_counter.append(1)
@@ -116,7 +120,7 @@ def _build_agent_with_perms(
     session_rules: SessionRuleSet,
     tool: BaseTool,
     turns: list[FakeTurn],
-    mode: str = "default",
+    mode: Mode = "default",
 ) -> Agent:
     """Wire a full permission hook around a FakeChatModel-driven Agent.
 
@@ -128,7 +132,7 @@ def _build_agent_with_perms(
         session=session_rules,
         rules=ruleset,
         project_root=project_root,
-        mode=mode,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        mode=mode,
     )
     hooks = HookChain(pre_tool=[hook])
     cfg = _minimal_cfg()

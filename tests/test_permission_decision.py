@@ -43,7 +43,7 @@ def test_user_deny_reason_must_be_deny() -> None:
 def test_decision_is_frozen() -> None:
     d = Decision(allow=True, reason="user_accept")
     with pytest.raises((AttributeError, TypeError)):
-        d.allow = False  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        d.__setattr__("allow", False)
 
 
 def test_rule_allow_with_rule_roundtrips() -> None:

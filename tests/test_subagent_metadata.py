@@ -308,6 +308,7 @@ async def test_meta_json_atomic_write_via_tmp(
 @pytest.mark.asyncio
 async def test_meta_write_failure_does_not_block_loop(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Storage path API raising must NOT propagate into run_task."""
     storage = SessionStorage(tmp_path / "parent.db")
@@ -321,7 +322,7 @@ async def test_meta_write_failure_does_not_block_loop(
         raise OSError("disk full")
 
     # Shadow the bound method on the instance with a function that raises.
-    storage.subagent_metadata_path = _raising_path  # type: ignore[assignment]
+    monkeypatch.setattr(storage, "subagent_metadata_path", _raising_path)
 
     store = TasksStore()
     factory = _make_factory()
@@ -369,13 +370,12 @@ async def test_meta_status_field_matches_record_status(
 @pytest.mark.asyncio
 async def test_meta_skipped_when_storage_lacks_path_api(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Storage missing ``subagent_metadata_path`` → silent skip + journal warning."""
     storage = SessionStorage(tmp_path / "parent.db")
-    # Shadow the class method on the instance. ``getattr(storage,
-    # "subagent_metadata_path", None)`` returns this ``None`` rather
-    # than the real method, so the writer hits its skip branch.
-    storage.subagent_metadata_path = None  # type: ignore[assignment]
+    # Shadow the bound method on the instance with None so the writer hits its skip branch.
+    monkeypatch.setattr(storage, "subagent_metadata_path", None)
 
     store = TasksStore()
     factory = _make_factory()

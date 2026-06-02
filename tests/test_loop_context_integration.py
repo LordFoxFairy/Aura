@@ -252,6 +252,9 @@ async def test_matched_rule_injected_into_next_model_call(tmp_path: Path) -> Non
     captured: list[list[BaseMessage]] = []
 
     class _CapturingFake(FakeChatModel):
+        def __init__(self, turns: list[FakeTurn] | None = None, **kwargs: Any) -> None:
+            super().__init__(turns=turns, **kwargs)
+
         async def _agenerate(
             self,
             messages: list[BaseMessage],
@@ -264,7 +267,7 @@ async def test_matched_rule_injected_into_next_model_call(tmp_path: Path) -> Non
                 messages, stop=stop, run_manager=run_manager, **_,
             )
 
-    model = _CapturingFake(turns=[  # type: ignore[call-arg]  # exercising missing/extra arg path
+    model = _CapturingFake(turns=[
         _tool_turn("read_file", args={"path": str(target)}),
         _final_turn(),
     ])

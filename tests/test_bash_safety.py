@@ -12,6 +12,8 @@ test_bash_safety_hook.py, agent-wiring integration in test_agent.py.
 
 from __future__ import annotations
 
+import pytest
+
 from aura.application.permission.bash_safety import (
     ZSH_DANGEROUS_COMMANDS,
     BashSafetyViolation,
@@ -468,38 +470,38 @@ def test_cat_etc_hosts_allowed() -> None:
     assert check_bash_safety("cat /etc/hosts") is None
 
 
-def test_rm_rf_home_envvar_blocked(monkeypatch: object) -> None:
+def test_rm_rf_home_envvar_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
     # $HOME pointed at a system prefix (root's home on Linux) must be
     # caught after env-var expansion — pre-fix this slipped through.
-    monkeypatch.setenv("HOME", "/root")  # type: ignore[attr-defined]
+    monkeypatch.setenv("HOME", "/root")
     v = check_bash_safety("rm -rf $HOME")
     assert isinstance(v, BashSafetyViolation)
     assert v.reason == "destructive_removal"
 
 
-def test_rm_rf_braced_envvar_blocked(monkeypatch: object) -> None:
-    monkeypatch.setenv("HOME", "/root")  # type: ignore[attr-defined]  # test sets attribute mypy can't see
+def test_rm_rf_braced_envvar_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", "/root")
     v = check_bash_safety("rm -rf ${HOME}")
     assert isinstance(v, BashSafetyViolation)
     assert v.reason == "destructive_removal"
 
 
-def test_rm_rf_tilde_root_blocked(monkeypatch: object) -> None:
+def test_rm_rf_tilde_root_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
     # On Linux ~root expands to /root; on macOS to /var/root. Force the
     # HOME-of-root lookup via a monkeypatched pwd entry isn't worth the
     # complexity — pin via $HOME=/root and use the literal ~ form which
     # expanduser maps using $HOME for the unqualified ~ case.
-    monkeypatch.setenv("HOME", "/root")  # type: ignore[attr-defined]
+    monkeypatch.setenv("HOME", "/root")
     v = check_bash_safety("rm -rf ~")
     assert isinstance(v, BashSafetyViolation)
     assert v.reason == "destructive_removal"
 
 
-def test_rm_rf_user_home_envvar_allowed(monkeypatch: object) -> None:
+def test_rm_rf_user_home_envvar_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     # Sanity: when $HOME points at a user-owned dir, NO Tier A trip —
     # the agent is allowed to wipe its own scratch space; permission
     # layer handles user consent.
-    monkeypatch.setenv("HOME", "/tmp/userspace")  # type: ignore[attr-defined]
+    monkeypatch.setenv("HOME", "/tmp/userspace")
     assert check_bash_safety("rm -rf $HOME") is None
 
 

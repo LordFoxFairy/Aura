@@ -102,10 +102,8 @@ def _cmd_add(args: argparse.Namespace) -> int:
             return 1
         url = raw_tokens[0]
         try:
-            entry = MCPServerConfig(
-                name=name,
-                transport=transport,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
-                url=url,
+            entry = MCPServerConfig.model_validate(
+                {"name": name, "transport": transport, "url": url}
             )
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)

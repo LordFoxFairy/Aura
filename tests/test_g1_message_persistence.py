@@ -141,7 +141,8 @@ class _OverflowThenOK(FakeChatModel):
 
     @property
     def captured(self) -> list[list[BaseMessage]]:
-        return self.__dict__["captured"]  # type: ignore[no-any-return]  # fake returns Any from __dict__
+        val: list[list[BaseMessage]] = self.__dict__["captured"]
+        return val
 
     async def _agenerate(
         self,

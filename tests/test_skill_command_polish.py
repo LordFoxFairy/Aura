@@ -15,7 +15,7 @@ from aura.application.commands.registry import CommandRegistry as _Reg
 from aura.application.commands.types import CommandResult, CommandSource
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
-from aura.domain.skill import Skill
+from aura.domain.skill import Skill, SkillLayer
 from aura.infrastructure.persistence import journal as journal_module
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills.command import SkillCommand
@@ -28,7 +28,7 @@ def _skill(
     *,
     description: str | None = None,
     body: str = "body",
-    layer: str = "user",
+    layer: SkillLayer = "user",
     arguments: tuple[str, ...] = (),
     user_invocable: bool = True,
     disable_model_invocation: bool = False,
@@ -39,7 +39,7 @@ def _skill(
         description=description or f"Description of {name}.",
         body=body,
         source_path=Path(f"/tmp/{name}.md"),
-        layer=layer,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        layer=layer,
         arguments=arguments,
         user_invocable=user_invocable,
         disable_model_invocation=disable_model_invocation,

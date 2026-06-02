@@ -168,12 +168,15 @@ async def test_restrict_tools_blocks_undeclared_tool(tmp_path: Path) -> None:
             state=agent.state,
         )
         # Hook denied + asker never consulted.
-        assert _sc(outcome) is not None
-        assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
+        sc = _sc(outcome)
+        assert sc is not None
+        assert sc.ok is False
         assert asker.calls == []
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
-        assert outcome.decision.allow is False  # type: ignore[union-attr]
+        from aura.domain.permission.outcome import Block, Replace
+        assert isinstance(outcome, (Block, Replace))
+        assert outcome.decision is not None
+        assert outcome.decision.reason == "restrict_tools_blocked"
+        assert outcome.decision.allow is False
     finally:
         await agent.aclose()
 
@@ -207,8 +210,10 @@ async def test_restrict_tools_allows_declared_tool(tmp_path: Path) -> None:
         assert len(asker.calls) == 1
         assert asker.calls[0]["tool"] == "read_file"
         assert _sc(outcome) is None
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.reason == "user_accept"  # type: ignore[union-attr]
+        from aura.domain.permission.outcome import Allow, Block, Replace
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision is not None
+        assert outcome.decision.reason == "user_accept"
     finally:
         await agent.aclose()
 
@@ -238,8 +243,10 @@ async def test_lease_expires_when_turn_advances(tmp_path: Path) -> None:
         outcome = await hook(
             tool=bash_tool, args={}, state=agent.state,
         )
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
+        from aura.domain.permission.outcome import Block, Replace
+        assert isinstance(outcome, (Block, Replace))
+        assert outcome.decision is not None
+        assert outcome.decision.reason == "restrict_tools_blocked"
 
         # Advance turn → lease expires → bash falls through to asker.
         agent.state.turn_count = 6
@@ -288,8 +295,10 @@ async def test_multiple_active_skills_union(tmp_path: Path) -> None:
             args={},
             state=agent.state,
         )
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
+        from aura.domain.permission.outcome import Block, Replace
+        assert isinstance(outcome, (Block, Replace))
+        assert outcome.decision is not None
+        assert outcome.decision.reason == "restrict_tools_blocked"
     finally:
         await agent.aclose()
 
@@ -380,8 +389,10 @@ async def test_restrict_lease_via_tool_path(tmp_path: Path) -> None:
             args={},
             state=agent.state,
         )
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.reason == "restrict_tools_blocked"  # type: ignore[union-attr]
+        from aura.domain.permission.outcome import Block, Replace
+        assert isinstance(outcome, (Block, Replace))
+        assert outcome.decision is not None
+        assert outcome.decision.reason == "restrict_tools_blocked"
         assert asker.calls == []
     finally:
         await agent.aclose()
@@ -411,8 +422,10 @@ async def test_internal_tools_exempt_from_restrict(tmp_path: Path) -> None:
             state=agent.state,
         )
         # Not short-circuited by restrict — flows through to asker.
-        assert outcome.decision is not None  # type: ignore[union-attr]
-        assert outcome.decision.reason != "restrict_tools_blocked"  # type: ignore[union-attr]
+        from aura.domain.permission.outcome import Allow, Block, Replace
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision is not None
+        assert outcome.decision.reason != "restrict_tools_blocked"
     finally:
         await agent.aclose()
 

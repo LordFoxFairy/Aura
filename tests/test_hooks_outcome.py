@@ -35,7 +35,7 @@ from pydantic import BaseModel
 
 from aura.application.hooks import HookChain, PreToolHook
 from aura.application.loop_state import LoopState
-from aura.domain.permission.decision import Decision
+from aura.domain.permission.decision import Decision, DecisionReason
 from aura.domain.permission.outcome import Allow, Ask, Block, Outcome, Replace
 from aura.domain.permission.rule import Rule
 from aura.domain.tool import ToolResult
@@ -55,8 +55,8 @@ _stub_tool: BaseTool = build_tool(
 )
 
 
-def _allow(reason: str = "mode_bypass") -> Decision:
-    return Decision(allow=True, reason=reason)  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+def _allow(reason: DecisionReason = "mode_bypass") -> Decision:
+    return Decision(allow=True, reason=reason)
 
 
 def _allow_with_rule(rule_tool: str = "stub") -> Decision:
@@ -67,8 +67,8 @@ def _allow_with_rule(rule_tool: str = "stub") -> Decision:
     )
 
 
-def _deny(reason: str = "safety_blocked") -> Decision:
-    return Decision(allow=False, reason=reason)  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+def _deny(reason: DecisionReason = "safety_blocked") -> Decision:
+    return Decision(allow=False, reason=reason)
 
 
 def _make_hook(outcome: Outcome) -> PreToolHook:

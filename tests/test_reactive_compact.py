@@ -21,7 +21,7 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from aura.application.compact import CompactResult
+from aura.application.compact import CompactResult, CompactSource
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.infrastructure.persistence import journal
@@ -104,10 +104,9 @@ async def test_reactive_compact_on_context_length_error(tmp_path: Path) -> None:
     compact_calls: list[str] = []
     orig_compact = Agent.compact
 
-    async def _spy(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
-        # deliberately off-type arg to exercise path
-        return await orig_compact(self, source=source)  # type: ignore[arg-type]
+        return await orig_compact(self, source=source)
 
     with patch.object(Agent, "compact", _spy):
         finals = []
@@ -162,11 +161,11 @@ async def test_reactive_compact_other_error_passthrough(tmp_path: Path) -> None:
 
     compact_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+            source=source,
         )
 
     with (

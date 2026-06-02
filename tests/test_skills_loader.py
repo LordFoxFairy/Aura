@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from aura.domain.skill import Skill
 from aura.infrastructure.persistence import journal as journal_module
 from aura.infrastructure.skills.loader import (
     activate_conditional_skills_for_paths,
@@ -602,10 +603,8 @@ def test_inline_cmd_in_body_emits_journal_warning(tmp_path: Path) -> None:
         journal_module.reset()
 
 
-# fake helper, type hints not needed
-def _make_skill_with_body(body: str, tmp_path: Path):  # type: ignore[no-untyped-def]
+def _make_skill_with_body(body: str, tmp_path: Path) -> Skill:
     """Construct a Skill dataclass directly so render tests don't have to round-trip yaml."""
-    from aura.domain.skill import Skill
     return Skill(
         name="t",
         description="d",

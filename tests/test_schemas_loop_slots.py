@@ -9,6 +9,7 @@ and the ``replace`` ergonomic.
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 import pytest
 
@@ -70,10 +71,11 @@ def test_loop_slots_is_frozen() -> None:
     ``dataclasses.replace`` (or in-place mutation of contained
     mutable collections, which is intentional)."""
     slots = LoopSlots()
+    obj: Any = slots
     with pytest.raises(dataclasses.FrozenInstanceError):
-        slots.active_team = "team-a"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        obj.active_team = "team-a"
     with pytest.raises(dataclasses.FrozenInstanceError):
-        slots.buddy = BuddyState(mood="happy")  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        obj.buddy = BuddyState(mood="happy")
 
 
 def test_loop_slots_replace_returns_new_instance() -> None:
@@ -101,11 +103,16 @@ def test_loop_slots_default_factories_isolate_per_instance() -> None:
     a = LoopSlots()
     b = LoopSlots()
 
-    a.turn_denials.append("sentinel")  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+    sentinel: Any = "sentinel"
+    a.turn_denials.append(sentinel)
     a.todos.append(TodoItem(content="x", status="pending", active_form="x"))
-    a.perm_dedup_cache["k"] = "v"  # type: ignore[assignment]  # narrowing branch mypy doesn't track
-    a.invoked_skills.append("skill_a")  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
-    a.preserved_invoked_skills.append("preserved_a")  # type: ignore[arg-type]
+    dedup_key: Any = "k"
+    dedup_val: Any = "v"
+    a.perm_dedup_cache[dedup_key] = dedup_val
+    skill_a: Any = "skill_a"
+    a.invoked_skills.append(skill_a)
+    preserved_a: Any = "preserved_a"
+    a.preserved_invoked_skills.append(preserved_a)
 
     assert b.turn_denials == []
     assert b.todos == []
@@ -121,7 +128,8 @@ def test_loop_slots_collections_mutable_in_place_under_frozen() -> None:
     ``LoopSlots`` is frozen.
     """
     slots = LoopSlots()
-    slots.turn_denials.append("d1")  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+    d1: Any = "d1"
+    slots.turn_denials.append(d1)
     slots.turn_denials.clear()
     assert slots.turn_denials == []
 
@@ -142,8 +150,9 @@ def test_tokenstats_is_frozen_and_zero_default() -> None:
     assert ts.total_cache_read_tokens == 0
     assert ts.turn_count == 0
 
+    ts_obj: Any = ts
     with pytest.raises(dataclasses.FrozenInstanceError):
-        ts.last_input_tokens = 5  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        ts_obj.last_input_tokens = 5
 
 
 def test_tokenstats_replace_yields_new_instance() -> None:
@@ -164,8 +173,9 @@ def test_skill_restrict_lease_is_frozen_with_required_fields() -> None:
     assert lease.install_turn == 3
     assert lease.tools == frozenset({"read_file"})
 
+    lease_obj: Any = lease
     with pytest.raises(dataclasses.FrozenInstanceError):
-        lease.install_turn = 5  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        lease_obj.install_turn = 5
 
 
 def test_loop_slots_and_pure_values_at_canonical_homes() -> None:
@@ -193,5 +203,6 @@ def test_buddy_state_defaults_match_idle_observer() -> None:
 
 def test_buddy_state_is_frozen() -> None:
     bs = BuddyState()
+    bs_obj: Any = bs
     with pytest.raises(dataclasses.FrozenInstanceError):
-        bs.mood = "happy"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        bs_obj.mood = "happy"

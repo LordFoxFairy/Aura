@@ -34,7 +34,7 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from aura.application.compact import CompactResult
+from aura.application.compact import CompactResult, CompactSource
 from aura.application.compact.compactor import Compactor
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
@@ -187,14 +187,14 @@ async def test_reactive_only_fires_on_prompt_too_long(tmp_path: Path) -> None:
     reactive_calls_ok: list[str] = []
     auto_calls_ok: list[str] = []
 
-    async def _spy_ok(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _spy_ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         if source == "reactive":
             reactive_calls_ok.append(source)
         elif source == "auto":
             auto_calls_ok.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]
+            source=source,
         )
 
     with patch.object(Agent, "compact", _spy_ok):
@@ -227,9 +227,9 @@ async def test_reactive_only_fires_on_prompt_too_long(tmp_path: Path) -> None:
     reactive_calls_ptl: list[str] = []
     orig_compact = Agent.compact
 
-    async def _spy_ptl(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _spy_ptl(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         reactive_calls_ptl.append(source)
-        return await orig_compact(self, source=source)  # type: ignore[arg-type]
+        return await orig_compact(self, source=source)
 
     with patch.object(Agent, "compact", _spy_ptl):
         async for _ in agent_ptl.astream("hi"):
@@ -256,13 +256,13 @@ async def test_auto_fires_post_turn_only(tmp_path: Path) -> None:
     event_count = 0
 
     async def _spy_auto(
-        self: Agent, *, source: str = "manual",
+        self: Agent, *, source: CompactSource = "manual",
     ) -> CompactResult:
         # Record the event-stream position at which the auto call lands.
         auto_call_indices.append(event_count)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]
+            source=source,
         )
 
     from aura.domain.events import Final
@@ -303,11 +303,11 @@ async def test_length_recovery_does_not_invoke_reactive(tmp_path: Path) -> None:
 
     reactive_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         reactive_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]
+            source=source,
         )
 
     with patch.object(Agent, "compact", _spy):
@@ -344,7 +344,7 @@ async def test_circuit_breaker_disables_after_three_failures_and_resets_on_succe
 
     calls: list[str] = []
 
-    async def _fail(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _fail(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         calls.append(source)
         raise RuntimeError("simulated compact failure")
 
@@ -376,11 +376,11 @@ async def test_circuit_breaker_disables_after_three_failures_and_resets_on_succe
         agent.state.slots, consecutive_compact_failures=2,
     )
 
-    async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]
+            source=source,
         )
 
     with patch.object(Agent, "compact", _ok):

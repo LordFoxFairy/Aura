@@ -66,7 +66,8 @@ class _RecordingFakeChatModel(FakeChatModel):
 
     @property
     def captured_messages(self) -> list[list[BaseMessage]]:
-        return self.__dict__["captured_messages"]  # type: ignore[no-any-return]  # fake returns Any from __dict__
+        result: list[list[BaseMessage]] = self.__dict__["captured_messages"]
+        return result
 
     async def _agenerate(
         self,

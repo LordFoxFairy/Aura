@@ -18,14 +18,15 @@ import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from aura.infrastructure.persistence.storage import SessionStorage
 
 
-def _read_jsonl(path: Path) -> list[dict[str, object]]:
-    out: list[dict[str, object]] = []
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -138,8 +139,7 @@ def test_concurrent_appends_dont_interleave_lines(tmp_path: Path) -> None:
     jsonl = storage.session_jsonl_path("s")
     lines = _read_jsonl(jsonl)
     assert len(lines) == 40
-    # test data shape known but not in stub
-    seen = {line["payload"]["data"]["content"] for line in lines}  # type: ignore[index]
+    seen = {line["payload"]["data"]["content"] for line in lines}
     assert seen == set(payloads)
 
 
@@ -306,9 +306,8 @@ def test_two_projects_isolated_in_separate_buckets(tmp_path: Path) -> None:
     # Each bucket holds only its own append.
     a_msgs = _read_jsonl(bucket_a / "session-x.jsonl")
     b_msgs = _read_jsonl(bucket_b / "session-x.jsonl")
-    # test data shape known but not in stub
-    assert a_msgs[0]["payload"]["data"]["content"] == "A msg"  # type: ignore[index]
-    assert b_msgs[0]["payload"]["data"]["content"] == "B msg"  # type: ignore[index]
+    assert a_msgs[0]["payload"]["data"]["content"] == "A msg"
+    assert b_msgs[0]["payload"]["data"]["content"] == "B msg"
     # The shared top-level index lists BOTH (last-write-wins on
     # session_id collision is acceptable — the bucket attribution
     # lives on disk where it's recoverable).

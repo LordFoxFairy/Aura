@@ -191,7 +191,7 @@ def test_web_search_config_rejects_unknown_provider() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        WebSearchConfig(provider="bing")  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        WebSearchConfig.model_validate({"provider": "bing"})
 
 
 def test_web_search_is_registered_as_stateful() -> None:

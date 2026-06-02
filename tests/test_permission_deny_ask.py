@@ -22,6 +22,7 @@ from aura.application.hooks.permission import make_permission_hook
 from aura.application.loop_state import LoopState
 from aura.application.permission.asker import AskerResponse
 from aura.config.schema import PermissionsConfig
+from aura.domain.permission.outcome import Allow, Block, Replace
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.domain.tool import ToolResult
@@ -35,7 +36,6 @@ from aura.tools.base import build_tool
 
 def _sc(outcome: object) -> ToolResult | None:
     """Extract the short-circuit result from Replace Outcome."""
-    from aura.domain.permission.outcome import Replace
     if isinstance(outcome, Replace):
         return outcome.result
     return getattr(outcome, "short_circuit", None)
@@ -236,14 +236,14 @@ async def test_deny_rule_blocks_under_default_mode(
         args={"command": "rm -rf /tmp/x"},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "deny rule" in _sc(outcome).error  # type: ignore[operator,union-attr]
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
-    assert outcome.decision.allow is False  # type: ignore[union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "deny rule" in sc.error
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason == "rule_deny"
+    assert outcome.decision.allow is False
     # Asker must NOT be consulted — deny rules short-circuit hard.
     assert spy.calls == []
 
@@ -274,8 +274,8 @@ async def test_deny_rule_blocks_even_under_bypass(
         state=LoopState(),
     )
     assert _sc(outcome) is not None
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason == "rule_deny"
     # ``permission_bypass`` MUST NOT fire — deny short-circuited first.
     assert "permission_bypass" not in [e[0] for e in journal_events]
 
@@ -306,9 +306,9 @@ async def test_deny_overrides_allow_when_both_match(
         args={"command": pattern},
         state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
-    assert outcome.decision.allow is False  # type: ignore[union-attr]
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason == "rule_deny"
+    assert outcome.decision.allow is False
 
 
 async def test_journal_records_rule_pattern_and_kind_for_deny(
@@ -368,8 +368,8 @@ async def test_ask_rule_forces_prompt_when_allow_rule_would_match(
     assert _sc(outcome) is None
     # Asker WAS consulted — the allow rule was overridden by the ask rule.
     assert len(spy.calls) == 1
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.reason == "user_accept"  # type: ignore[union-attr]
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason == "user_accept"
 
 
 async def test_ask_rule_forces_prompt_even_after_session_allow(
@@ -488,8 +488,8 @@ async def test_deny_overrides_ask_when_both_match(
         args={"command": pattern},
         state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason == "rule_deny"
     assert spy.calls == []  # never prompted — deny short-circuits
 
 
@@ -516,9 +516,9 @@ async def test_no_deny_no_ask_falls_through_to_allow_path(
         args={"command": "ls -la"},
         state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.reason == "rule_allow"  # type: ignore[union-attr]
-    assert outcome.decision.allow is True  # type: ignore[union-attr]
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason == "rule_allow"
+    assert outcome.decision.allow is True
 
 
 async def test_e2e_settings_json_deny_rule_blocks_call(
@@ -545,5 +545,5 @@ async def test_e2e_settings_json_deny_rule_blocks_call(
         args={"command": "npm publish"},
         state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.reason == "rule_deny"  # type: ignore[union-attr]
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason == "rule_deny"

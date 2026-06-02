@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import subprocess
@@ -116,7 +117,7 @@ def test_plaintext_api_key_writes_journal_event(tmp_path: Path) -> None:
     assert names == {"alpha", "gamma"}
 
 
-def _ns(**kw: object) -> object:
+def _ns(**kw: object) -> argparse.Namespace:
     import argparse
 
     return argparse.Namespace(**kw)
@@ -130,7 +131,7 @@ def test_resolve_mode_defaults_to_default() -> None:
 
     args = _ns(bypass_permissions=False)
     # deliberately off-type arg to exercise path
-    assert _resolve_mode(args, PermissionsConfig()) == "default"  # type: ignore[arg-type]
+    assert _resolve_mode(args, PermissionsConfig()) == "default"
 
 
 def test_resolve_mode_reads_permissions_config_mode() -> None:
@@ -142,7 +143,7 @@ def test_resolve_mode_reads_permissions_config_mode() -> None:
     perm_cfg = PermissionsConfig(mode="bypass")
     args = _ns(bypass_permissions=False)
     # deliberately off-type arg to exercise path
-    assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
+    assert _resolve_mode(args, perm_cfg) == "bypass"
 
 
 def test_resolve_mode_cli_flag_wins_over_settings_default() -> None:
@@ -152,7 +153,7 @@ def test_resolve_mode_cli_flag_wins_over_settings_default() -> None:
     perm_cfg = PermissionsConfig(mode="default")
     args = _ns(bypass_permissions=True)
     # deliberately off-type arg to exercise path
-    assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
+    assert _resolve_mode(args, perm_cfg) == "bypass"
 
 
 def test_resolve_mode_cli_flag_wins_even_over_settings_bypass() -> None:
@@ -165,7 +166,7 @@ def test_resolve_mode_cli_flag_wins_even_over_settings_bypass() -> None:
     perm_cfg = PermissionsConfig(mode="bypass")
     args = _ns(bypass_permissions=True)
     # deliberately off-type arg to exercise path
-    assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
+    assert _resolve_mode(args, perm_cfg) == "bypass"
 
 
 def test_bypass_refused_message_is_stable() -> None:
@@ -237,7 +238,7 @@ def test_disable_bypass_false_allows_bypass_flag() -> None:
     perm_cfg = PermissionsConfig(disable_bypass=False)
     args = _ns(bypass_permissions=True)
     # deliberately off-type arg to exercise path
-    assert _resolve_mode(args, perm_cfg) == "bypass"  # type: ignore[arg-type]
+    assert _resolve_mode(args, perm_cfg) == "bypass"
     assert perm_cfg.disable_bypass is False
 
 
@@ -329,13 +330,17 @@ def test_main_wires_allow_deny_and_ask_rules_into_permission_layers(
 
     assert main() == 0
 
-    rules = captured_hook_kwargs["rules"]
-    deny_rules = captured_hook_kwargs["deny_rules"]
-    ask_rules = captured_hook_kwargs["ask_rules"]
-    # test sets attribute mypy can't see
-    assert [rule.tool for rule in rules.rules][:1] == ["web_fetch"]  # type: ignore[attr-defined]
-    assert [rule.tool for rule in deny_rules.rules] == ["bash"]  # type: ignore[attr-defined]
-    assert [rule.tool for rule in ask_rules.rules] == ["write_file"]  # type: ignore[attr-defined]
-    assert captured_build_kwargs["ruleset"] is rules
-    assert captured_build_kwargs["deny_ruleset"] is deny_rules
-    assert captured_build_kwargs["ask_ruleset"] is ask_rules
+    from aura.domain.permission.session import RuleSet
+
+    rules_obj = captured_hook_kwargs["rules"]
+    deny_rules_obj = captured_hook_kwargs["deny_rules"]
+    ask_rules_obj = captured_hook_kwargs["ask_rules"]
+    assert isinstance(rules_obj, RuleSet)
+    assert isinstance(deny_rules_obj, RuleSet)
+    assert isinstance(ask_rules_obj, RuleSet)
+    assert [rule.tool for rule in rules_obj.rules][:1] == ["web_fetch"]
+    assert [rule.tool for rule in deny_rules_obj.rules] == ["bash"]
+    assert [rule.tool for rule in ask_rules_obj.rules] == ["write_file"]
+    assert captured_build_kwargs["ruleset"] is rules_obj
+    assert captured_build_kwargs["deny_ruleset"] is deny_rules_obj
+    assert captured_build_kwargs["ask_ruleset"] is ask_rules_obj

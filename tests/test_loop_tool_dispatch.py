@@ -86,8 +86,9 @@ async def test_run_turn_single_tool_call_roundtrip() -> None:
     assert len(history) == 4
 
     tool_msg = history[2]
-    assert tool_msg.tool_call_id == "tc_1"  # type: ignore[attr-defined]  # test sets attribute mypy can't see
-    assert tool_msg.status == "success"  # type: ignore[attr-defined]
+    assert isinstance(tool_msg, ToolMessage)
+    assert tool_msg.tool_call_id == "tc_1"
+    assert tool_msg.status == "success"
     assert "echoed" in tool_msg.content
 
     assert history[3].content == "done"

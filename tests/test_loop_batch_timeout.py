@@ -62,8 +62,8 @@ class _RecordingFakeChatModel(FakeChatModel):
 
     @property
     def seen_messages(self) -> list[list[BaseMessage]]:
-        # fake returns Any from __dict__
-        return self.__dict__.setdefault("seen_messages", [])  # type: ignore[no-any-return]
+        val: list[list[BaseMessage]] = self.__dict__.setdefault("seen_messages", [])
+        return val
 
     async def _agenerate(
         self, messages: list[BaseMessage], *args: Any, **kwargs: Any,

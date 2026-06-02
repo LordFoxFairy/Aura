@@ -36,7 +36,7 @@ class TestAssistantDelta:
     def test_frozen_raises_on_mutation(self) -> None:
         ev = AssistantDelta("hello")
         with pytest.raises(dataclasses.FrozenInstanceError):
-            ev.text = "world"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+            ev.__setattr__("text", "world")
 
     def test_isinstance_agent_event(self) -> None:
         ev = AssistantDelta("hello")
@@ -67,7 +67,7 @@ class TestToolCallStarted:
     def test_frozen_raises_on_mutation(self) -> None:
         ev = ToolCallStarted("bash", {"cmd": "ls"})
         with pytest.raises(dataclasses.FrozenInstanceError):
-            ev.name = "python"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+            ev.__setattr__("name", "python")
 
     def test_isinstance_agent_event(self) -> None:
         ev = ToolCallStarted("bash", {"cmd": "ls"})
@@ -125,7 +125,7 @@ class TestToolCallCompleted:
     def test_frozen_raises_on_mutation(self) -> None:
         ev = ToolCallCompleted("bash", "exit 0")
         with pytest.raises(dataclasses.FrozenInstanceError):
-            ev.output = "exit 1"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+            ev.__setattr__("output", "exit 1")
 
     def test_isinstance_agent_event(self) -> None:
         ev = ToolCallCompleted("bash", "exit 0")
@@ -154,7 +154,7 @@ class TestFinal:
     def test_frozen_raises_on_mutation(self) -> None:
         ev = Final("Answer is 42")
         with pytest.raises(dataclasses.FrozenInstanceError):
-            ev.message = "Answer is 43"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+            ev.__setattr__("message", "Answer is 43")
 
     def test_isinstance_agent_event(self) -> None:
         ev = Final("Answer is 42")
@@ -180,7 +180,7 @@ class TestPermissionAudit:
     def test_frozen_raises_on_mutation(self) -> None:
         ev = PermissionAudit("bash", "auto-allowed: rule `bash`")
         with pytest.raises(dataclasses.FrozenInstanceError):
-            ev.text = "other"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+            ev.__setattr__("text", "other")
 
     def test_is_in_agent_event_union(self) -> None:
         ev: AgentEvent = PermissionAudit("bash", "auto-allowed: rule `bash`")

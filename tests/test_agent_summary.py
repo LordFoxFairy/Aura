@@ -56,16 +56,21 @@ def _make_summary_model(
     """
     captured: list[list[BaseMessage]] = []
     turns = [FakeTurn(AIMessage(content=text)) for text in response_texts]
-    model = FakeChatModel(turns=turns)
-    # Wrap _agenerate to capture the prompts the summarizer sends.
-    orig_agenerate = model._agenerate
 
-    async def _spy(messages: list[BaseMessage], *a: Any, **kw: Any) -> Any:
-        captured.append(list(messages))
-        return await orig_agenerate(messages, *a, **kw)
+    class _SpyFake(FakeChatModel):
+        def __init__(self, turns: list[FakeTurn] | None = None, **kwargs: Any) -> None:
+            super().__init__(turns=turns, **kwargs)
 
-    model._agenerate = _spy  # type: ignore[method-assign]  # monkey-patching method for test
-    return model, captured
+        async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            *a: Any,
+            **kw: Any,
+        ) -> Any:
+            captured.append(list(messages))
+            return await super()._agenerate(messages, *a, **kw)
+
+    return _SpyFake(turns=turns), captured
 
 
 # ---------------------------------------------------------------------------

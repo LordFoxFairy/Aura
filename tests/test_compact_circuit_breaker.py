@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage
 
-from aura.application.compact import CompactResult
+from aura.application.compact import CompactResult, CompactSource
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -50,7 +50,7 @@ async def test_breaker_blocks_after_three_failures(tmp_path: Path) -> None:
 
     calls: list[str] = []
 
-    async def _fail(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _fail(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         calls.append(source)
         raise RuntimeError("simulated compact failure")
 
@@ -79,10 +79,10 @@ async def test_breaker_resets_on_success(tmp_path: Path) -> None:
         agent.state.slots, consecutive_compact_failures=2,
     )
 
-    async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         return CompactResult(
             before_tokens=0, after_tokens=0,
-            source=source,  # type: ignore[arg-type]
+            source=source,
         )
 
     with patch.object(Agent, "compact", _ok):
@@ -140,10 +140,10 @@ async def test_breaker_emits_skip_journal_event(tmp_path: Path) -> None:
             agent.state.slots, consecutive_compact_failures=5,
         )
 
-        async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:
+        async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
             return CompactResult(
                 before_tokens=0, after_tokens=0,
-                source=source,  # type: ignore[arg-type]
+                source=source,
             )
 
         with patch.object(Agent, "compact", _ok):

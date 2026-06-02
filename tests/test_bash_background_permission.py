@@ -70,12 +70,12 @@ async def test_bash_safety_hook_matches_bash_background() -> None:
         args={"command": "zmodload zsh/system"},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "bash safety blocked" in _sc(outcome).error  # type: ignore[operator,union-attr]
-    assert "zsh_dangerous_command" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "bash safety blocked" in sc.error
+    assert "zsh_dangerous_command" in sc.error
 
 
 @pytest.mark.asyncio
@@ -139,9 +139,11 @@ async def test_bash_safety_hook_sets_decision_on_outcome_for_bash_background() -
         args={"command": "zmodload zsh/system"},
         state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.allow is False  # type: ignore[union-attr]
-    assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
+    from aura.domain.permission.outcome import Block, Replace
+    assert isinstance(outcome, (Block, Replace))
+    assert outcome.decision is not None
+    assert outcome.decision.allow is False
+    assert outcome.decision.reason == "safety_blocked"
 
 
 @pytest.mark.asyncio

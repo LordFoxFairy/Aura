@@ -453,7 +453,7 @@ def test_mcp_server_status_is_frozen_dataclass() -> None:
         error_message=None, tool_count=0, resource_count=0, prompt_count=0,
     )
     with pytest.raises(_dc.FrozenInstanceError):
-        s.tool_count = 5  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        s.__setattr__("tool_count", 5)
 
 
 def test_build_one_connection_expands_stdio_command_args_env(

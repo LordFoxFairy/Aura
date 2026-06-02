@@ -26,6 +26,10 @@ class _FakeRateLimitError(Exception):
     does ``type(exc).__name__``, not ``isinstance(exc, …)``.
     """
 
+    response: object
+    retry_after: float | None
+    retry_after_ms: float | None
+
 
 _FakeRateLimitError.__name__ = "RateLimitError"
 
@@ -321,7 +325,7 @@ class _FakeResponse:
 def _make_rate_limit_with_header(value: str) -> _FakeRateLimitError:
     exc = _FakeRateLimitError("429")
     # test sets attribute mypy can't see
-    exc.response = _FakeResponse({"retry-after": value})  # type: ignore[attr-defined]
+    exc.response = _FakeResponse({"retry-after": value})
     return exc
 
 
@@ -338,7 +342,7 @@ def test_extract_retry_after_reads_lower_case_header() -> None:
 def test_extract_retry_after_reads_title_case_header() -> None:
     exc = _FakeRateLimitError("429")
     # test sets attribute mypy can't see
-    exc.response = _FakeResponse({"Retry-After": "12"})  # type: ignore[attr-defined]
+    exc.response = _FakeResponse({"Retry-After": "12"})
     assert _extract_retry_after(exc) == 12.0
 
 
@@ -361,19 +365,19 @@ def test_extract_retry_after_zero_and_negative_yield_none() -> None:
 
 def test_extract_retry_after_reads_sdk_field_seconds() -> None:
     exc = _FakeRateLimitError("rl")
-    exc.retry_after = 4.5  # type: ignore[attr-defined]  # test sets attribute mypy can't see
+    exc.retry_after = 4.5
     assert _extract_retry_after(exc) == 4.5
 
 
 def test_extract_retry_after_reads_sdk_field_milliseconds() -> None:
     exc = _FakeRateLimitError("rl")
-    exc.retry_after_ms = 2500  # type: ignore[attr-defined]  # test sets attribute mypy can't see
+    exc.retry_after_ms = 2500
     assert _extract_retry_after(exc) == 2.5
 
 
 def test_extract_retry_after_header_takes_precedence_over_sdk_field() -> None:
     exc = _make_rate_limit_with_header("8")
-    exc.retry_after = 99  # type: ignore[attr-defined]  # test sets attribute mypy can't see
+    exc.retry_after = 99
     assert _extract_retry_after(exc) == 8.0
 
 

@@ -95,10 +95,11 @@ def test_tool_metadata_is_frozen() -> None:
         args_preview=None,
         timeout_sec=None,
     )
+    meta_obj: Any = meta
     with pytest.raises(dataclasses.FrozenInstanceError):
-        meta.is_read_only = False  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        meta_obj.is_read_only = False
     with pytest.raises(dataclasses.FrozenInstanceError):
-        meta.capability_flags = frozenset({"x"})  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        meta_obj.capability_flags = frozenset({"x"})
 
 
 def test_tool_metadata_capability_flags_defaults_to_empty_frozenset() -> None:
@@ -217,10 +218,11 @@ def test_validation_result_is_frozen() -> None:
     reason or flipping the verdict in flight.
     """
     vr = ValidationResult(invalid=True, reason="bad")
+    vr_obj: Any = vr
     with pytest.raises(dataclasses.FrozenInstanceError):
-        vr.invalid = False  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        vr_obj.invalid = False
     with pytest.raises(dataclasses.FrozenInstanceError):
-        vr.reason = "other"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        vr_obj.reason = "other"
 
 
 def test_validation_result_invalid_is_required() -> None:
@@ -229,7 +231,8 @@ def test_validation_result_invalid_is_required() -> None:
     explicit at the construction site.
     """
     with pytest.raises(TypeError):
-        ValidationResult()  # type: ignore[call-arg]  # exercising missing/extra arg path
+        vr_cls: Any = ValidationResult
+        vr_cls()  # missing required arg `invalid` exercises TypeError at runtime
 
 
 def test_validation_result_exported_from_domain_tool() -> None:

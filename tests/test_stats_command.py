@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.messages.ai import UsageMetadata
 
 from aura.application.commands.stats import StatsCommand
 from aura.application.hooks.budget import make_usage_tracking_hook
@@ -50,13 +51,13 @@ def _ai(
     model: str = "",
 ) -> AIMessage:
     msg = AIMessage(content="ok")
-    usage: dict[str, Any] = {
+    computed_total = total if total is not None else input_tokens + output_tokens
+    usage_meta: UsageMetadata = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        "total_tokens": computed_total,
     }
-    if total is not None:
-        usage["total_tokens"] = total
-    msg.usage_metadata = usage  # type: ignore[assignment]  # narrowing branch mypy doesn't track
+    msg.usage_metadata = usage_meta
     if cache_read or model:
         meta: dict[str, Any] = {}
         if cache_read:
@@ -69,9 +70,9 @@ def _ai(
 
 @pytest.mark.asyncio
 async def test_stats_empty_state_friendly_message() -> None:
-    agent = _StubAgent(LoopState())
+    agent: Any = _StubAgent(LoopState())
     # deliberately off-type arg to exercise path
-    out = await StatsCommand().handle("", agent)  # type: ignore[arg-type]
+    out = await StatsCommand().handle("", agent)
     assert out.handled is True
     assert out.kind == "print"
     assert "No usage recorded yet" in out.text
@@ -90,9 +91,9 @@ async def test_stats_after_one_turn(tmp_path: Path) -> None:
             history=[],
             state=state,
         )
-        agent = _StubAgent(state)
+        agent: Any = _StubAgent(state)
         # deliberately off-type arg to exercise path
-        out = await StatsCommand().handle("", agent)  # type: ignore[arg-type]
+        out = await StatsCommand().handle("", agent)
 
         assert "1 turn" in out.text  # singular, no trailing "s"
         assert "1,000" in out.text  # input total
@@ -120,9 +121,9 @@ async def test_stats_accumulates_across_turns(tmp_path: Path) -> None:
             history=[],
             state=state,
         )
-        agent = _StubAgent(state)
+        agent: Any = _StubAgent(state)
         # deliberately off-type arg to exercise path
-        out = await StatsCommand().handle("", agent)  # type: ignore[arg-type]
+        out = await StatsCommand().handle("", agent)
 
         assert "2 turns" in out.text         # plural
         assert "1,500" in out.text           # input total (1000 + 500)
@@ -244,9 +245,9 @@ async def test_stats_history_no_journal_configured_message(
     """``/stats 7d`` with no live journal AND no config.log path → friendly hint."""
     journal_module.reset()
     state = LoopState()
-    agent = _StubAgent(state)  # config=None → no log path discoverable
+    agent: Any = _StubAgent(state)  # config=None → no log path discoverable
     # deliberately off-type arg to exercise path
-    out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
+    out = await StatsCommand().handle("7d", agent)
     assert out.handled is True
     assert "No journal configured" in out.text
 
@@ -260,9 +261,9 @@ async def test_stats_history_journal_missing_friendly_message(
     journal_module.configure(tmp_path / "never-written.jsonl")
     try:
         state = LoopState()
-        agent = _StubAgent(state)
+        agent: Any = _StubAgent(state)
         # deliberately off-type arg to exercise path
-        out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
+        out = await StatsCommand().handle("7d", agent)
         assert "not found yet" in out.text
     finally:
         journal_module.reset()
@@ -289,9 +290,9 @@ async def test_stats_history_aggregates_per_model(tmp_path: Path) -> None:
             input_tokens=500, output_tokens=200, cache_read_tokens=0,
         )
         state = LoopState()
-        agent = _StubAgent(state)
+        agent: Any = _StubAgent(state)
         # deliberately off-type arg to exercise path
-        out = await StatsCommand().handle("all", agent)  # type: ignore[arg-type]
+        out = await StatsCommand().handle("all", agent)
         assert out.handled is True
         assert out.kind == "view"
         # Sonnet sums: input 3000, output 130, cache 2000
@@ -322,9 +323,9 @@ async def test_stats_history_7d_filters_old_events(tmp_path: Path) -> None:
             input_tokens=100, output_tokens=10,
         )
         state = LoopState()
-        agent = _StubAgent(state)
+        agent: Any = _StubAgent(state)
         # deliberately off-type arg to exercise path
-        out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
+        out = await StatsCommand().handle("7d", agent)
         assert "recent-model" in out.text
         assert "old-model" not in out.text
         assert "99,999" not in out.text
@@ -354,9 +355,9 @@ async def test_stats_history_tolerates_malformed_lines(tmp_path: Path) -> None:
             log, ts=now, model="m1", input_tokens=200, output_tokens=20,
         )
         state = LoopState()
-        agent = _StubAgent(state)
+        agent: Any = _StubAgent(state)
         # deliberately off-type arg to exercise path
-        out = await StatsCommand().handle("all", agent)  # type: ignore[arg-type]
+        out = await StatsCommand().handle("all", agent)
         # Two valid events for m1: 100+200 input = 300, 10+20 = 30 output.
         assert "300" in out.text  # input total
         assert out.kind == "view"
@@ -381,9 +382,9 @@ async def test_stats_history_empty_window_friendly_message(
                 "ts": time.time(), "event": "config_loaded",
             }) + "\n")
         state = LoopState()
-        agent = _StubAgent(state)
+        agent: Any = _StubAgent(state)
         # deliberately off-type arg to exercise path
-        out = await StatsCommand().handle("7d", agent)  # type: ignore[arg-type]
+        out = await StatsCommand().handle("7d", agent)
         assert "No ``turn_usage`` events" in out.text
     finally:
         journal_module.reset()

@@ -14,7 +14,7 @@ from aura.application.teams.mailbox import (
     Mailbox,
     QueueMailboxNotifier,
 )
-from aura.domain.team import MAX_BODY_CHARS, TeamMessage
+from aura.domain.team import MAX_BODY_CHARS, TeamMessage, TeamMessageKind
 from aura.infrastructure.persistence.storage import SessionStorage
 
 
@@ -22,14 +22,14 @@ def _msg(
     sender: str = "leader",
     recipient: str = "alice",
     body: str = "hi",
-    kind: str = "text",
+    kind: TeamMessageKind = "text",
 ) -> TeamMessage:
     return TeamMessage(
         msg_id=uuid.uuid4().hex,
         sender=sender,
         recipient=recipient,
         body=body,
-        kind=kind,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        kind=kind,
     )
 
 

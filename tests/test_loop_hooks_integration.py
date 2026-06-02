@@ -326,7 +326,7 @@ async def test_user_accept_decision_does_not_emit_permission_audit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_tool_hook_returns_outcome_directly() -> None:
+async def test_pre_tool_hook_returns_outcome_directly(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC-G4-1: a permission hook returns its Decision via
     :class:`Allow.decision`; the Loop populates
     ``ToolStep.permission_decision`` without any side-channel slot.
@@ -351,9 +351,11 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
     from aura.application.loop import ToolStep
     captured_steps: list[ToolStep] = []
 
+    from langchain_core.messages import ToolCall
+
     orig_plan = AgentLoop._plan_tool_calls
 
-    async def spy_plan(self, tool_calls):  # type: ignore[no-untyped-def]  # fake helper, type hints not needed
+    async def spy_plan(self: AgentLoop, tool_calls: list[ToolCall]) -> list[ToolStep]:
         steps = await orig_plan(self, tool_calls)
         captured_steps.extend(steps)
         return steps
@@ -366,13 +368,10 @@ async def test_pre_tool_hook_returns_outcome_directly() -> None:
         context=make_minimal_context(),
         hooks=hooks,
     )
-    AgentLoop._plan_tool_calls = spy_plan  # type: ignore[method-assign]  # monkey-patching method for test
-    try:
-        events: list[AgentEvent] = []
-        async for ev in loop.run_turn(history=[HumanMessage(content="go")]):
-            events.append(ev)
-    finally:
-        AgentLoop._plan_tool_calls = orig_plan  # type: ignore[method-assign]  # monkey-patching method for test
+    monkeypatch.setattr(AgentLoop, "_plan_tool_calls", spy_plan)
+    events: list[AgentEvent] = []
+    async for ev in loop.run_turn(history=[HumanMessage(content="go")]):
+        events.append(ev)
 
     # AC-G4-1: Decision landed on ToolStep.permission_decision directly.
     assert len(captured_steps) == 1

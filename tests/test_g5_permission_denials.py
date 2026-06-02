@@ -109,7 +109,7 @@ def test_permission_denial_is_frozen() -> None:
         target="/etc/passwd",
     )
     with pytest.raises(FrozenInstanceError):
-        denial.reason = "user_deny"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        denial.__setattr__("reason", "user_deny")
 
 
 def test_permission_denial_default_timestamp_is_tz_aware() -> None:
@@ -374,11 +374,12 @@ async def test_last_turn_denials_is_readonly_view(tmp_path: Path) -> None:
     await _collect(agent, "go")
     view = agent.last_turn_denials()
     assert len(view) == 1
-    # tuple rejects item assignment AND append
+    # tuple rejects item assignment AND append; Any alias lets mypy skip static checks
+    view_mut: Any = view
     with pytest.raises(TypeError):
-        view[0] = None  # type: ignore[index]  # test data shape known but not in stub
+        view_mut[0] = None
     with pytest.raises(AttributeError):
-        view.append(None)  # type: ignore[attr-defined]  # test sets attribute mypy can't see
+        view_mut.append(None)
 
 
 async def test_last_turn_denials_empty_before_any_turn(tmp_path: Path) -> None:

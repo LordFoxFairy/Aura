@@ -22,6 +22,7 @@ a ``Decision``:
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 import pytest
 
@@ -51,8 +52,9 @@ def test_asker_prompt_is_frozen() -> None:
         is_destructive=False,
         request_id="req-1",
     )
+    obj: Any = prompt
     with pytest.raises(dataclasses.FrozenInstanceError):
-        prompt.tool = "other"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        obj.tool = "other"
 
 
 def test_asker_prompt_rejects_empty_request_id() -> None:
@@ -85,16 +87,18 @@ def test_asker_prompt_rejects_empty_tool() -> None:
 def test_asker_response_accepts_each_literal_choice(choice: str) -> None:
     """All four ``Literal`` values must construct cleanly. Spec §6 maps
     them onto Decision factories in the gate (Task 8)."""
-    # deliberately off-type arg to exercise path
-    response = AskerResponse(choice=choice, request_id="req-1")  # type: ignore[arg-type]
+    # deliberately off-type arg to exercise path — str variable satisfies runtime but not Literal
+    choice_any: Any = choice
+    response = AskerResponse(choice=choice_any, request_id="req-1")
     assert response.choice == choice
     assert response.request_id == "req-1"
 
 
 def test_asker_response_is_frozen() -> None:
     response = AskerResponse(choice="yes", request_id="req-1")
+    obj: Any = response
     with pytest.raises(dataclasses.FrozenInstanceError):
-        response.choice = "no"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        obj.choice = "no"
 
 
 def test_asker_response_rejects_empty_request_id() -> None:
@@ -109,8 +113,9 @@ def test_asker_response_rejects_unknown_choice() -> None:
     construction with a foreign string raises so a malformed IPC
     payload surfaces at deserialization, not at the gate."""
     with pytest.raises(ValueError, match="choice"):
-        # deliberately off-type arg to exercise path
-        AskerResponse(choice="maybe", request_id="req-1")  # type: ignore[arg-type]
+        # str variable satisfies runtime but not Literal — tests runtime ValueError path
+        bad_choice: Any = "maybe"
+        AskerResponse(choice=bad_choice, request_id="req-1")
 
 
 def test_asker_types_exported_from_domain_asker_io() -> None:

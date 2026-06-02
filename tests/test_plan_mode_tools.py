@@ -261,11 +261,11 @@ async def test_plan_mode_blocks_write_file_through_hook() -> None:
     outcome = await hook(
         tool=tool, args={"path": "/tmp/new.txt"}, state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "plan mode" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "plan mode" in sc.error
     assert spy.calls == []
 
 
@@ -337,8 +337,8 @@ async def test_plan_mode_still_blocks_unknown_tools() -> None:
     )
     tool = _mk_tool("weird_custom_tool", args_schema=_P)
     outcome = await hook(tool=tool, args={}, state=LoopState())
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "plan mode" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "plan mode" in sc.error

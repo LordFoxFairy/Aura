@@ -262,11 +262,11 @@ async def test_clear_session_wipes_read_state(tmp_path: Path) -> None:
         args={"path": str(target), "old_str": "body", "new_str": "BODY"},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "has not been read" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "has not been read" in sc.error
 
 
 def test_unknown_tool_name_in_config_raises_AuraConfigError(tmp_path: Path) -> None:
@@ -567,6 +567,9 @@ async def test_system_prompt_prepended_to_model_messages(tmp_path: Path) -> None
     received: list[list[BaseMessage]] = []
 
     class _CapturingFake(FakeChatModel):
+        def __init__(self, turns: list[FakeTurn] | None = None, **kwargs: Any) -> None:
+            super().__init__(turns=turns, **kwargs)
+
         async def _agenerate(
             self,
             messages: list[BaseMessage],
@@ -580,8 +583,7 @@ async def test_system_prompt_prepended_to_model_messages(tmp_path: Path) -> None
     cfg = _minimal_config(enabled=[])
     agent = Agent(
         config=cfg,
-        # exercising missing/extra arg path
-        model=_CapturingFake(turns=[FakeTurn(message=AIMessage(content="hi"))]),  # type: ignore[call-arg]
+        model=_CapturingFake(turns=[FakeTurn(message=AIMessage(content="hi"))]),
         storage=_storage(tmp_path),
     )
     async for _ in agent.astream("hello"):
@@ -741,7 +743,8 @@ class _CapturingFakeChatModel(FakeChatModel):
 
     @property
     def seen_messages(self) -> list[list[BaseMessage]]:
-        return self.__dict__["seen_messages"]  # type: ignore[no-any-return]  # fake returns Any from __dict__
+        val: list[list[BaseMessage]] = self.__dict__["seen_messages"]
+        return val
 
     async def _agenerate(
         self,

@@ -140,7 +140,7 @@ async def test_aclose_cancels_hanging_stop_all_within_timeout(
             session_id="b3-timeout",
         )
         fake_mgr = _HangingManager(connected_servers=["hang_a", "hang_b"])
-        agent._mcp_manager = fake_mgr  # type: ignore[assignment]  # noqa: SLF001
+        object.__setattr__(agent, "_mcp_manager", fake_mgr)  # noqa: SLF001
 
         loop = asyncio.get_running_loop()
         t0 = loop.time()
@@ -194,7 +194,7 @@ async def test_aclose_fast_path_emits_mcp_stopped_no_timeout_event(
             session_id="b3-fast",
         )
         fake_mgr = _FastManager()
-        agent._mcp_manager = fake_mgr  # type: ignore[assignment]  # noqa: SLF001
+        object.__setattr__(agent, "_mcp_manager", fake_mgr)  # noqa: SLF001
 
         await agent.aclose(mcp_timeout=5.0)
 
@@ -233,7 +233,7 @@ async def test_aclose_unexpected_error_emits_mcp_close_error(
             storage=_storage(tmp_path),
             session_id="b3-error",
         )
-        agent._mcp_manager = _RaisingManager()  # type: ignore[assignment]  # noqa: SLF001
+        object.__setattr__(agent, "_mcp_manager", _RaisingManager())  # noqa: SLF001
 
         # Must not propagate — shutdown swallows expected errors.
         await agent.aclose(mcp_timeout=1.0)
@@ -269,7 +269,7 @@ def test_sync_close_no_loop_runs_aclose_via_asyncio_run(tmp_path: Path) -> None:
             session_id="b3-sync",
         )
         fake_mgr = _FastManager()
-        agent._mcp_manager = fake_mgr  # type: ignore[assignment]  # noqa: SLF001
+        object.__setattr__(agent, "_mcp_manager", fake_mgr)  # noqa: SLF001
 
         agent.close()
 
@@ -302,7 +302,7 @@ async def test_sync_close_inside_running_loop_with_mcp_raises(tmp_path: Path) ->
         storage=_storage(tmp_path),
         session_id="b3-active-loop",
     )
-    agent._mcp_manager = _FastManager()  # type: ignore[assignment]  # noqa: SLF001
+    object.__setattr__(agent, "_mcp_manager", _FastManager())  # noqa: SLF001
     with pytest.raises(RuntimeError, match="aclose"):
         agent.close()
 

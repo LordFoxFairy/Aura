@@ -18,7 +18,7 @@ from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.domain.abort import AbortController
 from aura.domain.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
-from aura.domain.team import TeamMessage
+from aura.domain.team import TeamMessage, TeamMessageKind
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
@@ -29,13 +29,13 @@ def _stub_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-for-tests")
 
 
-def _msg(body: str = "hi", kind: str = "text", sender: str = "leader") -> TeamMessage:
+def _msg(body: str = "hi", kind: TeamMessageKind = "text", sender: str = "leader") -> TeamMessage:
     return TeamMessage(
         msg_id=uuid.uuid4().hex,
         sender=sender,
         recipient="alice",
         body=body,
-        kind=kind,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        kind=kind,
     )
 
 
@@ -121,8 +121,9 @@ async def test_runtime_processes_text_message(tmp_path: Path) -> None:
     abort = AbortController()
     stop = asyncio.Event()
     box.append(_msg(body="please work"))
+    _agent: Any = agent
     task = asyncio.create_task(run_teammate(
-        agent=agent,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        agent=_agent,
         team_id="team-a",
         member_name="alice",
         storage=storage,
@@ -158,8 +159,9 @@ async def test_runtime_records_teammate_task_progress(tmp_path: Path) -> None:
     stop = asyncio.Event()
     box.append(_msg(body="please work"))
 
+    _agent: Any = agent
     task = asyncio.create_task(run_teammate(
-        agent=agent,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        agent=_agent,
         team_id="team-a",
         member_name="alice",
         storage=storage,
@@ -190,8 +192,9 @@ async def test_runtime_seed_prompt_runs_immediately(tmp_path: Path) -> None:
     agent = _ScriptedAgent(replies=["seed-ack"])
     abort = AbortController()
     stop = asyncio.Event()
+    _agent: Any = agent
     task = asyncio.create_task(run_teammate(
-        agent=agent,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        agent=_agent,
         team_id="team-a",
         member_name="alice",
         storage=storage,
@@ -217,8 +220,9 @@ async def test_runtime_shutdown_request_exits_cleanly(tmp_path: Path) -> None:
     abort = AbortController()
     stop = asyncio.Event()
     box.append(_msg(kind="shutdown_request", body="please go"))
+    _agent: Any = agent
     task = asyncio.create_task(run_teammate(
-        agent=agent,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        agent=_agent,
         team_id="team-a",
         member_name="alice",
         storage=storage,
@@ -236,8 +240,9 @@ async def test_runtime_abort_stops_loop(tmp_path: Path) -> None:
     agent = _ScriptedAgent()
     abort = AbortController()
     stop = asyncio.Event()
+    _agent: Any = agent
     task = asyncio.create_task(run_teammate(
-        agent=agent,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        agent=_agent,
         team_id="team-a",
         member_name="alice",
         storage=storage,

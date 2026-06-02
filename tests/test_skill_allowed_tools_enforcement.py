@@ -237,10 +237,12 @@ async def test_declared_tool_auto_allowed(tmp_path: Path) -> None:
         )
         assert _sc(outcome) is None
         assert asker.calls == []
-        assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert outcome.decision.reason == "rule_allow"  # type: ignore[union-attr]
-        assert outcome.decision.rule is not None  # type: ignore[union-attr]
-        assert outcome.decision.rule.tool == "grep"  # type: ignore[union-attr]
+        from aura.domain.permission.outcome import Allow, Block, Replace
+        assert isinstance(outcome, (Allow, Block, Replace))
+        assert outcome.decision is not None
+        assert outcome.decision.reason == "rule_allow"
+        assert outcome.decision.rule is not None
+        assert outcome.decision.rule.tool == "grep"
     finally:
         await agent.aclose()
 

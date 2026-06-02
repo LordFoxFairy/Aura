@@ -35,11 +35,13 @@ class _FailingModel(BaseChatModel):
 
     @property
     def calls(self) -> int:
-        return self.__dict__["calls"]  # type: ignore[no-any-return]
+        result: int = self.__dict__["calls"]
+        return result
 
     @property
     def seen_lengths(self) -> list[int]:
-        return self.__dict__["seen_lengths"]  # type: ignore[no-any-return]
+        result: list[int] = self.__dict__["seen_lengths"]
+        return result
 
     @property
     def _llm_type(self) -> str:

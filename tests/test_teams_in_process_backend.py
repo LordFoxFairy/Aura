@@ -48,11 +48,13 @@ async def test_in_process_backend_spawn_returns_handle(tmp_path: Path) -> None:
     member = TeammateMember(name="alice")
     stop = asyncio.Event()
     abort = AbortController()
+    _agent: Any = _ScriptedAgent()
+    _manager: Any = None
     handle = await backend.spawn(
         team_id="team-a",
         member=member,
-        agent=_ScriptedAgent(),  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
-        manager=None,  # type: ignore[arg-type]  # unused by in-process
+        agent=_agent,
+        manager=_manager,
         storage=storage,
         stop_event=stop,
         abort=abort,
@@ -85,11 +87,13 @@ async def test_in_process_backend_shutdown_round_trip(tmp_path: Path) -> None:
         body="hi",
         kind="text",
     ))
+    _agent: Any = _ScriptedAgent()
+    _manager: Any = None
     handle = await backend.spawn(
         team_id="team-a",
         member=member,
-        agent=_ScriptedAgent(),  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
-        manager=None,  # type: ignore[arg-type]
+        agent=_agent,
+        manager=_manager,
         storage=storage,
         stop_event=stop,
         abort=abort,
@@ -110,11 +114,13 @@ async def test_in_process_backend_force_kill_idempotent(tmp_path: Path) -> None:
     member = TeammateMember(name="alice")
     stop = asyncio.Event()
     abort = AbortController()
+    _agent: Any = _ScriptedAgent()
+    _manager: Any = None
     handle = await backend.spawn(
         team_id="team-a",
         member=member,
-        agent=_ScriptedAgent(),  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
-        manager=None,  # type: ignore[arg-type]
+        agent=_agent,
+        manager=_manager,
         storage=storage,
         stop_event=stop,
         abort=abort,

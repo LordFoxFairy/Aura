@@ -362,7 +362,7 @@ def test_12_two_instances_independent_progressive_state(tmp_path: Path) -> None:
 def test_nested_fragment_is_frozen_dataclass(tmp_path: Path) -> None:
     frag = NestedFragment(source=tmp_path / "x.md", content="X")
     with pytest.raises(FrozenInstanceError):
-        frag.content = "Y"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        frag.__setattr__("content", "Y")
 
 
 def test_ac09_empty_todos_list_emits_no_todos_message(tmp_path: Path) -> None:

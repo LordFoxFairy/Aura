@@ -42,7 +42,7 @@ def _wire_permission_hook(
     project_root: Path,
     asker: ScriptedPermissionAsker,
     session_rules: SessionRuleSet,
-    mode: str = "default",
+    mode: Mode = "default",
 ) -> HookChain:
     """Build a HookChain with a real permission hook installed."""
     ruleset = perm_store.load_ruleset(project_root)
@@ -51,7 +51,7 @@ def _wire_permission_hook(
         session=session_rules,
         rules=ruleset,
         project_root=project_root,
-        mode=mode,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        mode=mode,
     )
     return HookChain(pre_tool=[hook])
 

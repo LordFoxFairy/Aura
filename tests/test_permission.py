@@ -25,8 +25,9 @@ from pydantic import BaseModel
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.loop_state import LoopState
 from aura.application.permission.asker import AskerResponse, PermissionAsker
+from aura.domain.permission.decision import Decision
 from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
-from aura.domain.permission.outcome import Allow, Replace
+from aura.domain.permission.outcome import Allow, Block, Replace
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.domain.tool import ToolResult
@@ -42,11 +43,11 @@ def _sc(outcome: object) -> ToolResult | None:
     return getattr(outcome, "short_circuit", None)
 
 
-def _decision(outcome: object) -> object:
+def _decision(outcome: object) -> Decision | None:
     """Extract the Decision from Allow, Block, or Replace Outcome."""
-    if isinstance(outcome, (Allow, Replace)):
+    if isinstance(outcome, (Allow, Block, Replace)):
         return outcome.decision
-    return getattr(outcome, "decision", None)
+    return None
 
 
 class _P(BaseModel):
@@ -132,7 +133,7 @@ def test_asker_response_deny_rejects_rule() -> None:
 def test_asker_response_is_frozen() -> None:
     resp = AskerResponse(choice="accept")
     with pytest.raises(FrozenInstanceError):
-        resp.choice = "deny"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        resp.__setattr__("choice", "deny")
 
 
 def test_asker_response_feedback_defaults_to_empty_string() -> None:
@@ -145,7 +146,7 @@ def test_asker_response_carries_feedback_field() -> None:
     assert resp.feedback == "wrong dir"
     # Field is frozen like the rest.
     with pytest.raises(FrozenInstanceError):
-        resp.feedback = "changed"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        resp.__setattr__("feedback", "changed")
 
 
 def test_permission_asker_runtime_checkable() -> None:
@@ -196,9 +197,10 @@ async def test_safety_blocks_destructive_write_to_protected_path(
         args={"path": str(tmp_path / ".git" / "HEAD")},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error == "denied: protected path (safety policy)"  # type: ignore[union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error == "denied: protected path (safety policy)"
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "safety_blocked"
@@ -225,9 +227,10 @@ async def test_safety_blocks_read_file_of_ssh_key(
         args={"path": str(Path.home() / ".ssh" / "id_rsa")},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error == "denied: protected path (safety policy)"  # type: ignore[union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error == "denied: protected path (safety policy)"
     assert spy.calls == []
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "safety_blocked"
@@ -426,9 +429,10 @@ async def test_ask_deny_returns_tool_result(
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error == "denied: user"  # type: ignore[union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error == "denied: user"
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_deny"
 
@@ -447,9 +451,9 @@ async def test_ask_deny_with_feedback_embeds_note_in_error(
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert _sc(outcome) is not None
-    # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error == "denied: user — note: wrong dir"  # type: ignore[union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.error == "denied: user — note: wrong dir"
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["feedback"] == "wrong dir"
 
@@ -582,9 +586,10 @@ async def test_asker_exception_treated_as_deny(
         project_root=Path("/tmp"),
     )
     outcome = await hook(tool=_tool(), args={}, state=LoopState())
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error == "denied: user"  # type: ignore[union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error == "denied: user"
     decision_event = next(e for e in journal_events if e[0] == "permission_decision")
     assert decision_event[1]["reason"] == "user_deny"
 
@@ -622,10 +627,10 @@ async def test_hook_returns_decision_on_outcome() -> None:
     )
     state = LoopState()
     outcome = await hook(tool=_tool(), args={}, state=state)
-    assert isinstance(_decision(outcome), Decision)
-    # test sets attribute mypy can't see
-    assert _decision(outcome).reason == "rule_allow"  # type: ignore[attr-defined]
-    assert _decision(outcome).allow is True  # type: ignore[attr-defined]
+    d = _decision(outcome)
+    assert isinstance(d, Decision)
+    assert d.reason == "rule_allow"
+    assert d.allow is True
     # Post-G4 direct-return contract: the hook MUST NOT write any
     # transient decision slot. Phase 1 Task 4 moved the G5 denials sink
     # onto ``state.slots.turn_denials`` (Task 7 then deleted the legacy
@@ -649,15 +654,15 @@ async def test_hook_decision_refreshes_across_calls() -> None:
     state = LoopState()
     # First call: rule_allow (writer rule matches).
     first_outcome = await hook(tool=_tool(), args={}, state=state)
-    assert _decision(first_outcome) is not None
-    # test sets attribute mypy can't see
-    assert _decision(first_outcome).reason == "rule_allow"  # type: ignore[attr-defined]
+    d1 = _decision(first_outcome)
+    assert d1 is not None
+    assert d1.reason == "rule_allow"
     # Second call: different tool, no matching rule → asker answers accept.
     second_outcome = await hook(tool=_tool("different"), args={}, state=state)
-    assert _decision(second_outcome) is not None
-    # test sets attribute mypy can't see
-    assert _decision(second_outcome).reason == "user_accept"  # type: ignore[attr-defined]
-    assert _decision(second_outcome) is not _decision(first_outcome)
+    d2 = _decision(second_outcome)
+    assert d2 is not None
+    assert d2.reason == "user_accept"
+    assert d2 is not d1
 
 
 async def test_every_terminal_decision_emits_permission_decision(

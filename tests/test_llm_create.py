@@ -30,7 +30,8 @@ class _StubOllama:
 
 
 def _stub_kwargs(model: Any) -> dict[str, Any]:
-    return model.kwargs  # type: ignore[no-any-return]  # fake returns Any from __dict__
+    val: dict[str, Any] = model.kwargs
+    return val
 
 
 def test_create_openai_happy_path_uses_default_env_var(monkeypatch: pytest.MonkeyPatch) -> None:

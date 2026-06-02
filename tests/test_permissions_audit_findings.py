@@ -17,7 +17,7 @@ from aura.application.hooks.permission import make_permission_hook
 from aura.application.loop_state import LoopState
 from aura.application.permission.asker import AskerResponse
 from aura.config.schema import AuraConfigError
-from aura.domain.permission.outcome import Ask, Outcome
+from aura.domain.permission.outcome import Allow, Ask, Block, Outcome, Replace
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.domain.tool import ToolResult
@@ -118,9 +118,9 @@ async def test_f_04_002_ask_demotes_rule_allow_to_asker_call(
     # Asker WAS called — auto-allow was demoted.
     assert len(asker.calls) == 1
     # Final decision reflects the asker's accept response.
-    assert outcome.decision is not None  # type: ignore[union-attr]
-    assert outcome.decision.allow is True  # type: ignore[union-attr]
-    assert outcome.decision.reason == "user_accept"  # type: ignore[union-attr]
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.allow is True
+    assert outcome.decision.reason == "user_accept"
 
 
 @pytest.mark.asyncio
@@ -150,9 +150,9 @@ async def test_f_04_002_ask_demotes_bypass_to_asker_call(
         tool=tool, args={}, state=LoopState(),
     )
     assert len(asker.calls) == 1
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.allow is False  # type: ignore[union-attr]
-    assert outcome.decision.reason == "user_deny"  # type: ignore[union-attr]
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.allow is False
+    assert outcome.decision.reason == "user_deny"
 
 
 @pytest.mark.asyncio
@@ -184,8 +184,8 @@ async def test_f_04_002_ask_does_not_override_safety_block(
     )
     # Asker NEVER called — safety wins.
     assert asker.calls == []
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.reason == "safety_blocked"  # type: ignore[union-attr]
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason == "safety_blocked"
 
 
 @pytest.mark.asyncio
@@ -202,10 +202,11 @@ async def test_f_04_005_plan_mode_blocks_web_fetch(tmp_path: Path) -> None:
     outcome = await hook(
         tool=tool, args={"url": "https://example.com"}, state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision is not None  # type: ignore[union-attr]
-    assert outcome.decision.reason == "plan_mode_blocked"  # type: ignore[union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason == "plan_mode_blocked"
     assert asker.calls == []
 
 
@@ -223,10 +224,11 @@ async def test_f_04_005_plan_mode_blocks_web_search(tmp_path: Path) -> None:
     outcome = await hook(
         tool=tool, args={}, state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision is not None  # type: ignore[union-attr]
-    assert outcome.decision.reason == "plan_mode_blocked"  # type: ignore[union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason == "plan_mode_blocked"
 
 
 def test_f_04_005_plan_mode_read_tools_excludes_outbound() -> None:
@@ -272,9 +274,9 @@ async def test_f_04_015_disable_bypass_clamps_runtime_bypass(
     # The hook must NOT have taken the bypass auto-allow path; instead
     # it falls through to the asker (clamped to default mode).
     assert len(asker.calls) == 1
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.reason != "mode_bypass"  # type: ignore[union-attr]
-    assert outcome.decision.reason == "user_accept"  # type: ignore[union-attr]
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason != "mode_bypass"
+    assert outcome.decision.reason == "user_accept"
 
     # The clamp must journal a warning the first time it fires.
     clamp_events = [e for e in events if e[0] == "bypass_clamped"]
@@ -336,8 +338,8 @@ async def test_f_04_015_disable_bypass_false_lets_bypass_through(
     outcome = await hook(
         tool=tool, args={}, state=LoopState(),
     )
-    assert outcome.decision is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert outcome.decision.reason == "mode_bypass"  # type: ignore[union-attr]
+    assert isinstance(outcome, (Allow, Block, Replace))
+    assert outcome.decision.reason == "mode_bypass"
     assert asker.calls == []
 
 

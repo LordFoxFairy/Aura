@@ -18,17 +18,20 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from aura.application.tasks.run import run_task
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
+from aura.domain.abort import AbortController
+from aura.domain.events import AgentEvent
 from aura.infrastructure.persistence import journal as journal_module
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
@@ -185,6 +188,18 @@ async def test_subagent_cancelled_carries_duration(tmp_path: Path) -> None:
     journal_module.reset()
     journal_module.configure(log)
 
+    class _SlowAgent(Agent):
+        async def astream(
+            self,
+            prompt: str,
+            *,
+            attachments: list[HumanMessage] | None = None,
+            abort: AbortController | None = None,
+        ) -> AsyncIterator[AgentEvent | dict[str, Any]]:  # pragma: no cover
+            await asyncio.sleep(100)
+            if False:
+                yield  # makes this an async generator with correct return type
+
     class _SlowSpinFactory(SubagentSpawner[Agent]):
         def __init__(self) -> None:
             pass
@@ -200,20 +215,13 @@ async def test_subagent_cancelled_carries_duration(tmp_path: Path) -> None:
         ) -> Agent:
             _spin_path = Path("/tmp/aura-subagent-lifecycle-cancel")
             _spin_path.mkdir(parents=True, exist_ok=True)
-            agent = Agent(
+            return _SlowAgent(
                 config=_minimal_config(),
                 model=FakeChatModel(
                     turns=[FakeTurn(message=AIMessage(content="_never_"))],
                 ),
                 storage=_storage(_spin_path / f"run-{task_id or 'x'}"),
             )
-            # Patch astream to sleep forever so outer cancellation fires.
-            async def _forever(_: Any) -> Any:  # pragma: no cover
-                await asyncio.sleep(100)
-                if False:  # pragma: no cover - make this an async generator
-                    yield
-            agent.astream = _forever  # type: ignore[method-assign,assignment]  # monkey-patching method for test
-            return agent
 
     try:
         store = TasksStore()

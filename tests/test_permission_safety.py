@@ -81,7 +81,7 @@ def test_safety_policy_is_frozen() -> None:
         exempt=(),
     )
     with pytest.raises((AttributeError, Exception)):
-        policy.protected_writes = ("changed",)  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        policy.__setattr__("protected_writes", ("changed",))
 
 
 @pytest.mark.parametrize(

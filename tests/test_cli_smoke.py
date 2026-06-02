@@ -28,16 +28,18 @@ import signal
 import subprocess
 import sys
 import time
+import types
 from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 # pty is POSIX-only. On Windows CI we skip the whole pty test section.
+_pty: types.ModuleType | None
 try:
     import pty as _pty
 except ImportError:  # pragma: no cover — Windows only
-    _pty = None  # type: ignore[assignment]  # narrowing branch mypy doesn't track
+    _pty = None
 
 # Repo root == parent of tests/. Resolved once so individual tests don't
 # recompute it; every subprocess is spawned with ``cwd=_REPO_ROOT`` so
@@ -552,8 +554,12 @@ class _PtyAura:
         except subprocess.TimeoutExpired:
             return None
 
-    # fake helper, type hints not needed
-    def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object,
+    ) -> None:
         # Always attempt graceful close first, then kill if the child
         # didn't take the hint. The process group start_new_session=True
         # lets us SIGKILL the whole group if uv spawned grandchildren.

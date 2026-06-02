@@ -250,4 +250,4 @@ def test_session_meta_is_frozen() -> None:
         first_user_prompt="hi",
     )
     with pytest.raises(FrozenInstanceError):
-        meta.session_id = "xyz"  # type: ignore[misc]  # rebinding/mutating frozen field for test
+        meta.__setattr__("session_id", "xyz")

@@ -130,7 +130,7 @@ def _build_rule(md_path: Path, *, base_dir: Path) -> Rule | None:
             journal.write("rule_yaml_parse_failed", path=str(md_path), error=str(exc))
             return None
         globs_or_skip = _extract_globs(parsed)
-        if globs_or_skip is _SKIP:
+        if globs_or_skip is None:
             actual_type = type(parsed["paths"]).__name__ if isinstance(
                 parsed, dict
             ) and "paths" in parsed else type(parsed).__name__
@@ -140,7 +140,7 @@ def _build_rule(md_path: Path, *, base_dir: Path) -> Rule | None:
                 actual_type=actual_type,
             )
             return None
-        globs = globs_or_skip  # type: ignore[assignment]  # narrowing branch mypy doesn't track
+        globs = globs_or_skip
 
     try:
         source = md_path.resolve()
@@ -186,11 +186,11 @@ def _split_frontmatter(raw: str) -> tuple[str | None, str]:
     return None, raw
 
 
-# Distinguishes "no `paths` field (→ unconditional)" from "unknown type (→ skip)".
-_SKIP = object()
+def _extract_globs(parsed: Any) -> tuple[str, ...] | None:
+    """Globs tuple, or ``None`` for a present-but-wrong-typed ``paths`` field.
 
-
-def _extract_globs(parsed: Any) -> tuple[str, ...] | object:
+    ``()`` means "no ``paths`` field → unconditional"; ``None`` means "skip".
+    """
     if not isinstance(parsed, dict):
         return ()
     if "paths" not in parsed:
@@ -202,7 +202,7 @@ def _extract_globs(parsed: Any) -> tuple[str, ...] | object:
     if isinstance(value, list):
         parts = tuple(str(item) for item in value)
         return _normalize_universal(parts)
-    return _SKIP
+    return None
 
 
 _UNIVERSAL_GLOBS = frozenset({"**", "**/*"})

@@ -88,11 +88,13 @@ class SizeLimitedSummaryModel(FakeChatModel):
 
     @property
     def prompt_sizes(self) -> list[int]:
-        return self.__dict__["prompt_sizes"]  # type: ignore[no-any-return]
+        result: list[int] = self.__dict__["prompt_sizes"]
+        return result
 
     @property
     def prompts(self) -> list[str]:
-        return self.__dict__["prompts"]  # type: ignore[no-any-return]
+        result: list[str] = self.__dict__["prompts"]
+        return result
 
 
 @pytest.mark.asyncio
@@ -101,12 +103,14 @@ async def test_compact_noop_when_short_history(tmp_path: Path) -> None:
     # 4 messages (2 pairs) must be a no-op.
     agent = _make_agent(tmp_path)
     _seed_history(agent, pairs=2)
-    before_model_calls = agent._model.ainvoke_calls  # type: ignore[attr-defined]
+    assert isinstance(agent._model, FakeChatModel)
+    before_model_calls = agent._model.ainvoke_calls
 
     result = await agent.compact(source="manual")
 
     # No summary turn should have been invoked.
-    assert agent._model.ainvoke_calls == before_model_calls  # type: ignore[attr-defined]
+    assert isinstance(agent._model, FakeChatModel)
+    assert agent._model.ainvoke_calls == before_model_calls
     # Returned result still structurally valid.
     assert result.source == "manual"
     # History unchanged.

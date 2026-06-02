@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import Any
 
 import pytest
+from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatResult
 from rich.console import Console
 
 from aura.config.schema import AuraConfig
@@ -442,33 +445,34 @@ async def test_multiline_non_slash_input_reaches_agent_intact(
     captured: list[str] = []
 
     class _CaptureModel(FakeChatModel):
-        async def _agenerate(  # type: ignore[override]  # test stub intentionally diverges
+        def __init__(self, turns: list[FakeTurn] | None = None, **kwargs: Any) -> None:
+            super().__init__(turns=turns, **kwargs)
+
+        async def _agenerate(
             self,
             messages: list[BaseMessage],
             stop: list[str] | None = None,
-            run_manager: object | None = None,
+            run_manager: AsyncCallbackManagerForLLMRun | None = None,
             **kwargs: object,
-        ) -> object:
+        ) -> ChatResult:
             for msg in messages:
                 if isinstance(msg, HumanMessage) and isinstance(
                     msg.content, str,
                 ):
                     captured.append(msg.content)
             return await super()._agenerate(
-                messages, stop, run_manager,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+                messages, stop, run_manager,
                 **kwargs,
             )
 
+    _model: Any = _CaptureModel(turns=[FakeTurn(message=AIMessage(content="ok"))])
     agent = Agent(
         config=AuraConfig.model_validate({
             "providers": [{"name": "openai", "protocol": "openai"}],
             "router": {"default": "openai:gpt-4o-mini"},
             "tools": {"enabled": []},
         }),
-        model=_CaptureModel(
-            # exercising missing/extra arg path
-            turns=[FakeTurn(message=AIMessage(content="ok"))],  # type: ignore[call-arg]
-        ),
+        model=_model,
         storage=SessionStorage(tmp_path / "db"),
     )
     console, _buf = _capture_console()
@@ -777,9 +781,10 @@ async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
+    _exploding: Any = _ExplodingModel()
     agent = Agent(
         config=cfg,
-        model=_ExplodingModel(),  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        model=_exploding,
         storage=SessionStorage(tmp_path / "db"),
     )
     console, buf = _capture_console()

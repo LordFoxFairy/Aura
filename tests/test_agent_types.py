@@ -8,6 +8,7 @@ and the intrinsic shape of each built-in type. Integration with the factory
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from typing import Any
 
 import pytest
 
@@ -105,4 +106,5 @@ def test_agent_def_is_immutable() -> None:
         # runtime frozen contract, not the static type check.
         setattr(td, "name", "hacked")  # noqa: B010
     with pytest.raises(AttributeError):
-        td.tools.add("bash")  # type: ignore[attr-defined]  # test sets attribute mypy can't see
+        tools: Any = td.tools
+        tools.add("bash")

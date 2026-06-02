@@ -101,10 +101,8 @@ async def test_bash_allow_command_installs_session_rule(
         "Feedback (optional)": "",
     })
     asker = make_cli_asker()
-    resp = await asker(
-        # deliberately off-type arg to exercise path
-        tool=_bash_tool(), args={"command": "ls -la"}, rule_hint=None,  # type: ignore[arg-type]
-    )
+    rule_hint: Any = None  # deliberately off-type to exercise path
+    resp = await asker(tool=_bash_tool(), args={"command": "ls -la"}, rule_hint=rule_hint)
     assert resp.choice == "always"
     assert resp.scope == "session"
     assert resp.rule is not None and resp.rule.content == "ls -la"
@@ -119,10 +117,8 @@ async def test_bash_allow_prefix_installs_project_rule(
         "Feedback (optional)": "",
     })
     asker = make_cli_asker()
-    resp = await asker(
-        # deliberately off-type arg to exercise path
-        tool=_bash_tool(), args={"command": "git status"}, rule_hint=None,  # type: ignore[arg-type]
-    )
+    rule_hint: Any = None  # deliberately off-type to exercise path
+    resp = await asker(tool=_bash_tool(), args={"command": "git status"}, rule_hint=rule_hint)
     assert resp.choice == "always"
     assert resp.scope == "project"
     assert resp.rule is not None and resp.rule.content == "git"
@@ -137,10 +133,8 @@ async def test_bash_deny_carries_feedback(
         "Feedback (optional)": "too risky",
     })
     asker = make_cli_asker()
-    resp = await asker(
-        # deliberately off-type arg to exercise path
-        tool=_bash_tool(), args={"command": "rm -rf /"}, rule_hint=None,  # type: ignore[arg-type]
-    )
+    rule_hint: Any = None  # deliberately off-type to exercise path
+    resp = await asker(tool=_bash_tool(), args={"command": "rm -rf /"}, rule_hint=rule_hint)
     assert resp.choice == "deny"
     assert resp.feedback == "too risky"
 
@@ -154,10 +148,11 @@ async def test_write_allow_dir_installs_dir_rule(
         "Feedback (optional)": "",
     })
     asker = make_cli_asker()
+    rule_hint: Any = None  # deliberately off-type to exercise path
     resp = await asker(
         tool=_write_tool(),
         args={"path": "src/foo/bar.py", "content": ""},
-        rule_hint=None,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        rule_hint=rule_hint,
     )
     assert resp.choice == "always"
     assert resp.scope == "project"
@@ -173,10 +168,11 @@ async def test_write_allow_path_uses_derived_rule(
         "Feedback (optional)": "",
     })
     asker = make_cli_asker()
+    rule_hint: Any = None  # deliberately off-type to exercise path
     resp = await asker(
         tool=_write_tool(),
         args={"path": "src/foo.py", "content": ""},
-        rule_hint=None,  # type: ignore[arg-type]  # deliberately off-type arg to exercise path
+        rule_hint=rule_hint,
     )
     assert resp.choice == "always"
     assert resp.scope == "project"
@@ -193,10 +189,8 @@ async def test_generic_allow_always_session_rule_when_no_matcher(
         "Feedback (optional)": "",
     })
     asker = make_cli_asker()
-    resp = await asker(
-        # deliberately off-type arg to exercise path
-        tool=_generic_tool(), args={"arg": ""}, rule_hint=None,  # type: ignore[arg-type]
-    )
+    rule_hint: Any = None  # deliberately off-type to exercise path
+    resp = await asker(tool=_generic_tool(), args={"arg": ""}, rule_hint=rule_hint)
     assert resp.choice == "always"
     assert resp.scope == "session"
     assert resp.rule is not None and resp.rule.content is None

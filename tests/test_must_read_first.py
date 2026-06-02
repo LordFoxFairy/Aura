@@ -126,11 +126,11 @@ async def test_edit_file_rejected_without_prior_read(tmp_path: Path) -> None:
         args={"path": str(target), "old_str": "hello", "new_str": "bye"},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "has not been read" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "has not been read" in sc.error
 
 
 @pytest.mark.asyncio
@@ -164,8 +164,9 @@ async def test_edit_file_rejected_when_different_path_read(tmp_path: Path) -> No
         args={"path": str(b), "old_str": "B", "new_str": "C"},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
 
 
 @pytest.mark.asyncio
@@ -227,11 +228,11 @@ async def test_non_existent_path_blocks_as_never_read(tmp_path: Path) -> None:
         args={"path": str(ghost), "old_str": "x", "new_str": "y"},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "has not been read" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "has not been read" in sc.error
 
 
 @pytest.mark.asyncio
@@ -278,11 +279,11 @@ async def test_edit_file_rejected_when_file_changed_since_read(tmp_path: Path) -
         args={"path": str(target), "old_str": "hello", "new_str": "bye"},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "has changed since last read" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "has changed since last read" in sc.error
 
 
 @pytest.mark.asyncio
@@ -297,10 +298,10 @@ async def test_stale_and_never_read_errors_are_distinct(tmp_path: Path) -> None:
         args={"path": str(never), "old_str": "x", "new_str": "y"},
         state=LoopState(),
     )
-    assert _sc(r_never) is not None
-    assert _sc(r_never).error is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    # narrowed by assert; mypy keeps union
-    assert "has not been read" in _sc(r_never).error  # type: ignore[operator,union-attr]
+    sc_never = _sc(r_never)
+    assert sc_never is not None
+    assert sc_never.error is not None
+    assert "has not been read" in sc_never.error
 
     stale = tmp_path / "stale.txt"
     stale.write_text("x\n")
@@ -314,13 +315,12 @@ async def test_stale_and_never_read_errors_are_distinct(tmp_path: Path) -> None:
         args={"path": str(stale), "old_str": "x", "new_str": "y"},
         state=LoopState(),
     )
-    assert _sc(r_stale) is not None
-    assert _sc(r_stale).error is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    # narrowed by assert; mypy keeps union
-    assert "has changed since last read" in _sc(r_stale).error  # type: ignore[operator,union-attr]
+    sc_stale = _sc(r_stale)
+    assert sc_stale is not None
+    assert sc_stale.error is not None
+    assert "has changed since last read" in sc_stale.error
 
-    # narrowed by assert above; mypy keeps union
-    assert _sc(r_never).error != _sc(r_stale).error  # type: ignore[union-attr]
+    assert sc_never.error != sc_stale.error
 
 
 def test_fresh_after_record_returns_fresh_status(tmp_path: Path) -> None:
@@ -452,11 +452,11 @@ async def test_hook_still_blocks_edit_with_old_str_on_never_read_file(
         args={"path": str(target), "old_str": "hello", "new_str": "bye"},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "has not been read" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "has not been read" in sc.error
 
 
 @pytest.mark.asyncio
@@ -483,11 +483,11 @@ async def test_partial_read_blocks_edit_with_partial_reason(
             args={"path": str(target), "old_str": "a", "new_str": "A"},
             state=LoopState(),
         )
-        assert _sc(outcome) is not None
-        assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert _sc(outcome).error is not None  # type: ignore[union-attr]
-        # narrowed by assert; mypy keeps union
-        assert "partially read" in _sc(outcome).error  # type: ignore[operator,union-attr]
+        sc = _sc(outcome)
+        assert sc is not None
+        assert sc.ok is False
+        assert sc.error is not None
+        assert "partially read" in sc.error
 
         events = [json.loads(line) for line in log.read_text().splitlines()]
         blocked = [e for e in events if e["event"] == "must_read_first_blocked"]
@@ -555,12 +555,12 @@ async def test_write_file_overwrite_rejected_without_prior_read(
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "has not been read" in _sc(outcome).error  # type: ignore[operator,union-attr]
-    assert "overwriting" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "has not been read" in sc.error
+    assert "overwriting" in sc.error
 
 
 @pytest.mark.asyncio
@@ -600,11 +600,11 @@ async def test_write_file_overwrite_rejected_when_stale(
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "has changed since last read" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "has changed since last read" in sc.error
 
 
 @pytest.mark.asyncio
@@ -622,11 +622,11 @@ async def test_write_file_overwrite_rejected_when_partial(
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]
-    # narrowed by assert; mypy keeps union
-    assert "partially read" in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert sc.error is not None
+    assert "partially read" in sc.error
 
 
 @pytest.mark.asyncio
@@ -645,11 +645,11 @@ async def test_write_file_error_messages_say_overwriting_not_editing(
         args={"path": str(target)},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).error is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    # narrowed by assert; mypy keeps union
-    assert "overwriting" in _sc(outcome).error  # type: ignore[operator,union-attr]
-    assert "before edit" not in _sc(outcome).error  # type: ignore[operator,union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.error is not None
+    assert "overwriting" in sc.error
+    assert "before edit" not in sc.error
 
 
 @pytest.mark.asyncio
@@ -669,11 +669,12 @@ async def test_never_read_message_no_duplicated_path(tmp_path: Path) -> None:
             else {"path": str(target)},
             state=LoopState(),
         )
-        assert _sc(outcome) is not None
-        assert _sc(outcome).error is not None  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-        assert _sc(outcome).error.count(str(target.resolve())) == 1, (  # type: ignore[union-attr]
-            f"path appeared {_sc(outcome).error.count(str(target.resolve()))}x in: "  # type: ignore[union-attr]
-            f"{_sc(outcome).error!r}"
+        sc = _sc(outcome)
+        assert sc is not None
+        assert sc.error is not None
+        assert sc.error.count(str(target.resolve())) == 1, (
+            f"path appeared {sc.error.count(str(target.resolve()))}x in: "
+            f"{sc.error!r}"
         )
 
 
@@ -717,10 +718,11 @@ async def test_bash_sed_in_place_blocked_when_target_unread(
         args={"command": f"sed -i 's/1/2/' {target}"},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
-    assert "would mutate" in (_sc(outcome).error or "")  # type: ignore[union-attr]
-    assert str(target.resolve()) in (_sc(outcome).error or "")  # type: ignore[union-attr]
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert "would mutate" in (sc.error or "")
+    assert str(target.resolve()) in (sc.error or "")
 
 
 @pytest.mark.asyncio
@@ -751,8 +753,9 @@ async def test_bash_redirect_overwrite_blocked_when_target_unread(
         args={"command": f"echo new > {target}"},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
 
 
 @pytest.mark.parametrize(
@@ -773,8 +776,9 @@ async def test_bash_compact_redirect_blocked_when_target_unread(
         args={"command": template.format(path=target)},
         state=LoopState(),
     )
-    assert _sc(outcome) is not None
-    assert _sc(outcome).ok is False  # type: ignore[union-attr]  # narrowed by assert above; mypy keeps union
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
 
 
 @pytest.mark.asyncio

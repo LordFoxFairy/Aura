@@ -24,7 +24,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from aura.application.compact.compactor import Compactor
 from aura.application.compact.microcompact import MicrocompactPolicy
-from aura.application.compact.reactive import CompactResult
+from aura.application.compact.reactive import CompactResult, CompactSource
 from aura.config.schema import AuraConfig
 from aura.core.agent import Agent
 from aura.infrastructure.persistence import journal
@@ -187,11 +187,11 @@ async def test_reactive_delegates_to_agent_compact(tmp_path: Path) -> None:
 
     seen: list[str] = []
 
-    async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         seen.append(source)
         return CompactResult(
             before_tokens=100, after_tokens=50,
-            source=source,  # type: ignore[arg-type]
+            source=source,
         )
 
     history: list[Any] = []
@@ -215,7 +215,7 @@ async def test_reactive_failure_emits_failed_outcome(tmp_path: Path) -> None:
     events: list[dict[str, Any]] = []
     compactor = _make_compactor(agent, events=events)
 
-    async def _boom(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _boom(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         raise RuntimeError("simulated")
 
     history: list[Any] = []
@@ -261,10 +261,10 @@ async def test_auto_above_threshold_runs_and_resets_breaker(
     events: list[dict[str, Any]] = []
     compactor = _make_compactor(agent, events=events)
 
-    async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         return CompactResult(
             before_tokens=100, after_tokens=20,
-            source=source,  # type: ignore[arg-type]
+            source=source,
         )
 
     with patch.object(Agent, "compact", _ok):
@@ -297,7 +297,7 @@ async def test_auto_failure_increments_circuit_breaker(tmp_path: Path) -> None:
 
     calls: list[str] = []
 
-    async def _fail(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _fail(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         calls.append(source)
         raise RuntimeError("compact failed")
 
@@ -347,7 +347,7 @@ async def test_auto_breaker_limit_honors_config(tmp_path: Path) -> None:
 
     calls: list[str] = []
 
-    async def _fail(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _fail(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         calls.append(source)
         raise RuntimeError("boom")
 
@@ -379,11 +379,11 @@ async def test_manual_delegates_and_bypasses_breaker(tmp_path: Path) -> None:
 
     seen: list[str] = []
 
-    async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         seen.append(source)
         return CompactResult(
             before_tokens=10, after_tokens=5,
-            source=source,  # type: ignore[arg-type]
+            source=source,
         )
 
     with patch.object(Agent, "compact", _ok):
@@ -411,10 +411,10 @@ async def test_event_emitter_payload_matches_spec(tmp_path: Path) -> None:
     events: list[dict[str, Any]] = []
     compactor = _make_compactor(agent, events=events)
 
-    async def _ok(self: Agent, *, source: str = "manual") -> CompactResult:
+    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
         return CompactResult(
             before_tokens=42, after_tokens=7,
-            source=source,  # type: ignore[arg-type]
+            source=source,
         )
 
     with patch.object(Agent, "compact", _ok):

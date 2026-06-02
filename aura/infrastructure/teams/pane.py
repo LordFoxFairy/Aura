@@ -14,6 +14,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -115,15 +116,14 @@ class PaneHandle(BackendHandle):
 
     def _wait_for_ack(
         self,
-        mailbox: object,
+        mailbox: Mailbox,
         baseline: set[str],
         timeout: float,
     ) -> bool:
         # JSONL on disk is the IPC channel — the subprocess can't share an asyncio.Future.
-        import time as _time  # noqa: PLC0415  # keep ad-hoc poll local
-        deadline = _time.monotonic() + timeout
-        while _time.monotonic() < deadline:
-            for msg in mailbox.read_all(TEAM_LEADER_NAME):  # type: ignore[attr-defined]
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for msg in mailbox.read_all(TEAM_LEADER_NAME):
                 if msg.msg_id in baseline:
                     continue
                 if (
@@ -131,7 +131,7 @@ class PaneHandle(BackendHandle):
                     and msg.kind == "shutdown_response"
                 ):
                     return True
-            _time.sleep(0.05)
+            time.sleep(0.05)
         return False
 
     async def force_kill(self) -> None:

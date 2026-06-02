@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -299,9 +300,9 @@ def test_save_rule_local_scope_atomic_write_failure_raises(
 
 
 def test_save_rule_scope_invalid_raises(tmp_path: Path) -> None:
+    bogus_scope: Any = "bogus"  # deliberately off-type to exercise path
     with pytest.raises((TypeError, ValueError)):
-        # deliberately off-type arg to exercise path
-        save_rule(tmp_path, Rule(tool="bash", content=None), scope="bogus")  # type: ignore[arg-type]
+        save_rule(tmp_path, Rule(tool="bash", content=None), scope=bogus_scope)
 
 
 def test_ensure_local_creates_file_with_template(tmp_path: Path) -> None:

@@ -884,7 +884,7 @@ _SUBAGENT_ISOLATION_DRIVER = textwrap.dedent(
         captured[tid] = agent._session_id
         return agent
 
-    factory.spawn = _spying_spawn  # type: ignore[method-assign]  # monkey-patching method for test
+    factory.spawn = _spying_spawn
 
     async def main() -> None:
         await asyncio.gather(

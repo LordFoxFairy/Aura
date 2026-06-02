@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import pathspec
 import yaml
@@ -186,7 +185,7 @@ def _split_frontmatter(raw: str) -> tuple[str | None, str]:
     return None, raw
 
 
-def _extract_globs(parsed: Any) -> tuple[str, ...] | None:
+def _extract_globs(parsed: object) -> tuple[str, ...] | None:
     """Globs tuple, or ``None`` for a present-but-wrong-typed ``paths`` field.
 
     ``()`` means "no ``paths`` field → unconditional"; ``None`` means "skip".

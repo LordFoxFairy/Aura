@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
 
 import pathspec
 
@@ -47,15 +46,13 @@ def is_protected(
         return False
 
 
-def _candidate_paths(path: Any) -> list[str]:
-    if isinstance(path, Path):
-        candidate = path
-    elif isinstance(path, str):
+def _candidate_paths(path: Path | str) -> list[str]:
+    if isinstance(path, str):
         if not path:
             return []
         candidate = Path(path)
     else:
-        return []
+        candidate = path
 
     try:
         expanded = candidate.expanduser()

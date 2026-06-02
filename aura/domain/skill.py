@@ -15,12 +15,7 @@ SkillLayer = Literal["user", "project", "managed"]
 
 @dataclass(frozen=True)
 class Skill:
-    """A parsed skill file (``<base_dir>/SKILL.md``).
-
-    All frontmatter-driven knobs default to "no special config" so tests
-    constructing a Skill with only the five required fields keep compiling.
-    ``base_dir`` defaults to ``source_path.parent``.
-    """
+    """A parsed skill file (``<base_dir>/SKILL.md``)."""
 
     name: str
     description: str

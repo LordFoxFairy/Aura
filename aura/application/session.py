@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal
@@ -14,6 +15,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
 from aura.application.agent_context import AgentContext
+from aura.application.commands.types import Command
 from aura.application.compact import (
     MICROCOMPACT_KEEP_RECENT,
     MICROCOMPACT_TRIGGER_PAIRS,
@@ -280,9 +282,7 @@ class AgentSession:
         self._team_member_name: str | None = None
         self._teammate: TeammateBinding | None = None
 
-        def _on_terminal(rec: object) -> None:
-            if not isinstance(rec, TaskRecord):
-                return
+        def _on_terminal(rec: TaskRecord) -> None:
             summary = (
                 rec.progress.latest_summary
                 or rec.final_result
@@ -303,9 +303,7 @@ class AgentSession:
             )
         self._tasks_store.add_terminal_listener(_on_terminal)
 
-        def _on_started(rec: object) -> None:
-            if not isinstance(rec, TaskRecord):
-                return
+        def _on_started(rec: TaskRecord) -> None:
             self._enqueue_protocol_event(
                 task_started_to_wire(
                     task_id=rec.id,
@@ -317,9 +315,7 @@ class AgentSession:
             )
         self._tasks_store.add_started_listener(_on_started)
 
-        def _on_activity(rec: object, activity: str) -> None:
-            if not isinstance(rec, TaskRecord):
-                return
+        def _on_activity(rec: TaskRecord, activity: str) -> None:
             self._enqueue_protocol_event(
                 task_progress_to_wire(
                     task_id=rec.id,
@@ -810,10 +806,6 @@ class AgentSession:
         self._available_tools.pop("send_message", None)
         self._loop.rebind_tools(self._registry.tools())
 
-    def _user_pinned_tools_allowlist(self) -> bool:
-        """True iff the user supplied a custom ``tools.enabled`` value."""
-        return self._user_pinned_tools_allowlist_value
-
     def resume_session(self, session_id: str) -> int:
         """Load ``session_id`` from storage; reset state to fresh-session feel.
 
@@ -871,15 +863,15 @@ class AgentSession:
         self._mcp_runtime.manager = value
 
     @property
-    def _mcp_commands(self) -> list[object]:
+    def _mcp_commands(self) -> list[Command[object]]:
         return self._mcp_runtime.commands
 
     @_mcp_commands.setter
-    def _mcp_commands(self, value: list[object]) -> None:
+    def _mcp_commands(self, value: list[Command[object]]) -> None:
         self._mcp_runtime.commands = list(value)
 
     @property
-    def mcp_commands(self) -> list[object]:
+    def mcp_commands(self) -> list[Command[object]]:
         return self._mcp_runtime.commands
 
     @property
@@ -974,8 +966,6 @@ class AgentSession:
         return history_tokens + self._estimate_pinned_tokens()
 
     def _estimate_pinned_tokens(self) -> int:
-        import json
-
         tokens = 0
         for message in self._context.build([]):
             content = message.content

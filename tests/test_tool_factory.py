@@ -40,9 +40,12 @@ from aura.application.runtime import (
 from aura.application.session import AgentSession
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
+from aura.application.teams.team_port import TeamPort
 from aura.config.schema import AuraConfig
+from aura.domain.team import TeamMessage, TeamMessageKind, TeamRecord
 from aura.domain.todos import TodoItem
 from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.wire.events import CoordinationEvent
 from aura.tools.ask_user import AskUserQuestion, FormQuestionDict
 from aura.tools.send_message import SendMessage
 from aura.tools.task_create import TaskCreate
@@ -310,13 +313,35 @@ def test_task_stop_factory_rejects_missing_running_shells() -> None:
         TaskStopFactory().build(runtime)
 
 
+class _StubTeam:
+    """Minimal TeamPort impl for provider-wiring identity checks."""
+
+    is_active: bool = False
+    team: TeamRecord | None = None
+    pending_protocol_events: tuple[CoordinationEvent, ...] = ()
+
+    @property
+    def storage(self) -> SessionStorage:
+        raise NotImplementedError
+    def post_message(self, msg: TeamMessage) -> None: ...
+    def send(
+        self, *, sender: str, recipient: str, body: str,
+        kind: TeamMessageKind = "text",
+    ) -> list[TeamMessage]:
+        return []
+    def confirm_shutdown(self, member_name: str, *, body: str = "") -> None: ...
+    def drain_protocol_events(self) -> list[CoordinationEvent]:
+        return []
+    async def cleanup_session_teams(self) -> None: ...
+
+
 def test_send_message_factory_wires_runtime_providers() -> None:
     """SendMessageFactory wires live team/member providers into SendMessage.
 
     Providers (not snapshots) so a join_team after tool construction is
     reflected on the next invoke.
     """
-    sentinel_team = object()
+    sentinel_team: TeamPort = _StubTeam()
     runtime = ToolRuntime(
         state=LoopState(),
         team_provider=lambda: sentinel_team,

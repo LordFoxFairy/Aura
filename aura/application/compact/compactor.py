@@ -6,7 +6,7 @@ import contextlib
 import dataclasses
 import time
 from collections.abc import Callable
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage
@@ -42,7 +42,7 @@ class _CompactorSession(Protocol):
     def estimate_history_tokens(self, history: list[BaseMessage]) -> int: ...
 
 
-EventEmitter = Callable[[dict[str, Any]], None]
+EventEmitter = Callable[[dict[str, object]], None]
 
 
 class Compactor:

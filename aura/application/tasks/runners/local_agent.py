@@ -9,10 +9,12 @@ import os
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol, TypedDict
+from typing import TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage
 
+from aura.application.hooks.protocols import PostModelHook
+from aura.application.loop_state import LoopState
 from aura.application.subagent_summary import AgentSummarizer
 from aura.application.tasks.spawn_port import SpawnedAgent, SpawnPort
 from aura.application.tasks.store import TasksStore
@@ -21,24 +23,6 @@ from aura.domain.task import TaskRecord, TaskStatus
 from aura.infrastructure.llm import make_summary_model_factory
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
-
-
-class _LoopState(Protocol):
-    """Narrow loop-state; Protocol compliance only — no members accessed at runtime."""
-
-
-class _PostModelHook(Protocol):
-    """Async hook receiving ai_message + history + state."""
-
-    async def __call__(
-        self,
-        *,
-        ai_message: AIMessage,
-        history: list[BaseMessage],
-        state: _LoopState,
-        **kwargs: Any,
-    ) -> None: ...
-
 
 # 5 minute defense-in-depth ceiling; ``AURA_SUBAGENT_TIMEOUT_SEC<=0`` disables.
 DEFAULT_SUBAGENT_TIMEOUT_SEC: float = 300.0
@@ -86,13 +70,13 @@ def resolve_timeout(override: float | None) -> float | None:
     return DEFAULT_SUBAGENT_TIMEOUT_SEC
 
 
-def make_token_observer(store: TasksStore, task_id: str) -> _PostModelHook:
+def make_token_observer(store: TasksStore, task_id: str) -> PostModelHook:
     """post_model hook forwarding ``usage_metadata`` into the store; failures journaled."""
     async def _observe(
         *,
         ai_message: AIMessage,
         history: list[BaseMessage],  # noqa: ARG001 - protocol compliance
-        state: _LoopState,  # noqa: ARG001 - protocol compliance
+        state: LoopState,  # noqa: ARG001 - protocol compliance
         **_: object,
     ) -> None:
         try:

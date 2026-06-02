@@ -7,22 +7,19 @@ rule_matcher metadata, absent matcher = no match).
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
 
 from aura.domain.errors import AuraError
-from aura.domain.tool_meta_access import meta_dict
+from aura.domain.tool_meta_access import aura_metadata
 
 
 class InvalidRuleError(AuraError):
     pass
 
-
-_RuleMatcher = Callable[[dict[str, Any], str], bool]
 
 RuleKind = Literal["allow", "deny", "ask"]
 
@@ -41,10 +38,10 @@ class Rule:
             return False
         if self.content is None:
             return True
-        matcher = meta_dict(tool).get("rule_matcher")
-        if matcher is None:
+        meta = aura_metadata(tool)
+        if meta is None or meta.rule_matcher is None:
             return False
-        return cast(_RuleMatcher, matcher)(args, self.content)
+        return meta.rule_matcher(args, self.content)
 
     def to_string(self) -> str:
         if self.content is None:

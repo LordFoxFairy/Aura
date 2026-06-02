@@ -26,6 +26,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from aura.infrastructure.agents.builtin import builtin_agents
 from aura.infrastructure.agents.types import AgentDef
 from aura.infrastructure.persistence import journal
@@ -39,47 +41,15 @@ _FRONTMATTER_RE = re.compile(
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    """Split a markdown string into ``(frontmatter_dict, body)``.
-
-    Uses :mod:`yaml` when available; falls back to a minimal line parser
-    that handles ``key: value`` and ``key: [a, b, c]`` shapes so the
-    loader stays usable without PyYAML.
-    """
+    """Split a markdown string into ``(frontmatter_dict, body)``."""
     match = _FRONTMATTER_RE.match(text)
     if match is None:
         return {}, text
-    yaml_text = match.group("yaml")
     body = match.group("body")
-    try:  # pragma: no cover — yaml import path
-        import yaml as _yaml
-
-        parsed = _yaml.safe_load(yaml_text) or {}
-        if not isinstance(parsed, dict):
-            return {}, body
-        return parsed, body
-    except ImportError:
-        return _parse_simple_frontmatter(yaml_text), body
-
-
-def _parse_simple_frontmatter(yaml_text: str) -> dict[str, Any]:
-    """Minimal fallback parser — handles ``key: value`` and ``key: [a, b]``."""
-    out: dict[str, Any] = {}
-    for raw_line in yaml_text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        key = key.strip()
-        value = value.strip()
-        if value.startswith("[") and value.endswith("]"):
-            out[key] = [
-                v.strip().strip('"').strip("'")
-                for v in value[1:-1].split(",")
-                if v.strip()
-            ]
-        else:
-            out[key] = value.strip('"').strip("'")
-    return out
+    parsed = yaml.safe_load(match.group("yaml")) or {}
+    if not isinstance(parsed, dict):
+        return {}, body
+    return parsed, body
 
 
 def _agent_from_file(path: Path) -> AgentDef | None:

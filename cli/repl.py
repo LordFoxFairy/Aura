@@ -15,6 +15,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
@@ -296,10 +297,6 @@ def _print_welcome(agent: Agent, console: Console) -> None:
         console.print(_render_welcome_panel(agent, _BANNER_SETTLE_GLYPH))
         return
 
-    import time as _time
-
-    from rich.live import Live
-
     total_frames = max(
         1, int(_BANNER_ANIMATION_SECONDS / _BANNER_FRAME_INTERVAL),
     )
@@ -310,10 +307,10 @@ def _print_welcome(agent: Agent, console: Console) -> None:
         transient=False,
     ) as live:
         for i in range(1, total_frames):
-            _time.sleep(_BANNER_FRAME_INTERVAL)
+            time.sleep(_BANNER_FRAME_INTERVAL)
             frame = _BANNER_SPINNER_FRAMES[i % len(_BANNER_SPINNER_FRAMES)]
             live.update(_render_welcome_panel(agent, frame))
-        _time.sleep(_BANNER_FRAME_INTERVAL)
+        time.sleep(_BANNER_FRAME_INTERVAL)
         live.update(_render_welcome_panel(agent, _BANNER_SETTLE_GLYPH))
 
 

@@ -42,7 +42,7 @@ def make_size_budget_hook(
         if len(serialized) <= effective_max:
             return result
 
-        truncation: dict[str, Any] = {
+        truncation: dict[str, bool | int | str] = {
             "truncated": True,
             "total_chars": len(serialized),
             "preview": serialized[:effective_max],

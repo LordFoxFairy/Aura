@@ -172,7 +172,7 @@ def compact_args(args: dict[str, Any], *, max_len: int = 80) -> str:
     return rendered[:max_len] + "…"
 
 
-def _format_read_file_result(output: Any) -> str:
+def _format_read_file_result(output: object) -> str:
     if not isinstance(output, dict):
         return str(output)
     lines = output.get("lines", 0)
@@ -184,7 +184,7 @@ def _format_read_file_result(output: Any) -> str:
     return f"{lines} lines, {size_kb:.1f} KB"
 
 
-def _format_write_file_result(output: Any) -> str:
+def _format_write_file_result(output: object) -> str:
     # Accept both {"bytes": N} (contract) and {"written": N} (current impl).
     if isinstance(output, dict):
         if "bytes" in output:
@@ -194,7 +194,7 @@ def _format_write_file_result(output: Any) -> str:
     return "written"
 
 
-def _format_edit_file_result(output: Any) -> str:
+def _format_edit_file_result(output: object) -> str:
     if isinstance(output, dict):
         reps = output.get("replacements", 0)
         if output.get("created"):
@@ -205,7 +205,7 @@ def _format_edit_file_result(output: Any) -> str:
     return "edited"
 
 
-def _format_grep_result(output: Any) -> str:
+def _format_grep_result(output: object) -> str:
     if isinstance(output, dict):
         mode = output.get("mode")
         trunc = " (truncated)" if output.get("truncated") else ""
@@ -224,7 +224,7 @@ def _format_grep_result(output: Any) -> str:
     return "searched"
 
 
-def _format_glob_result(output: Any) -> str:
+def _format_glob_result(output: object) -> str:
     if isinstance(output, dict):
         n = output.get("count", len(output.get("files", [])))
         suffix = "" if n == 1 else "s"
@@ -233,7 +233,7 @@ def _format_glob_result(output: Any) -> str:
     return "globbed"
 
 
-def _format_bash_result(output: Any) -> str:
+def _format_bash_result(output: object) -> str:
     if isinstance(output, dict):
         code = output.get("exit_code", 0)
         marker = "" if code == 0 else f" (exit {code})"
@@ -245,7 +245,7 @@ def _format_bash_result(output: Any) -> str:
     return "executed"
 
 
-def _format_task_create_result(output: Any) -> str:
+def _format_task_create_result(output: object) -> str:
     if isinstance(output, dict):
         tid = str(output.get("task_id", "?"))
         desc = output.get("description", "")
@@ -253,7 +253,7 @@ def _format_task_create_result(output: Any) -> str:
     return "spawned"
 
 
-_TOOL_RESULT_FORMATTERS: dict[str, Callable[[Any], str]] = {
+_TOOL_RESULT_FORMATTERS: dict[str, Callable[[object], str]] = {
     "read_file": _format_read_file_result,
     "write_file": _format_write_file_result,
     "edit_file": _format_edit_file_result,
@@ -269,7 +269,7 @@ _SEARCH_COMMAND_TOOLS: frozenset[str] = frozenset({
 })
 
 
-def _extract_text(output: Any) -> str | None:
+def _extract_text(output: object) -> str | None:
     if isinstance(output, str):
         return output
     if not isinstance(output, dict):

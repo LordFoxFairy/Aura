@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
-from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any
 
 from aura.application.hooks.permission import make_permission_hook
 from aura.config.loader import load_config
 from aura.core.agent import Agent
 from aura.infrastructure import permission_store as perm_store
 from aura.infrastructure.llm import make_model_for_spec
-from aura.infrastructure.wire.serialize import agent_state_to_wire, event_to_wire
-from aura.infrastructure.wire.stream import encode_sse
+from aura.infrastructure.wire.serialize import (
+    HasAgentState,
+    agent_state_to_wire,
+    event_to_wire,
+)
 from desktop.host import session_service
 
 
@@ -23,15 +26,16 @@ class IpcAsker(session_service.IpcAsker):
 
 
 def _emit(payload: dict[str, Any]) -> None:
-    sys.stdout.write(encode_sse(cast(Any, payload)))
+    # session_service emits ad-hoc control dicts (ready/exited) outside the WireEvent union.
+    sys.stdout.write(f"event: aura\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n")
     sys.stdout.flush()
 
 
-def _event_to_dict(event: Any) -> dict[str, Any]:
+def _event_to_dict(event: object) -> dict[str, Any]:
     return dict(event_to_wire(event))
 
 
-def _build_aura_state(agent: Any, last_turn_seconds: float) -> dict[str, Any]:
+def _build_aura_state(agent: HasAgentState, last_turn_seconds: float) -> dict[str, Any]:
     return dict(agent_state_to_wire(agent, last_turn_seconds))
 
 
@@ -44,20 +48,14 @@ def _feed_permission_response(asker: IpcAsker, payload: dict[str, Any]) -> bool:
 
 
 async def _run() -> int:
-    try:
-        return await session_service.run_session_driver(
-            emit=_emit,
-            load_config_fn=load_config,
-            make_model_for_spec_fn=make_model_for_spec,
-            make_permission_hook_fn=make_permission_hook,
-            agent_cls=Agent,
-            perm_store_module=perm_store,
-        )
-    except TypeError as exc:
-        if "unexpected keyword argument 'emit'" not in str(exc):
-            raise
-        legacy_runner = cast(Callable[[], Awaitable[int]], session_service.run_session_driver)
-        return await legacy_runner()
+    return await session_service.run_session_driver(
+        emit=_emit,
+        load_config_fn=load_config,
+        make_model_for_spec_fn=make_model_for_spec,
+        make_permission_hook_fn=make_permission_hook,
+        agent_cls=Agent,
+        perm_store_module=perm_store,
+    )
 
 
 def main() -> int:

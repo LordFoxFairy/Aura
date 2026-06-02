@@ -72,7 +72,7 @@ class EditFile(Tool):
 
     def _run(
         self, path: str, old_str: str, new_str: str, replace_all: bool = False,
-    ) -> dict[str, Any]:
+    ) -> EditFileResult:
         p = Path(path).expanduser()
 
         if not p.exists():

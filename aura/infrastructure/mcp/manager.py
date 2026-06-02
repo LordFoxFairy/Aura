@@ -10,13 +10,15 @@ from __future__ import annotations
 import asyncio
 import inspect
 import os
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
+from langchain_mcp_adapters import sessions
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from pydantic import AnyUrl
 
 from aura.application.commands.types import Command
 from aura.config import mcp_approvals, mcp_store
@@ -118,12 +120,6 @@ class MCPServerStatus:
 
 def _supported_transports() -> set[str]:
     """Transports the installed ``langchain-mcp-adapters`` understands."""
-    try:
-        from langchain_mcp_adapters import (
-            sessions,  # noqa: PLC0415  # deferred import is intentional
-        )
-    except ImportError:
-        return {"stdio"}
     supported = {"stdio"}
     if hasattr(sessions, "SSEConnection"):
         supported.add("sse")
@@ -158,7 +154,9 @@ _LIST_CHANGED_METHODS: frozenset[str] = frozenset({
 })
 
 
-def _make_list_changed_logger(server_name: str) -> Any:
+def _make_list_changed_logger(
+    server_name: str,
+) -> Callable[[Any], Awaitable[None]]:
     """Return a ``message_handler`` closure that journals list-changed events."""
     async def _handler(message: Any) -> None:
         root = message.root if isinstance(message, _HasRoot) and message.root else message
@@ -537,8 +535,6 @@ class MCPManager:
                 f"unknown MCP resource uri {uri_str!r}; "
                 f"known uris: {known}"
             )
-
-        from pydantic import AnyUrl
 
         async def _do_read() -> Any:
             # Single awaitable so wait_for cancels session + read together.

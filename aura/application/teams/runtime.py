@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from pathlib import Path
 
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import (
@@ -201,8 +202,6 @@ async def run_teammate_main(
     system_prompt: str | None = None,
     seed_prompt: str | None = None,
 ) -> int:
-    from pathlib import Path
-
     config = load_config()
     if model_name:
         config = config.model_copy(

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -193,10 +194,8 @@ def _cap_summary_text(text: str, *, max_chars: int) -> str:
     return f"{text[:max_chars]}\n... (truncated; {omitted} chars omitted)"
 
 
-def _serialize_tool_args(args: object, *, caps: SummaryCaps) -> str:
+def _serialize_tool_args(args: dict[str, Any], *, caps: SummaryCaps) -> str:
     try:
-        import json
-
         rendered = json.dumps(args, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         rendered = str(args)

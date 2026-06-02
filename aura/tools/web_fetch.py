@@ -415,12 +415,3 @@ def make_web_fetch(
 
 
 web_fetch: WebFetch = WebFetch()
-
-
-_set_default_factory_attr = staticmethod(set_default_model_factory)
-_make_web_fetch_attr = staticmethod(make_web_fetch)
-# object.__setattr__ — BaseTool blocks regular assignment for non-fields.
-object.__setattr__(
-    web_fetch, "set_default_model_factory", set_default_model_factory,
-)
-object.__setattr__(web_fetch, "make_web_fetch", make_web_fetch)

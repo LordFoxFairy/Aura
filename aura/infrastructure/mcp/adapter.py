@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 from typing import Any, Protocol, runtime_checkable
 
@@ -291,8 +292,6 @@ def normalize_resource_contents(contents: Any) -> dict[str, Any]:
     Invariant: ``BlobResourceContents.blob`` is reported by decoded byte
     size only — base64 payloads are NOT echoed back to the LLM.
     """
-    import base64
-
     uri = contents.uri if isinstance(contents, _HasUri) else None
     mime = contents.mimeType if isinstance(contents, _HasMime) else None
     if isinstance(contents, _HasText) and isinstance(contents.text, str):

@@ -510,7 +510,7 @@ def test_desktop_session_service_module_exists() -> None:
 async def test_headless_run_delegates_to_session_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_driver() -> int:
+    async def fake_driver(**_: object) -> int:
         return 7
 
     monkeypatch.setattr(session_service, "run_session_driver", fake_driver)

@@ -8,7 +8,6 @@ entirely in the loop, so this stays a thin generator.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Any
 
 from langchain_core.messages import BaseMessage
 
@@ -21,7 +20,7 @@ async def run_agent(
     definition: AgentDefinition,
     messages: list[BaseMessage],
     context: AgentContext,
-) -> AsyncIterator[AgentEvent | dict[str, Any]]:
+) -> AsyncIterator[AgentEvent]:
     # definition pins this turn's identity (prompt/tools/model/mode); the loop
     # carried by context was built from it, so dispatch is a thin delegate.
     _ = definition

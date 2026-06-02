@@ -5,18 +5,24 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import sys
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from aura.application.hooks import HookChain
 from aura.application.hooks.permission import make_permission_hook
+from aura.application.hooks.protocols import PreToolHook
 from aura.application.permission.asker import AskerResponse
 from aura.config.loader import load_config
+from aura.config.schema import AuraConfig, PermissionsConfig
 from aura.core.agent import Agent
 from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
+from aura.domain.permission.mode import Mode
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.safety import (
     DEFAULT_PROTECTED_READS,
@@ -38,6 +44,15 @@ class EventEmitter(Protocol):
 
 class RequestReader(Protocol):
     async def readline(self) -> bytes: ...
+
+
+class PermStoreModule(Protocol):
+    def load(self, project_root: Path) -> PermissionsConfig: ...
+    def load_ruleset(
+        self, project_root: Path, *, known_tool_names: Iterable[str] | None = None,
+    ) -> RuleSet: ...
+    def load_deny_ruleset(self, project_root: Path) -> RuleSet: ...
+    def load_ask_ruleset(self, project_root: Path) -> RuleSet: ...
 
 
 class IpcAsker:
@@ -131,11 +146,11 @@ async def run_session_driver(
     *,
     emit: EventEmitter,
     reader: RequestReader | None = None,
-    load_config_fn: Any = load_config,
-    make_model_for_spec_fn: Any = make_model_for_spec,
-    make_permission_hook_fn: Any = make_permission_hook,
+    load_config_fn: Callable[[], AuraConfig] = load_config,
+    make_model_for_spec_fn: Callable[[str, AuraConfig], BaseChatModel] = make_model_for_spec,
+    make_permission_hook_fn: Callable[..., PreToolHook] = make_permission_hook,
     agent_cls: type[Agent] = Agent,
-    perm_store_module: Any = perm_store,
+    perm_store_module: PermStoreModule = perm_store,
 ) -> int:
     cfg = load_config_fn()
     spec = cfg.router.get("default", "")
@@ -173,7 +188,7 @@ async def run_session_driver(
     )
     session = SessionRuleSet()
     asker = IpcAsker(emit=emit)
-    mode: Literal["default", "bypass", "plan", "accept_edits"] = perm_cfg.mode
+    mode: Mode = perm_cfg.mode
     if mode == "bypass" and perm_cfg.disable_bypass:
         storage.close()
         emit({
@@ -182,7 +197,7 @@ async def run_session_driver(
         })
         return 1
 
-    def _live_mode() -> Literal["default", "bypass", "plan", "accept_edits"]:
+    def _live_mode() -> Mode:
         return mode
 
     permission_hook = make_permission_hook_fn(
@@ -224,7 +239,7 @@ async def run_session_driver(
             loop = asyncio.get_running_loop()
             stream_reader = asyncio.StreamReader()
             protocol = asyncio.StreamReaderProtocol(stream_reader)
-            await loop.connect_read_pipe(lambda: protocol, __import__("sys").stdin)
+            await loop.connect_read_pipe(lambda: protocol, sys.stdin)
             active_reader = stream_reader
         else:
             active_reader = reader

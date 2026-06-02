@@ -78,9 +78,9 @@ class _StubCommand:
         self.argument_hint: str | None = argument_hint
         self._text = text
         self.last_arg: str | None = None
-        self.last_agent: Agent | None = None
+        self.last_agent: object | None = None
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: object) -> CommandResult:
         self.last_arg = arg
         self.last_agent = agent
         return CommandResult(handled=True, kind="print", text=self._text)

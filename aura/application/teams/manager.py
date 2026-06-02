@@ -9,14 +9,18 @@ import os
 import re
 import shutil
 import uuid
-from collections.abc import Callable, Coroutine
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from aura.application.session import AgentSession
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
-from aura.application.teams.mailbox import Mailbox, QueueMailboxNotifier
+from aura.application.teams.mailbox import (
+    Mailbox,
+    MailboxNotifier,
+    QueueMailboxNotifier,
+)
 from aura.application.teams.runtime import run_teammate
 from aura.domain.abort import AbortController
 from aura.domain.team import (
@@ -51,6 +55,21 @@ _SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 @runtime_checkable
 class _HasTask(Protocol):
     task: asyncio.Task[None]
+
+
+class TeammateRunner(Protocol):
+    def __call__(
+        self,
+        *,
+        agent: AgentSession,
+        team_id: str,
+        member_name: str,
+        storage: SessionStorage,
+        stop_event: asyncio.Event,
+        abort: AbortController,
+        seed_prompt: str | None = None,
+        notifier: MailboxNotifier | None = None,
+    ) -> Coroutine[Any, Any, None]: ...
 
 
 @dataclass(frozen=True)
@@ -97,7 +116,7 @@ class TeamManager:
         factory: SubagentSpawner[AgentSession],
         running_aborts: dict[str, AbortController],
         tasks_store: TasksStore,
-        runtime_runner: Callable[..., Coroutine[Any, Any, None]] | None = None,
+        runtime_runner: TeammateRunner | None = None,
     ) -> None:
         self._leader = leader
         self._storage = storage

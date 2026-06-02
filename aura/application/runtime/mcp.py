@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import Any
 
 from langchain_core.tools import BaseTool
 
+from aura.application.commands.types import Command
 from aura.application.tools_catalog import assemble_tool_pool
 from aura.config.schema import MCPServerConfig
 from aura.domain.tool_registry import ToolRegistry
@@ -37,7 +37,7 @@ class McpRuntime:
             else _default_manager_factory
         )
         self._manager: MCPManager | None = None
-        self._commands: list[Any] = []
+        self._commands: list[Command[object]] = []
         self._tools: list[BaseTool] = []
 
     @property
@@ -50,11 +50,11 @@ class McpRuntime:
         self._manager = value
 
     @property
-    def commands(self) -> list[Any]:
+    def commands(self) -> list[Command[object]]:
         return self._commands
 
     @commands.setter
-    def commands(self, value: list[Any]) -> None:
+    def commands(self, value: list[Command[object]]) -> None:
         self._commands = list(value)
 
     @property

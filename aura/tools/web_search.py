@@ -24,6 +24,7 @@ _INSTALL_HINT = (
 
 _RATE_LIMIT_EXCEPTIONS: tuple[type[Exception], ...]
 
+# ddgs is an optional extra; degrade to a clear error instead of an import crash.
 try:
     from ddgs import DDGS
     from ddgs.exceptions import RatelimitException

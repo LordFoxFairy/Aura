@@ -6,7 +6,7 @@ import argparse
 import asyncio
 import sys
 from pathlib import Path
-from typing import TypeAlias, cast
+from typing import TypeAlias
 
 from rich.console import Console
 
@@ -30,8 +30,13 @@ from aura.domain.permission.safety import (
 from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.infrastructure import permission_store as store
 from aura.infrastructure.persistence import journal
+from cli import repl
+from cli._permission_asker import make_cli_asker, print_bypass_banner
+from cli._user_asker import make_cli_user_asker
+from cli.mcp_cli import handle_mcp
 
 AgentRef: TypeAlias = Agent | None
+_MODES: tuple[Mode, ...] = ("default", "bypass", "plan", "accept_edits")
 
 
 def _force_utf8_streams() -> None:
@@ -214,16 +219,10 @@ def main() -> int:
         args.command_args = post
 
     if args.subcommand == "mcp":
-        from cli.mcp_cli import handle_mcp
-
         return handle_mcp(args)
 
     if args.subcommand == "teammate":
         return run_as_teammate(args)
-
-    from cli._permission_asker import make_cli_asker, print_bypass_banner
-    from cli._user_asker import make_cli_user_asker
-    from cli.repl import run_repl_async
 
     console = Console()
 
@@ -297,7 +296,11 @@ def main() -> int:
             a = _agent_cell[0]
             if a is None:
                 return mode
-            return cast("Mode", a.mode)
+            live = a.mode
+            for candidate in _MODES:
+                if live == candidate:
+                    return candidate
+            return mode
 
         hooks = HookChain(
             pre_tool=[
@@ -353,7 +356,7 @@ def main() -> int:
                 error=f"{type(exc).__name__}: {exc}",
             )
         try:
-            await run_repl_async(
+            await repl.run_repl_async(
                 agent, console=console, verbose=args.verbose,
                 bypass=(mode == "bypass"),
             )

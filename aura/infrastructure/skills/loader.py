@@ -20,6 +20,7 @@ import re
 import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -357,7 +358,6 @@ def _install_or_drop(
     # flip ``activated`` so render-time filters see them as visible.
     if skill.is_conditional():
         if skill.name in _activated_conditional_names:
-            from dataclasses import replace
             skill = replace(skill, activated=True)
         else:
             _conditional_skills[skill.name] = skill

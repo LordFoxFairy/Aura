@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage
 
@@ -29,7 +28,7 @@ def estimate_text_tokens(text: str) -> int:
     return max(1, (ascii_chars + 3) // 4 + cjk_chars + (other_non_ascii + 1) // 2)
 
 
-def estimate_json_tokens(value: Any) -> int:
+def estimate_json_tokens(value: object) -> int:
     try:
         text = json.dumps(value, ensure_ascii=False, default=str)
     except (TypeError, ValueError):

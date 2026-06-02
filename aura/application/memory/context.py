@@ -11,8 +11,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from aura.application.memory import project_memory
@@ -61,7 +62,7 @@ class Context:
         todos_provider: Callable[[], list[TodoItem]] | None = None,
         notifications_drainer: Callable[[], list[TaskNotification]] | None = None,
         carryover: ReadCarryover | None = None,
-        model: Any | None = None,
+        model: BaseChatModel | None = None,
     ) -> None:
         self._cwd = cwd.resolve()
         self._system_prompt = system_prompt
@@ -365,7 +366,7 @@ def _joined_eager(primary: str, unconditional: list[Rule]) -> str:
     return "\n\n".join(pieces)
 
 
-def _provider_type(model: Any | None) -> str:
+def _provider_type(model: BaseChatModel | None) -> str:
     if model is None:
         return ""
     try:
@@ -374,7 +375,7 @@ def _provider_type(model: Any | None) -> str:
         return ""
 
 
-def _is_anthropic_provider(model: Any | None) -> bool:
+def _is_anthropic_provider(model: BaseChatModel | None) -> bool:
     # Prefix match accepts future Anthropic-shaped wrappers (e.g. routing proxies).
     return _provider_type(model).lower().startswith("anthropic")
 

@@ -47,8 +47,8 @@ class Replace:
     decision: Decision
 
     def __post_init__(self) -> None:
-        # Defensive None check: callers can bypass the type system (tests do).
-        if self.result is None:  # pyright: ignore[reportUnnecessaryComparison]  # ToolResult is non-Optional in types, but tests construct via raw kwargs that bypass it.
+        # Guards off-type construction that bypasses the non-Optional annotation.
+        if self.result is None:  # pyright: ignore[reportUnnecessaryComparison]
             raise ValueError("Replace requires a non-None ToolResult")
         if self.decision.allow:
             raise ValueError(

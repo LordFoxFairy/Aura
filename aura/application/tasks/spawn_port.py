@@ -8,6 +8,9 @@ from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.language_models import BaseChatModel
 
+from aura.application.hooks import HookChain
+from aura.config.schema import AuraConfig
+from aura.domain.events import AgentEvent
 from aura.infrastructure.persistence.storage import SessionStorage
 
 
@@ -15,7 +18,7 @@ class SpawnedAgent(Protocol):
     """Runnable child-agent surface a task runner depends on."""
 
     @property
-    def config(self) -> Any: ...
+    def config(self) -> AuraConfig: ...
 
     @property
     def model(self) -> BaseChatModel: ...
@@ -27,9 +30,9 @@ class SpawnedAgent(Protocol):
     def session_id(self) -> str: ...
 
     @property
-    def hooks(self) -> Any: ...
+    def hooks(self) -> HookChain: ...
 
-    def astream(self, prompt: str) -> AsyncIterator[Any]: ...
+    def astream(self, prompt: str) -> AsyncIterator[AgentEvent | dict[str, Any]]: ...
 
     async def aclose(self) -> None: ...
 

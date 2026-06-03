@@ -27,7 +27,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
-from aura.application.tasks.spawn import SubagentSpawner
+from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.domain.abort import AbortController
@@ -59,11 +59,20 @@ def _storage(root: Path) -> SessionStorage:
     return SessionStorage(root / "aura.db")
 
 
+def _stub_context() -> SpawnContext[AgentSession]:
+    # Overridden spawn() never reads ctx; build_child satisfies the required field.
+    return SpawnContext(
+        build_child=AgentSession,
+        parent_config=_minimal_config(),
+        parent_model_spec="openai:gpt-4o-mini",
+    )
+
+
 class _CompletingFactory(SubagentSpawner[AgentSession]):
     """Spawns a child that finishes its astream immediately."""
 
-    def __init__(self, tmp_path: Path) -> None:
-        pass  # skip base __init__
+    def __init__(self, tmp_path: Path) -> None:  # noqa: ARG002  # signature kept for call-site parity; overridden spawn ignores it
+        super().__init__(_stub_context())
 
     def spawn(
         self,
@@ -87,7 +96,7 @@ class _CompletingFactory(SubagentSpawner[AgentSession]):
 
 class _FailingFactory(SubagentSpawner[AgentSession]):
     def __init__(self) -> None:
-        pass
+        super().__init__(_stub_context())
 
     def spawn(
         self,
@@ -202,7 +211,7 @@ async def test_subagent_cancelled_carries_duration(tmp_path: Path) -> None:
 
     class _SlowSpinFactory(SubagentSpawner[AgentSession]):
         def __init__(self) -> None:
-            pass
+            super().__init__(_stub_context())
 
         def spawn(
             self,

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generic, TypeVar
 from uuid import uuid4
@@ -72,95 +73,73 @@ def _default_storage() -> SessionStorage:
     return SessionStorage(Path(":memory:"))
 
 
-class SubagentSpawner(Generic[A]):
-    """Create a standalone AgentSession for a single subagent run.
+@dataclass(frozen=True)
+class SpawnContext(Generic[A]):
+    """Inherited parent state a child agent is spawned from.
 
     ``build_child`` is injected so this module never imports the concrete
     session type — the construction site binds ``A`` to its agent class.
     """
 
-    # Class-level defaults so subclasses that skip __init__ still see sane state.
-    _parent_abort_event: asyncio.Event | None = None
-    _register_abort: Callable[[str, AbortController], None] | None = None
+    build_child: Callable[..., A]
+    parent_config: AuraConfig
+    parent_model_spec: str
+    parent_skills: SkillRegistry | None = None
+    parent_carryover_provider: Callable[[], ReadCarryover] | None = None
+    parent_ruleset: RuleSet | None = None
+    parent_safety: SafetyPolicy | None = None
+    parent_mode_provider: Callable[[], str] | None = None
+    # ``parent_session`` is NOT inherited; kept for "child.session is fresh" verification only.
+    parent_session: SessionRuleSet | None = None
+    parent_deny_rules: RuleSet | None = None
+    parent_ask_rules: RuleSet | None = None
+    model_factory: Callable[[], BaseChatModel] | None = None
+    storage_factory: Callable[[], SessionStorage] | None = None
+    parent_abort_event: asyncio.Event | None = None
+    parent_storage: SessionStorage | None = None
+    parent_hooks: HookChain | None = None
+    parent_model: BaseChatModel | None = None
+    parent_session_id: str | None = None
+    register_abort: Callable[[str, AbortController], None] | None = None
 
-    def __init__(
-        self,
-        parent_config: AuraConfig,
-        parent_model_spec: str,
-        *,
-        build_child: Callable[..., A],
-        parent_skills: SkillRegistry | None = None,
-        parent_carryover_provider: (
-            Callable[[], ReadCarryover] | None
-        ) = None,
-        parent_ruleset: RuleSet | None = None,
-        parent_safety: SafetyPolicy | None = None,
-        parent_mode_provider: Callable[[], str] | None = None,
-        parent_session: SessionRuleSet | None = None,
-        parent_deny_rules: RuleSet | None = None,
-        parent_ask_rules: RuleSet | None = None,
-        model_factory: Callable[[], BaseChatModel] | None = None,
-        storage_factory: Callable[[], SessionStorage] | None = None,
-        parent_abort_event: asyncio.Event | None = None,
-        parent_storage: SessionStorage | None = None,
-        parent_hooks: HookChain | None = None,
-        parent_model: BaseChatModel | None = None,
-        parent_session_id: str | None = None,
-        register_abort: Callable[[str, AbortController], None] | None = None,
-    ) -> None:
-        self._parent_config = parent_config
-        self._parent_storage = parent_storage
-        self._parent_hooks = parent_hooks
-        self._parent_model = parent_model
-        self._parent_session_id = parent_session_id
-        self._parent_model_spec = parent_model_spec
-        self._build_child = build_child
-        self._parent_skills = parent_skills
-        self._parent_carryover_provider = parent_carryover_provider
-        self._parent_ruleset = parent_ruleset
-        self._parent_safety = parent_safety
-        self._parent_mode_provider = parent_mode_provider
-        # ``parent_session`` is NOT inherited; kept for "child.session is fresh" verification only.
-        self._parent_session = parent_session
-        self._parent_deny_rules = parent_deny_rules
-        self._parent_ask_rules = parent_ask_rules
-        self._model_factory = model_factory
-        self._storage_factory = storage_factory or _default_storage
-        self._parent_abort_event = parent_abort_event
-        self._register_abort = register_abort
+
+class SubagentSpawner(Generic[A]):
+    """Create a standalone AgentSession for a single subagent run."""
+
+    def __init__(self, ctx: SpawnContext[A]) -> None:
+        self._ctx = ctx
 
     @property
     def abort_event(self) -> asyncio.Event | None:
-        # Class-level default covers subclasses that skip __init__.
-        return self._parent_abort_event
+        return self._ctx.parent_abort_event
 
     @property
     def parent_config(self) -> AuraConfig:
-        return self._parent_config
+        return self._ctx.parent_config
 
     @property
     def parent_model(self) -> BaseChatModel | None:
-        return self._parent_model
+        return self._ctx.parent_model
 
     @property
     def parent_hooks(self) -> HookChain | None:
-        return self._parent_hooks
+        return self._ctx.parent_hooks
 
     @property
     def parent_storage(self) -> SessionStorage | None:
-        return self._parent_storage
+        return self._ctx.parent_storage
 
     @property
     def parent_session_id(self) -> str | None:
-        return self._parent_session_id
+        return self._ctx.parent_session_id
 
     @property
     def parent_model_spec(self) -> str:
-        return self._parent_model_spec
+        return self._ctx.parent_model_spec
 
     def validate_model_spec(self, spec: str) -> None:
         """Raise :class:`UnknownModelSpecError` if ``spec`` cannot resolve. Pure validation."""
-        llm.resolve(spec, cfg=self._parent_config)
+        llm.resolve(spec, cfg=self._ctx.parent_config)
 
     def spawn(
         self,
@@ -175,7 +154,7 @@ class SubagentSpawner(Generic[A]):
 
         # Restricted agent_type MUST raise on missing tools — silently dropping would
         # hand the child a prompt promising tools it can't see.
-        parent_enabled = list(self._parent_config.tools.enabled)
+        parent_enabled = list(self._ctx.parent_config.tools.enabled)
         if type_def.tools:
             missing = type_def.tools - set(parent_enabled)
             if missing:
@@ -198,22 +177,22 @@ class SubagentSpawner(Generic[A]):
                 and (effective_allow is None or name in effective_allow)
             ]
         )
-        child_cfg = self._parent_config.model_copy(
+        child_cfg = self._ctx.parent_config.model_copy(
             update={"tools": child_tools}
         )
-        if self._model_factory is not None:
-            model = self._model_factory()
+        if self._ctx.model_factory is not None:
+            model = self._ctx.model_factory()
         elif model_spec is not None:
-            model = llm.make_model_for_spec(model_spec, self._parent_config)
+            model = llm.make_model_for_spec(model_spec, self._ctx.parent_config)
         else:
             provider, model_name = llm.resolve(
-                self._parent_model_spec, cfg=self._parent_config,
+                self._ctx.parent_model_spec, cfg=self._ctx.parent_config,
             )
             model = llm.create(provider, model_name)
-        storage = self._storage_factory()
+        storage = (self._ctx.storage_factory or _default_storage)()
         carryover: ReadCarryover | None
-        if self._parent_carryover_provider is not None:
-            carryover = self._parent_carryover_provider()
+        if self._ctx.parent_carryover_provider is not None:
+            carryover = self._ctx.parent_carryover_provider()
         else:
             carryover = None
 
@@ -221,23 +200,23 @@ class SubagentSpawner(Generic[A]):
         child_hooks: HookChain | None = None
         child_mode: str = "default"
         if (
-            self._parent_ruleset is not None
-            and self._parent_safety is not None
-            and self._parent_mode_provider is not None
+            self._ctx.parent_ruleset is not None
+            and self._ctx.parent_safety is not None
+            and self._ctx.parent_mode_provider is not None
         ):
-            parent_mode = self._parent_mode_provider()
+            parent_mode = self._ctx.parent_mode_provider()
             child_mode = "bypass" if parent_mode == "bypass" else "default"
             # Freeze the mode: a mid-turn parent flip must NOT bleed into the child.
             _resolved_mode: Mode = "bypass" if parent_mode == "bypass" else "default"
             perm_hook = make_permission_hook(
                 asker=_SUBAGENT_AUTO_DENY_ASKER,
                 session=child_session,
-                rules=self._parent_ruleset,
-                deny_rules=self._parent_deny_rules or RuleSet(),
-                ask_rules=self._parent_ask_rules or RuleSet(),
-                project_root=self._parent_config.resolved_storage_path().parent,
+                rules=self._ctx.parent_ruleset,
+                deny_rules=self._ctx.parent_deny_rules or RuleSet(),
+                ask_rules=self._ctx.parent_ask_rules or RuleSet(),
+                project_root=self._ctx.parent_config.resolved_storage_path().parent,
                 mode=_resolved_mode,
-                safety=self._parent_safety or DEFAULT_SAFETY,
+                safety=self._ctx.parent_safety or DEFAULT_SAFETY,
             )
             child_hooks = HookChain(pre_tool=[perm_hook])
 
@@ -251,21 +230,21 @@ class SubagentSpawner(Generic[A]):
         # The child's inherited controller: registered with the parent so a single
         # Ctrl+C cascades, and injected so the child re-raises on abort.
         child_abort = AbortController()
-        child_agent = self._build_child(
+        child_agent = self._ctx.build_child(
             config=child_cfg,
             model=model,
             storage=storage,
             hooks=child_hooks,
             session_id=child_session_id,
             session_rules=child_session,
-            pre_loaded_skills=self._parent_skills,
+            pre_loaded_skills=self._ctx.parent_skills,
             system_prompt_suffix=type_def.system_prompt_suffix,
             carryover=carryover,
             mode=child_mode,
             parent_abort=child_abort,
         )
-        if self._register_abort is not None:
-            self._register_abort(
+        if self._ctx.register_abort is not None:
+            self._ctx.register_abort(
                 task_id if task_id is not None else child_session_id,
                 child_abort,
             )

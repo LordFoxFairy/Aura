@@ -45,7 +45,7 @@ from aura.application.runtime.mcp import McpRuntime
 from aura.application.runtime.session import SessionRuntime
 from aura.application.runtime.tool_factory import STATEFUL_TOOL_FACTORIES
 from aura.application.runtime.tool_runtime import ToolRuntime
-from aura.application.tasks.spawn import SubagentSpawner
+from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.team_port import TeammateBinding, TeamPort
 from aura.config.schema import AuraConfig, AuraConfigError, ToolsConfig
@@ -254,22 +254,24 @@ class AgentSession:
         # parent_mode_provider closes over self so mid-session mode changes
         # are visible to every spawn.
         self.subagent_factory = SubagentSpawner(
-            build_child=AgentSession,
-            parent_config=self._config,
-            parent_model_spec=self._config.router.get("default", ""),
-            parent_skills=self._skill_registry,
-            parent_carryover_provider=self._snapshot_read_carryover,
-            parent_ruleset=ruleset,
-            parent_safety=safety,
-            parent_mode_provider=lambda: self._mode,
-            parent_session=self._session_rules,
-            parent_deny_rules=deny_ruleset,
-            parent_ask_rules=ask_ruleset,
-            parent_storage=self._storage,
-            parent_hooks=self._hooks,
-            parent_model=self._model,
-            parent_session_id=self._session_id,
-            register_abort=self._running_aborts.__setitem__,
+            SpawnContext(
+                build_child=AgentSession,
+                parent_config=self._config,
+                parent_model_spec=self._config.router.get("default", ""),
+                parent_skills=self._skill_registry,
+                parent_carryover_provider=self._snapshot_read_carryover,
+                parent_ruleset=ruleset,
+                parent_safety=safety,
+                parent_mode_provider=lambda: self._mode,
+                parent_session=self._session_rules,
+                parent_deny_rules=deny_ruleset,
+                parent_ask_rules=ask_ruleset,
+                parent_storage=self._storage,
+                parent_hooks=self._hooks,
+                parent_model=self._model,
+                parent_session_id=self._session_id,
+                register_abort=self._running_aborts.__setitem__,
+            )
         )
         self._team: TeamPort | None = None
         # Concrete manager the /team command stack caches across invocations;

@@ -35,7 +35,7 @@ from langchain_core.messages import AIMessage
 
 from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
-from aura.application.tasks.spawn import SubagentSpawner
+from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.infrastructure.persistence import journal
@@ -73,13 +73,15 @@ async def test_two_subagents_get_distinct_session_ids(tmp_path: Path) -> None:
     """Spawn two subagents via ``factory.spawn(..., task_id=...)`` and verify
     each child's ``_session_id`` is ``subagent-<their-task-id>``."""
     factory = SubagentSpawner(
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="done"))]
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="done"))]
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child_a = factory.spawn("prompt-a", task_id="task-aaaa")
     child_b = factory.spawn("prompt-b", task_id="task-bbbb")
@@ -104,13 +106,15 @@ async def test_subagents_storage_does_not_cross_contaminate(tmp_path: Path) -> N
     shared_storage = SessionStorage(db)
 
     factory = SubagentSpawner(
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="child-output"))]
-        ),
-        storage_factory=lambda: shared_storage,
+        SpawnContext(
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="child-output"))]
+            ),
+            storage_factory=lambda: shared_storage,
+        )
     )
 
     child_a = factory.spawn("prompt-a", task_id="task-aaaa")
@@ -157,13 +161,15 @@ async def test_subagent_journal_events_carry_distinct_session_ids(
 
     store = TasksStore()
     factory = SubagentSpawner(
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="done"))]
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="done"))]
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
     rec_a = store.create(description="a", prompt="alpha-prompt")
@@ -200,13 +206,15 @@ async def test_spawn_without_task_id_falls_back_to_unique_id(tmp_path: Path) -> 
     """Legacy callers that don't pass ``task_id`` still get a unique session
     (not the hardcoded ``"subagent"``). Two such spawns must differ."""
     factory = SubagentSpawner(
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="done"))]
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="done"))]
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child_a = factory.spawn("p")
     child_b = factory.spawn("p")

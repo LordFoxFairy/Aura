@@ -18,7 +18,7 @@ from langchain_core.messages import AIMessage
 
 from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
-from aura.application.tasks.spawn import SubagentSpawner
+from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -47,11 +47,13 @@ def _make_factory_with_usage(
         },
     )
     factory = SubagentSpawner(
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(turns=[FakeTurn(ai)]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(turns=[FakeTurn(ai)]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     return store, factory
 
@@ -91,11 +93,13 @@ async def test_no_usage_metadata_does_not_crash() -> None:
     store = TasksStore()
     ai = AIMessage(content="no-usage")  # usage_metadata defaults to None
     factory = SubagentSpawner(
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(turns=[FakeTurn(ai)]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(turns=[FakeTurn(ai)]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     rec = store.create(description="d", prompt="p")
     # Should not raise; token_count stays at 0.

@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
-from aura.application.tasks.spawn import SubagentSpawner
+from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -24,17 +24,19 @@ def _make_factory(
 ) -> SubagentSpawner[AgentSession]:
     """Build a SubagentSpawner with a one-turn FakeChatModel by default."""
     return SubagentSpawner(
-        parent_config=AuraConfig.model_validate({
-            "providers": [{"name": "openai", "protocol": "openai"}],
-            "router": {"default": "openai:gpt-4o-mini"},
-            "tools": {"enabled": []},
-        }),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(
-            turns=turns or [FakeTurn(AIMessage(content="child-final"))],
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=AuraConfig.model_validate({
+                "providers": [{"name": "openai", "protocol": "openai"}],
+                "router": {"default": "openai:gpt-4o-mini"},
+                "tools": {"enabled": []},
+            }),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(
+                turns=turns or [FakeTurn(AIMessage(content="child-final"))],
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
 
@@ -132,15 +134,17 @@ async def test_meta_json_written_on_terminal_failure(
             return _MidStreamBoomAgent()
 
     factory = _StubFactory(
-        parent_config=AuraConfig.model_validate({
-            "providers": [{"name": "openai", "protocol": "openai"}],
-            "router": {"default": "openai:gpt-4o-mini"},
-            "tools": {"enabled": []},
-        }),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=AuraConfig.model_validate({
+                "providers": [{"name": "openai", "protocol": "openai"}],
+                "router": {"default": "openai:gpt-4o-mini"},
+                "tools": {"enabled": []},
+            }),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     rec = store.create(description="d-failed", prompt="hi")
 
@@ -198,15 +202,17 @@ async def test_meta_json_written_on_terminal_cancelled(
             return _ForeverAgent()
 
     factory = _ForeverFactory(
-        parent_config=AuraConfig.model_validate({
-            "providers": [{"name": "openai", "protocol": "openai"}],
-            "router": {"default": "openai:gpt-4o-mini"},
-            "tools": {"enabled": []},
-        }),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=AuraConfig.model_validate({
+                "providers": [{"name": "openai", "protocol": "openai"}],
+                "router": {"default": "openai:gpt-4o-mini"},
+                "tools": {"enabled": []},
+            }),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     rec = store.create(description="d-cancelled", prompt="hi")
 

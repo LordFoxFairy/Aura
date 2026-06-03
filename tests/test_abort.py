@@ -11,6 +11,7 @@ No mocks for the loop — real asyncio so timing bugs surface.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 from pathlib import Path
 from typing import Any
@@ -410,7 +411,9 @@ async def test_subagent_abort_cascades(tmp_path: Path) -> None:
         object.__setattr__(m, "_agenerate", _child_hanging_agen)
         return m
 
-    agent.subagent_factory._model_factory = _child_model_factory
+    agent.subagent_factory._ctx = dataclasses.replace(
+        agent.subagent_factory._ctx, model_factory=_child_model_factory
+    )
 
     async def _drive() -> None:
         try:

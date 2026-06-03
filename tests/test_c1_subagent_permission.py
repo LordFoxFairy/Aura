@@ -28,6 +28,7 @@ Contract for Aura:
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ from aura.application.loop_state import LoopState
 from aura.application.session import AgentSession
 from aura.application.tasks.spawn import (
     SUBAGENT_AUTO_DENY_FEEDBACK,
+    SpawnContext,
     SubagentSpawner,
     _SubagentPermissionAsker,
 )
@@ -112,18 +114,20 @@ def _build_factory(
     parent_deny_rules: RuleSet | None = None,
     parent_ask_rules: RuleSet | None = None,
 ) -> SubagentSpawner[AgentSession]:
-    return SubagentSpawner(build_child=AgentSession,
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        parent_ruleset=parent_ruleset,
-        parent_safety=parent_safety,
-        parent_mode_provider=lambda: parent_mode,
-        parent_deny_rules=parent_deny_rules,
-        parent_ask_rules=parent_ask_rules,
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="done"))]
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    return SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            parent_ruleset=parent_ruleset,
+            parent_safety=parent_safety,
+            parent_mode_provider=lambda: parent_mode,
+            parent_deny_rules=parent_deny_rules,
+            parent_ask_rules=parent_ask_rules,
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="done"))]
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
 
@@ -260,11 +264,12 @@ async def test_agent_wiring_passes_deny_and_ask_rules_to_subagent_factory(
         ask_ruleset=RuleSet(),
         safety=DEFAULT_SAFETY,
     )
-    agent.subagent_factory._model_factory = lambda: FakeChatModel(
-        turns=[FakeTurn(AIMessage(content="done"))]
-    )
-    agent.subagent_factory._storage_factory = lambda: SessionStorage(
-        Path(":memory:")
+    agent.subagent_factory._ctx = dataclasses.replace(
+        agent.subagent_factory._ctx,
+        model_factory=lambda: FakeChatModel(
+            turns=[FakeTurn(AIMessage(content="done"))]
+        ),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
     child = agent.subagent_factory.spawn("prompt")
     try:
@@ -322,17 +327,19 @@ async def test_subagent_does_not_pollute_parent_session_rules() -> None:
     parent_session = SessionRuleSet()
     # Parent-state proxy for "session rules the parent knows about".
     parent_session.add(Rule(tool="bash", content="ls"))
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        parent_ruleset=RuleSet(),
-        parent_safety=DEFAULT_SAFETY,
-        parent_mode_provider=lambda: "default",
-        parent_session=parent_session,  # exposes the link so the test can probe
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="done"))]
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            parent_ruleset=RuleSet(),
+            parent_safety=DEFAULT_SAFETY,
+            parent_mode_provider=lambda: "default",
+            parent_session=parent_session,  # exposes the link so the test can probe
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="done"))]
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child = factory.spawn("prompt")
     try:
@@ -385,16 +392,18 @@ async def test_subagent_inherits_bypass_mode_from_parent() -> None:
 async def test_subagent_freezes_parent_mode_at_spawn() -> None:
     """Parent mode flips after spawn do not change child hook behavior."""
     mode = "default"
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        parent_ruleset=RuleSet(),
-        parent_safety=DEFAULT_SAFETY,
-        parent_mode_provider=lambda: mode,
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="done"))]
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            parent_ruleset=RuleSet(),
+            parent_safety=DEFAULT_SAFETY,
+            parent_mode_provider=lambda: mode,
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="done"))]
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
     child = factory.spawn("prompt")

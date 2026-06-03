@@ -25,7 +25,7 @@ from langchain_core.messages import AIMessage
 from aura.application.memory.context import Context
 from aura.application.memory.rules_types import RulesBundle
 from aura.application.session import AgentSession
-from aura.application.tasks.spawn import SubagentSpawner
+from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.config.schema import AuraConfig
 from aura.domain.state_values import ReadCarryover, ReadRecord
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -135,14 +135,16 @@ def _factory_with_parent_reads(
         )
 
     return SubagentSpawner(
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        parent_carryover_provider=_provider,
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="done"))]
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            parent_carryover_provider=_provider,
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="done"))]
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
 
@@ -236,13 +238,15 @@ def test_subagent_factory_without_provider_starts_empty(tmp_path: Path) -> None:
     # ``parent_carryover_provider`` behaves exactly as before — child
     # Context starts with an empty _read_records dict.
     factory = SubagentSpawner(
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="done"))]
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="done"))]
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child = factory.spawn("sub-prompt")
     try:

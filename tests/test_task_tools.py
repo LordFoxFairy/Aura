@@ -14,6 +14,7 @@ status=cancelled.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import time
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,7 @@ from langchain_core.outputs import ChatResult
 
 from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
-from aura.application.tasks.spawn import SubagentSpawner
+from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.domain.skill import Skill
@@ -51,11 +52,13 @@ def _make_factory(tmp_path: Path) -> tuple[TasksStore, SubagentSpawner[AgentSess
     store = TasksStore()
     # Subagent gets a FakeChatModel with one Final turn.
     sub_model = FakeChatModel(turns=[FakeTurn(AIMessage(content="subagent-final"))])
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=_cfg(enabled=[]),
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: sub_model,
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=_cfg(enabled=[]),
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: sub_model,
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     return store, factory
 
@@ -171,11 +174,13 @@ def test_subagent_inherits_parent_mcp_servers() -> None:
         "tools": {"enabled": []},
         "mcp_servers": [mcp_entry],
     })
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=parent_config,
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: FakeChatModel(turns=[]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=parent_config,
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: FakeChatModel(turns=[]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child_agent = factory.spawn("sub-prompt")
     assert len(child_agent._config.mcp_servers) == 1
@@ -209,12 +214,14 @@ def test_subagent_inherits_parent_skills(tmp_path: Path) -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=parent_config,
-        parent_model_spec="openai:gpt-4o-mini",
-        parent_skills=parent_skills,
-        model_factory=lambda: FakeChatModel(turns=[]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=parent_config,
+            parent_model_spec="openai:gpt-4o-mini",
+            parent_skills=parent_skills,
+            model_factory=lambda: FakeChatModel(turns=[]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child_agent = factory.spawn("sub-prompt")
     names = {s.name for s in child_agent._skill_registry.list()}
@@ -230,11 +237,13 @@ def test_subagent_has_no_spawn_tools() -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
     })
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=parent_config,
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: FakeChatModel(turns=[]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=parent_config,
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: FakeChatModel(turns=[]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child_agent = factory.spawn("sub-prompt")
     enabled = child_agent._config.tools.enabled
@@ -246,9 +255,11 @@ def test_subagent_has_no_spawn_tools() -> None:
 def _wire_fake_model_chain(child_agent: AgentSession) -> None:
     # Test ergonomics — AgentSession.__init__ builds the child's own spawner with no
     # model_factory; inject a FakeChatModel so a direct spawn works in unit tests.
-    child_agent.subagent_factory._model_factory = lambda: FakeChatModel(turns=[])
-    child_agent.subagent_factory._storage_factory = (
-        lambda: SessionStorage(Path(":memory:"))
+    spawner = child_agent.subagent_factory
+    spawner._ctx = dataclasses.replace(
+        spawner._ctx,
+        model_factory=lambda: FakeChatModel(turns=[]),
+        storage_factory=lambda: SessionStorage(Path(":memory:")),
     )
 
 
@@ -260,11 +271,13 @@ def test_subagent_strips_spawn_tools_unconditionally() -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
     })
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=parent_config,
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: FakeChatModel(turns=[]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=parent_config,
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: FakeChatModel(turns=[]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child = factory.spawn("d1")
     _wire_fake_model_chain(child)
@@ -282,11 +295,13 @@ def test_subagent_inherits_non_spawn_tools() -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
     })
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=parent_config,
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: FakeChatModel(turns=[]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=parent_config,
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: FakeChatModel(turns=[]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child_agent = factory.spawn("sub-prompt")
     assert child_agent._config.tools.enabled == ["bash", "read_file"]
@@ -373,11 +388,13 @@ async def test_task_create_explore_restricts_child_tools(tmp_path: Path) -> None
             return child
 
     factory = _ProbeFactory(
-        build_child=AgentSession,
-        parent_config=parent_config,
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=_cap_model_factory,
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            build_child=AgentSession,
+            parent_config=parent_config,
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=_cap_model_factory,
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     tasks: dict[str, asyncio.Task[None]] = {}
     tool = TaskCreate(store=store, spawner=factory, running=tasks)
@@ -416,11 +433,13 @@ def test_factory_spawn_verify_appends_verdict_system_prompt() -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["read_file", "grep", "glob", "web_fetch", "web_search"]},
     })
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=parent_config,
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: FakeChatModel(turns=[]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=parent_config,
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: FakeChatModel(turns=[]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child = factory.spawn("audit claim X", agent_type="verify")
     assert "VERDICT:" in child._system_prompt
@@ -439,11 +458,13 @@ def test_factory_spawn_plan_includes_plan_mode_tools() -> None:
             ],
         },
     })
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=parent_config,
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: FakeChatModel(turns=[]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=parent_config,
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: FakeChatModel(turns=[]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child = factory.spawn("plan something", agent_type="plan")
     enabled = set(child._config.tools.enabled)
@@ -464,11 +485,13 @@ def test_factory_spawn_rejects_type_requiring_missing_parent_tools() -> None:
         # Deliberately missing read_file / grep / glob / web_*.
         "tools": {"enabled": ["bash"]},
     })
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=parent_config,
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: FakeChatModel(turns=[]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=parent_config,
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: FakeChatModel(turns=[]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     with pytest.raises(ValueError, match="requires tools"):
         factory.spawn("p", agent_type="explore")
@@ -482,11 +505,13 @@ def test_factory_spawn_general_purpose_inherits_all_but_spawn_tools() -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["bash", "read_file", "write_file", "task_create"]},
     })
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=parent_config,
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: FakeChatModel(turns=[]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=parent_config,
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: FakeChatModel(turns=[]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child = factory.spawn("p", agent_type="general-purpose")
     enabled = set(child._config.tools.enabled)
@@ -513,11 +538,13 @@ async def test_parent_cancel_cascades_to_subagent(tmp_path: Path) -> None:
             await asyncio.sleep(10)
             raise RuntimeError("should not get here")
 
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=_cfg(enabled=[]),
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: _HangingFake(),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=_cfg(enabled=[]),
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: _HangingFake(),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
     rec = store.create(description="slow", prompt="go")
@@ -551,12 +578,14 @@ async def test_parent_abort_event_cascades_to_subagent(tmp_path: Path) -> None:
             raise RuntimeError("unreachable")
 
     parent_abort = asyncio.Event()
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=_cfg(enabled=[]),
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: _HangingFake(),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
-        parent_abort_event=parent_abort,
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=_cfg(enabled=[]),
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: _HangingFake(),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+            parent_abort_event=parent_abort,
+        )
     )
 
     rec = store.create(description="cascade", prompt="hang")
@@ -585,12 +614,14 @@ async def test_subagent_spawner_does_not_propagate_abort_event_to_children() -> 
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["bash", "read_file", "task_create", "task_output"]},
     })
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=parent_config,
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: FakeChatModel(turns=[]),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
-        parent_abort_event=parent_abort,
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=parent_config,
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: FakeChatModel(turns=[]),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+            parent_abort_event=parent_abort,
+        )
     )
     assert factory.abort_event is parent_abort
     child = factory.spawn("d1")
@@ -618,12 +649,14 @@ async def test_cancelled_subagent_is_marked_cancelled_not_completed(
             raise RuntimeError("unreachable")
 
     captured: dict[str, Any] = {}
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=_cfg(enabled=[]),
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: _HangingFake(),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
-        register_abort=lambda key, ctrl: captured.__setitem__(key, ctrl),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=_cfg(enabled=[]),
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: _HangingFake(),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+            register_abort=lambda key, ctrl: captured.__setitem__(key, ctrl),
+        )
     )
 
     rec = store.create(description="cancel-me", prompt="hang")
@@ -665,14 +698,16 @@ async def test_inherited_abort_keeps_subagent_terminal_not_completed(
         # AbortException deterministically (no hung model, no flake).
         ctrl.abort("user_ctrl_c")
 
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=_cfg(enabled=[]),
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(message=AIMessage(content="hi"))],
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
-        register_abort=_register,
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=_cfg(enabled=[]),
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(message=AIMessage(content="hi"))],
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+            register_abort=_register,
+        )
     )
 
     rec = store.create(description="inherit-abort", prompt="go")
@@ -718,11 +753,13 @@ async def test_run_task_wallclock_timeout_marks_failed(tmp_path: Path) -> None:
             await asyncio.sleep(30)
             raise RuntimeError("should not get here")
 
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=_cfg(enabled=[]),
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: _HangingFake(),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=_cfg(enabled=[]),
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: _HangingFake(),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
     rec = store.create(description="hang", prompt="hang")
@@ -758,13 +795,15 @@ async def test_run_task_timeout_disabled_by_zero(
     # naturally must still reach ``completed`` even with the timeout
     # switched off.
     store = TasksStore()
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=_cfg(enabled=[]),
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="done"))]
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=_cfg(enabled=[]),
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="done"))]
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
     rec = store.create(description="fast", prompt="hi")
@@ -801,11 +840,13 @@ async def test_run_task_timeout_env_override(
             await asyncio.sleep(30)
             raise RuntimeError("unreachable")
 
-    factory = SubagentSpawner(build_child=AgentSession,
-        parent_config=_cfg(enabled=[]),
-        parent_model_spec="openai:gpt-4o-mini",
-        model_factory=lambda: _HangingFake(),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+    factory = SubagentSpawner(
+        SpawnContext(build_child=AgentSession,
+            parent_config=_cfg(enabled=[]),
+            parent_model_spec="openai:gpt-4o-mini",
+            model_factory=lambda: _HangingFake(),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
     rec = store.create(description="env-hang", prompt="hang")

@@ -10,7 +10,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from aura.application.session import AgentSession
-from aura.application.tasks.spawn import SubagentSpawner
+from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.manager import TeamManager
 from aura.config.schema import AuraConfig
@@ -34,16 +34,18 @@ def _cfg() -> AuraConfig:
 
 def _factory() -> SubagentSpawner[AgentSession]:
     return SubagentSpawner(
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        parent_ruleset=RuleSet(),
-        parent_safety=DEFAULT_SAFETY,
-        parent_mode_provider=lambda: "default",
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="ack"))],
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            parent_ruleset=RuleSet(),
+            parent_safety=DEFAULT_SAFETY,
+            parent_mode_provider=lambda: "default",
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="ack"))],
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
 

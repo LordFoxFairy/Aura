@@ -23,7 +23,7 @@ from langchain_core.outputs import ChatResult
 
 from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
-from aura.application.tasks.spawn import SubagentSpawner
+from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.domain.abort import AbortController, current_abort_signal
@@ -46,17 +46,19 @@ def _cfg() -> AuraConfig:
 
 def _make_factory() -> SubagentSpawner[AgentSession]:
     return SubagentSpawner(
-        parent_config=AuraConfig.model_validate({
-            "providers": [{"name": "openai", "protocol": "openai"}],
-            "router": {"default": "openai:gpt-4o-mini"},
-            "tools": {"enabled": []},
-        }),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="child-final"))],
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=AuraConfig.model_validate({
+                "providers": [{"name": "openai", "protocol": "openai"}],
+                "router": {"default": "openai:gpt-4o-mini"},
+                "tools": {"enabled": []},
+            }),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="child-final"))],
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
 
@@ -383,28 +385,20 @@ async def test_notification_with_summary_when_subagent_returns_one(
 
         class _CustomFactory(SubagentSpawner[AgentSession]):
             def __init__(self) -> None:
-                # Skip parent SubagentSpawner.__init__; we only ever call
-                # spawn here and don't need its dependencies.
-                self._parent_config = AuraConfig.model_validate({
-                    "providers": [{"name": "openai", "protocol": "openai"}],
-                    "router": {"default": "openai:gpt-4o-mini"},
-                    "tools": {"enabled": []},
-                })
-                self._parent_model_spec = "openai:gpt-4o-mini"
-                self._parent_skills = None
-                self._parent_carryover_provider = None
-                self._parent_ruleset = None
-                self._parent_deny_rules = None
-                self._parent_ask_rules = None
-                self._parent_safety = None
-                self._parent_mode_provider = None
-                self._parent_session = None
-                self._build_child = AgentSession
-                self._model_factory = lambda: FakeChatModel(
-                    turns=[FakeTurn(AIMessage(content="found 3 issues"))],
-                )
-                self._storage_factory = lambda: SessionStorage(
-                    Path(":memory:")
+                super().__init__(
+                    SpawnContext(
+                        build_child=AgentSession,
+                        parent_config=AuraConfig.model_validate({
+                            "providers": [{"name": "openai", "protocol": "openai"}],
+                            "router": {"default": "openai:gpt-4o-mini"},
+                            "tools": {"enabled": []},
+                        }),
+                        parent_model_spec="openai:gpt-4o-mini",
+                        model_factory=lambda: FakeChatModel(
+                            turns=[FakeTurn(AIMessage(content="found 3 issues"))],
+                        ),
+                        storage_factory=lambda: SessionStorage(Path(":memory:")),
+                    )
                 )
 
         rec = store.create(description="audit", prompt="go")
@@ -429,7 +423,13 @@ async def test_notification_for_failed_subagent_includes_error(
 
         class _BoomFactory(SubagentSpawner[AgentSession]):
             def __init__(self) -> None:
-                pass
+                super().__init__(
+                    SpawnContext(
+                        build_child=AgentSession,
+                        parent_config=_cfg(),
+                        parent_model_spec="openai:gpt-4o-mini",
+                    )
+                )
 
             def spawn(
                 self,
@@ -688,15 +688,17 @@ async def test_full_flow_task_create_then_wait(tmp_path: Path) -> None:
 
     store = TasksStore()
     factory = SubagentSpawner(
-        parent_config=AuraConfig.model_validate({
-            "providers": [{"name": "openai", "protocol": "openai"}],
-            "router": {"default": "openai:gpt-4o-mini"},
-            "tools": {"enabled": []},
-        }),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=_slow_fake_factory,
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=AuraConfig.model_validate({
+                "providers": [{"name": "openai", "protocol": "openai"}],
+                "router": {"default": "openai:gpt-4o-mini"},
+                "tools": {"enabled": []},
+            }),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=_slow_fake_factory,
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     create_tool = TaskCreate(
         store=store, spawner=factory, running={},

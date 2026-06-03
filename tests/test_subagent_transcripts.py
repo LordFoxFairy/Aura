@@ -29,7 +29,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
-from aura.application.tasks.spawn import SubagentSpawner
+from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
 from aura.infrastructure.persistence.storage import SessionStorage, TranscriptMeta
@@ -38,17 +38,19 @@ from tests.conftest import FakeChatModel, FakeTurn
 
 def _make_factory() -> SubagentSpawner[AgentSession]:
     return SubagentSpawner(
-        parent_config=AuraConfig.model_validate({
-            "providers": [{"name": "openai", "protocol": "openai"}],
-            "router": {"default": "openai:gpt-4o-mini"},
-            "tools": {"enabled": []},
-        }),
-        parent_model_spec="openai:gpt-4o-mini",
-        build_child=AgentSession,
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="child-final"))],
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=AuraConfig.model_validate({
+                "providers": [{"name": "openai", "protocol": "openai"}],
+                "router": {"default": "openai:gpt-4o-mini"},
+                "tools": {"enabled": []},
+            }),
+            parent_model_spec="openai:gpt-4o-mini",
+            build_child=AgentSession,
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="child-final"))],
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
 
 

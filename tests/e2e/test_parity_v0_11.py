@@ -430,7 +430,7 @@ _SUBAGENT_READS_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.infrastructure.persistence.storage import SessionStorage
-    from aura.application.tasks.spawn import SubagentSpawner
+    from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
     from aura.domain.state_values import ReadCarryover, ReadRecord
     from tests.conftest import FakeChatModel, FakeTurn
 
@@ -462,13 +462,15 @@ _SUBAGENT_READS_DRIVER = textwrap.dedent(
         )
 
     factory = SubagentSpawner(
-        parent_config=_cfg(),
-        parent_model_spec="openai:gpt-4o-mini",
-        parent_carryover_provider=_carryover_provider,
-        model_factory=lambda: FakeChatModel(
-            turns=[FakeTurn(AIMessage(content="subagent done"))]
-        ),
-        storage_factory=lambda: SessionStorage(Path(":memory:")),
+        SpawnContext(
+            parent_config=_cfg(),
+            parent_model_spec="openai:gpt-4o-mini",
+            parent_carryover_provider=_carryover_provider,
+            model_factory=lambda: FakeChatModel(
+                turns=[FakeTurn(AIMessage(content="subagent done"))]
+            ),
+            storage_factory=lambda: SessionStorage(Path(":memory:")),
+        )
     )
     child = factory.spawn("sub-prompt")
     try:

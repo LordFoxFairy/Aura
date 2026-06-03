@@ -342,11 +342,10 @@ def _print_active_team_status(agent: Agent, console: Console) -> None:
     if not active_id:
         return
     label = active_id
-    mgr = getattr(agent, "_team_manager", None)
-    if mgr is not None:
-        live = getattr(mgr, "team", None)
-        if live is not None and getattr(live, "team_id", None) == active_id:
-            label = live.name
+    port = agent.team
+    live = port.team if port is not None else None
+    if live is not None and live.team_id == active_id:
+        label = live.name
     console.print(Text(f"· in team: {label} ·", style="dim"))
 
 

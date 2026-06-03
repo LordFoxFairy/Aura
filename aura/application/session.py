@@ -8,7 +8,7 @@ import dataclasses
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -219,7 +219,7 @@ class AgentSession:
 
         self._init_hooks()
 
-        self._pending_compact_events: list[dict[str, Any]] = []
+        self._pending_compact_events: list[dict[str, object]] = []
         self._loop = self._build_loop()
         self._mcp_runtime = McpRuntime(
             list(self._config.mcp_servers),
@@ -416,7 +416,7 @@ class AgentSession:
         *,
         attachments: list[HumanMessage] | None = None,
         abort: AbortController | None = None,
-    ) -> AsyncIterator[AgentEvent | dict[str, Any]]:
+    ) -> AsyncIterator[AgentEvent | dict[str, object]]:
         # Persist the user turn before any ainvoke so a mid-stream crash
         # leaves resumable history instead of a black hole.
         ctx = (

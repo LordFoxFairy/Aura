@@ -115,12 +115,7 @@ class SkillTool(BaseTool):
     ) -> SkillResult:
         skill = self._registry.get(name)
         # disable_model_invocation skills surface as "missing" so retry can't tell hidden vs absent.
-        if skill is not None and skill.disable_model_invocation:
-            available = [s.name for s in self._registry.model_visible()]
-            raise ToolError(
-                f"no skill named {name!r}; available: {available}"
-            )
-        if skill is None:
+        if skill is None or skill.disable_model_invocation:
             available = [s.name for s in self._registry.model_visible()]
             raise ToolError(
                 f"no skill named {name!r}; available: {available}"

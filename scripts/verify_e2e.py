@@ -24,9 +24,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
-from aura.cli.commands import build_default_registry  # noqa: E402
 from langchain_core.messages import AIMessage  # noqa: E402
 
+from aura.application.commands.factory import build_default_registry  # noqa: E402
 from aura.config.schema import AuraConfig  # noqa: E402
 from aura.core.agent import Agent  # noqa: E402
 from aura.infrastructure.persistence.storage import SessionStorage  # noqa: E402

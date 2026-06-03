@@ -94,7 +94,7 @@ def _parse_add_args(rest: str) -> tuple[list[str], BackendType]:
     return positional, backend_type
 
 
-def _ensure_manager(agent: Agent) -> TeamManager | None:
+def _ensure_manager(agent: Agent) -> TeamManager:
     cached = agent._team_manager
     if isinstance(cached, TeamManager):
         return cached
@@ -274,7 +274,6 @@ class TeamCommand:
         self, verb: str, rest: str, agent: Agent,
     ) -> tuple[str, CommandKind]:
         mgr = _ensure_manager(agent)
-        assert mgr is not None  # _ensure_manager only returns None pre-init
         if verb == "help":
             return _HELP, "view"
         if verb == "create":
@@ -300,7 +299,7 @@ class TeamCommand:
         if verb == "enter":
             return await self._enter(agent, mgr, rest)
         if verb == "leave":
-            return self._leave(agent, mgr)
+            return self._leave(agent)
         if verb == "view":
             return self._view(agent, mgr, rest)
         if verb == "teammate":
@@ -397,7 +396,7 @@ class TeamCommand:
             )
         return f"entered team {rest!r} (id={team_id}){joined_msg}", "print"
 
-    def _leave(self, agent: Agent, mgr: TeamManager) -> tuple[str, CommandKind]:
+    def _leave(self, agent: Agent) -> tuple[str, CommandKind]:
         prev = agent.state.slots.active_team
         _set_active_team(agent, None)
         joined = agent.team is not None

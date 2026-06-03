@@ -46,7 +46,6 @@ class McpRuntime:
 
     @manager.setter
     def manager(self, value: MCPManager | None) -> None:
-        # Direct setter retained so the ``Agent._mcp_manager`` shim and test fakes keep working.
         self._manager = value
 
     @property

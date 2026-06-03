@@ -48,14 +48,3 @@ def estimate_message_tokens(
             total += estimate_text_tokens(str(tool_call.get("name") or ""))
             total += estimate_json_tokens(tool_call.get("args") or {})
     return total
-
-
-def estimate_messages_tokens(
-    messages: list[BaseMessage],
-    *,
-    include_tool_calls: bool = True,
-) -> int:
-    return sum(
-        estimate_message_tokens(m, include_tool_calls=include_tool_calls)
-        for m in messages
-    )

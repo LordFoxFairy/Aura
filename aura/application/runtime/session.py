@@ -51,7 +51,6 @@ class SessionRuntime:
 
     @session_id.setter
     def session_id(self, value: str) -> None:
-        # resume_session is the legitimate writer; setter retained for tests.
         self._session_id = value
 
     @property

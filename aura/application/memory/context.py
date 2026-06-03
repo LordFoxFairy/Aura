@@ -1,10 +1,4 @@
-"""Single message-assembly site. Mutability ladder L1 sys / L2 eager / L2b progressive / L3 history.
-
-Invariant: progressive fields are append-only within a session; `/clear` and
-`/compact` construct a new Context instance rather than mutating in place.
-Provider-injected sections (`<todos>`) read external snapshots, so Context
-stays a pure function of (constructor inputs, progressive state, history).
-"""
+"""Single message-assembly site; mutability ladder L1 sys / L2 eager / L2b progressive / L3."""
 
 from __future__ import annotations
 

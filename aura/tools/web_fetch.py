@@ -359,17 +359,9 @@ class WebFetch(Tool):
                 hit: WebFetchSuccess = {**cached, "cached": True}
                 return hit
 
-        try:
-            fetched = _fetch(url=url, timeout=timeout)
-        except ToolError:
-            raise
-
+        fetched = _fetch(url=url, timeout=timeout)
         body = fetched["content"]
-
-        try:
-            factory = self._resolve_factory()
-        except ToolError:
-            raise
+        factory = self._resolve_factory()
         try:
             summary_model = factory()
         except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate

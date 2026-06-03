@@ -13,7 +13,6 @@ from langchain_core.messages import BaseMessage
 from aura.domain.task import (
     SHELL_RECENT_ACTIVITIES_CAP,
     TaskKind,
-    TaskNotification,
     TaskRecord,
     TaskStatus,
     append_recent,
@@ -307,11 +306,9 @@ class TasksStore:
         self._fire_terminal(rec)
 
 
-# Re-exported so ``from .store import TaskNotification`` stays a stable import path.
 __all__ = [
     "ActivityListener",
     "StartedListener",
     "TasksStore",
-    "TaskNotification",
     "TerminalListener",
 ]

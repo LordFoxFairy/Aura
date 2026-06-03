@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from aura.application.hooks.must_read_first import make_must_read_first_hook
 from aura.application.loop_state import LoopState
 from aura.application.memory.context import Context
-from aura.application.memory.rules import RulesBundle
+from aura.application.memory.rules_types import RulesBundle
 from aura.domain.permission.outcome import Replace
 from aura.domain.tool import ToolResult
 from aura.infrastructure.persistence import journal as journal_module

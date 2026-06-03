@@ -10,12 +10,11 @@ from typing import Any, cast
 import pytest
 
 from aura.application.memory.rules import (
-    Rule,
-    RulesBundle,
     clear_cache,
     load_rules,
     match,
 )
+from aura.application.memory.rules_types import Rule, RulesBundle
 from aura.core import journal as journal_module
 
 

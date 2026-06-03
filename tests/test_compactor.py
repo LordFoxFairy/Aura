@@ -22,9 +22,9 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from aura.application.compact import CompactResult, CompactSource
 from aura.application.compact.compactor import Compactor
 from aura.application.compact.microcompact import MicrocompactPolicy
-from aura.application.compact.reactive import CompactResult, CompactSource
 from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
 from aura.infrastructure.persistence import journal

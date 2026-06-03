@@ -221,7 +221,7 @@ def test_status_dataclass_carries_needs_auth_state() -> None:
     """The ``MCPServerStatus.state`` field accepts ``"needs_auth"``
     (the literal union covers it). Pin so a future literal narrowing
     doesn't drop the value."""
-    from aura.infrastructure.mcp.manager import MCPServerStatus
+    from aura.infrastructure.mcp.types import MCPServerStatus
 
     s = MCPServerStatus(
         name="x",

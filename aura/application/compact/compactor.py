@@ -16,7 +16,7 @@ from aura.application.compact.microcompact import (
     MicrocompactPolicy,
     apply_microcompact,
 )
-from aura.application.compact.reactive import CompactResult
+from aura.application.compact.result_types import CompactResult
 from aura.application.loop_state import LoopSlots, LoopState
 from aura.config.schema import CompactConfig
 from aura.infrastructure.persistence import journal

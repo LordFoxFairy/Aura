@@ -17,7 +17,7 @@ from langchain_core.tools import BaseTool
 from pydantic import ConfigDict
 
 from aura.application.memory.context import Context
-from aura.application.memory.rules import RulesBundle
+from aura.application.memory.rules_types import RulesBundle
 
 
 def make_minimal_context(

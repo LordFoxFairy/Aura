@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from aura.application.memory.context import Context
-from aura.application.memory.rules import RulesBundle
+from aura.application.memory.rules_types import RulesBundle
 from aura.domain.skill import Skill
 
 

@@ -12,8 +12,8 @@ from aura.application.session import AgentSession
 from aura.application.teams.manager import (
     TeamError,
     TeamManager,
-    TeamViewSnapshot,
 )
+from aura.application.teams.view_types import TeamViewSnapshot
 from aura.domain.team import BackendType, TeamRecord
 from aura.infrastructure.persistence.storage import SessionStorage
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from aura.application.commands.types import CommandResult, CommandSource
 from aura.application.session import AgentSession
 from aura.config import mcp_store
-from aura.infrastructure.mcp.manager import MCPServerStatus
+from aura.infrastructure.mcp.types import MCPServerStatus
 
 _VALID_SUBCOMMANDS = (
     "list", "enable", "disable", "reconnect", "approve", "revoke", "reload", "help",

@@ -11,8 +11,6 @@ from __future__ import annotations
 from aura.application.permission.bash_safety_lex import _expand_braces
 from aura.application.permission.bash_safety_rules import (
     ZSH_DANGEROUS_COMMANDS,
-    BashSafetyViolation,
-    Reason,
     _check_cd_git_compound,
     _check_command_substitution,
     _check_cr_outside_quotes,
@@ -27,6 +25,7 @@ from aura.application.permission.bash_safety_rules import (
     _check_world_writable_chmod,
     _check_zsh_dangerous,
 )
+from aura.application.permission.bash_safety_types import BashSafetyViolation, Reason
 
 __all__ = [
     "ZSH_DANGEROUS_COMMANDS",

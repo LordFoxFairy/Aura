@@ -12,8 +12,7 @@ import inspect
 import os
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from dataclasses import dataclass
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters import sessions
@@ -29,7 +28,11 @@ from aura.infrastructure.mcp.adapter import (
     make_mcp_command,
     normalize_resource_contents,
 )
-from aura.infrastructure.mcp.types import MCPServerConfig
+from aura.infrastructure.mcp.types import (
+    MCPServerConfig,
+    MCPServerState,
+    MCPServerStatus,
+)
 from aura.infrastructure.persistence import journal
 
 
@@ -73,17 +76,6 @@ class _Closable(Protocol):
     def close(self) -> object: ...
 
 
-MCPServerState = Literal[
-    "connected",
-    "connecting",
-    "disabled",
-    "error",
-    "needs_auth",
-    "never_started",
-    "unapproved",
-]
-
-
 _NEEDS_AUTH_CODE = -32001
 _NEEDS_AUTH_HINTS = ("oauth", "unauthorized", "401", "403")
 
@@ -103,19 +95,6 @@ _MAX_RECONNECT_ATTEMPTS = 5
 
 _DEFAULT_OP_TIMEOUT_SEC = 30.0
 _OP_TIMEOUT_ENV_VAR = "AURA_MCP_TIMEOUT_SEC"
-
-
-@dataclass(frozen=True)
-class MCPServerStatus:
-    """Snapshot of one MCP server for the ``/mcp`` list view."""
-
-    name: str
-    transport: str
-    state: MCPServerState
-    error_message: str | None
-    tool_count: int
-    resource_count: int
-    prompt_count: int
 
 
 def _supported_transports() -> set[str]:

@@ -79,7 +79,7 @@ class _HangingManager:
     def status(self) -> list[Any]:
         # AgentSession computes servers_hanging from .status() entries whose state
         # is still "connected" at shutdown time.
-        from aura.infrastructure.mcp.manager import MCPServerStatus
+        from aura.infrastructure.mcp.types import MCPServerStatus
 
         return [
             MCPServerStatus(

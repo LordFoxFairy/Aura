@@ -11,8 +11,9 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
 from aura.application.memory import project_memory
-from aura.application.memory.rules import Rule, RulesBundle
+from aura.application.memory.context_types import ReadRecord
 from aura.application.memory.rules import match as match_rules
+from aura.application.memory.rules_types import Rule, RulesBundle
 from aura.domain.skill import Skill
 from aura.domain.state_values import ReadCarryover
 from aura.domain.task import TaskNotification
@@ -35,13 +36,6 @@ _OVERRIDE_PREAMBLE = (
 class NestedFragment:
     source: Path
     content: str
-
-
-@dataclass(frozen=True)
-class ReadRecord:
-    mtime: float
-    size: int
-    partial: bool = False
 
 
 class Context:

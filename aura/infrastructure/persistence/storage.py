@@ -24,17 +24,9 @@ from langchain_core.messages import BaseMessage, messages_from_dict, messages_to
 
 from aura.infrastructure.persistence import journal, storage_paths
 from aura.infrastructure.persistence.session_index import SessionIndex
+from aura.infrastructure.persistence.storage_types import SessionMeta
 
 _PREVIEW_MAX_CHARS: int = 79
-
-
-@dataclass(frozen=True)
-class SessionMeta:
-    session_id: str
-    created_at: datetime
-    last_used_at: datetime
-    message_count: int
-    first_user_prompt: str
 
 
 @dataclass(frozen=True)

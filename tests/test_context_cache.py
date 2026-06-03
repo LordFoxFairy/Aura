@@ -24,7 +24,7 @@ from langchain_core.tools import BaseTool
 from pydantic import ConfigDict
 
 from aura.application.memory.context import Context
-from aura.application.memory.rules import Rule, RulesBundle
+from aura.application.memory.rules_types import Rule, RulesBundle
 from aura.domain.skill import Skill
 from aura.infrastructure.persistence import journal
 

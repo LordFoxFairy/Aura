@@ -263,7 +263,7 @@ async def test_compact_clears_nested_memory_fragments(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_compact_clears_matched_rules(tmp_path: Path) -> None:
-    from aura.application.memory.rules import Rule
+    from aura.application.memory.rules_types import Rule
 
     agent = _make_agent(tmp_path)
     _seed_history(agent, pairs=10)

@@ -10,7 +10,6 @@ import re
 import shutil
 import uuid
 from collections.abc import Coroutine
-from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from aura.application.session import AgentSession
@@ -22,6 +21,7 @@ from aura.application.teams.mailbox import (
     QueueMailboxNotifier,
 )
 from aura.application.teams.runtime import run_teammate
+from aura.application.teams.view_types import TeammateMemberStatus, TeamViewSnapshot
 from aura.domain.abort import AbortController
 from aura.domain.team import (
     BROADCAST_RECIPIENT,
@@ -70,27 +70,6 @@ class TeammateRunner(Protocol):
         seed_prompt: str | None = None,
         notifier: MailboxNotifier | None = None,
     ) -> Coroutine[Any, Any, None]: ...
-
-
-@dataclass(frozen=True)
-class TeammateMemberStatus:
-    name: str
-    agent_type: str
-    model_spec: str | None
-    status: str
-    tokens_used: int
-    last_active: float | None
-    lifecycle_state: str
-
-
-@dataclass(frozen=True)
-class TeamViewSnapshot:
-    team_id: str
-    name: str
-    members: list[TeammateMemberStatus]
-    recent_messages: list[TeamMessage]
-    subagent_count: int
-    transcript_count: int
 
 
 _RECENT_MESSAGE_CAP: int = 10

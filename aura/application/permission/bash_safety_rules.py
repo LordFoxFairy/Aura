@@ -1,11 +1,9 @@
-"""Tier A bash-safety rule predicates and their violation type."""
+"""Tier A bash-safety rule predicates."""
 
 from __future__ import annotations
 
 import re
 import shlex
-from dataclasses import dataclass
-from typing import Literal
 
 from aura.application.permission.bash_safety_lex import (
     _first_token,
@@ -13,6 +11,7 @@ from aura.application.permission.bash_safety_lex import (
     _split_segments_quote_aware,
 )
 from aura.application.permission.bash_safety_paths import _is_system_path
+from aura.application.permission.bash_safety_types import BashSafetyViolation
 
 # Exhaustive zsh-builtin set that bypasses bash's file-access / fd-owner checks.
 # Only the subset attackers have leveraged for sandbox escape — not "all dangerous zsh builtins".
@@ -25,22 +24,6 @@ ZSH_DANGEROUS_COMMANDS: frozenset[str] = frozenset({
     "zf_chown", "zf_mkdir", "zf_rmdir", "zf_chgrp",
 })
 
-Reason = Literal[
-    "zsh_dangerous_command",
-    "cr_outside_double_quote",
-    "malformed_with_separator",
-    "cd_git_compound",
-    "command_substitution",
-    "pipe_to_shell",
-    "sed_inplace_system_path",
-    "redirect_to_system_path",
-    "destructive_removal",
-    "world_writable_chmod",
-    "root_chown",
-    "exec_destructive",
-    "obfuscated_execution",
-]
-
 # A shell name as the first token after ``|`` means the preceding segment's stdout
 # is executed as script — canonical ``curl X | bash`` remote-exec pattern.
 _SHELL_NAMES: frozenset[str] = frozenset({
@@ -51,13 +34,6 @@ _SHELL_NAMES: frozenset[str] = frozenset({
 _DESTRUCTIVE_COMMANDS: frozenset[str] = frozenset({
     "rm", "chmod", "chown", "dd", "mkfs", "shred", "wipe",
 })
-
-
-@dataclass(frozen=True)
-class BashSafetyViolation:
-    # ``detail`` is cited verbatim in ToolResult.error surfaced to the model.
-    reason: Reason
-    detail: str
 
 
 _SEGMENT_SPLIT = re.compile(r"(?:\|\||&&|[;|\n])")

@@ -211,7 +211,7 @@ _SKILL_VISIBILITY_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.application.memory.context import Context
-    from aura.application.memory.rules import RulesBundle
+    from aura.application.memory.rules_types import RulesBundle
     from aura.infrastructure.skills.loader import load_skills
 
     cwd = Path(sys.argv[1])

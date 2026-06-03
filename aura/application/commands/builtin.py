@@ -15,7 +15,7 @@ from aura.application.compact.reactive import (
 from aura.application.session import AgentSession
 from aura.config.schema import AuraConfigError
 from aura.domain.tokens import estimate_message_tokens
-from aura.infrastructure.persistence.storage import SessionMeta
+from aura.infrastructure.persistence.storage_types import SessionMeta
 
 
 class HelpCommand:

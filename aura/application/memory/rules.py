@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import pathspec
 import yaml
 
+from aura.application.memory.rules_types import Rule, RulesBundle
 from aura.infrastructure.persistence import journal
 
 _AURA_DIR = ".aura"
@@ -23,21 +23,6 @@ def _truncation_warning(actual_bytes: int, limit: int) -> str:
         f"\nWARNING: this file is {actual_bytes} bytes (limit: {limit}). "
         "Keep memory files under 25 KB; split long content into separate files."
     )
-
-
-@dataclass(frozen=True)
-class Rule:
-    source_path: Path
-    base_dir: Path
-    # Empty tuple = unconditional (no `paths` in frontmatter).
-    globs: tuple[str, ...]
-    content: str
-
-
-@dataclass
-class RulesBundle:
-    unconditional: list[Rule] = field(default_factory=list)
-    conditional: list[Rule] = field(default_factory=list)
 
 
 # Single event-loop — no concurrent writes, no lock needed.

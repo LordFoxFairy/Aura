@@ -20,7 +20,7 @@ import pytest
 
 from aura.application.commands.mcp import MCPCommand
 from aura.application.session import AgentSession
-from aura.infrastructure.mcp.manager import MCPServerStatus
+from aura.infrastructure.mcp.types import MCPServerStatus
 
 
 @dataclass

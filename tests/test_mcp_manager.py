@@ -11,7 +11,8 @@ from pydantic import BaseModel
 
 from aura.config.schema import MCPServerConfig
 from aura.domain.tool_meta_access import meta_dict
-from aura.infrastructure.mcp.manager import MCPManager, MCPServerStatus
+from aura.infrastructure.mcp.manager import MCPManager
+from aura.infrastructure.mcp.types import MCPServerStatus
 
 
 class _P(BaseModel):

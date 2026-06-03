@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from langchain_core.messages import BaseMessage, HumanMessage
 
 from aura.application.compact.constants import KEEP_LAST_N_TURNS
+from aura.application.compact.result_types import CompactResult, CompactSource
 from aura.application.compact.summary_turn import (
     _CompactSession,
     _is_prompt_too_long,
@@ -19,13 +18,11 @@ from aura.application.compact.summary_turn import (
     summary_caps_from_agent,
 )
 from aura.application.memory import project_memory, rules
-from aura.application.memory.context import ReadRecord
+from aura.application.memory.context_types import ReadRecord
 from aura.domain.skill import Skill
 from aura.infrastructure.persistence import journal
 
 __all__ = [
-    "CompactResult",
-    "CompactSource",
     "_CompactSession",
     "_is_prompt_too_long",
     "_run_summary_turn_with_retry",
@@ -33,16 +30,6 @@ __all__ = [
     "estimate_compact_summary_tokens",
     "run_compact",
 ]
-
-CompactSource = Literal["manual", "auto", "reactive"]
-
-
-@dataclass(frozen=True)
-class CompactResult:
-    before_tokens: int
-    after_tokens: int
-    source: CompactSource
-
 
 def _build_recent_file_messages(
     read_records: dict[Path, ReadRecord],

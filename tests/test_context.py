@@ -17,11 +17,9 @@ from aura.application.memory.context import (
     Context,
     NestedFragment,
 )
-from aura.application.memory.context import (
-    ReadRecord as ContextReadRecord,
-)
 from aura.application.memory.context import _render_todos_body as render_todos_body
-from aura.application.memory.rules import Rule, RulesBundle
+from aura.application.memory.context_types import ReadRecord as ContextReadRecord
+from aura.application.memory.rules_types import Rule, RulesBundle
 from aura.domain.skill import Skill
 from aura.domain.state_values import ReadCarryover, ReadRecord
 from aura.domain.task import TaskNotification

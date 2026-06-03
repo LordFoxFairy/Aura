@@ -45,10 +45,8 @@ from aura.application.memory.system_prompt import build_system_prompt
 from aura.application.run_agent import run_agent
 from aura.application.runtime.mcp import McpRuntime
 from aura.application.runtime.session import SessionRuntime
-from aura.application.runtime.tool_factory import (
-    STATEFUL_TOOL_FACTORIES,
-    ToolRuntime,
-)
+from aura.application.runtime.tool_factory import STATEFUL_TOOL_FACTORIES
+from aura.application.runtime.tool_runtime import ToolRuntime
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.team_port import TeammateBinding, TeamPort

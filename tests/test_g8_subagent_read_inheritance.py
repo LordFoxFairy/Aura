@@ -23,7 +23,7 @@ from pathlib import Path
 from langchain_core.messages import AIMessage
 
 from aura.application.memory.context import Context
-from aura.application.memory.rules import RulesBundle
+from aura.application.memory.rules_types import RulesBundle
 from aura.application.session import AgentSession
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.config.schema import AuraConfig

@@ -18,12 +18,11 @@ from aura.application.memory import project_memory as pm
 from aura.application.memory import rules as rules_module
 from aura.application.memory.context import Context
 from aura.application.memory.rules import (
-    Rule,
-    RulesBundle,
     _extract_globs,
     _truncate,
     load_rules,
 )
+from aura.application.memory.rules_types import Rule, RulesBundle
 from aura.core import journal as journal_module
 
 

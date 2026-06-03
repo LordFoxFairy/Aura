@@ -13,7 +13,8 @@ from aura.application.commands.factory import build_default_registry
 from aura.application.commands.registry import dispatch
 from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.infrastructure.persistence.storage import SessionMeta, SessionStorage
+from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.persistence.storage_types import SessionMeta
 from tests.conftest import FakeChatModel, FakeTurn
 
 

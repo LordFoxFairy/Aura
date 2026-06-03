@@ -31,6 +31,14 @@ __all__ = [
     "run_compact",
 ]
 
+def _block_message(tag: str, attr: str, body: str, *, max_tokens: int) -> HumanMessage:
+    """One <tag attr=...>body</tag> block, body truncated at max_tokens*4 chars."""
+    max_chars = max_tokens * 4
+    if len(body) > max_chars:
+        body = body[:max_chars] + "\n… (truncated)"
+    return HumanMessage(content=f"<{tag} {attr}>\n{body}\n</{tag}>")
+
+
 def _build_recent_file_messages(
     read_records: dict[Path, ReadRecord],
     *,
@@ -41,7 +49,6 @@ def _build_recent_file_messages(
     ranked = sorted(
         read_records.items(), key=lambda kv: kv[1].mtime, reverse=True,
     )
-    max_chars = max_tokens_per_file * 4
     messages: list[HumanMessage] = []
     for path, record in ranked:
         if len(messages) >= max_files_to_restore:
@@ -52,12 +59,8 @@ def _build_recent_file_messages(
             body = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        if len(body) > max_chars:
-            body = body[:max_chars] + "\n… (truncated)"
         messages.append(
-            HumanMessage(
-                content=f'<recent-file path="{path}">\n{body}\n</recent-file>',
-            )
+            _block_message("recent-file", f'path="{path}"', body, max_tokens=max_tokens_per_file),
         )
     return messages
 
@@ -68,18 +71,13 @@ _MAX_TOKENS_PER_SKILL_BODY = 5_000
 def _build_skill_reinjection_messages(
     invoked_skills: list[Skill],
 ) -> list[HumanMessage]:
-    max_chars = _MAX_TOKENS_PER_SKILL_BODY * 4
-    out: list[HumanMessage] = []
-    for skill in invoked_skills:
-        body = skill.body
-        if len(body) > max_chars:
-            body = body[:max_chars] + "\n… (truncated)"
-        out.append(
-            HumanMessage(
-                content=f'<skill-active name="{skill.name}">\n{body}\n</skill-active>',
-            ),
+    return [
+        _block_message(
+            "skill-active", f'name="{skill.name}"', skill.body,
+            max_tokens=_MAX_TOKENS_PER_SKILL_BODY,
         )
-    return out
+        for skill in invoked_skills
+    ]
 
 
 def _build_active_task_messages(agent: _CompactSession) -> list[HumanMessage]:

@@ -239,9 +239,9 @@ async def test_force_remove_marks_teammate_task_cancelled(
 
     record = mgr._tasks_store.list(kind="teammate")[0]
     assert record.status == "cancelled"
-    assert mgr._member_task_ids == {}
+    assert all(m.task_id is None for m in mgr._members.values())
     assert mgr._running_aborts == {}
-    assert mgr._stop_events == {}
+    assert all(m.stop_event is None for m in mgr._members.values())
 
 
 @pytest.mark.asyncio
@@ -310,7 +310,8 @@ async def test_add_member_teammate_uses_subagent_permission_contract(
     mgr.create_team("alpha")
 
     mgr.add_member("alice")
-    child = mgr._member_agents["alice"]
+    child = mgr._members["alice"].agent
+    assert child is not None
     try:
         from aura.domain.permission.outcome import Allow, Replace
 
@@ -420,9 +421,9 @@ async def test_pane_force_remove_marks_teammate_task_cancelled(
 
     record = mgr._tasks_store.list(kind="teammate")[0]
     assert record.status == "cancelled"
-    assert mgr._member_task_ids == {}
+    assert all(m.task_id is None for m in mgr._members.values())
     assert mgr._running_aborts == {}
-    assert mgr._stop_events == {}
+    assert all(m.stop_event is None for m in mgr._members.values())
 
 
 @pytest.mark.asyncio
@@ -612,7 +613,9 @@ async def test_session_cleanup_preserves_unrelated_abort_controllers(
     mgr.add_member("alice")
     await asyncio.sleep(0)
 
-    teammate_task_ids = set(mgr._member_task_ids.values())
+    teammate_task_ids = {
+        m.task_id for m in mgr._members.values() if m.task_id is not None
+    }
     assert teammate_task_ids
     assert teammate_task_ids.issubset(running_aborts)
 

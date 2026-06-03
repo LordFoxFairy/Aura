@@ -10,6 +10,7 @@ import re
 import shutil
 import uuid
 from collections.abc import Coroutine
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from aura.application.session import AgentSession
@@ -75,6 +76,21 @@ class TeammateRunner(Protocol):
 _RECENT_MESSAGE_CAP: int = 10
 
 
+@dataclass
+class Member:
+    """Per-name runtime handles for one teammate, indexed by member name."""
+
+    # lifecycle_state outlives the runtime handles: it is set before spawn and
+    # retained past teardown ("terminated") until the team is cleared.
+    lifecycle_state: str | None = None
+    task_id: str | None = None
+    agent: AgentSession | None = None
+    stop_event: asyncio.Event | None = None
+    backend: _BackendHandleLike | None = None
+    shutdown_ack: asyncio.Future[bool] | None = None
+    shutdown_waiter: asyncio.Task[bool] | None = None
+
+
 class TeamError(ValueError):
     pass
 
@@ -107,18 +123,12 @@ class TeamManager:
         )
         self._team: TeamRecord | None = None
         self._runtimes: dict[str, asyncio.Task[None]] = {}
-        self._member_task_ids: dict[str, str] = {}
-        self._member_agents: dict[str, AgentSession] = {}
-        self._stop_events: dict[str, asyncio.Event] = {}
-        self._shutdown_acks: dict[str, asyncio.Future[bool]] = {}
-        self._shutdown_waiters: dict[str, asyncio.Task[bool]] = {}
+        self._members: dict[str, Member] = {}
         self._mailbox_notifier = QueueMailboxNotifier()
-        self._member_backends: dict[str, _BackendHandleLike] = {}
         self._teammate_terminal_intents: dict[str, str] = {}
         self._session_created_teams: set[str] = set()
         self._pending_protocol_events: list[CoordinationEvent] = []
         self._team_lifecycle_state: str | None = None
-        self._member_lifecycle_states: dict[str, str] = {}
 
     @property
     def team(self) -> TeamRecord | None:
@@ -153,7 +163,8 @@ class TeamManager:
         if self._team is None:
             return
         payload: LifecyclePayload = {"state": state}
-        previous = self._member_lifecycle_states.get(name)
+        member = self._members.get(name)
+        previous = None if member is None else member.lifecycle_state
         if previous is not None:
             payload["previous_state"] = previous
         if reason is not None:
@@ -166,7 +177,10 @@ class TeamManager:
             "member_id": name,
             "payload": payload,
         })
-        self._member_lifecycle_states[name] = state
+        if member is None:
+            self._members[name] = Member(lifecycle_state=state)
+        else:
+            member.lifecycle_state = state
 
     @property
     def storage(self) -> SessionStorage:
@@ -203,7 +217,7 @@ class TeamManager:
         self._persist()
         self._session_created_teams.add(team_id)
         self._team_lifecycle_state = None
-        self._member_lifecycle_states.clear()
+        self._members.clear()
         self._emit_team_lifecycle("active")
         journal.write(
             "team_created",
@@ -229,15 +243,16 @@ class TeamManager:
             shutil.rmtree(team_dir)
         self._team = None
         self._team_lifecycle_state = None
-        self._member_lifecycle_states.clear()
+        self._members.clear()
         journal.write("team_deleted", team_id=team_id, dir_removed=True)
 
     async def cleanup_session_teams(self) -> None:
         if not self._session_created_teams:
             return
         team_ids = list(self._session_created_teams)
-        for task_id in list(self._member_task_ids.values()):
-            self._mark_teammate_cancelled(task_id)
+        for m in list(self._members.values()):
+            if m.task_id is not None:
+                self._mark_teammate_cancelled(m.task_id)
         for task in list(self._runtimes.values()):
             if not task.done():
                 task.cancel()
@@ -246,13 +261,15 @@ class TeamManager:
                 *[t for t in self._runtimes.values() if not t.done()],
                 return_exceptions=True,
             )
-        if self._member_backends:
+        backends = [m.backend for m in self._members.values() if m.backend is not None]
+        if backends:
             # Pane backends own tmux panes; force_kill must run before rmtree.
             await asyncio.gather(
-                *[h.force_kill() for h in self._member_backends.values()],
+                *[h.force_kill() for h in backends],
                 return_exceptions=True,
             )
-            self._member_backends.clear()
+            for m in self._members.values():
+                m.backend = None
         for team_id in team_ids:
             team_dir = self._storage.team_root(team_id)
             try:
@@ -271,9 +288,10 @@ class TeamManager:
         if self._team is not None and self._team.team_id not in self._session_created_teams:
             self._team = None
             self._runtimes.clear()
-            self._member_task_ids.clear()
-            self._member_agents.clear()
-            self._stop_events.clear()
+            for m in self._members.values():
+                m.task_id = None
+                m.agent = None
+                m.stop_event = None
             self._teammate_terminal_intents.clear()
 
     def add_member(
@@ -347,8 +365,9 @@ class TeamManager:
             task_id=record.id,
             tasks_store=self._tasks_store,
         )
-        self._member_agents[name] = child
-        self._member_task_ids[name] = record.id
+        slot = self._members.setdefault(name, Member())
+        slot.agent = child
+        slot.task_id = record.id
         # Abort controller must register before runtime starts so a same-tick cascade finds it.
         abort = AbortController()
         self._running_aborts[record.id] = abort
@@ -401,8 +420,8 @@ class TeamManager:
                 self._finalize_runtime_task(record.id, _t, abort)
             in_proc_task.add_done_callback(_cleanup)
             self._runtimes[record.id] = in_proc_task
-        self._stop_events[name] = stop_event
-        self._member_backends[name] = handle
+        slot.stop_event = stop_event
+        slot.backend = handle
         if member.tmux_pane_id is not None:
             # Pane backend may have stamped tmux_pane_id during spawn.
             self._persist()
@@ -498,8 +517,9 @@ class TeamManager:
             task_id=record.id,
             tasks_store=self._tasks_store,
         )
-        self._member_agents[name] = child
-        self._member_task_ids[name] = record.id
+        slot = self._members.setdefault(name, Member())
+        slot.agent = child
+        slot.task_id = record.id
         abort = AbortController()
         self._running_aborts[record.id] = abort
         stop_event = asyncio.Event()
@@ -522,8 +542,8 @@ class TeamManager:
                 self._finalize_runtime_task(record.id, _t, abort)
             task.add_done_callback(_cleanup)
             self._runtimes[record.id] = task
-        self._stop_events[name] = stop_event
-        self._member_backends[name] = handle
+        slot.stop_event = stop_event
+        slot.backend = handle
         if member.tmux_pane_id is not None:
             self._persist()
         self._emit_member_lifecycle(name, "ready")
@@ -570,9 +590,11 @@ class TeamManager:
             self.aremove_member(name, timeout_sec=timeout_sec),
             name=f"aura-team-shutdown-{name}",
         )
-        self._shutdown_waiters[name] = waiter
+        self._members.setdefault(name, Member()).shutdown_waiter = waiter
         def _prune(_t: asyncio.Task[bool]) -> None:
-            self._shutdown_waiters.pop(name, None)
+            slot = self._members.get(name)
+            if slot is not None:
+                slot.shutdown_waiter = None
             with contextlib.suppress(Exception):
                 if not _t.cancelled():
                     _t.exception()
@@ -607,7 +629,8 @@ class TeamManager:
         self._emit_member_lifecycle(name, "draining")
         loop = asyncio.get_running_loop()
         ack_future: asyncio.Future[bool] = loop.create_future()
-        self._shutdown_acks[name] = ack_future
+        slot = self._members.setdefault(name, Member())
+        slot.shutdown_ack = ack_future
         with contextlib.suppress(Exception):
             self._post(TeamMessage(
                 msg_id=uuid.uuid4().hex,
@@ -616,11 +639,10 @@ class TeamManager:
                 body="shutdown",
                 kind="shutdown_request",
             ))
-        stop_event = self._stop_events.get(name)
+        stop_event = slot.stop_event
         if stop_event is not None:
-            task_id = self._member_task_ids.get(name)
-            if task_id is not None:
-                self._set_teammate_cancel_intent(task_id)
+            if slot.task_id is not None:
+                self._set_teammate_cancel_intent(slot.task_id)
             stop_event.set()
         try:
             acked = await asyncio.wait_for(
@@ -629,7 +651,9 @@ class TeamManager:
         except TimeoutError:
             acked = False
         finally:
-            self._shutdown_acks.pop(name, None)
+            ack_slot = self._members.get(name)
+            if ack_slot is not None:
+                ack_slot.shutdown_ack = None
         if acked:
             journal.write(
                 "team_member_shutdown_ack_received",
@@ -656,7 +680,8 @@ class TeamManager:
 
     def confirm_shutdown(self, member_name: str, *, body: str = "") -> None:
         del body
-        fut = self._shutdown_acks.get(member_name)
+        slot = self._members.get(member_name)
+        fut = None if slot is None else slot.shutdown_ack
         if fut is None or fut.done():
             return
         with contextlib.suppress(Exception):
@@ -679,9 +704,13 @@ class TeamManager:
         if idx >= 0:
             self._team.members.pop(idx)
             self._persist()
-        task_id = self._member_task_ids.pop(name, None)
-        stop_event = self._stop_events.pop(name, None)
-        pending_ack = self._shutdown_acks.pop(name, None)
+        # Runtime handles drop here; lifecycle_state + shutdown_waiter outlive teardown.
+        slot = self._members.get(name) or Member()
+        task_id, slot.task_id = slot.task_id, None
+        stop_event, slot.stop_event = slot.stop_event, None
+        pending_ack, slot.shutdown_ack = slot.shutdown_ack, None
+        backend_handle, slot.backend = slot.backend, None
+        agent, slot.agent = slot.agent, None
         if pending_ack is not None and not pending_ack.done():
             with contextlib.suppress(Exception):
                 pending_ack.set_result(False)
@@ -706,7 +735,6 @@ class TeamManager:
             handle = self._runtimes.get(task_id)
             if handle is not None and not handle.done():
                 handle.cancel()
-        backend_handle = self._member_backends.pop(name, None)
         if backend_handle is not None and not already_acked:
             with contextlib.suppress(Exception):
                 # force_kill is async; skip when no loop runs (task cancel above suffices).
@@ -716,7 +744,6 @@ class TeamManager:
                     loop = None
                 if loop is not None:
                     loop.create_task(backend_handle.force_kill())
-        agent = self._member_agents.pop(name, None)
         if agent is not None:
             with contextlib.suppress(Exception):
                 asyncio.ensure_future(agent.aclose())
@@ -802,19 +829,19 @@ class TeamManager:
             tokens = 0
             last_active: float | None = None
             model_spec: str | None = m.model_name
-            if live:
-                task_id = self._member_task_ids.get(m.name)
-                if task_id is not None:
-                    rec = self._tasks_store.get(task_id)
-                    if rec is not None:
-                        tokens = int(rec.progress.token_count)
-                        last_active = rec.progress.last_activity_at
-                        # Resolved spec reflects the inherited default when override is empty.
-                        if rec.model_spec:
-                            model_spec = rec.model_spec
+            slot = self._members.get(m.name)
+            if live and slot is not None and slot.task_id is not None:
+                rec = self._tasks_store.get(slot.task_id)
+                if rec is not None:
+                    tokens = int(rec.progress.token_count)
+                    last_active = rec.progress.last_activity_at
+                    # Resolved spec reflects the inherited default when override is empty.
+                    if rec.model_spec:
+                        model_spec = rec.model_spec
+            shutting_down = slot is not None and slot.shutdown_waiter is not None
             if not m.is_active:
                 status = "dead"
-            elif live and m.name in self._shutdown_waiters:
+            elif live and shutting_down:
                 status = "shutting-down"
             else:
                 status = "active"
@@ -826,8 +853,9 @@ class TeamManager:
                     status=status,
                     tokens_used=tokens,
                     last_active=last_active,
-                    lifecycle_state=self._member_lifecycle_states.get(
-                        m.name, "unknown",
+                    lifecycle_state=(
+                        "unknown" if slot is None
+                        else slot.lifecycle_state or "unknown"
                     ),
                 ),
             )
@@ -940,6 +968,7 @@ class TeamManager:
             )
 
 __all__ = [
+    "Member",
     "TeamError",
     "TeamManager",
     "TeammateMemberStatus",

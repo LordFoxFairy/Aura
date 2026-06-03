@@ -38,6 +38,20 @@ class NestedFragment:
     content: str
 
 
+class _Breakpointer:
+    """Stamps Anthropic-only cache_control on messages and counts the breakpoints."""
+
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self.count = 0
+
+    def stamp(self, message: BaseMessage) -> None:
+        if not self.enabled:
+            return
+        message.additional_kwargs["cache_control"] = {"type": "ephemeral"}
+        self.count += 1
+
+
 class Context:
     def __init__(
         self,
@@ -230,48 +244,65 @@ class Context:
 
     def build(self, history: list[BaseMessage]) -> list[BaseMessage]:
         # Anthropic-only cache_control breakpoints: system / project-memory / skills.
-        is_anthropic = _is_anthropic_provider(self._model)
-        breakpoint_count = 0
+        bp = _Breakpointer(_is_anthropic_provider(self._model))
 
+        messages: list[BaseMessage] = [self._system_message(bp)]
+        messages.extend(self._project_memory_message(bp))
+        messages.extend(self._nested_fragment_messages())
+        messages.extend(self._rule_messages())
+        messages.extend(self._skill_messages(bp))
+        messages.extend(self._todo_message())
+        messages.extend(self._notification_message())
+        messages.extend(history)
+
+        if bp.enabled and bp.count > 0:
+            journal.write(
+                "cache_breakpoints_set",
+                count=bp.count,
+                provider=_provider_type(self._model),
+            )
+        return messages
+
+    def _system_message(self, bp: _Breakpointer) -> SystemMessage:
         sys_msg = SystemMessage(self._system_prompt)
-        if is_anthropic:
-            sys_msg.additional_kwargs["cache_control"] = {"type": "ephemeral"}
-            breakpoint_count += 1
-        messages: list[BaseMessage] = [sys_msg]
+        bp.stamp(sys_msg)
+        return sys_msg
 
+    def _project_memory_message(self, bp: _Breakpointer) -> list[BaseMessage]:
         eager = _joined_eager(self._primary_memory, self._rules.unconditional)
-        if eager:
-            project_memory_msg = SystemMessage(
-                "<system-reminder>\n"
-                f"{_OVERRIDE_PREAMBLE}\n\n"
-                f"<project-memory>\n{eager}\n</project-memory>\n"
-                "</system-reminder>"
-            )
-            if is_anthropic:
-                project_memory_msg.additional_kwargs["cache_control"] = {
-                    "type": "ephemeral",
-                }
-                breakpoint_count += 1
-            messages.append(project_memory_msg)
+        if not eager:
+            return []
+        msg = SystemMessage(
+            "<system-reminder>\n"
+            f"{_OVERRIDE_PREAMBLE}\n\n"
+            f"<project-memory>\n{eager}\n</project-memory>\n"
+            "</system-reminder>"
+        )
+        bp.stamp(msg)
+        return [msg]
 
-        for fragment in self._nested_fragments:
-            messages.append(
-                HumanMessage(
-                    f'<nested-memory path="{fragment.source}">\n'
-                    f"{fragment.content}\n"
-                    "</nested-memory>"
-                )
+    def _nested_fragment_messages(self) -> list[BaseMessage]:
+        return [
+            HumanMessage(
+                f'<nested-memory path="{fragment.source}">\n'
+                f"{fragment.content}\n"
+                "</nested-memory>"
             )
+            for fragment in self._nested_fragments
+        ]
 
-        for rule in self._matched_rules:
-            messages.append(
-                HumanMessage(
-                    f'<rule src="{rule.source_path}">\n'
-                    f"{rule.content}\n"
-                    "</rule>"
-                )
+    def _rule_messages(self) -> list[BaseMessage]:
+        return [
+            HumanMessage(
+                f'<rule src="{rule.source_path}">\n'
+                f"{rule.content}\n"
+                "</rule>"
             )
+            for rule in self._matched_rules
+        ]
 
+    def _skill_messages(self, bp: _Breakpointer) -> list[BaseMessage]:
+        messages: list[BaseMessage] = []
         # Sorted by name so set-preserving registry reorderings don't churn the
         # prompt-cache prefix. Hides user-only and unactivated-conditional skills.
         visible_skills = sorted(
@@ -293,11 +324,7 @@ class Context:
                 + "\n".join(available_lines)
                 + "\n</skills-available>"
             )
-            if is_anthropic:
-                skills_msg.additional_kwargs["cache_control"] = {
-                    "type": "ephemeral",
-                }
-                breakpoint_count += 1
+            bp.stamp(skills_msg)
             messages.append(skills_msg)
         for skill in self._invoked_skills:
             messages.append(
@@ -307,41 +334,36 @@ class Context:
                     "</skill-invoked>"
                 )
             )
-
-        if self._todos_provider is not None:
-            todos = self._todos_provider()
-            if todos:
-                body = _render_todos_body(todos)
-                messages.append(HumanMessage(f"<todos>\n{body}\n</todos>"))
-
-        # Drain on every build so the prompt envelope flushes the queue.
-        if self._notifications_drainer is not None:
-            drained = list(self._notifications_drainer())
-            if drained:
-                cap = 5
-                head = drained[-cap:] if len(drained) > cap else drained
-                lines: list[str] = []
-                for n in head:
-                    line = f"- {n.task_id[:8]} [{n.status}] {n.description}"
-                    if n.summary:
-                        line += f": {n.summary}"
-                    lines.append(line)
-                if len(drained) > cap:
-                    lines.append(f"({len(drained) - cap} more earlier)")
-                body = "\n".join(lines)
-                messages.append(HumanMessage(
-                    f"<task-notification>\n{body}\n</task-notification>"
-                ))
-
-        messages.extend(history)
-
-        if is_anthropic and breakpoint_count > 0:
-            journal.write(
-                "cache_breakpoints_set",
-                count=breakpoint_count,
-                provider=_provider_type(self._model),
-            )
         return messages
+
+    def _todo_message(self) -> list[BaseMessage]:
+        if self._todos_provider is None:
+            return []
+        todos = self._todos_provider()
+        if not todos:
+            return []
+        body = _render_todos_body(todos)
+        return [HumanMessage(f"<todos>\n{body}\n</todos>")]
+
+    def _notification_message(self) -> list[BaseMessage]:
+        # Drain on every build so the prompt envelope flushes the queue.
+        if self._notifications_drainer is None:
+            return []
+        drained = list(self._notifications_drainer())
+        if not drained:
+            return []
+        cap = 5
+        head = drained[-cap:] if len(drained) > cap else drained
+        lines: list[str] = []
+        for n in head:
+            line = f"- {n.task_id[:8]} [{n.status}] {n.description}"
+            if n.summary:
+                line += f": {n.summary}"
+            lines.append(line)
+        if len(drained) > cap:
+            lines.append(f"({len(drained) - cap} more earlier)")
+        body = "\n".join(lines)
+        return [HumanMessage(f"<task-notification>\n{body}\n</task-notification>")]
 
 
 def _joined_eager(primary: str, unconditional: list[Rule]) -> str:

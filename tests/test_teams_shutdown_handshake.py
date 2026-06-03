@@ -31,7 +31,7 @@ from aura.application.session import AgentSession
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import Mailbox
-from aura.application.teams.manager import TeamError, TeamManager
+from aura.application.teams.manager import Member, TeamError, TeamManager
 from aura.application.teams.runtime import run_teammate
 from aura.config.schema import AuraConfig
 from aura.domain.abort import AbortController
@@ -442,6 +442,6 @@ async def test_confirm_shutdown_is_idempotent_when_no_waiter(
     # Allocate a future, resolve it, then ack again — also no-op.
     loop = asyncio.get_running_loop()
     fut: asyncio.Future[bool] = loop.create_future()
-    mgr._shutdown_acks["bob"] = fut
+    mgr._members["bob"] = Member(shutdown_ack=fut)
     fut.set_result(True)
     mgr.confirm_shutdown("bob")  # already done — must not raise

@@ -456,8 +456,6 @@ class TeamManager:
         handle: _BackendHandleLike
         if self._runtime_runner is not run_teammate:
             # Tests inject a runner directly; bypass the backend dispatch.
-            def _cleanup(_t: asyncio.Task[None]) -> None:
-                self._finalize_runtime_task(record.id, _t, abort)
             task: asyncio.Task[None] = asyncio.create_task(
                 self._runtime_runner(
                     agent=child,
@@ -470,8 +468,7 @@ class TeamManager:
                 ),
                 name=f"aura-teammate-{name}",
             )
-            task.add_done_callback(_cleanup)
-            self._runtimes[record.id] = task
+            self._register_runtime_task(task, record.id, abort)
             handle = InProcessHandle(
                 task=task,
                 stop_event=stop_event,
@@ -490,11 +487,7 @@ class TeamManager:
                 seed_prompt=seed_prompt,
                 notifier=self._mailbox_notifier,
             )
-            in_proc_task = handle.task
-            def _cleanup(_t: asyncio.Task[None]) -> None:
-                self._finalize_runtime_task(record.id, _t, abort)
-            in_proc_task.add_done_callback(_cleanup)
-            self._runtimes[record.id] = in_proc_task
+            self._register_runtime_task(handle.task, record.id, abort)
         return self._finalize_member(
             prepared,
             handle,
@@ -544,12 +537,7 @@ class TeamManager:
             notifier=self._mailbox_notifier,
         )
         if isinstance(handle, _HasTask):
-            task = handle.task
-
-            def _cleanup(_t: asyncio.Task[None]) -> None:
-                self._finalize_runtime_task(record.id, _t, abort)
-            task.add_done_callback(_cleanup)
-            self._runtimes[record.id] = task
+            self._register_runtime_task(handle.task, record.id, abort)
         return self._finalize_member(
             prepared,
             handle,
@@ -760,6 +748,18 @@ class TeamManager:
     def _mark_teammate_cancelled(self, task_id: str) -> None:
         self._set_teammate_cancel_intent(task_id)
         self._tasks_store.mark_cancelled(task_id)
+
+    def _register_runtime_task(
+        self,
+        task: asyncio.Task[None],
+        task_id: str,
+        abort: AbortController,
+    ) -> None:
+        """Track the teammate task; finalize (drop refs) when it exits."""
+        task.add_done_callback(
+            lambda t: self._finalize_runtime_task(task_id, t, abort)
+        )
+        self._runtimes[task_id] = task
 
     def _finalize_runtime_task(
         self,

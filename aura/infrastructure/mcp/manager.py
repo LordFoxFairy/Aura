@@ -642,6 +642,18 @@ class MCPManager:
             k: v for k, v in self._resources.items() if k[0] != name
         }
 
+    def _cleanup_server(
+        self, name: str, *, new_state: MCPServerState | None = None
+    ) -> None:
+        if self._client is not None:
+            self._client.connections.pop(name, None)
+        self._drop_resources_for(name)
+        self._cancel_reconnect_task(name)
+        if new_state is not None:
+            self._state[name] = new_state
+        self._errors.pop(name, None)
+        self._reset_counts(name)
+
     def known_server_names(self) -> list[str]:
         return [cfg.name for cfg in self._configs_all]
 
@@ -681,13 +693,7 @@ class MCPManager:
         if current == "disabled":
             return f"MCP server {name!r} is already disabled"
         self._configs = [c for c in self._configs if c.name != name]
-        if self._client is not None:
-            self._client.connections.pop(name, None)
-        self._drop_resources_for(name)
-        self._cancel_reconnect_task(name)
-        self._state[name] = "disabled"
-        self._errors.pop(name, None)
-        self._reset_counts(name)
+        self._cleanup_server(name, new_state="disabled")
         return f"MCP server {name!r} disabled"
 
     async def reconnect(self, name: str) -> str:
@@ -695,13 +701,7 @@ class MCPManager:
         cfg = self._lookup_config_or_error(name)
         if isinstance(cfg, str):
             return cfg
-        if self._client is not None:
-            self._client.connections.pop(name, None)
-        self._drop_resources_for(name)
-        self._cancel_reconnect_task(name)
-        self._state[name] = "never_started"
-        self._errors.pop(name, None)
-        self._reset_counts(name)
+        self._cleanup_server(name, new_state="never_started")
         if cfg not in self._configs:
             self._configs.append(cfg)
         await self._connect_one(cfg)
@@ -769,13 +769,7 @@ class MCPManager:
         mcp_approvals.revoke(name)
         self._unapproved.add(name)
         self._configs = [c for c in self._configs if c.name != name]
-        if self._client is not None:
-            self._client.connections.pop(name, None)
-        self._drop_resources_for(name)
-        self._cancel_reconnect_task(name)
-        self._state[name] = "unapproved"
-        self._errors.pop(name, None)
-        self._reset_counts(name)
+        self._cleanup_server(name, new_state="unapproved")
         return f"MCP server {name!r} approval revoked and disconnected"
 
     async def reload(

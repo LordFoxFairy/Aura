@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,17 +57,3 @@ class ReadCarryover:
             }
             # object.__setattr__: only way to rebind a frozen dataclass field.
             object.__setattr__(self, "records", MappingProxyType(normalized))
-
-    def is_fresh(self, path: Path) -> bool:
-        resolved = path.expanduser().resolve(strict=False)
-        record = self.records.get(resolved)
-        if record is None:
-            return False
-        try:
-            stat = os.stat(resolved)
-        except OSError:
-            return False
-        return (
-            stat.st_mtime == record.mtime_at_read
-            and stat.st_size == record.size_at_read
-        )

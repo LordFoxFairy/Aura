@@ -3,15 +3,12 @@
 Phase 3 Task 1 — schema contracts only. ``ReadCarryover`` replaces the
 ad-hoc ``inherited_reads: dict[Path, _ReadRecord]`` propagation that
 the subagent factory uses to share parent file-read records with a
-spawned child. Task 4 wires the new type through the factory; Task 5
-teaches ``must_read_first`` to call ``is_fresh`` before honoring an
-inherited record. This file pins the schema invariants in isolation.
+spawned child. This file pins the schema invariants in isolation.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import os
 from pathlib import Path
 from typing import Any
 
@@ -59,121 +56,6 @@ def test_read_carryover_constructs_with_records(tmp_path: Path) -> None:
     assert carry.records[f] is record
     assert carry.source_session_id == "parent-abc"
     assert carry.generated_at_turn == 3
-
-
-def test_is_fresh_true_for_unchanged_file(tmp_path: Path) -> None:
-    """The file on disk matches the recorded ``(mtime, size)`` — the
-    inherited record is still trustworthy."""
-    f = tmp_path / "a.txt"
-    f.write_text("hello")
-
-    carry = ReadCarryover(
-        records={f: _make_record(f)},
-        source_session_id=None,
-        generated_at_turn=1,
-    )
-
-    assert carry.is_fresh(f) is True
-
-
-def test_is_fresh_normalizes_lookup_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Records are keyed by resolved paths, but callers may ask with a
-    relative path. Normalize before lookup so inheritance matches
-    Context.read_status semantics."""
-    f = tmp_path / "a.txt"
-    f.write_text("hello")
-    monkeypatch.chdir(tmp_path)
-
-    carry = ReadCarryover(
-        records={f.resolve(): _make_record(f.resolve())},
-        source_session_id=None,
-        generated_at_turn=1,
-    )
-
-    assert carry.is_fresh(Path("a.txt")) is True
-
-
-def test_is_fresh_false_when_mtime_newer(tmp_path: Path) -> None:
-    """Touching the file forwards mtime past the recorded value;
-    freshness check must reject the record so the subagent re-reads."""
-    f = tmp_path / "a.txt"
-    f.write_text("hello")
-    record = _make_record(f)
-    # Bump mtime forward by 10s — well past any filesystem granularity.
-    new_mtime = record.mtime_at_read + 10.0
-    os.utime(f, (new_mtime, new_mtime))
-
-    carry = ReadCarryover(
-        records={f: record}, source_session_id=None, generated_at_turn=1
-    )
-
-    assert carry.is_fresh(f) is False
-
-
-def test_is_fresh_false_when_mtime_older_even_same_size(tmp_path: Path) -> None:
-    """Freshness is exact ``(mtime, size)`` equality. A changed/restored
-    file can have the same size and an older mtime; it still must be
-    rejected."""
-    f = tmp_path / "a.txt"
-    f.write_text("hello")
-    record = _make_record(f)
-    f.write_text("jello")
-    older_mtime = record.mtime_at_read - 10.0
-    os.utime(f, (older_mtime, older_mtime))
-
-    carry = ReadCarryover(
-        records={f: record}, source_session_id=None, generated_at_turn=1
-    )
-
-    assert carry.is_fresh(f) is False
-
-
-def test_is_fresh_false_when_size_differs(tmp_path: Path) -> None:
-    """Same mtime but different byte length — the file changed even if
-    the OS clock didn't tick. ``is_fresh`` must catch this."""
-    f = tmp_path / "a.txt"
-    f.write_text("hello")
-    record = _make_record(f)
-    # Rewrite with a different length, then restore the original mtime
-    # so only ``size`` differs from the record.
-    f.write_text("hello world")
-    os.utime(f, (record.mtime_at_read, record.mtime_at_read))
-
-    carry = ReadCarryover(
-        records={f: record}, source_session_id=None, generated_at_turn=1
-    )
-
-    assert carry.is_fresh(f) is False
-
-
-def test_is_fresh_false_when_file_missing(tmp_path: Path) -> None:
-    """Parent read it, child arrives, but the file has been deleted —
-    no defensible "fresh" answer; return False."""
-    f = tmp_path / "a.txt"
-    f.write_text("hello")
-    record = _make_record(f)
-    f.unlink()
-
-    carry = ReadCarryover(
-        records={f: record}, source_session_id=None, generated_at_turn=1
-    )
-
-    assert carry.is_fresh(f) is False
-
-
-def test_is_fresh_false_when_path_not_in_records(tmp_path: Path) -> None:
-    """A path the parent never read is, by definition, not fresh in the
-    carryover. The subagent must read it first."""
-    f = tmp_path / "a.txt"
-    f.write_text("hello")
-    other = tmp_path / "b.txt"
-    other.write_text("other")
-
-    carry = ReadCarryover(
-        records={f: _make_record(f)}, source_session_id=None, generated_at_turn=1
-    )
-
-    assert carry.is_fresh(other) is False
 
 
 def test_read_carryover_is_frozen() -> None:

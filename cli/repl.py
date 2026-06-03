@@ -217,15 +217,17 @@ async def run_repl_async(
                 line=line[:200],
                 kind=result.kind,
             )
-            if result.kind == "exit":
-                journal.write("repl_exit", reason="slash_exit")
-                return
-            if result.kind == "view":
-                _render_view(_console, result.text)
-                continue
-            if result.text:
-                _console.print(result.text)
-            continue
+            match result.kind:
+                case "exit":
+                    journal.write("repl_exit", reason="slash_exit")
+                    return
+                case "view":
+                    _render_view(_console, result.text)
+                    continue
+                case _:
+                    if result.text:
+                        _console.print(result.text)
+                    continue
 
         try:
             last_turn_seconds[0] = await _run_turn(

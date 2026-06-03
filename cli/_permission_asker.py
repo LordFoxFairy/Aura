@@ -28,7 +28,6 @@ _ALLOW_ONCE = "Allow once"
 _DENY = "Deny"
 
 
-
 def _bash_options(command: str) -> list[FormOptionDict]:
     head = command.split(maxsplit=1)[0] if command.strip() else ""
     prefix = head or command

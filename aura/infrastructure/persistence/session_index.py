@@ -31,13 +31,6 @@ class SessionIndex:
     def __init__(self, path: Path) -> None:
         self._path = path
 
-    @property
-    def path(self) -> Path:
-        return self._path
-
-    def exists(self) -> bool:
-        return self._path.exists()
-
     def refresh(self, session_id: str, jsonl_path: Path) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         message_count, first_prompt = _scan_jsonl(jsonl_path)

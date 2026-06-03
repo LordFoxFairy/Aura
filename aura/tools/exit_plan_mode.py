@@ -16,7 +16,6 @@ ExitTarget = Literal["default", "accept_edits"]
 
 PriorModeGetter = Callable[[], str | None]
 
-_EXIT_TARGETS: frozenset[ExitTarget] = frozenset({"default", "accept_edits"})
 _APPROVAL_QUESTION = "Exit plan mode and accept this plan?"
 _APPROVAL_HEADER = "Approve plan"
 

@@ -143,15 +143,9 @@ class SessionStorage:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def _validate_session_id(self, session_id: str) -> None:
-        storage_paths.validate_session_id(session_id)
-
-    def _validate_task_id(self, task_id: str) -> None:
-        storage_paths.validate_task_id(task_id)
-
     def append(self, session_id: str, message: BaseMessage) -> None:
         """Append one envelope line + refresh the index; ``:memory:`` skips disk."""
-        self._validate_session_id(session_id)
+        storage_paths.validate_session_id(session_id)
         if self._in_memory:
             cur = self._conn.cursor()
             cur.execute(
@@ -187,7 +181,7 @@ class SessionStorage:
         parent_session_id: str | None = None,
         cwd: Path | None = None,
     ) -> Path:
-        self._validate_task_id(task_id)
+        storage_paths.validate_task_id(task_id)
         path = self.subagent_transcript_path(
             task_id,
             parent_session_id=parent_session_id,
@@ -257,7 +251,7 @@ class SessionStorage:
         return out
 
     def load_subagent_transcript(self, task_id: str) -> list[BaseMessage]:
-        self._validate_task_id(task_id)
+        storage_paths.validate_task_id(task_id)
         candidates: list[Path] = []
         projects = self._projects_dir()
         if projects.is_dir():
@@ -294,7 +288,7 @@ class SessionStorage:
 
     def save(self, session_id: str, messages: list[BaseMessage]) -> None:
         """Save full history; prefix-extension appends in place, divergence rewrites atomically."""
-        self._validate_session_id(session_id)
+        storage_paths.validate_session_id(session_id)
         journal.write(
             "storage_save", session=session_id, count=len(messages),
         )
@@ -372,7 +366,7 @@ class SessionStorage:
 
     def load(self, session_id: str) -> list[BaseMessage]:
         """Load messages; falls back to the in-process table when JSONL is empty/absent."""
-        self._validate_session_id(session_id)
+        storage_paths.validate_session_id(session_id)
         cur = self._conn.cursor()
         jsonl_path = self.session_jsonl_path(session_id)
         payloads = self._read_jsonl_payloads(jsonl_path)
@@ -389,7 +383,7 @@ class SessionStorage:
         return messages
 
     def clear(self, session_id: str) -> None:
-        self._validate_session_id(session_id)
+        storage_paths.validate_session_id(session_id)
         journal.write("storage_clear", session=session_id)
         cur = self._conn.cursor()
         cur.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))

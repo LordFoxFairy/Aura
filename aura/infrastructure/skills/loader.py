@@ -29,7 +29,6 @@ from aura.infrastructure.skills.registry import SkillRegistry
 from aura.infrastructure.skills.skills_bundled import _bundled_skills_root
 from aura.infrastructure.skills.skills_conditional import (
     activate_conditional_skills_for_paths,
-    activated_conditional_names,
     clear_conditional_state,
     get_conditional_skills,
     is_activated,
@@ -38,7 +37,6 @@ from aura.infrastructure.skills.skills_conditional import (
 
 __all__ = [
     "activate_conditional_skills_for_paths",
-    "activated_conditional_names",
     "clear_conditional_state",
     "get_conditional_skills",
     "load_skills",

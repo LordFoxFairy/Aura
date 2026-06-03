@@ -109,7 +109,6 @@ def _error_text(tool_name: str, reason: _ReadStatus, path: Path) -> str:
         return (
             f"file has not been read yet. read_file({path}) before overwriting."
         )
-    # edit_file
     if reason == "stale":
         return (
             f"file has changed since last read. re-read before editing. "

@@ -157,8 +157,6 @@ class _PickerState:
         self.viewport_top = max(
             0, min(self.cursor - self.page_size + 1, n - self.page_size),
         )
-        if self.viewport_top < 0:
-            self.viewport_top = 0
 
     def page_up(self) -> None:
         n = len(self.visible())

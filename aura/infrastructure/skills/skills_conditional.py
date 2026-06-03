@@ -63,11 +63,6 @@ def get_conditional_skills() -> list[Skill]:
     return list(_conditional_skills.values())
 
 
-def activated_conditional_names() -> frozenset[str]:
-    """Return the set of skills activated this session."""
-    return frozenset(_activated_conditional_names)
-
-
 def clear_conditional_state() -> None:
     """Reset the module-global conditional state (test hook)."""
     _conditional_skills.clear()

@@ -202,9 +202,7 @@ class MCPManager:
                 self._state[cfg.name] = (
                     "never_started" if cfg.enabled else "disabled"
                 )
-            self._tool_counts[cfg.name] = 0
-            self._prompt_counts[cfg.name] = 0
-            self._resource_counts[cfg.name] = 0
+            self._reset_counts(cfg.name)
 
         supported = _supported_transports()
         for cfg in self._configs:
@@ -323,9 +321,7 @@ class MCPManager:
                 self._errors[cfg.name] = err_text
                 if cfg.transport in ("sse", "streamable_http"):
                     self._schedule_reconnect(cfg)
-            self._tool_counts[cfg.name] = 0
-            self._prompt_counts[cfg.name] = 0
-            self._resource_counts[cfg.name] = 0
+            self._reset_counts(cfg.name)
             return [], []
 
         for t in tools:
@@ -379,9 +375,7 @@ class MCPManager:
             )
             resources = []
         # Reconnect may yield fewer resources; drop stale entries first.
-        self._resources = {
-            k: v for k, v in self._resources.items() if k[0] != cfg.name
-        }
+        self._drop_resources_for(cfg.name)
         for r in resources:
             if not isinstance(r, _ResourceLike) or r.uri is None:
                 continue
@@ -638,6 +632,16 @@ class MCPManager:
                 return cfg
         return None
 
+    def _reset_counts(self, name: str) -> None:
+        self._tool_counts[name] = 0
+        self._prompt_counts[name] = 0
+        self._resource_counts[name] = 0
+
+    def _drop_resources_for(self, name: str) -> None:
+        self._resources = {
+            k: v for k, v in self._resources.items() if k[0] != name
+        }
+
     def known_server_names(self) -> list[str]:
         return [cfg.name for cfg in self._configs_all]
 
@@ -680,15 +684,11 @@ class MCPManager:
         self._configs = [c for c in self._configs if c.name != name]
         if self._client is not None:
             self._client.connections.pop(name, None)
-        self._resources = {
-            k: v for k, v in self._resources.items() if k[0] != name
-        }
+        self._drop_resources_for(name)
         self._cancel_reconnect_task(name)
         self._state[name] = "disabled"
         self._errors.pop(name, None)
-        self._tool_counts[name] = 0
-        self._prompt_counts[name] = 0
-        self._resource_counts[name] = 0
+        self._reset_counts(name)
         return f"MCP server {name!r} disabled"
 
     async def reconnect(self, name: str) -> str:
@@ -702,15 +702,11 @@ class MCPManager:
             )
         if self._client is not None:
             self._client.connections.pop(name, None)
-        self._resources = {
-            k: v for k, v in self._resources.items() if k[0] != name
-        }
+        self._drop_resources_for(name)
         self._cancel_reconnect_task(name)
         self._state[name] = "never_started"
         self._errors.pop(name, None)
-        self._tool_counts[name] = 0
-        self._prompt_counts[name] = 0
-        self._resource_counts[name] = 0
+        self._reset_counts(name)
         if cfg not in self._configs:
             self._configs.append(cfg)
         await self._connect_one(cfg)
@@ -794,15 +790,11 @@ class MCPManager:
         self._configs = [c for c in self._configs if c.name != name]
         if self._client is not None:
             self._client.connections.pop(name, None)
-        self._resources = {
-            k: v for k, v in self._resources.items() if k[0] != name
-        }
+        self._drop_resources_for(name)
         self._cancel_reconnect_task(name)
         self._state[name] = "unapproved"
         self._errors.pop(name, None)
-        self._tool_counts[name] = 0
-        self._prompt_counts[name] = 0
-        self._resource_counts[name] = 0
+        self._reset_counts(name)
         return f"MCP server {name!r} approval revoked and disconnected"
 
     async def reload(
@@ -833,9 +825,7 @@ class MCPManager:
             self._cancel_reconnect_task(name)
             if self._client is not None:
                 self._client.connections.pop(name, None)
-            self._resources = {
-                k: v for k, v in self._resources.items() if k[0] != name
-            }
+            self._drop_resources_for(name)
 
         self._configs_all = list(configs)
         self._configs = [c for c in configs if c.enabled]
@@ -853,7 +843,5 @@ class MCPManager:
                     self._state[cfg.name] = (
                         "never_started" if cfg.enabled else "disabled"
                     )
-                self._tool_counts[cfg.name] = 0
-                self._prompt_counts[cfg.name] = 0
-                self._resource_counts[cfg.name] = 0
+                self._reset_counts(cfg.name)
         return f"+{len(added)} -{len(removed)}"

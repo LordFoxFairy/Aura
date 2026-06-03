@@ -278,11 +278,6 @@ class Bash(Tool):
             await _shutdown(proc)
             await _drain_pipes(proc)
             raise ToolError(f"timeout after {timeout}s: {exc}") from exc
-        except asyncio.CancelledError:
-            await _cleanup()
-            await _shutdown(proc)
-            await _drain_pipes(proc)
-            raise
         except BaseException:
             await _cleanup()
             await _shutdown(proc)

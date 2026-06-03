@@ -1,6 +1,5 @@
 """Core agent loop, state, registry, hooks, and built-in hook factories."""
 
-from aura.application.agent_context import AgentContext
 from aura.application.hooks import (
     HookChain,
     PostModelHook,
@@ -17,7 +16,6 @@ from aura.application.hooks.permission import make_permission_hook
 from aura.application.loop import AgentLoop, ToolStep
 from aura.application.loop_state import LoopState
 from aura.application.permission.asker import AskerResponse, PermissionAsker
-from aura.application.run_agent import run_agent
 from aura.application.session import AgentSession, build_agent
 from aura.domain.agent_definition import AgentDefinition
 from aura.domain.errors import AuraError
@@ -39,7 +37,6 @@ from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 
 __all__ = [
-    "AgentContext",
     "AgentDefinition",
     "AgentSession",
     "AgentEvent",
@@ -70,5 +67,4 @@ __all__ = [
     "make_permission_hook",
     "make_size_budget_hook",
     "make_usage_tracking_hook",
-    "run_agent",
 ]

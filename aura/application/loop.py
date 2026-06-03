@@ -263,48 +263,52 @@ class AgentLoop:
 
                 if ai.content:
                     yield AssistantDelta(text=str(ai.content))
-                if not ai.tool_calls:
-                    if (
-                        ai.response_metadata.get("finish_reason")
-                        == "length_recovery_exhausted"
-                    ):
+
+                # Destructure the model reply: empty tool_calls = terminal text,
+                # else a tool-use batch to dispatch before the next turn.
+                match ai:
+                    case AIMessage(tool_calls=[]):
+                        if (
+                            ai.response_metadata.get("finish_reason")
+                            == "length_recovery_exhausted"
+                        ):
+                            journal.write(
+                                "turn_end",
+                                turn=self._state.turn_count,
+                                ended_with="length_recovery_exhausted",
+                            )
+                            yield Final(
+                                message=str(ai.content),
+                                reason="length_recovery_exhausted",
+                            )
+                            return
+                        journal.write(
+                            "turn_end",
+                            turn=self._state.turn_count, ended_with="final",
+                        )
+                        yield Final(message=str(ai.content))
+                        return
+                    case AIMessage(tool_calls=tool_calls):
+                        # On cancel, synthesise one ToolMessage per unanswered call
+                        # so providers don't 400 on the trailing tool_use AIMessage.
+                        try:
+                            async for event in self._dispatch_tool_calls(
+                                tool_calls, history,
+                            ):
+                                yield event
+                        except (AbortException, asyncio.CancelledError):
+                            answered = {
+                                m.tool_call_id for m in history
+                                if isinstance(m, ToolMessage)
+                            }
+                            self._synthesise_missing_tool_messages(history, answered)
+                            raise
                         journal.write(
                             "turn_end",
                             turn=self._state.turn_count,
-                            ended_with="length_recovery_exhausted",
+                            ended_with="tool_loop",
+                            tool_count=len(tool_calls),
                         )
-                        yield Final(
-                            message=str(ai.content),
-                            reason="length_recovery_exhausted",
-                        )
-                        return
-                    journal.write(
-                        "turn_end",
-                        turn=self._state.turn_count, ended_with="final",
-                    )
-                    yield Final(message=str(ai.content))
-                    return
-
-                # On cancel, synthesise one ToolMessage per unanswered call
-                # so providers don't 400 on the trailing tool_use AIMessage.
-                try:
-                    async for event in self._dispatch_tool_calls(
-                        ai.tool_calls, history,
-                    ):
-                        yield event
-                except (AbortException, asyncio.CancelledError):
-                    answered = {
-                        m.tool_call_id for m in history
-                        if isinstance(m, ToolMessage)
-                    }
-                    self._synthesise_missing_tool_messages(history, answered)
-                    raise
-                journal.write(
-                    "turn_end",
-                    turn=self._state.turn_count,
-                    ended_with="tool_loop",
-                    tool_count=len(ai.tool_calls),
-                )
 
                 if (
                     self._max_turns is not None

@@ -14,7 +14,6 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
-from aura.application.agent_context import AgentContext
 from aura.application.commands.types import Command
 from aura.application.compact import (
     MICROCOMPACT_KEEP_RECENT,
@@ -42,7 +41,6 @@ from aura.application.loop_state import LoopState
 from aura.application.memory import project_memory, rules
 from aura.application.memory.context import Context
 from aura.application.memory.system_prompt import build_system_prompt
-from aura.application.run_agent import run_agent
 from aura.application.runtime.mcp import McpRuntime
 from aura.application.runtime.session import SessionRuntime
 from aura.application.runtime.tool_factory import STATEFUL_TOOL_FACTORIES
@@ -449,9 +447,8 @@ class AgentSession:
             saw_ai_message = False
             try:
                 try:
-                    turn_context = AgentContext(loop=self._loop, abort=local_abort)
-                    async for event in run_agent(
-                        self.definition, history, turn_context,
+                    async for event in self._loop.run_turn(
+                        history=history, abort=local_abort,
                     ):
                         if isinstance(event, AssistantDelta):
                             self._partial_assistant_text += event.text

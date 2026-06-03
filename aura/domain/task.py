@@ -35,8 +35,6 @@ class TaskProgress:
     recent_activities: list[str] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
-    latest_summary: str | None = None
-    summary_updated_at: float | None = None
 
 
 @dataclass

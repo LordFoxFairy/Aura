@@ -257,7 +257,6 @@ async def test_meta_json_includes_input_output_tokens(
         parent_session_id="parent-tokens",
         cwd=str(tmp_path),
         # Disable summarizer so the test doesn't need the LLM factory.
-        summary_interval_sec=0,
     )
 
     meta = _read_meta(

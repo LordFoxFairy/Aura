@@ -36,8 +36,6 @@ class TaskProgressDict(TypedDict):
     recent_activities: list[str]
     input_tokens: int
     output_tokens: int
-    latest_summary: str | None
-    summary_updated_at: float | None
 
 
 class TaskGetResult(TypedDict):
@@ -99,8 +97,6 @@ def _serialize(rec: TaskRecord, *, include_messages: bool) -> TaskGetResult:
             "recent_activities": list(rec.progress.recent_activities),
             "input_tokens": rec.progress.input_tokens,
             "output_tokens": rec.progress.output_tokens,
-            "latest_summary": rec.progress.latest_summary,
-            "summary_updated_at": rec.progress.summary_updated_at,
         },
     }
     if include_messages:

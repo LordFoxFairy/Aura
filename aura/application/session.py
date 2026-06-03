@@ -281,11 +281,7 @@ class AgentSession:
         self._teammate: TeammateBinding | None = None
 
         def _on_terminal(rec: TaskRecord) -> None:
-            summary = (
-                rec.progress.latest_summary
-                or rec.final_result
-                or rec.error
-            )
+            summary = rec.final_result or rec.error
             notification = TaskNotification(
                 task_id=rec.id,
                 status=rec.status,

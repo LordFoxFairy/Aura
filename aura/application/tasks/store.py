@@ -190,14 +190,6 @@ class TasksStore:
             rec.progress.input_tokens + rec.progress.output_tokens
         )
 
-    def update_summary(self, task_id: str, summary: str) -> None:
-        """Overwrite ``progress.latest_summary`` and stamp the timestamp."""
-        rec = self._records.get(task_id)
-        if rec is None:
-            return
-        rec.progress.latest_summary = summary
-        rec.progress.summary_updated_at = time.time()
-
     def mark_observed(self, task_id: str) -> float | None:
         """Stamp when a terminal task's result is first observed; stable on repeated reads."""
         rec = self._records.get(task_id)

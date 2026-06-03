@@ -64,7 +64,7 @@ async def test_token_count_increments_after_model_invoke() -> None:
     # Disable the periodic summarizer so the test only exercises the
     # token-tracking path (the summary loop schedules a separate model
     # invoke that would also count).
-    await run_task(store, factory, rec.id, summary_interval_sec=0)
+    await run_task(store, factory, rec.id)
     refreshed = store.get(rec.id)
     assert refreshed is not None
     assert refreshed.progress.token_count == 125
@@ -77,7 +77,7 @@ async def test_token_count_appears_in_task_get() -> None:
     """task_get surfaces the cumulative usage breakdown."""
     store, factory = _make_factory_with_usage(input_tokens=50, output_tokens=12)
     rec = store.create(description="d", prompt="p")
-    await run_task(store, factory, rec.id, summary_interval_sec=0)
+    await run_task(store, factory, rec.id)
 
     out = await TaskGet(store=store).ainvoke({"task_id": rec.id})
     assert out["progress"]["token_count"] == 62
@@ -99,7 +99,7 @@ async def test_no_usage_metadata_does_not_crash() -> None:
     )
     rec = store.create(description="d", prompt="p")
     # Should not raise; token_count stays at 0.
-    await run_task(store, factory, rec.id, summary_interval_sec=0)
+    await run_task(store, factory, rec.id)
     refreshed = store.get(rec.id)
     assert refreshed is not None
     assert refreshed.status == "completed"
@@ -134,7 +134,7 @@ async def test_token_count_aggregates_across_multiple_rounds() -> None:
     # the hook calls into.
     store, factory = _make_factory_with_usage(input_tokens=100, output_tokens=25)
     rec = store.create(description="d", prompt="p")
-    await run_task(store, factory, rec.id, summary_interval_sec=0)
+    await run_task(store, factory, rec.id)
 
     # Now simulate a second invoke landing on the same record (as would
     # happen on a multi-round child) by calling record_token_usage again.
@@ -177,7 +177,7 @@ async def test_observer_runs_on_real_subagent_invoke() -> None:
     store, factory = _make_factory_with_usage(input_tokens=42, output_tokens=8)
     rec = store.create(description="probe", prompt="hi")
     await asyncio.wait_for(
-        run_task(store, factory, rec.id, summary_interval_sec=0),
+        run_task(store, factory, rec.id),
         timeout=5.0,
     )
     refreshed = store.get(rec.id)

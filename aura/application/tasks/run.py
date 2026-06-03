@@ -19,7 +19,6 @@ async def run_task(
     *,
     timeout_sec: float | None = None,
     transcript_storage: SessionStorage | None = None,
-    summary_interval_sec: float | None = None,
     parent_session_id: str | None = None,
     cwd: str | None = None,
 ) -> None:
@@ -30,7 +29,6 @@ async def run_task(
         task_id=task_id,
         timeout_sec=timeout_sec,
         transcript_storage=transcript_storage,
-        summary_interval_sec=summary_interval_sec,
         parent_session_id=parent_session_id,
         cwd=cwd,
     )

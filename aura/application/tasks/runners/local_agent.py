@@ -7,9 +7,6 @@ import contextlib
 import os
 import time
 
-from langchain_core.messages import BaseMessage
-
-from aura.application.subagent_summary import AgentSummarizer
 from aura.application.tasks.runners.local_agent_io import (
     capture_child_messages,
     flush_metadata,
@@ -25,7 +22,6 @@ from aura.application.tasks.runners.local_agent_support import (
 from aura.application.tasks.spawn_port import SpawnedAgent, SpawnPort
 from aura.application.tasks.store import TasksStore
 from aura.domain.events import Final, ToolCallStarted
-from aura.infrastructure.llm import make_summary_model_factory
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 
@@ -41,7 +37,6 @@ class LocalAgentTask:
         task_id: str,
         timeout_sec: float | None = None,
         transcript_storage: SessionStorage | None = None,
-        summary_interval_sec: float | None = None,
         parent_session_id: str | None = None,
         cwd: str | None = None,
     ) -> None:
@@ -50,7 +45,6 @@ class LocalAgentTask:
         self._task_id = task_id
         self._timeout_sec = timeout_sec
         self._transcript_storage = transcript_storage
-        self._summary_interval_sec = summary_interval_sec
         self._parent_session_id = parent_session_id
         self._cwd = cwd
         self._task: asyncio.Task[None] | None = None
@@ -83,7 +77,6 @@ class LocalAgentTask:
             task_id=self._task_id,
             timeout_sec=self._timeout_sec,
             transcript_storage=self._transcript_storage,
-            summary_interval_sec=self._summary_interval_sec,
             parent_session_id=self._parent_session_id,
             cwd=self._cwd,
         )
@@ -96,7 +89,6 @@ async def run_local_agent(
     task_id: str,
     timeout_sec: float | None,
     transcript_storage: SessionStorage | None,
-    summary_interval_sec: float | None,
     parent_session_id: str | None,
     cwd: str | None,
 ) -> None:
@@ -134,7 +126,6 @@ async def run_local_agent(
     store.record_started(task_id)
     agent: SpawnedAgent | None = None
     final_text = ""
-    summarizer: AgentSummarizer | None = None
 
     async def _finalize_run(*, require_agent: bool, cleanup: bool) -> None:
         if transcript_storage is not None and (agent is not None or not require_agent):
@@ -160,8 +151,6 @@ async def run_local_agent(
                     parent_session_id=resolved_parent_session_id,
                     cwd=resolved_cwd,
                 )
-        if summarizer is not None:
-            await summarizer.stop()
         if agent is not None:
             await agent.aclose()
 
@@ -173,27 +162,6 @@ async def run_local_agent(
             model_spec=record.model_spec or None,
         )
         agent.hooks.post_model.append(make_token_observer(store, task_id))
-        summary_factory = make_summary_model_factory(
-            agent.config, agent.model, summary_spec=None,
-        )
-        child_storage = agent.storage
-        child_session_id = agent.session_id
-
-        def _transcript_provider() -> list[BaseMessage]:
-            try:
-                return list(child_storage.load(child_session_id))
-            except Exception:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
-                rec = store.get(task_id)
-                return list(rec.messages) if rec is not None else []
-
-        summarizer = AgentSummarizer(
-            task_id=task_id,
-            store=store,
-            transcript_provider=_transcript_provider,
-            summary_model_factory=summary_factory,
-            interval_sec=summary_interval_sec,
-        )
-        summarizer.start()
         async with asyncio.timeout(effective_timeout):
             async for event in agent.astream(record.prompt):
                 if isinstance(event, ToolCallStarted):

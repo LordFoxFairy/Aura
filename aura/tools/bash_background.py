@@ -101,10 +101,6 @@ class BashBackground(BaseTool):
         self._running_shells = running_shells
         self._running_tasks = running_tasks if running_tasks is not None else {}
 
-    @property
-    def running_shells(self) -> dict[str, asyncio.subprocess.Process]:
-        return self._running_shells
-
     def _run(
         self,
         command: str,

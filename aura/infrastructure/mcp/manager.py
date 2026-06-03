@@ -745,12 +745,6 @@ class MCPManager:
     def unapproved_server_names(self) -> set[str]:
         return set(self._unapproved)
 
-    def needs_auth_server_names(self) -> set[str]:
-        return {
-            name for name, state in self._state.items()
-            if state == "needs_auth"
-        }
-
     async def approve(self, name: str) -> str:
         """Persist approval for a project-layer server, then (re)connect."""
         cfg = self._config_by_name(name)

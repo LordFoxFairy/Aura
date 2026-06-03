@@ -133,11 +133,10 @@ def _resolve_target(
         suffix = path.suffix.lower()
         if suffix in _JSON_EXTS:
             fmt = "json"
-        elif suffix in _MD_EXTS:
-            fmt = "md"
         else:
             fmt = "md"
-            note = f"note: unknown extension {suffix!r}, writing markdown"
+            if suffix not in _MD_EXTS:
+                note = f"note: unknown extension {suffix!r}, writing markdown"
     return path, fmt, note
 
 

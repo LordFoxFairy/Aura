@@ -25,12 +25,11 @@ from aura.application.permission.bash_safety_rules import (
     _check_world_writable_chmod,
     _check_zsh_dangerous,
 )
-from aura.application.permission.bash_safety_types import BashSafetyViolation, Reason
+from aura.application.permission.bash_safety_types import BashSafetyViolation
 
 __all__ = [
     "ZSH_DANGEROUS_COMMANDS",
     "BashSafetyViolation",
-    "Reason",
     "_expand_braces",
     "check_bash_safety",
 ]

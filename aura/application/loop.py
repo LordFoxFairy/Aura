@@ -96,6 +96,17 @@ def _length_truncated(ai: AIMessage) -> bool:
     )
 
 
+@contextlib.contextmanager
+def _abort_scope(abort: AbortController | None) -> Iterator[None]:
+    """Bind the turn's abort signal so tools and spawned subagents inherit it."""
+    token = current_abort_signal.set(abort) if abort is not None else None
+    try:
+        yield
+    finally:
+        if token is not None:
+            current_abort_signal.reset(token)
+
+
 def _resolve_batch_timeout(override: float | None) -> float:
     """Effective batch deadline in seconds; ``0.0`` disables the feature.
 
@@ -248,11 +259,7 @@ class AgentLoop:
         # so AgentSession.last_turn_denials keeps pointing at the live bucket.
         self._state.slots.turn_denials.clear()
         self._state.slots.perm_dedup_cache.clear()
-        # contextvar lets tools and spawned subagents inherit the signal.
-        ctx_token = None
-        if abort is not None:
-            ctx_token = current_abort_signal.set(abort)
-        try:
+        with _abort_scope(abort):
             while True:
                 journal.write("turn_begin", turn=self._state.turn_count + 1)
                 # Gate between turns so cancel doesn't race the next ainvoke.
@@ -325,9 +332,6 @@ class AgentLoop:
                         reason="max_turns",
                     )
                     return
-        finally:
-            if ctx_token is not None:
-                current_abort_signal.reset(ctx_token)
 
     def _synthesise_missing_tool_messages(
         self,

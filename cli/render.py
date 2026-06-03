@@ -16,6 +16,7 @@ from rich.text import Text
 from aura.domain.events import (
     AgentEvent,
     AssistantDelta,
+    Final,
     PermissionAudit,
     ToolCallCompleted,
     ToolCallProgress,
@@ -63,79 +64,79 @@ class Renderer:
             self._pending_text += event.text
             return
         self._flush_pending()
-        if isinstance(event, ToolCallStarted):
-            if self._pending_tool is not None:
-                self._flush_pending_tool_as_running()
-            self._pending_tool = (event.name, event.input)
-            return
-        if isinstance(event, PermissionAudit):
-            if self._pending_tool is not None:
-                self._flush_pending_tool_as_running()
-            self._console.print(f"    [dim]{rich_escape(event.text)}[/dim]")
-            return
-        if isinstance(event, ToolCallProgress):
-            if self._pending_tool is not None:
-                self._flush_pending_tool_as_running()
-            text = event.chunk.rstrip("\n")
-            if not text:
-                return
-            for line in text.split("\n"):
-                self._console.print(
-                    f"[dim]│ {rich_escape(line)}[/dim]",
-                    highlight=False,
-                )
-            return
-        if isinstance(event, ToolCallCompleted):
-            pending = self._pending_tool
-            self._pending_tool = None
-            if event.error:
-                if pending is not None:
-                    name, args = pending
+        match event:
+            case ToolCallStarted(name=name, input=tool_input):
+                if self._pending_tool is not None:
+                    self._flush_pending_tool_as_running()
+                self._pending_tool = (name, tool_input)
+            case PermissionAudit(text=text):
+                if self._pending_tool is not None:
+                    self._flush_pending_tool_as_running()
+                self._console.print(f"    [dim]{rich_escape(text)}[/dim]")
+            case ToolCallProgress(chunk=chunk):
+                if self._pending_tool is not None:
+                    self._flush_pending_tool_as_running()
+                text = chunk.rstrip("\n")
+                if not text:
+                    return
+                for line in text.split("\n"):
                     self._console.print(
-                        f"[red]✗[/red] [dim]{rich_escape(name)}"
-                        f"({rich_escape(compact_args(args))})[/dim]",
+                        f"[dim]│ {rich_escape(line)}[/dim]",
+                        highlight=False,
                     )
-                self._console.print(_render_tool_error(event.name, event.error))
-                return
-            formatter = _TOOL_RESULT_FORMATTERS.get(event.name)
-            summary = (
-                rich_escape(formatter(event.output))
-                if formatter is not None else None
-            )
+            case ToolCallCompleted():
+                self._render_completed(event)
+            case Final(reason=reason):
+                if self._pending_tool is not None:
+                    self._flush_pending_tool_as_running()
+                if reason == "aborted":
+                    self._console.print(Text(" cancelled by user", style="dim"))
+                elif reason == "max_turns":
+                    self._console.print(Text(" max turns reached", style="dim"))
+                elif reason == "length_recovery_exhausted":
+                    self._console.print(Text(
+                        " ⚠ output truncated by max_output_tokens after 3 retries"
+                        " — try /retry",
+                        style="yellow",
+                    ))
+
+    def _render_completed(self, event: ToolCallCompleted) -> None:
+        pending = self._pending_tool
+        self._pending_tool = None
+        if event.error:
             if pending is not None:
                 name, args = pending
-                head = (
-                    f"[green]✓[/green] [dim]{rich_escape(name)}"
-                    f"({rich_escape(compact_args(args))})[/dim]"
+                self._console.print(
+                    f"[red]✗[/red] [dim]{rich_escape(name)}"
+                    f"({rich_escape(compact_args(args))})[/dim]",
                 )
-                if summary is not None:
-                    self._console.print(f"{head} [dim]— {summary}[/dim]")
-                else:
-                    self._console.print(head)
-            elif summary is not None:
-                self._console.print(f"[green]✓[/green] [dim]{summary}[/dim]")
-            else:
-                self._console.print("[green]✓[/green]")
-            if event.name in _SEARCH_COMMAND_TOOLS:
-                fold_text = _extract_text(event.output)
-                if fold_text is not None:
-                    total_lines = len(fold_text.splitlines())
-                    if total_lines > _FOLD_THRESHOLD:
-                        _render_folded(self._console, fold_text)
+            self._console.print(_render_tool_error(event.name, event.error))
             return
-        if self._pending_tool is not None:
-            self._flush_pending_tool_as_running()
-        reason = event.reason
-        if reason == "aborted":
-            self._console.print(Text(" cancelled by user", style="dim"))
-        elif reason == "max_turns":
-            self._console.print(Text(" max turns reached", style="dim"))
-        elif reason == "length_recovery_exhausted":
-            self._console.print(Text(
-                " ⚠ output truncated by max_output_tokens after 3 retries"
-                " — try /retry",
-                style="yellow",
-            ))
+        formatter = _TOOL_RESULT_FORMATTERS.get(event.name)
+        summary = (
+            rich_escape(formatter(event.output))
+            if formatter is not None else None
+        )
+        if pending is not None:
+            name, args = pending
+            head = (
+                f"[green]✓[/green] [dim]{rich_escape(name)}"
+                f"({rich_escape(compact_args(args))})[/dim]"
+            )
+            if summary is not None:
+                self._console.print(f"{head} [dim]— {summary}[/dim]")
+            else:
+                self._console.print(head)
+        elif summary is not None:
+            self._console.print(f"[green]✓[/green] [dim]{summary}[/dim]")
+        else:
+            self._console.print("[green]✓[/green]")
+        if event.name in _SEARCH_COMMAND_TOOLS:
+            fold_text = _extract_text(event.output)
+            if fold_text is not None:
+                total_lines = len(fold_text.splitlines())
+                if total_lines > _FOLD_THRESHOLD:
+                    _render_folded(self._console, fold_text)
 
     def finish(self) -> None:
         self._flush_pending()

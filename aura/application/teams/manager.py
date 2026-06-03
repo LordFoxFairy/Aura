@@ -24,6 +24,7 @@ from aura.application.teams.mailbox import (
 from aura.application.teams.runtime import run_teammate
 from aura.application.teams.view_types import TeammateMemberStatus, TeamViewSnapshot
 from aura.domain.abort import AbortController
+from aura.domain.task import TaskRecord
 from aura.domain.team import (
     BROADCAST_RECIPIENT,
     MAX_BODY_CHARS,
@@ -40,6 +41,7 @@ from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.teams.in_process import InProcessBackend, InProcessHandle
 from aura.infrastructure.teams.registry import BackendUnavailable, get_backend
+from aura.infrastructure.teams.types import TeammateBackend
 from aura.infrastructure.wire.events import CoordinationEvent, LifecyclePayload
 from aura.infrastructure.wire.serialize import team_message_to_wire
 
@@ -89,6 +91,20 @@ class Member:
     backend: _BackendHandleLike | None = None
     shutdown_ack: asyncio.Future[bool] | None = None
     shutdown_waiter: asyncio.Task[bool] | None = None
+
+
+@dataclass(frozen=True)
+class _PreparedMember:
+    """Common prefix of (a)add_member: validated, persisted, spawned, pre-dispatch."""
+
+    member: TeammateMember
+    record: TaskRecord
+    child: AgentSession
+    abort: AbortController
+    stop_event: asyncio.Event
+    backend: TeammateBackend
+    slot: Member
+    team_id: str
 
 
 class TeamError(ValueError):
@@ -294,16 +310,16 @@ class TeamManager:
                 m.stop_event = None
             self._teammate_terminal_intents.clear()
 
-    def add_member(
+    def _prepare_member(
         self,
         name: str,
         *,
-        agent_type: str = "general-purpose",
-        system_prompt: str | None = None,
-        model_name: str | None = None,
-        seed_prompt: str | None = None,
-        backend_type: BackendType = "in_process",
-    ) -> TeammateMember:
+        agent_type: str,
+        system_prompt: str | None,
+        model_name: str | None,
+        seed_prompt: str | None,
+        backend_type: BackendType,
+    ) -> _PreparedMember:
         if self._team is None:
             raise TeamError("no team is active; call create_team first")
         if name == TEAM_LEADER_NAME:
@@ -371,12 +387,71 @@ class TeamManager:
         # Abort controller must register before runtime starts so a same-tick cascade finds it.
         abort = AbortController()
         self._running_aborts[record.id] = abort
-        stop_event = asyncio.Event()
+        return _PreparedMember(
+            member=member,
+            record=record,
+            child=child,
+            abort=abort,
+            stop_event=asyncio.Event(),
+            backend=backend,
+            slot=slot,
+            team_id=self._team.team_id,
+        )
+
+    def _finalize_member(
+        self,
+        prepared: _PreparedMember,
+        handle: _BackendHandleLike,
+        *,
+        agent_type: str,
+        backend_type: BackendType,
+    ) -> TeammateMember:
+        member = prepared.member
+        prepared.slot.stop_event = prepared.stop_event
+        prepared.slot.backend = handle
+        if member.tmux_pane_id is not None:
+            # Pane backend may have stamped tmux_pane_id during spawn.
+            self._persist()
+        self._emit_member_lifecycle(member.name, "ready")
+        self._emit_member_lifecycle(member.name, "idle")
+        journal.write(
+            "team_member_added",
+            team_id=prepared.team_id,
+            member=member.name,
+            agent_type=agent_type,
+            backend_type=backend_type,
+            task_id=prepared.record.id,
+            tmux_pane_id=member.tmux_pane_id,
+        )
+        return member
+
+    def add_member(
+        self,
+        name: str,
+        *,
+        agent_type: str = "general-purpose",
+        system_prompt: str | None = None,
+        model_name: str | None = None,
+        seed_prompt: str | None = None,
+        backend_type: BackendType = "in_process",
+    ) -> TeammateMember:
+        prepared = self._prepare_member(
+            name,
+            agent_type=agent_type,
+            system_prompt=system_prompt,
+            model_name=model_name,
+            seed_prompt=seed_prompt,
+            backend_type=backend_type,
+        )
         if backend_type == "pane":
             raise TeamError(
                 "pane backend must be added via aadd_member() from an "
                 "async context (sync add_member supports in_process only)",
             )
+        record = prepared.record
+        child = prepared.child
+        abort = prepared.abort
+        stop_event = prepared.stop_event
         self._emit_member_lifecycle(name, "starting")
         handle: _BackendHandleLike
         if self._runtime_runner is not run_teammate:
@@ -386,7 +461,7 @@ class TeamManager:
             task: asyncio.Task[None] = asyncio.create_task(
                 self._runtime_runner(
                     agent=child,
-                    team_id=self._team.team_id,
+                    team_id=prepared.team_id,
                     member_name=name,
                     storage=self._storage,
                     stop_event=stop_event,
@@ -403,10 +478,10 @@ class TeamManager:
                 abort=abort,
             )
         else:
-            assert isinstance(backend, InProcessBackend)
-            handle = backend.spawn_sync(
-                team_id=self._team.team_id,
-                member=member,
+            assert isinstance(prepared.backend, InProcessBackend)
+            handle = prepared.backend.spawn_sync(
+                team_id=prepared.team_id,
+                member=prepared.member,
                 agent=child,
                 manager=self,
                 storage=self._storage,
@@ -420,23 +495,12 @@ class TeamManager:
                 self._finalize_runtime_task(record.id, _t, abort)
             in_proc_task.add_done_callback(_cleanup)
             self._runtimes[record.id] = in_proc_task
-        slot.stop_event = stop_event
-        slot.backend = handle
-        if member.tmux_pane_id is not None:
-            # Pane backend may have stamped tmux_pane_id during spawn.
-            self._persist()
-        self._emit_member_lifecycle(name, "ready")
-        self._emit_member_lifecycle(name, "idle")
-        journal.write(
-            "team_member_added",
-            team_id=self._team.team_id,
-            member=name,
+        return self._finalize_member(
+            prepared,
+            handle,
             agent_type=agent_type,
             backend_type=backend_type,
-            task_id=record.id,
-            tmux_pane_id=member.tmux_pane_id,
         )
-        return member
 
     async def aadd_member(
         self,
@@ -457,80 +521,24 @@ class TeamManager:
                 seed_prompt=seed_prompt,
                 backend_type=backend_type,
             )
-        if self._team is None:
-            raise TeamError("no team is active; call create_team first")
-        if name == TEAM_LEADER_NAME:
-            raise TeamError(f"member name {name!r} is reserved for the leader")
-        if name == BROADCAST_RECIPIENT:
-            raise TeamError(
-                f"member name {name!r} is reserved for broadcast routing",
-            )
-        if not _SLUG_RE.match(name):
-            raise TeamError(
-                f"member name {name!r} must match {_SLUG_RE.pattern}",
-            )
-        if any(m.name == name for m in self._team.members):
-            raise TeamError(f"member {name!r} already exists in team")
-        if len(self._team.members) >= MAX_MEMBERS:
-            raise TeamError(
-                f"team has reached MAX_MEMBERS={MAX_MEMBERS}; "
-                "remove a member before adding another",
-            )
-        try:
-            backend = get_backend(backend_type)
-        except BackendUnavailable as exc:
-            raise TeamError(str(exc)) from exc
-        if model_name is not None:
-            self._factory.validate_model_spec(model_name)
-        member = TeammateMember(
-            name=name,
+        prepared = self._prepare_member(
+            name,
             agent_type=agent_type,
             system_prompt=system_prompt,
             model_name=model_name,
+            seed_prompt=seed_prompt,
             backend_type=backend_type,
         )
-        self._team.members.append(member)
-        self._persist()
-        prompt_for_task = seed_prompt or "(idle teammate; awaiting messages)"
-        task_model_spec = (
-            model_name
-            if model_name is not None
-            else self._factory.parent_model_spec
-        )
-        record = self._tasks_store.create(
-            description=f"teammate: {name}",
-            prompt=prompt_for_task,
-            kind="teammate",
-            agent_type=agent_type,
-            metadata={"team_id": self._team.team_id, "member": name},
-            model_spec=task_model_spec,
-        )
-        child = self._factory.spawn(
-            prompt_for_task,
-            agent_type=agent_type,
-            task_id=record.id,
-            model_spec=model_name,
-        )
-        child.join_team(
-            manager=self,
-            member_name=name,
-            task_id=record.id,
-            tasks_store=self._tasks_store,
-        )
-        slot = self._members.setdefault(name, Member())
-        slot.agent = child
-        slot.task_id = record.id
-        abort = AbortController()
-        self._running_aborts[record.id] = abort
-        stop_event = asyncio.Event()
+        record = prepared.record
+        abort = prepared.abort
         self._emit_member_lifecycle(name, "starting")
-        handle = await backend.spawn(
-            team_id=self._team.team_id,
-            member=member,
-            agent=child,
+        handle = await prepared.backend.spawn(
+            team_id=prepared.team_id,
+            member=prepared.member,
+            agent=prepared.child,
             manager=self,
             storage=self._storage,
-            stop_event=stop_event,
+            stop_event=prepared.stop_event,
             abort=abort,
             seed_prompt=seed_prompt,
             notifier=self._mailbox_notifier,
@@ -542,22 +550,12 @@ class TeamManager:
                 self._finalize_runtime_task(record.id, _t, abort)
             task.add_done_callback(_cleanup)
             self._runtimes[record.id] = task
-        slot.stop_event = stop_event
-        slot.backend = handle
-        if member.tmux_pane_id is not None:
-            self._persist()
-        self._emit_member_lifecycle(name, "ready")
-        self._emit_member_lifecycle(name, "idle")
-        journal.write(
-            "team_member_added",
-            team_id=self._team.team_id,
-            member=name,
+        return self._finalize_member(
+            prepared,
+            handle,
             agent_type=agent_type,
             backend_type=backend_type,
-            task_id=record.id,
-            tmux_pane_id=member.tmux_pane_id,
         )
-        return member
 
     # 5 s matches the teammate runtime's mailbox-wait slice; below it fights the cadence.
     DEFAULT_SHUTDOWN_GRACE_SEC: float = 5.0

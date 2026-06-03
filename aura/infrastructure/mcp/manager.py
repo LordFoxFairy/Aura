@@ -645,15 +645,18 @@ class MCPManager:
     def known_server_names(self) -> list[str]:
         return [cfg.name for cfg in self._configs_all]
 
-    async def enable(self, name: str) -> str:
-        """Bring a server online; never raises on unknown name."""
+    def _lookup_config_or_error(self, name: str) -> MCPServerConfig | str:
         cfg = self._config_by_name(name)
         if cfg is None:
             known = self.known_server_names()
-            return (
-                f"no MCP server named {name!r}; "
-                f"known: {known}"
-            )
+            return f"no MCP server named {name!r}; known: {known}"
+        return cfg
+
+    async def enable(self, name: str) -> str:
+        """Bring a server online; never raises on unknown name."""
+        cfg = self._lookup_config_or_error(name)
+        if isinstance(cfg, str):
+            return cfg
         current = self._state.get(name, "never_started")
         if current == "connected":
             return f"MCP server {name!r} is already connected"
@@ -671,13 +674,9 @@ class MCPManager:
 
     async def disable(self, name: str) -> str:
         """Disconnect + clear discovery state; idempotent."""
-        cfg = self._config_by_name(name)
-        if cfg is None:
-            known = self.known_server_names()
-            return (
-                f"no MCP server named {name!r}; "
-                f"known: {known}"
-            )
+        cfg = self._lookup_config_or_error(name)
+        if isinstance(cfg, str):
+            return cfg
         current = self._state.get(name, "never_started")
         if current == "disabled":
             return f"MCP server {name!r} is already disabled"
@@ -693,13 +692,9 @@ class MCPManager:
 
     async def reconnect(self, name: str) -> str:
         """Force a disable-then-enable cycle; idempotent."""
-        cfg = self._config_by_name(name)
-        if cfg is None:
-            known = self.known_server_names()
-            return (
-                f"no MCP server named {name!r}; "
-                f"known: {known}"
-            )
+        cfg = self._lookup_config_or_error(name)
+        if isinstance(cfg, str):
+            return cfg
         if self._client is not None:
             self._client.connections.pop(name, None)
         self._drop_resources_for(name)
@@ -747,13 +742,9 @@ class MCPManager:
 
     async def approve(self, name: str) -> str:
         """Persist approval for a project-layer server, then (re)connect."""
-        cfg = self._config_by_name(name)
-        if cfg is None:
-            known = self.known_server_names()
-            return (
-                f"no MCP server named {name!r}; "
-                f"known: {known}"
-            )
+        cfg = self._lookup_config_or_error(name)
+        if isinstance(cfg, str):
+            return cfg
         if name not in self._project_server_names:
             return (
                 f"MCP server {name!r} is user-scope; approval is not required"
@@ -772,13 +763,9 @@ class MCPManager:
 
     async def revoke(self, name: str) -> str:
         """Revoke approval and tear down any live connection."""
-        cfg = self._config_by_name(name)
-        if cfg is None:
-            known = self.known_server_names()
-            return (
-                f"no MCP server named {name!r}; "
-                f"known: {known}"
-            )
+        cfg = self._lookup_config_or_error(name)
+        if isinstance(cfg, str):
+            return cfg
         mcp_approvals.revoke(name)
         self._unapproved.add(name)
         self._configs = [c for c in self._configs if c.name != name]

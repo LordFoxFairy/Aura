@@ -4,11 +4,11 @@ Unit-level task tests already exist under ``tests/test_task_tools.py``; they
 drive the ``task_create`` tool directly and assert the ``TasksStore`` gets
 the right record. This tier runs the full LLM-driven path: the parent
 model issues a ``task_create`` tool call, the loop dispatches the
-subagent Agent, the subagent runs its own ``astream`` → writes a final
+subagent AgentSession, the subagent runs its own ``astream`` → writes a final
 result back into the store, the parent model's next turn observes the
 result via ``task_get`` / ``task_list``.
 
-If any of the plumbing across that boundary breaks (subagent's Agent
+If any of the plumbing across that boundary breaks (subagent's AgentSession
 never spawns, final_result never lands, parent never gets the follow-up
 turn), this test catches it — whereas the unit tests would keep
 passing.
@@ -230,7 +230,7 @@ async def test_parallel_three_subagents_parent_reads_all(tmp_path: Path) -> None
     store = agent._tasks_store
 
     # Child model factory returns a different reply per agent_type by
-    # looking at the child Agent's system_prompt at spawn time.
+    # looking at the child AgentSession's system_prompt at spawn time.
     _responses = {
         "Explore": "scan complete",
         "Verify": "VERDICT: PASS all checks green",

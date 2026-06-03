@@ -1,7 +1,7 @@
 """F-0910-002 — auto-compact consecutive-failure circuit breaker.
 
 Three consecutive failed auto-compact attempts must disable subsequent auto
-firings on this Agent. Manual /compact bypasses the breaker. A successful
+firings on this AgentSession. Manual /compact bypasses the breaker. A successful
 auto-compact resets the counter to 0.
 """
 
@@ -15,8 +15,8 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from aura.application.compact import CompactResult, CompactSource
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -29,8 +29,8 @@ def _config() -> AuraConfig:
     })
 
 
-def _agent(tmp_path: Path, threshold: int = 10) -> Agent:
-    return Agent(
+def _agent(tmp_path: Path, threshold: int = 10) -> AgentSession:
+    return AgentSession(
         config=_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="x"))] * 20),
         storage=SessionStorage(tmp_path / "aura.db"),
@@ -50,11 +50,11 @@ async def test_breaker_blocks_after_three_failures(tmp_path: Path) -> None:
 
     calls: list[str] = []
 
-    async def _fail(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _fail(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         calls.append(source)
         raise RuntimeError("simulated compact failure")
 
-    with patch.object(Agent, "compact", _fail):
+    with patch.object(AgentSession, "compact", _fail):
         for _ in range(3):
             with pytest.raises(RuntimeError):
                 async for _ev in agent.astream("hi"):
@@ -63,7 +63,7 @@ async def test_breaker_blocks_after_three_failures(tmp_path: Path) -> None:
     assert agent.state.slots.consecutive_compact_failures == 3
     # Fourth attempt — same conditions, but breaker tripped → no more calls.
     pre = len(calls)
-    with patch.object(Agent, "compact", _fail):
+    with patch.object(AgentSession, "compact", _fail):
         async for _ev in agent.astream("hi"):
             pass
     assert len(calls) == pre, "breaker did not block 4th auto-compact"
@@ -79,13 +79,13 @@ async def test_breaker_resets_on_success(tmp_path: Path) -> None:
         agent.state.slots, consecutive_compact_failures=2,
     )
 
-    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _ok(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         return CompactResult(
             before_tokens=0, after_tokens=0,
             source=source,
         )
 
-    with patch.object(Agent, "compact", _ok):
+    with patch.object(AgentSession, "compact", _ok):
         async for _ev in agent.astream("hi"):
             pass
 
@@ -95,7 +95,7 @@ async def test_breaker_resets_on_success(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_manual_compact_bypasses_breaker(tmp_path: Path) -> None:
-    """Manual ``Agent.compact()`` runs the heavy lifting via ``run_compact``,
+    """Manual ``AgentSession.compact()`` runs the heavy lifting via ``run_compact``,
     not the auto-compact branch in ``astream``, so the breaker never gates
     it. Tripping the counter to 99 must not stop a manual call from at
     least *attempting* to run."""
@@ -140,13 +140,13 @@ async def test_breaker_emits_skip_journal_event(tmp_path: Path) -> None:
             agent.state.slots, consecutive_compact_failures=5,
         )
 
-        async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+        async def _ok(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
             return CompactResult(
                 before_tokens=0, after_tokens=0,
                 source=source,
             )
 
-        with patch.object(Agent, "compact", _ok):
+        with patch.object(AgentSession, "compact", _ok):
             async for _ev in agent.astream("hi"):
                 pass
 

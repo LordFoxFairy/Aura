@@ -1,4 +1,4 @@
-"""MCP server lifecycle sidecar for one :class:`Agent`."""
+"""MCP server lifecycle sidecar for one :class:`AgentSession`."""
 from __future__ import annotations
 
 import asyncio

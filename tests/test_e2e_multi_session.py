@@ -1,9 +1,9 @@
 """End-to-end multi-session scenario — two concurrent Agents in the same
 process write to fully-isolated per-session journals.
 
-This pins the contract at the Agent.astream boundary, not just the
+This pins the contract at the AgentSession.astream boundary, not just the
 journal unit level (which test_journal_session_scope.py covers). The
-entire flow — Agent init takes session_log_dir, astream wraps its body
+entire flow — AgentSession init takes session_log_dir, astream wraps its body
 in session_scope, every nested journal.write inside the loop + hooks
 routes correctly — is exercised here.
 
@@ -22,8 +22,8 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -62,10 +62,10 @@ async def test_two_agents_same_process_write_to_separate_logs(
             )
 
     # Hand-roll agents with the slow model.
-    def _slow_agent(session_id: str, content: str) -> Agent:
+    def _slow_agent(session_id: str, content: str) -> AgentSession:
         model = _SlowFake(turns=[FakeTurn(AIMessage(content=content))])
         storage = SessionStorage(tmp_path / f"{session_id}.db")
-        return Agent(
+        return AgentSession(
             config=_minimal_config(),
             model=model,
             storage=storage,
@@ -77,7 +77,7 @@ async def test_two_agents_same_process_write_to_separate_logs(
     agent_a = _slow_agent("alpha", "from A")
     agent_b = _slow_agent("beta", "from B")
 
-    async def run(agent: Agent, prompt: str) -> list[Any]:
+    async def run(agent: AgentSession, prompt: str) -> list[Any]:
         events: list[Any] = []
         async for e in agent.astream(prompt):
             events.append(e)

@@ -1,4 +1,4 @@
-"""Auto-compact — Agent.astream calls self.compact(source='auto') when
+"""Auto-compact — AgentSession.astream calls self.compact(source='auto') when
 ``state.total_tokens_used`` crosses ``auto_compact_threshold`` after the
 current turn completes.
 
@@ -9,7 +9,7 @@ The invariant we test:
 - A journal event ``auto_compact_triggered`` is emitted right before the
   compact call so an audit trail reconstructs the decision.
 
-We patch ``Agent.compact`` to a spy in the first four tests so we can
+We patch ``AgentSession.compact`` to a spy in the first four tests so we can
 assert call behavior without paying the runtime + FakeChatModel-scripting
 cost of actually running compaction. The journal-event test uses the real
 compact path against a short history — the short-history branch inside
@@ -29,8 +29,8 @@ import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
 from aura.application.compact import CompactResult, CompactSource
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
@@ -50,11 +50,11 @@ def _storage(tmp_path: Path) -> SessionStorage:
 
 def _agent(
     tmp_path: Path, *, threshold: int, turns: list[FakeTurn] | None = None,
-) -> Agent:
+) -> AgentSession:
     model = FakeChatModel(
         turns=turns or [FakeTurn(AIMessage(content="done"))],
     )
-    return Agent(
+    return AgentSession(
         config=_minimal_config(),
         model=model,
         storage=_storage(tmp_path),
@@ -69,14 +69,14 @@ async def test_auto_compact_fires_when_threshold_crossed(tmp_path: Path) -> None
 
     compact_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _spy(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
             source=source,
         )
 
-    with patch.object(Agent, "compact", _spy):
+    with patch.object(AgentSession, "compact", _spy):
         async for _ in agent.astream("hi"):
             pass
 
@@ -91,14 +91,14 @@ async def test_auto_compact_not_fired_below_threshold(tmp_path: Path) -> None:
 
     compact_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _spy(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
             source=source,
         )
 
-    with patch.object(Agent, "compact", _spy):
+    with patch.object(AgentSession, "compact", _spy):
         async for _ in agent.astream("hi"):
             pass
 
@@ -114,14 +114,14 @@ async def test_auto_compact_disabled_when_threshold_zero(tmp_path: Path) -> None
 
     compact_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _spy(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
             source=source,
         )
 
-    with patch.object(Agent, "compact", _spy):
+    with patch.object(AgentSession, "compact", _spy):
         async for _ in agent.astream("hi"):
             pass
 
@@ -140,14 +140,14 @@ async def test_auto_compact_journal_event(tmp_path: Path) -> None:
 
         compact_calls: list[str] = []
 
-        async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+        async def _spy(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
             compact_calls.append(source)
             return CompactResult(
                 before_tokens=0, after_tokens=0,
                 source=source,
             )
 
-        with patch.object(Agent, "compact", _spy):
+        with patch.object(AgentSession, "compact", _spy):
             async for _ in agent.astream("hi"):
                 pass
 
@@ -191,7 +191,7 @@ async def test_auto_compact_skipped_on_cancel(tmp_path: Path) -> None:
             )
 
     slow_model: Any = _SlowFake(turns=[FakeTurn(AIMessage(content="never"))])
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=slow_model,
         storage=_storage(tmp_path),
@@ -202,14 +202,14 @@ async def test_auto_compact_skipped_on_cancel(tmp_path: Path) -> None:
 
     compact_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _spy(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
             source=source,
         )
 
-    with patch.object(Agent, "compact", _spy):
+    with patch.object(AgentSession, "compact", _spy):
         async def _run() -> None:
             async for _ in agent.astream("slow"):
                 pass

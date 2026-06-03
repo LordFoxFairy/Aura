@@ -1,10 +1,10 @@
 """End-to-end integration test for Phase D Task 9.
 
-Drives a full Agent.astream call with a real permission hook wired in,
+Drives a full AgentSession.astream call with a real permission hook wired in,
 exercising the claim made by spec §11 AC 2 and AC 7:
 
 - First run: user answers "always" → rule persisted to .aura/settings.json.
-- Second run (fresh Agent): same tool call → rule on disk auto-allows; asker
+- Second run (fresh AgentSession): same tool call → rule on disk auto-allows; asker
   never consulted.
 - /clear drops runtime session-scope rules but leaves persisted rules alone.
 - --bypass-permissions mode skips the asker entirely.
@@ -29,8 +29,8 @@ from pydantic import BaseModel
 from aura.application.hooks import HookChain
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.permission.asker import AskerResponse
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.permission.mode import Mode
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import SessionRuleSet
@@ -121,8 +121,8 @@ def _build_agent_with_perms(
     tool: BaseTool,
     turns: list[FakeTurn],
     mode: Mode = "default",
-) -> Agent:
-    """Wire a full permission hook around a FakeChatModel-driven Agent.
+) -> AgentSession:
+    """Wire a full permission hook around a FakeChatModel-driven AgentSession.
 
     Mirrors what aura/cli/__main__.py does, minus the banner/argparse.
     """
@@ -138,7 +138,7 @@ def _build_agent_with_perms(
     cfg = _minimal_cfg()
     model = FakeChatModel(turns=turns)
     storage = SessionStorage(tmp_path / "aura.db")
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=model,
         storage=storage,
@@ -148,7 +148,7 @@ def _build_agent_with_perms(
     )
 
 
-async def _drain(agent: Agent, prompt: str) -> None:
+async def _drain(agent: AgentSession, prompt: str) -> None:
     async for _ in agent.astream(prompt):
         pass
 
@@ -284,7 +284,7 @@ async def test_clear_session_does_not_nuke_disk_rules(tmp_path: Path) -> None:
     )
     try:
         await _drain(agent1, "go")
-        # /clear on the first Agent — disk must be untouched.
+        # /clear on the first AgentSession — disk must be untouched.
         agent1.clear_session()
     finally:
         await agent1.aclose()

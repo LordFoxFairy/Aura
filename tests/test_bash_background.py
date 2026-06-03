@@ -2,7 +2,7 @@
 
 The tool spawns a shell subprocess DETACHED from the tool invocation,
 returns a ``task_id`` immediately, and writes rolling output into the
-parent Agent's ``TasksStore`` so ``task_get`` / ``task_stop`` /
+parent AgentSession's ``TasksStore`` so ``task_get`` / ``task_stop`` /
 ``task_list`` can observe / kill it. These tests exercise the lifecycle
 axes: fast completion, long-running polling, timeout kill, task_stop
 kill, stream prefixes, safety rejection, and ring-buffer boundedness.

@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import Protocol, runtime_checkable
 
+from aura.application.session import AgentSession
 from aura.application.teams.mailbox import MailboxNotifier
 from aura.application.teams.team_port import TeamPort
-from aura.core.agent import Agent
 from aura.domain.abort import AbortController
 from aura.domain.team import BackendType, TeammateMember
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -39,7 +39,7 @@ class TeammateBackend(Protocol):
         *,
         team_id: str,
         member: TeammateMember,
-        agent: Agent,
+        agent: AgentSession,
         manager: TeamPort,
         storage: SessionStorage,
         stop_event: asyncio.Event,

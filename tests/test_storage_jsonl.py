@@ -146,7 +146,7 @@ def test_concurrent_appends_dont_interleave_lines(tmp_path: Path) -> None:
 def test_session_resume_after_jsonl_write_loads_correctly(
     tmp_path: Path,
 ) -> None:
-    """Persistence-shape change must keep ``Agent``-level resume semantics."""
+    """Persistence-shape change must keep ``AgentSession``-level resume semantics."""
     storage = SessionStorage(tmp_path / "aura.db", cwd=tmp_path)
     storage.append("resume-target", HumanMessage(content="first turn"))
     storage.append("resume-target", AIMessage(content="reply"))

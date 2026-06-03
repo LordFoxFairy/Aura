@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from aura.infrastructure.skills import loader
+from aura.infrastructure.skills import skills_bundled
 from aura.infrastructure.skills.loader import (
     clear_conditional_state,
     load_skills,
@@ -97,7 +97,7 @@ def test_bundled_skills_root_uses_hidden_global_plugins_dir(
 ) -> None:
     home = tmp_path / "home"
 
-    with loader._bundled_skills_root(home_dir=home) as bundled_root:
+    with skills_bundled._bundled_skills_root(home_dir=home) as bundled_root:
         assert bundled_root is not None
         assert bundled_root.is_dir()
         assert bundled_root.name == "skills"
@@ -112,11 +112,11 @@ def test_bundled_skills_root_reuses_session_extraction(
 ) -> None:
     home = tmp_path / "home"
 
-    with loader._bundled_skills_root(home_dir=home) as first_root:
+    with skills_bundled._bundled_skills_root(home_dir=home) as first_root:
         assert first_root is not None
         first_path = first_root
     assert first_path.is_dir()
 
-    with loader._bundled_skills_root(home_dir=home) as second_root:
+    with skills_bundled._bundled_skills_root(home_dir=home) as second_root:
         assert second_root == first_path
         assert (second_root / "verify" / "SKILL.md").is_file()

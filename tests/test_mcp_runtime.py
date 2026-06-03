@@ -1,6 +1,6 @@
 """Tests for :class:`aura.application.runtime.mcp.McpRuntime` (Phase 2 Task 8).
 
-The runtime is exercised in isolation — no :class:`Agent`, no
+The runtime is exercised in isolation — no :class:`AgentSession`, no
 :class:`AgentLoop`, no real MCP transport. Each case constructs the
 runtime with a fake manager factory so connect / disconnect / status
 behaviour can be verified without spinning subprocesses.
@@ -133,8 +133,8 @@ def _read_journal(path: Path) -> list[dict[str, Any]]:
 def test_init_is_sync_and_does_not_spin_manager() -> None:
     """Construction must not call the factory or start any server.
 
-    The Agent's sync ``__init__`` requires McpRuntime to stay sync —
-    otherwise the existing Agent(...) call sites would have to thread
+    The AgentSession's sync ``__init__`` requires McpRuntime to stay sync —
+    otherwise the existing AgentSession(...) call sites would have to thread
     an event loop through. Verifies the factory is untouched and the
     runtime advertises ``has_servers`` based purely on the configs
     list.

@@ -1,4 +1,4 @@
-"""run_teammate — long-lived loop driving an Agent on mailbox messages."""
+"""run_teammate — long-lived loop driving an AgentSession on mailbox messages."""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ from typing import Any
 
 import pytest
 
+from aura.application.session import AgentSession
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import Mailbox
 from aura.application.teams.manager import TeamManager
 from aura.application.teams.runtime import _format_envelope, run_teammate
 from aura.application.teams.team_port import TeammateBinding, TeamPort
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.abort import AbortController
 from aura.domain.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
 from aura.domain.team import TeamMessage, TeamMessageKind
@@ -43,14 +43,14 @@ def _storage(tmp_path: Path) -> SessionStorage:
     return SessionStorage(tmp_path / "sessions.db")
 
 
-def _leader_agent(tmp_path: Path) -> Agent:
+def _leader_agent(tmp_path: Path) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
         "teams": {"enabled": True},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -70,7 +70,7 @@ def _manager(tmp_path: Path) -> TeamManager:
 
 
 class _ScriptedAgent:
-    """Minimal Agent stand-in: yields a Final per astream call.
+    """Minimal AgentSession stand-in: yields a Final per astream call.
 
     Records every prompt it sees so tests can assert envelope shape.
     """

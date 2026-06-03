@@ -142,7 +142,7 @@ def make_permission_hook(
     safety: SafetyPolicy = DEFAULT_SAFETY,
     disable_bypass: bool = False,
 ) -> PreToolHook:
-    # mode is a Callable so Agent.set_mode mid-session is honored.
+    # mode is a Callable so AgentSession.set_mode mid-session is honored.
     if callable(mode):
         _raw_mode_provider: Callable[[], Mode] = mode
     else:

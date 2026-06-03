@@ -23,11 +23,6 @@ from aura.infrastructure.persistence import journal
 Scope = Literal["global", "project"]
 
 
-def get_path() -> Path:
-    # Back-compat alias: callers that print "the" MCP store path mean global.
-    return global_path()
-
-
 def global_path() -> Path:
     return Path.home() / ".aura" / "mcp_servers.json"
 
@@ -189,7 +184,6 @@ def find_scope_of(name: str) -> Scope | None:
 __all__ = [
     "Scope",
     "find_scope_of",
-    "get_path",
     "global_path",
     "load",
     "load_layer",

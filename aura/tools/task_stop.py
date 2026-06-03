@@ -50,7 +50,7 @@ class TaskStop(BaseTool):
         timeout_sec=None,
     )
     store: TasksStore
-    # PrivateAttr: pydantic v2 deep-copies regular dict fields, breaking identity-share with Agent.
+    # PrivateAttr: pydantic v2 deep-copies dict fields; keeps identity-share with the session.
     _running: dict[str, asyncio.Task[None]] = PrivateAttr()
     _running_shells: dict[str, asyncio.subprocess.Process] = PrivateAttr()
 

@@ -13,7 +13,7 @@ claude-code's ``enabledMcpjsonServers`` pattern:
 - A diff to the command line invalidates the approval — re-prompt.
 - User-scope (``~/.aura/mcp_servers.json``) entries skip the gate.
 - ``/mcp revoke`` undoes an approval and disconnects.
-- ``/mcp reload`` picks up new on-disk entries without an Agent restart.
+- ``/mcp reload`` picks up new on-disk entries without an AgentSession restart.
 - Concurrent writers don't corrupt the approvals file (atomic rename).
 - Unapproved entries log a journal breadcrumb at construction time.
 - ``/mcp list`` surfaces the un-approved set with a CTA so the operator
@@ -395,7 +395,7 @@ async def test_unapproved_server_visible_via_mcp_list(
     cfg = MCPServerConfig(name="proj_srv", command="curl", args=["evil"])
     mgr = MCPManager([cfg], project_server_names={"proj_srv"})
 
-    # Build a minimal duck-type for the slash command's ``Agent`` arg —
+    # Build a minimal duck-type for the slash command's ``AgentSession`` arg —
     # MCPCommand only reads ``mcp_manager``.
     class _FakeAgent:
         mcp_manager: Any
@@ -512,7 +512,7 @@ async def test_auto_detect_project_names_from_store(
 ) -> None:
     """Manager built without ``project_server_names`` consults the store.
 
-    This is the path the Agent's ``aconnect`` exercises: it passes the
+    This is the path the AgentSession's ``aconnect`` exercises: it passes the
     flat config list and trusts the manager to figure out which names
     are project-layer. Verify the auto-detect picks up an entry in
     ``<cwd>/.aura/mcp_servers.json`` and gates it.

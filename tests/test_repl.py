@@ -12,20 +12,20 @@ from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatResult
 from rich.console import Console
 
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from cli.repl import run_repl_async
 from tests.conftest import FakeChatModel, FakeTurn
 
 
-def _agent(tmp_path: Path, turns: list[FakeTurn] | None = None) -> Agent:
+def _agent(tmp_path: Path, turns: list[FakeTurn] | None = None) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=turns or []),
         storage=SessionStorage(tmp_path / "db"),
@@ -105,7 +105,7 @@ async def test_empty_input_does_not_reach_agent(tmp_path: Path) -> None:
         input_fn=_ScriptedInput(["", "   ", "\t\n", "/exit"]),
         console=console,
     )
-    # Agent's single queued turn was never consumed — the empty inputs
+    # AgentSession's single queued turn was never consumed — the empty inputs
     # skipped the astream path entirely.
     assert "should not fire" not in buf.getvalue()
     await agent.aclose()
@@ -266,7 +266,7 @@ def test_welcome_banner_animated_path_runs_in_real_tty(
         "from pathlib import Path\n"
         "from rich.console import Console\n"
         "from cli.repl import _print_welcome\n"
-        "from aura.core.agent import Agent\n"
+        "from aura.application.session import AgentSession\n"
         "from aura.config.schema import AuraConfig\n"
         "from aura.infrastructure.persistence.storage import SessionStorage\n"
         "from tests.conftest import FakeChatModel\n"
@@ -277,7 +277,7 @@ def test_welcome_banner_animated_path_runs_in_real_tty(
         "})\n"
         "import tempfile\n"
         "d = Path(tempfile.mkdtemp())\n"
-        "agent = Agent(config=cfg, model=FakeChatModel(turns=[]),\n"
+        "agent = AgentSession(config=cfg, model=FakeChatModel(turns=[]),\n"
         "              storage=SessionStorage(d / 'db'))\n"
         "_print_welcome(agent, Console(force_terminal=True))\n"
         "agent.close()\n"
@@ -466,7 +466,7 @@ async def test_multiline_non_slash_input_reaches_agent_intact(
             )
 
     _model: Any = _CaptureModel(turns=[FakeTurn(message=AIMessage(content="ok"))])
-    agent = Agent(
+    agent = AgentSession(
         config=AuraConfig.model_validate({
             "providers": [{"name": "openai", "protocol": "openai"}],
             "router": {"default": "openai:gpt-4o-mini"},
@@ -768,7 +768,7 @@ async def test_escape_resets_mode_silently_no_scrollback_spam(
 
 
 async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:
-    # Real resilience: if Agent.astream raises (network error, client bug,
+    # Real resilience: if AgentSession.astream raises (network error, client bug,
     # provider 500), the REPL must print an error and keep looping.
     class _ExplodingModel:
         async def ainvoke(self, *a: object, **kw: object) -> object:
@@ -782,7 +782,7 @@ async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:
         "tools": {"enabled": []},
     })
     _exploding: Any = _ExplodingModel()
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=_exploding,
         storage=SessionStorage(tmp_path / "db"),

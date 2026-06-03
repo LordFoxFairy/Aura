@@ -1,4 +1,4 @@
-"""Tests for streaming Agent output through ``stream_agent_wire``."""
+"""Tests for streaming AgentSession output through ``stream_agent_wire``."""
 
 from __future__ import annotations
 

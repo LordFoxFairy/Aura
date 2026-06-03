@@ -6,7 +6,7 @@ same event loop, and task_output reflects progress. FakeChatModel produces a
 single Final turn so the subagent completes in O(event-loop-tick).
 
 Cancellation test models the "user hits Ctrl+C mid-subagent" case — the
-Agent tracks the asyncio.Task handle so close()/cancel_all can propagate
+AgentSession tracks the asyncio.Task handle so close()/cancel_all can propagate
 CancelledError into the child, which the run_task loop turns into
 status=cancelled.
 """
@@ -28,7 +28,6 @@ from aura.application.tasks.run import run_task
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.skill import Skill
 from aura.domain.tool import ToolError
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -187,7 +186,7 @@ def test_subagent_inherits_parent_mcp_servers() -> None:
 def test_subagent_inherits_parent_skills(tmp_path: Path) -> None:
     # Parent's loaded SkillRegistry must cross to the subagent — otherwise
     # /<skill> invocations inside the subagent see nothing. Pre-loaded
-    # registry is passed through Agent(pre_loaded_skills=...) so the child
+    # registry is passed through AgentSession(pre_loaded_skills=...) so the child
     # doesn't re-scan the disk (cheaper + exact parity with parent).
     parent_skills = SkillRegistry([
         Skill(
@@ -244,8 +243,8 @@ def test_subagent_has_no_spawn_tools() -> None:
     child_agent.close()
 
 
-def _wire_fake_model_chain(child_agent: Agent) -> None:
-    # Test ergonomics — Agent.__init__ builds the child's own spawner with no
+def _wire_fake_model_chain(child_agent: AgentSession) -> None:
+    # Test ergonomics — AgentSession.__init__ builds the child's own spawner with no
     # model_factory; inject a FakeChatModel so a direct spawn works in unit tests.
     child_agent.subagent_factory._model_factory = lambda: FakeChatModel(turns=[])
     child_agent.subagent_factory._storage_factory = (
@@ -348,7 +347,7 @@ async def test_task_create_explore_restricts_child_tools(tmp_path: Path) -> None
             ],
         },
     })
-    captured: list[Agent] = []
+    captured: list[AgentSession] = []
 
     def _cap_model_factory() -> FakeChatModel:
         return FakeChatModel(turns=[FakeTurn(AIMessage(content="done"))])
@@ -411,7 +410,7 @@ async def test_task_create_explore_restricts_child_tools(tmp_path: Path) -> None
 
 def test_factory_spawn_verify_appends_verdict_system_prompt() -> None:
     # Verify type's distinguishing feature: its suffix carries the strict
-    # VERDICT: output contract. Must survive the factory → Agent wiring.
+    # VERDICT: output contract. Must survive the factory → AgentSession wiring.
     parent_config = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},

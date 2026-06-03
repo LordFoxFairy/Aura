@@ -52,7 +52,7 @@ from aura.tools.progress import (
     set_progress_callback,
 )
 
-# Shared with aura.core.agent so AgentLoop and Agent defaults never drift.
+# Shared with aura.application.session so AgentLoop and AgentSession defaults never drift.
 DEFAULT_SESSION = "default"
 
 # Auto-decisions whose dim "auto-allowed: <reason>" the renderer surfaces.
@@ -245,7 +245,7 @@ class AgentLoop:
         # Caller owns the user HumanMessage append + persist so a mid-turn
         # crash can't erase the user's input.
         # Per-turn sinks reset at the turn boundary; list identity is stable
-        # so Agent.last_turn_denials keeps pointing at the live bucket.
+        # so AgentSession.last_turn_denials keeps pointing at the live bucket.
         self._state.slots.turn_denials.clear()
         self._state.slots.perm_dedup_cache.clear()
         # contextvar lets tools and spawned subagents inherit the signal.

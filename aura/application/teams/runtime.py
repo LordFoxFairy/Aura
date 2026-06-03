@@ -1,4 +1,4 @@
-"""Long-lived loop driving one teammate Agent against its JSONL mailbox."""
+"""Long-lived loop driving one teammate AgentSession against its JSONL mailbox."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import contextlib
 import time
 from pathlib import Path
 
+from aura.application.session import AgentSession, build_agent
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import (
     FileMailboxNotifier,
@@ -15,7 +16,6 @@ from aura.application.teams.mailbox import (
 )
 from aura.application.teams.team_port import TeamPort
 from aura.config.loader import load_config
-from aura.core.agent import Agent, build_agent
 from aura.domain.abort import AbortController, AbortException
 from aura.domain.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
 from aura.domain.team import TeamMessage
@@ -25,14 +25,14 @@ from aura.infrastructure.persistence.storage import SessionStorage
 _WAIT_SLICE_SEC: float = 5.0
 
 
-def _task_tracking(agent: Agent) -> tuple[TasksStore, str] | None:
+def _task_tracking(agent: AgentSession) -> tuple[TasksStore, str] | None:
     binding = agent._teammate
     if binding is None:
         return None
     return binding.tasks_store, binding.task_id
 
 
-def _record_teammate_note(agent: Agent, activity: str) -> None:
+def _record_teammate_note(agent: AgentSession, activity: str) -> None:
     tracking = _task_tracking(agent)
     if tracking is None:
         return
@@ -48,7 +48,7 @@ def _format_envelope(messages: list[TeamMessage]) -> str:
 
 async def _drive_one_turn(
     *,
-    agent: Agent,
+    agent: AgentSession,
     prompt: str,
     abort: AbortController,
     storage: SessionStorage,
@@ -116,7 +116,7 @@ async def _wait_for_message(
 
 async def run_teammate(
     *,
-    agent: Agent,
+    agent: AgentSession,
     team_id: str,
     member_name: str,
     storage: SessionStorage,

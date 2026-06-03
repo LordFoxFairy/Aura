@@ -15,8 +15,8 @@ from aura.application.compact.constants import (
     AUTO_COMPACT_HEADROOM_TOKENS,
     auto_compact_threshold_for,
 )
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -47,10 +47,10 @@ def test_function_floors_at_one_thousand() -> None:
 
 
 def test_agent_default_threshold_is_model_aware(tmp_path: Path) -> None:
-    """Agent constructed without an explicit threshold uses the model-aware
+    """AgentSession constructed without an explicit threshold uses the model-aware
     derivation — i.e. its effective threshold matches
     ``auto_compact_threshold_for(current_model)``."""
-    agent = Agent(
+    agent = AgentSession(
         config=_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="x"))]),
         storage=SessionStorage(tmp_path / "a.db"),
@@ -62,7 +62,7 @@ def test_agent_default_threshold_is_model_aware(tmp_path: Path) -> None:
 
 
 def test_explicit_override_wins(tmp_path: Path) -> None:
-    agent = Agent(
+    agent = AgentSession(
         config=_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="x"))]),
         storage=SessionStorage(tmp_path / "a.db"),
@@ -72,7 +72,7 @@ def test_explicit_override_wins(tmp_path: Path) -> None:
 
 
 def test_zero_threshold_still_disables(tmp_path: Path) -> None:
-    agent = Agent(
+    agent = AgentSession(
         config=_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="x"))]),
         storage=SessionStorage(tmp_path / "a.db"),
@@ -88,7 +88,7 @@ def test_threshold_recomputes_on_switch_model(tmp_path: Path) -> None:
     update ``_current_model_spec`` directly — same code path the helper
     reads from.
     """
-    agent = Agent(
+    agent = AgentSession(
         config=_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="x"))]),
         storage=SessionStorage(tmp_path / "a.db"),

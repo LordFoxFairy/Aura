@@ -44,7 +44,6 @@ from aura.application.tasks.spawn import (
     _SubagentPermissionAsker,
 )
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
 from aura.domain.permission.outcome import Allow, Block, Replace
 from aura.domain.permission.rule import Rule
@@ -252,7 +251,7 @@ async def test_agent_wiring_passes_deny_and_ask_rules_to_subagent_factory(
     )
     ruleset = RuleSet(rules=(Rule(tool="write_file", content=None),))
     deny_ruleset = RuleSet(rules=(Rule(tool="write_file", content=None),))
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="done"))]),
         storage=SessionStorage(tmp_path / "parent.db"),
@@ -364,7 +363,7 @@ async def test_subagent_inherits_bypass_mode_from_parent() -> None:
     factory = _build_factory(parent_ruleset=RuleSet(), parent_mode="bypass")
     child = factory.spawn("prompt")
     try:
-        # Spawned Agent's mode must reflect the inherited bypass.
+        # Spawned AgentSession's mode must reflect the inherited bypass.
         assert child.mode == "bypass"
         # And the hook behaviour must match: a tool with no rule would
         # normally hit the ask → auto-deny path, but bypass short-circuits

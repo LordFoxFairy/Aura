@@ -1,11 +1,11 @@
 """Reactive recompact — when the model raises a context-overflow error,
-``Agent.astream`` catches it, runs ``compact(source='reactive')``, and retries
+``AgentSession.astream`` catches it, runs ``compact(source='reactive')``, and retries
 the turn ONCE. Non-overflow errors pass through unchanged. A hard guard
 prevents infinite retry loops.
 
 All tests drive behavior through a custom FakeChatModel subclass that fails
 on the first call and (optionally) succeeds on the second. That keeps the
-test surface tight — the only moving piece is Agent.astream's error branch.
+test surface tight — the only moving piece is AgentSession.astream's error branch.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from aura.application.compact import CompactResult, CompactSource
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
@@ -87,7 +87,7 @@ async def test_reactive_compact_on_context_length_error(tmp_path: Path) -> None:
             FakeTurn(AIMessage(content="OK after retry")),
         ],
     )
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=model,
         storage=_storage(tmp_path),
@@ -102,13 +102,13 @@ async def test_reactive_compact_on_context_length_error(tmp_path: Path) -> None:
     agent.storage.save(agent.session_id, h)
 
     compact_calls: list[str] = []
-    orig_compact = Agent.compact
+    orig_compact = AgentSession.compact
 
-    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _spy(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
         return await orig_compact(self, source=source)
 
-    with patch.object(Agent, "compact", _spy):
+    with patch.object(AgentSession, "compact", _spy):
         finals = []
         async for ev in agent.astream("hi"):
             finals.append(ev)
@@ -128,7 +128,7 @@ async def test_reactive_compact_only_retries_once(tmp_path: Path) -> None:
         errors=[err1, None, err2],  # initial fail, summary, retry fails again
         turns=[FakeTurn(AIMessage(content="SUMMARY"))],
     )
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=model,
         storage=_storage(tmp_path),
@@ -152,7 +152,7 @@ async def test_reactive_compact_other_error_passthrough(tmp_path: Path) -> None:
     """Unrelated errors are NOT caught — they propagate unchanged."""
     err = ValueError("unrelated programming error")
     model = _RaisingModel(errors=[err], turns=[])
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=model,
         storage=_storage(tmp_path),
@@ -161,7 +161,7 @@ async def test_reactive_compact_other_error_passthrough(tmp_path: Path) -> None:
 
     compact_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _spy(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         compact_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
@@ -169,7 +169,7 @@ async def test_reactive_compact_other_error_passthrough(tmp_path: Path) -> None:
         )
 
     with (
-        patch.object(Agent, "compact", _spy),
+        patch.object(AgentSession, "compact", _spy),
         pytest.raises(ValueError, match="unrelated"),
     ):
         async for _ in agent.astream("hi"):
@@ -193,7 +193,7 @@ async def test_reactive_compact_journal_event(tmp_path: Path) -> None:
                 FakeTurn(AIMessage(content="recovered")),
             ],
         )
-        agent = Agent(
+        agent = AgentSession(
             config=_minimal_config(),
             model=model,
             storage=_storage(tmp_path),
@@ -234,7 +234,7 @@ async def test_reactive_compact_journal_event(tmp_path: Path) -> None:
 async def test_reactive_compact_preserves_turn_count(tmp_path: Path) -> None:
     """F-01-012 — turn_count is NOT reset across the reactive recompact.
 
-    Pre-fix, the outer Agent caught the overflow and re-entered run_turn,
+    Pre-fix, the outer AgentSession caught the overflow and re-entered run_turn,
     which started a brand-new turn at count=1. Post-fix, the loop catches
     overflow internally and retries the SAME turn — so the post-recompact
     successful ainvoke lands in turn 1, not turn 2 of a fresh run.
@@ -250,7 +250,7 @@ async def test_reactive_compact_preserves_turn_count(tmp_path: Path) -> None:
             FakeTurn(AIMessage(content="OK after retry")),
         ],
     )
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=model,
         storage=_storage(tmp_path),
@@ -268,6 +268,6 @@ async def test_reactive_compact_preserves_turn_count(tmp_path: Path) -> None:
 
     # The post-recompact ainvoke completed inside turn 1 — i.e. the loop's
     # turn_count is exactly 1 after the run, not 2 (which would mean the
-    # whole turn was re-entered from the outer Agent layer).
+    # whole turn was re-entered from the outer AgentSession layer).
     assert agent.state.turn_count == 1
     await agent.aclose()

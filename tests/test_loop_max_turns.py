@@ -1,4 +1,4 @@
-"""F-01-003 — ``max_turns`` is per-user-turn, not per-Agent-lifetime."""
+"""F-01-003 — ``max_turns`` is per-user-turn, not per-AgentSession-lifetime."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.events import Final
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
@@ -36,7 +36,7 @@ async def test_max_turns_resets_per_astream_call(tmp_path: Path) -> None:
 
     Pre-fix: ``LoopState.turn_count`` accumulated across astream calls,
     so after enough cumulative rounds the second user prompt would
-    trip ``max_turns_reached`` immediately. Now Agent.astream zeroes
+    trip ``max_turns_reached`` immediately. Now AgentSession.astream zeroes
     the counter at entry, mirroring claude-code's local
     ``turnCount = 1`` initialisation at every ``query`` entry.
     """
@@ -48,7 +48,7 @@ async def test_max_turns_resets_per_astream_call(tmp_path: Path) -> None:
     ]
     model = FakeChatModel(turns=turns)
     storage = SessionStorage(tmp_path / "s.db")
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(), model=model, storage=storage,
     )
 
@@ -77,7 +77,7 @@ async def test_max_turns_does_not_trip_after_long_prior_session(
 ) -> None:
     """A long prior session does NOT shorten the next astream's budget.
 
-    Drive 5 user turns, each one model round. With a per-Agent-lifetime
+    Drive 5 user turns, each one model round. With a per-AgentSession-lifetime
     counter, turn_count would be 5 after the 5th astream and a
     max_turns=3 cap would trip on the next astream's FIRST round. With
     the per-astream reset, the next astream still gets a full 3-round
@@ -89,7 +89,7 @@ async def test_max_turns_does_not_trip_after_long_prior_session(
     turns = [FakeTurn(AIMessage(content=f"r{i}")) for i in range(6)]
     model = FakeChatModel(turns=turns)
     storage = SessionStorage(tmp_path / "s.db")
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(), model=model, storage=storage,
     )
     # Squeeze max_turns down to 3 so the test boundary is observable.
@@ -147,7 +147,7 @@ async def test_max_turns_still_caps_within_a_single_user_turn(
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["echo"]},
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg, model=model, storage=storage,
         available_tools={"echo": echo_tool},
     )

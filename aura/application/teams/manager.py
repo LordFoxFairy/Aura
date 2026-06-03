@@ -1,4 +1,4 @@
-"""Lifecycle owner of one team per leader Agent: record, mailbox, runtime tasks."""
+"""Lifecycle owner of one team per leader AgentSession: record, mailbox, runtime tasks."""
 
 from __future__ import annotations
 

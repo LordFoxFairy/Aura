@@ -31,7 +31,7 @@ from aura.infrastructure.persistence import journal as journal_module
 
 
 class _StubAgent:
-    """Minimal Agent-shaped object exposing ``state`` — all /stats needs."""
+    """Minimal AgentSession-shaped object exposing ``state`` — all /stats needs."""
 
     def __init__(self, state: LoopState, *, config: object | None = None) -> None:
         self.state = state

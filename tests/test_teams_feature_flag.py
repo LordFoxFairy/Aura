@@ -9,8 +9,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from aura.application.commands.factory import build_default_registry
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
@@ -23,8 +23,8 @@ def _cfg(*, teams_enabled: bool) -> AuraConfig:
     })
 
 
-def _agent(tmp_path: Path, *, teams_enabled: bool) -> Agent:
-    return Agent(
+def _agent(tmp_path: Path, *, teams_enabled: bool) -> AgentSession:
+    return AgentSession(
         config=_cfg(teams_enabled=teams_enabled),
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "sessions.db"),
@@ -63,7 +63,7 @@ def test_teams_enabled_registers_team_command(tmp_path: Path) -> None:
 
 
 def test_teams_disabled_join_team_raises(tmp_path: Path) -> None:
-    """Programmatic ``Agent.join_team`` rejects with a config-pointer error."""
+    """Programmatic ``AgentSession.join_team`` rejects with a config-pointer error."""
     agent = _agent(tmp_path, teams_enabled=False)
     with pytest.raises(RuntimeError) as excinfo:
         agent.join_team(manager=_stub_manager())

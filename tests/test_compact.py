@@ -1,4 +1,4 @@
-"""``Agent.compact``: history summarization plus selective state preservation."""
+"""``AgentSession.compact``: history summarization plus selective state preservation."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from aura.application.compact.constants import MICROCOMPACT_CLEAR_MARKER
 from aura.application.compact.reactive import _is_prompt_too_long
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.skill import Skill
 from aura.domain.todos import TodoItem
 from aura.infrastructure.persistence import journal
@@ -38,17 +38,17 @@ def _storage(tmp_path: Path) -> SessionStorage:
     return SessionStorage(tmp_path / "aura.db")
 
 
-def _make_agent(tmp_path: Path, *, summary_text: str = "SUMMARY-TEXT") -> Agent:
-    """Agent whose FakeChatModel yields a single scripted summary turn."""
+def _make_agent(tmp_path: Path, *, summary_text: str = "SUMMARY-TEXT") -> AgentSession:
+    """AgentSession whose FakeChatModel yields a single scripted summary turn."""
     model = FakeChatModel(turns=[FakeTurn(AIMessage(content=summary_text))])
-    return Agent(
+    return AgentSession(
         config=_minimal_config(),
         model=model,
         storage=_storage(tmp_path),
     )
 
 
-def _seed_history(agent: Agent, *, pairs: int) -> None:
+def _seed_history(agent: AgentSession, *, pairs: int) -> None:
     """Seed ``pairs`` HumanMessage/AIMessage pairs into the agent's storage."""
     h: list[Any] = []
     for i in range(pairs):
@@ -357,7 +357,7 @@ async def test_compact_journal_event(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 @pytest.mark.asyncio
 async def test_compact_result_dataclass_shape(tmp_path: Path) -> None:
-    """Agent.compact returns CompactResult with before/after/source fields."""
+    """AgentSession.compact returns CompactResult with before/after/source fields."""
     agent = _make_agent(tmp_path)
     _seed_history(agent, pairs=10)
 
@@ -389,7 +389,7 @@ async def test_compact_splits_summary_when_provider_rejects_large_prompt(
     tmp_path: Path,
 ) -> None:
     model = SizeLimitedSummaryModel(max_prompt_chars=9_000)
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(context_window=15_000),
         model=model,
         storage=_storage(tmp_path),
@@ -414,7 +414,7 @@ async def test_compact_truncates_oversized_raw_tool_outputs_before_summary(
     tmp_path: Path,
 ) -> None:
     model = SizeLimitedSummaryModel(max_prompt_chars=9_000)
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(context_window=15_000),
         model=model,
         storage=_storage(tmp_path),
@@ -438,7 +438,7 @@ async def test_compact_summarizes_microcompacted_dynamic_history_view(
     tmp_path: Path,
 ) -> None:
     model = SizeLimitedSummaryModel(max_prompt_chars=12_000)
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(context_window=20_000),
         model=model,
         storage=_storage(tmp_path),
@@ -530,7 +530,7 @@ async def test_compact_honors_max_files_to_restore_config_override(
         "compact": {"max_files_to_restore": 2},
     })
     model = FakeChatModel(turns=[FakeTurn(AIMessage(content="SUMMARY-TEXT"))])
-    agent = Agent(config=cfg, model=model, storage=_storage(tmp_path))
+    agent = AgentSession(config=cfg, model=model, storage=_storage(tmp_path))
     _seed_history(agent, pairs=10)
 
     # 5 files, distinct mtimes — newest first (file_4) should win every slot.

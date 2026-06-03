@@ -1,8 +1,8 @@
-"""Integration: permission asker roundtrip through a real Agent.
+"""Integration: permission asker roundtrip through a real AgentSession.
 
 Unit tests in ``tests/test_permission_mode.py`` / ``tests/test_cli_permission*.py``
 exercise the permission hook or the CLI asker in isolation. This tier
-wires both ends to a real Agent (so history gets the ToolMessage, mode
+wires both ends to a real AgentSession (so history gets the ToolMessage, mode
 transitions propagate, and the LLM sees the decision) and asserts on
 the *observable* downstream effects: did the tool run, did the LLM
 receive the right ToolMessage, did ``accept_edits`` auto-allow without
@@ -227,7 +227,7 @@ async def test_plan_mode_exit_approval_flow_flips_mode_and_user_deny(
             ],
         )
     )
-    # Turn 4: after approval, the permission hook must re-read Agent.mode.
+    # Turn 4: after approval, the permission hook must re-read AgentSession.mode.
     # If it still enforces the construction-time "plan" value, this write
     # is dry-run blocked and the target file is never created.
     turn_4 = FakeTurn(
@@ -278,7 +278,7 @@ async def test_plan_mode_exit_approval_flow_flips_mode_and_user_deny(
         project_root=tmp_path,
         mode=lambda: cast("Mode", agent.mode),
     )
-    # Agent.__init__ inserts bash safety at 0 and must-read-first at the end.
+    # AgentSession.__init__ inserts bash safety at 0 and must-read-first at the end.
     # Put permission between them, matching the normal caller-owned hook slot.
     hooks.pre_tool.insert(1, live_permission_hook)
     try:

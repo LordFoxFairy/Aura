@@ -8,7 +8,7 @@ meant:
    ``bash_background_safety_blocked`` one — so audit scrapers that filter
    on ``permission_decision`` missed bash_background denials.
 2. The denials sink (``state.slots.turn_denials``) stayed empty —
-   :meth:`Agent.last_turn_denials` returned ``()`` even though the call
+   :meth:`AgentSession.last_turn_denials` returned ``()`` even though the call
    was denied.
 3. ``mode == "bypass"`` was ignored — a user-opted-in bypass still had
    safety applied, while the blocking ``bash`` tool correctly skipped
@@ -32,9 +32,9 @@ from pydantic import BaseModel
 
 from aura.application.hooks.bash_safety import make_bash_safety_hook
 from aura.application.loop_state import LoopState
+from aura.application.session import AgentSession
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.tool import ToolResult
 from aura.infrastructure.persistence import journal as journal_module
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -109,7 +109,7 @@ async def test_bash_safety_hook_emits_permission_decision_for_bash_background(
 async def test_bash_safety_hook_populates_denials_sink_for_bash_background() -> None:
     """The denials sink (``state.slots.turn_denials``) must carry a
     :class:`PermissionDenial` entry for bash_background safety blocks, so
-    :meth:`Agent.last_turn_denials` surfaces them to SDK consumers."""
+    :meth:`AgentSession.last_turn_denials` surfaces them to SDK consumers."""
     state = LoopState()
     hook = make_bash_safety_hook()
     await hook(
@@ -227,7 +227,7 @@ def _storage(tmp_path: Path) -> SessionStorage:
 async def test_agent_bash_background_safety_end_to_end_populates_denials(
     tmp_path: Path,
 ) -> None:
-    """When an Agent turn calls bash_background with a dangerous command,
+    """When an AgentSession turn calls bash_background with a dangerous command,
     the safety hook must (a) block the call, (b) append a PermissionDenial
     to the per-turn sink, and (c) emit ``permission_decision`` — all
     without raising out of the tool."""
@@ -248,7 +248,7 @@ async def test_agent_bash_background_safety_end_to_end_populates_denials(
             )),
             FakeTurn(message=AIMessage(content="done")),
         ])
-        agent = Agent(
+        agent = AgentSession(
             config=cfg,
             model=model,
             storage=_storage(tmp_path),
@@ -320,7 +320,7 @@ async def test_agent_bash_background_bypass_mode_skips_safety(
             )),
             FakeTurn(message=AIMessage(content="done")),
         ])
-        agent = Agent(
+        agent = AgentSession(
             config=cfg,
             model=model,
             storage=_storage(tmp_path),

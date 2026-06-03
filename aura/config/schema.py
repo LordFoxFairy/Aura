@@ -155,7 +155,7 @@ class TeamsConfig(BaseModel):
         default=False,
         description=(
             "Enable teams (multi-agent swarm). False: /team commands "
-            "unregistered, send_message tool absent, Agent.join_team raises."
+            "unregistered, send_message tool absent, AgentSession.join_team raises."
         ),
     )
 

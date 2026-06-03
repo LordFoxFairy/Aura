@@ -1,8 +1,8 @@
-"""Tests for ``/model`` slash command + ``Agent.switch_model`` live swap.
+"""Tests for ``/model`` slash command + ``AgentSession.switch_model`` live swap.
 
 Covers the runtime model-switch flow end-to-end:
 
-- ``Agent.switch_model`` resolves via router alias + direct provider:model
+- ``AgentSession.switch_model`` resolves via router alias + direct provider:model
 - failure modes (unknown spec, missing credential) propagate as
   ``AuraConfigError`` subclasses
 - ``agent.current_model`` reflects the live spec (not the config default)
@@ -22,8 +22,8 @@ from langchain_core.messages import AIMessage
 
 from aura.application.commands.factory import build_default_registry
 from aura.application.commands.registry import dispatch
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure import llm
 from aura.infrastructure.llm import MissingCredentialError, UnknownModelSpecError
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -45,8 +45,8 @@ def _config() -> AuraConfig:
     })
 
 
-def _agent(tmp_path: Path, *, turns: list[FakeTurn] | None = None) -> Agent:
-    return Agent(
+def _agent(tmp_path: Path, *, turns: list[FakeTurn] | None = None) -> AgentSession:
+    return AgentSession(
         config=_config(),
         model=FakeChatModel(turns=turns or []),
         storage=SessionStorage(tmp_path / "db"),
@@ -121,7 +121,7 @@ async def test_switch_model_routes_next_turn_to_new_model(
     model_a = FakeChatModel(turns=[FakeTurn(AIMessage(content="from-a"))])
     model_b = FakeChatModel(turns=[FakeTurn(AIMessage(content="from-b"))])
 
-    agent = Agent(
+    agent = AgentSession(
         config=_config(),
         model=model_a,
         storage=SessionStorage(tmp_path / "db"),
@@ -240,7 +240,7 @@ def test_current_model_is_read_by_both_status_surfaces() -> None:
     required to reflect a /model switch. This test asserts the property
     exists, is a ``str``, and reflects the LIVE spec — the single
     invariant those surfaces depend on."""
-    mock_agent = MagicMock(spec=Agent)
+    mock_agent = MagicMock(spec=AgentSession)
     mock_agent.current_model = "openai:gpt-4o-mini"
     assert isinstance(mock_agent.current_model, str)
     mock_agent.current_model = "anthropic:claude-opus-4"

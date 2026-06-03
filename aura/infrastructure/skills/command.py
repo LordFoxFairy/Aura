@@ -1,11 +1,11 @@
-"""SkillCommand — slash command that records a Skill invocation on the Agent.
+"""SkillCommand — slash command that records a Skill invocation on the AgentSession.
 
-Registered into the per-session :class:`CommandRegistry` at Agent
+Registered into the per-session :class:`CommandRegistry` at AgentSession
 construction (one per user-invocable Skill). ``handle()`` delegates to
 ``agent.record_skill_invocation`` to thread the (rendered) Skill into the
-Context's ``_invoked_skills`` list. The Agent is injected at construction,
+Context's ``_invoked_skills`` list. The AgentSession is injected at construction,
 not via the ``handle(arg, agent)`` parameter — SkillCommand is inherently
-per-Agent and the binding removes the cross-Agent footgun.
+per-AgentSession and the binding removes the cross-AgentSession footgun.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """BUG-AUDIT-B1 integration: pre_tool decision merge first-deny-wins.
 
-Drives a real :class:`aura.core.agent.Agent` turn through the full
+Drives a real :class:`aura.application.session.AgentSession` turn through the full
 pre_tool hook chain — bash_safety + a "soft-policy" deny hook + the
 real permission hook + must_read_first — and asserts on the persisted
 journal that:
@@ -41,8 +41,8 @@ from aura.application.hooks.bash_safety import make_bash_safety_hook
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.loop_state import LoopState
 from aura.application.permission.asker import AskerResponse
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.events import ToolCallCompleted
 from aura.domain.permission.decision import Decision
 from aura.domain.permission.outcome import Allow, Block, Outcome, Replace
@@ -101,7 +101,7 @@ def _one_bash_then_final(command: str) -> list[FakeTurn]:
 async def test_first_deny_beats_later_allow_in_real_agent_turn(
     tmp_path: Path,
 ) -> None:
-    """Real Agent turn with bash_safety + soft-deny + permission_hook in
+    """Real AgentSession turn with bash_safety + soft-deny + permission_hook in
     chain order. The soft-deny emits ``allow=False`` without
     short-circuiting; the permission hook is in bypass mode and would
     return ``allow=True``. Pre-fix, last-wins merge would let bypass
@@ -161,7 +161,7 @@ async def test_first_deny_beats_later_allow_in_real_agent_turn(
 
     storage = SessionStorage(tmp_path / "aura.db")
     session_log_dir = tmp_path / "logs"
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_cfg(),
         model=FakeChatModel(turns=_one_bash_then_final("echo hi")),
         storage=storage,
@@ -263,7 +263,7 @@ async def test_multiple_non_short_circuiting_decisions_merge_first_deny_wins(
 
     storage = SessionStorage(tmp_path / "aura.db")
     session_log_dir = tmp_path / "logs"
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_cfg(),
         model=FakeChatModel(turns=_one_bash_then_final("echo hi")),
         storage=storage,

@@ -1,4 +1,4 @@
-"""Tests for shift+tab mode-cycle keybinding + Agent.set_mode."""
+"""Tests for shift+tab mode-cycle keybinding + AgentSession.set_mode."""
 
 from __future__ import annotations
 
@@ -9,14 +9,14 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from aura.core.agent import Agent
+from aura.application.session import AgentSession
 from cli.repl import _build_mode_key_bindings, _cycle_mode
 from tests.conftest import FakeChatModel
 from tests.test_agent import _minimal_config, _storage
 
 
-def _agent(tmp_path: Path, mode: str = "default") -> Agent:
-    return Agent(
+def _agent(tmp_path: Path, mode: str = "default") -> AgentSession:
+    return AgentSession(
         config=_minimal_config(enabled=[]),
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -160,9 +160,9 @@ def test_escape_under_bypass_is_noop(tmp_path: Path) -> None:
     agent.close()
 
 
-def _agent_with_plan_tools(tmp_path: Path, mode: str = "default") -> Agent:
+def _agent_with_plan_tools(tmp_path: Path, mode: str = "default") -> AgentSession:
     # Need enter_plan_mode enabled to cover the wiring end-to-end.
-    return Agent(
+    return AgentSession(
         config=_minimal_config(enabled=["enter_plan_mode"]),
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),

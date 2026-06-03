@@ -2,7 +2,7 @@
 
 Unit tests cover the asker / permission hook / prompt_mutex in isolation.
 This tier mounts a real ``prompt_mutex`` around two scripted askers
-that "ask" concurrently (via ``asyncio.gather`` of two Agent.astream
+that "ask" concurrently (via ``asyncio.gather`` of two AgentSession.astream
 coroutines) and asserts:
 
 1. The two asks did NOT overlap (second started strictly after first
@@ -96,7 +96,7 @@ async def test_two_parallel_permission_asks_serialize_fifo(
     bash call that reaches the asker. With the mutex in place, the second
     ask must start strictly after the first ask returns.
     """
-    # Each Agent drives a single bash call + a final message.
+    # Each AgentSession drives a single bash call + a final message.
     def _make_one(cmd: str) -> tuple[FakeTurn, FakeTurn]:
         return (
             FakeTurn(
@@ -306,7 +306,7 @@ async def test_asker_timeout_is_per_call_not_shared(tmp_path: Path) -> None:
 
         return HookChain(pre_tool=[_timed_hook])
 
-    # Agent 1 hangs its first (and only) ask — times out to deny.
+    # AgentSession 1 hangs its first (and only) ask — times out to deny.
     turns_hang = [
         FakeTurn(
             message=AIMessage(
@@ -329,7 +329,7 @@ async def test_asker_timeout_is_per_call_not_shared(tmp_path: Path) -> None:
         hooks=_build_hook_with_timeout(0.5),
         available_tools={"bash": tool_a},
     )
-    # Agent 2 lands on its own fresh 0.5s budget — must succeed despite
+    # AgentSession 2 lands on its own fresh 0.5s budget — must succeed despite
     # agent 1's hang.
     turns_ok = [
         FakeTurn(

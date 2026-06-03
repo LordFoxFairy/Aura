@@ -58,7 +58,7 @@ class AskUserQuestionFactory:
     name: str = "ask_user_question"
 
     def build(self, runtime: ToolRuntime) -> BaseTool:
-        if runtime.asker is None:  # pragma: no cover  # Agent always wires a fallback
+        if runtime.asker is None:  # pragma: no cover  # AgentSession always wires a fallback
             raise RuntimeError(
                 "AskUserQuestionFactory.build requires runtime.asker."
             )
@@ -129,7 +129,7 @@ class TaskStopFactory:
 
 
 class SendMessageFactory:
-    """Outside a team the tool surfaces a clean ToolError; gating lives on :class:`Agent`."""
+    """Outside a team the tool surfaces a clean ToolError; gating lives on :class:`AgentSession`."""
 
     name: str = "send_message"
 

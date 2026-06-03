@@ -2,7 +2,7 @@
 
 Pins the wiring between LangChain's ``ai_message.usage_metadata`` and
 :attr:`TaskProgress.token_count` / ``input_tokens`` / ``output_tokens``.
-The producer is a post_model hook installed on the child Agent's
+The producer is a post_model hook installed on the child AgentSession's
 HookChain by ``run_task`` after :meth:`SubagentSpawner.spawn` returns;
 each tick of ``ai = ainvoke(...)`` fires the hook, which forwards
 usage to :meth:`TasksStore.record_token_usage`.

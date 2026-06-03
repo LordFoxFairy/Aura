@@ -16,7 +16,7 @@ from aura.config.schema import MCPServerConfig
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect ``Path.home()`` and ``Path.cwd()`` under ``tmp_path``.
 
-    Without this, ``mcp_store.get_path()`` would point at the real user
+    Without this, ``mcp_store.global_path()`` would point at the real user
     ``~/.aura/mcp_servers.json`` and the test would either pollute the
     developer's environment or depend on it. We also chdir into a
     ``project/`` subdir under the faked home so the project-layer
@@ -55,8 +55,8 @@ def project_dir(isolated_home: Path) -> Path:
     return Path(os.getcwd())
 
 
-def test_get_path_under_home(isolated_home: Path) -> None:
-    assert mcp_store.get_path() == isolated_home / ".aura" / "mcp_servers.json"
+def test_global_path_under_home(isolated_home: Path) -> None:
+    assert mcp_store.global_path() == isolated_home / ".aura" / "mcp_servers.json"
 
 
 def test_load_missing_file_returns_empty(isolated_home: Path) -> None:
@@ -151,7 +151,7 @@ def test_multiple_entries_preserve_order(isolated_home: Path) -> None:
 
 
 def test_load_rejects_non_object_top_level(isolated_home: Path) -> None:
-    path = mcp_store.get_path()
+    path = mcp_store.global_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(["not", "an", "object"]))
     with pytest.raises(ValueError, match="expected object at top level"):
@@ -159,7 +159,7 @@ def test_load_rejects_non_object_top_level(isolated_home: Path) -> None:
 
 
 def test_load_rejects_invalid_json(isolated_home: Path) -> None:
-    path = mcp_store.get_path()
+    path = mcp_store.global_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{ not json")
     with pytest.raises(ValueError, match="invalid JSON"):
@@ -167,7 +167,7 @@ def test_load_rejects_invalid_json(isolated_home: Path) -> None:
 
 
 def test_load_rejects_non_list_servers(isolated_home: Path) -> None:
-    path = mcp_store.get_path()
+    path = mcp_store.global_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"servers": "oops"}))
     with pytest.raises(ValueError, match="'servers' must be a list"):
@@ -177,7 +177,7 @@ def test_load_rejects_non_list_servers(isolated_home: Path) -> None:
 def test_load_surfaces_validation_errors(isolated_home: Path) -> None:
     # stdio transport without command is a validator failure; the store
     # must surface it rather than silently dropping the entry.
-    path = mcp_store.get_path()
+    path = mcp_store.global_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
         "servers": [{"name": "bad", "transport": "stdio"}],
@@ -208,7 +208,7 @@ def test_saved_json_shape_is_hand_editable(isolated_home: Path) -> None:
     mcp_store.save([
         MCPServerConfig(name="x", transport="stdio", command="cmd"),
     ])
-    raw = mcp_store.get_path().read_text(encoding="utf-8")
+    raw = mcp_store.global_path().read_text(encoding="utf-8")
     data = json.loads(raw)
     assert set(data.keys()) == {"servers"}
     assert isinstance(data["servers"], list)

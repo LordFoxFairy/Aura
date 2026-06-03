@@ -45,7 +45,7 @@ from tests.conftest import FakeChatModel, FakeTurn
 
 def _cfg() -> AuraConfig:
     # ``teams.enabled=True`` from v0.18 — see test_teams_manager.py for
-    # the rationale (the gate would otherwise make spawned Agent.join_team
+    # the rationale (the gate would otherwise make spawned AgentSession.join_team
     # raise inside SubagentSpawner.spawn).
     return AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
@@ -100,7 +100,7 @@ async def _silent_runtime(**_kwargs: Any) -> None:
 
 
 class _ScriptedAgent:
-    """Real-Agent surrogate for run_teammate.
+    """Real-AgentSession surrogate for run_teammate.
 
     Carries a ``team`` attribute so the runtime can call
     ``agent.team.send(...)`` for the shutdown_response leg.

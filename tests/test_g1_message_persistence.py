@@ -1,4 +1,4 @@
-"""``Agent.astream`` persists user messages and attachments before the model call."""
+"""``AgentSession.astream`` persists user messages and attachments before the model call."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -74,7 +74,7 @@ async def test_user_message_persisted_before_model_call(tmp_path: Path) -> None:
         error=ValueError("bad request: provider died mid-stream"),
         turns=[],
     )
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=model,
         storage=storage,
@@ -109,7 +109,7 @@ async def test_user_message_persisted_before_model_call_no_attachments(
     storage = _storage(tmp_path)
     # Non-retriable + no context-overflow signature → propagates unchanged.
     model = _RaisingOnce(error=ValueError("bad request: provider died"), turns=[])
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=model,
         storage=storage,
@@ -179,7 +179,7 @@ async def test_reactive_compact_retains_attachments_idempotently(
         FakeTurn(AIMessage(content="SUMMARY")),    # compact summary turn
         FakeTurn(AIMessage(content="recovered")),  # retry turn
     ])
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=model,
         storage=storage,
@@ -249,7 +249,7 @@ def _pre_append_then_kill_driver() -> str:
     """Return the Python source for the subprocess driver.
 
     The driver:
-    1. Constructs an Agent with a model that hangs forever on ``ainvoke``.
+    1. Constructs an AgentSession with a model that hangs forever on ``ainvoke``.
     2. Spawns astream as an asyncio.Task.
     3. Waits for the post-save signal file to appear.
     4. Exits hard (``os._exit(137)``) — simulating a kill mid-stream.
@@ -276,7 +276,7 @@ def _pre_append_then_kill_driver() -> str:
         sys.path.insert(0, {repo_root!r})
 
         from aura.config.schema import AuraConfig
-        from aura.core.agent import Agent
+        from aura.application.session import AgentSession
         from aura.infrastructure.persistence.storage import SessionStorage
         from tests.conftest import FakeChatModel
 
@@ -308,7 +308,7 @@ def _pre_append_then_kill_driver() -> str:
             "tools": {{"enabled": []}},
         }})
         storage = SessionStorage(Path(db_path))
-        agent = Agent(
+        agent = AgentSession(
             config=cfg,
             model=_HangingModel(turns=[]),
             storage=storage,
@@ -426,7 +426,7 @@ async def test_save_happens_before_turn_begin_in_journal(
     journal.configure(log_path)
     try:
         model = FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))])
-        agent = Agent(
+        agent = AgentSession(
             config=_minimal_config(),
             model=model,
             storage=_storage(tmp_path),

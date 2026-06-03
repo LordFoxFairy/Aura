@@ -1,6 +1,6 @@
 """TaskProgress — rolling child-agent tool activity.
 
-The run_task coroutine drains ``Agent.astream`` and forwards each
+The run_task coroutine drains ``AgentSession.astream`` and forwards each
 ``ToolCallStarted`` event into ``TasksStore.record_activity``. These tests
 exercise the recording path directly (no real subagent) so the invariants
 (bounded ring, tool_count monotonic, last_activity_at stamped) are pinned

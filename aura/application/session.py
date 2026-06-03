@@ -89,7 +89,7 @@ async def _unavailable_question_asker(
     raise ToolError(
         "ask_user_question is unavailable: no CLI asker was injected. "
         "Run aura through the CLI, or pass question_asker=... to "
-        "build_agent(...) / Agent(...) when driving programmatically."
+        "build_agent(...) / AgentSession(...) when driving programmatically."
     )
 
 
@@ -163,7 +163,7 @@ class AgentSession:
         self._mode = _validated_mode(
             mode,
             disable_bypass=disable_bypass,
-            source="to construct Agent(mode=...)",
+            source="to construct AgentSession(mode=...)",
         )
         # enter_plan_mode stashes the prior mode for exit_plan_mode to restore.
         self._prior_mode: str | None = None
@@ -332,7 +332,7 @@ class AgentSession:
         question_asker: UserAsker | None,
         available_tools: dict[str, BaseTool] | None,
     ) -> None:
-        # Stateful tools instantiate per-Agent; stateless ones reuse singletons.
+        # Stateful tools instantiate per-AgentSession; stateless ones reuse singletons.
         self._available_tools = (
             dict(available_tools) if available_tools is not None else dict(BUILTIN_TOOLS)
         )
@@ -349,7 +349,7 @@ class AgentSession:
         )
         for factory in STATEFUL_TOOL_FACTORIES:
             self._available_tools[factory.name] = factory.build(tool_runtime)
-        # Closures below need Agent-bound methods so they can't use ToolRuntime.
+        # Closures below need AgentSession-bound methods so they can't use ToolRuntime.
         self._available_tools["task_output"] = BUILTIN_STATEFUL_TOOLS[
             "task_output"
         ](store=self._tasks_store)
@@ -438,7 +438,7 @@ class AgentSession:
             history.append(HumanMessage(content=prompt))
             self._storage.save(self._session_id, history)
 
-            # max_turns is per-user-turn, not per-Agent-lifetime.
+            # max_turns is per-user-turn, not per-AgentSession-lifetime.
             self._state.turn_count = 0
 
             # Abort precedence: explicit kwarg > inherited from parent > own.
@@ -569,7 +569,7 @@ class AgentSession:
 
     @property
     def session_rules(self) -> SessionRuleSet | None:
-        """Public alias for :attr:`_session_rules` — callers outside Agent use this."""
+        """Public alias for :attr:`_session_rules` — callers outside AgentSession use this."""
         return self._session_runtime.session_rules
 
     @property
@@ -587,7 +587,7 @@ class AgentSession:
 
     def clear_session(self) -> None:
         # SessionRuntime owns lifecycle (storage.clear, session_rules drop,
-        # buffers, SessionStart re-arm). Agent owns LoopState slots, hook
+        # buffers, SessionStart re-arm). AgentSession owns LoopState slots, hook
         # rewiring, memory/rules cache invalidation, Context/Loop rebuild.
         self._session_runtime.clear()
         self._state.reset()
@@ -669,7 +669,7 @@ class AgentSession:
         self._loop = self._build_loop()
 
     def reload_memory_and_rules(self) -> None:
-        """Re-read AURA.md + rules from disk into Agent state.
+        """Re-read AURA.md + rules from disk into AgentSession state.
 
         Compact reloads BEFORE rebuilding Context so the new Context picks
         up disk edits made during the prior turn.
@@ -912,7 +912,7 @@ class AgentSession:
     async def set_cwd(self, path: Path) -> None:
         """Resolve ``path``, retarget ``_cwd``, fire CwdChangedHook consumers.
 
-        The process CWD stays put — Agent's logical workdir is enough for
+        The process CWD stays put — AgentSession's logical workdir is enough for
         memory + rules + skill loading, and mutating os.cwd would race tools.
         """
         new_cwd = Path(path).expanduser().resolve()
@@ -1132,7 +1132,7 @@ class AgentSession:
             return
         if self._mcp_manager is not None:
             raise RuntimeError(
-                "Agent.close() called inside a running event loop with a "
+                "AgentSession.close() called inside a running event loop with a "
                 "live MCP manager. Use `await agent.aclose(mcp_timeout=...)` "
                 "instead — fire-and-forget close was removed in v0.11."
             )
@@ -1166,7 +1166,7 @@ def build_agent(
     ask_ruleset: RuleSet | None = None,
     safety: SafetyPolicy | None = None,
 ) -> AgentSession:
-    # Production convenience: resolves model + storage; Agent ctor stays DI-pure.
+    # Production convenience: resolves model + storage; AgentSession ctor stays DI-pure.
     provider, model_name = llm.resolve(config.router["default"], cfg=config)
     model = llm.create(provider, model_name)
     storage = SessionStorage(config.resolved_storage_path())

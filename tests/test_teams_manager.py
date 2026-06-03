@@ -89,7 +89,7 @@ def _factory(*, parent_ruleset: RuleSet | None = None) -> SubagentSpawner[AgentS
 
 
 def _leader_stub(storage: SessionStorage, *, session_id: str = "leader-1") -> Any:
-    """Lightweight stand-in for an Agent with the surface TeamManager touches."""
+    """Lightweight stand-in for an AgentSession with the surface TeamManager touches."""
     leader = MagicMock()
     leader.session_id = session_id
     leader.cwd = Path.cwd()

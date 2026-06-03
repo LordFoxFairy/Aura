@@ -1,8 +1,8 @@
-"""Tests for the CwdChanged hook + Agent.set_cwd + cwd-rules reload consumer.
+"""Tests for the CwdChanged hook + AgentSession.set_cwd + cwd-rules reload consumer.
 
 Covers (V14-HOOK-CATALOG):
 
-1. ``Agent.set_cwd(new_path)`` updates ``self._cwd``.
+1. ``AgentSession.set_cwd(new_path)`` updates ``self._cwd``.
 2. ``set_cwd`` fires ``CwdChanged`` with old + new paths.
 3. ``set_cwd`` emits ``cwd_changed`` journal event.
 4. Reload consumer refreshes Context's rules from the new cwd.
@@ -21,9 +21,9 @@ from aura.application.loop_state import LoopState
 
 
 def _minimal_agent(tmp_path: Path) -> Any:
-    """Build a bare Agent with no tools enabled — enough for set_cwd tests."""
+    """Build a bare AgentSession with no tools enabled — enough for set_cwd tests."""
+    from aura.application.session import AgentSession
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
     from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel
 
@@ -35,7 +35,7 @@ def _minimal_agent(tmp_path: Path) -> Any:
             "storage": {"path": str(tmp_path / "db")},
         }
     )
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "aura.db"),
@@ -151,7 +151,7 @@ async def test_cwd_rules_reload_refreshes_rules_from_new_cwd(
         )
         (new_cwd / "AURA.md").write_text("RELOADED-MEM", encoding="utf-8")
 
-        # Sanity: original Agent does NOT see project2's rules yet.
+        # Sanity: original AgentSession does NOT see project2's rules yet.
         original_sources = [r.source_path for r in agent._rules.conditional]
         assert rule_path.resolve() not in original_sources
 
@@ -164,7 +164,7 @@ async def test_cwd_rules_reload_refreshes_rules_from_new_cwd(
             state=agent.state,
         )
 
-        # Now the Agent's rules + memory reflect the new cwd.
+        # Now the AgentSession's rules + memory reflect the new cwd.
         new_sources = [r.source_path for r in agent._rules.conditional]
         assert rule_path.resolve() in new_sources
         assert "RELOADED-MEM" in agent._primary_memory

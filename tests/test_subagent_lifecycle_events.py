@@ -25,11 +25,11 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from aura.application.session import AgentSession
 from aura.application.tasks.run import run_task
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.abort import AbortController
 from aura.domain.events import AgentEvent
 from aura.infrastructure.persistence import journal as journal_module
@@ -59,7 +59,7 @@ def _storage(root: Path) -> SessionStorage:
     return SessionStorage(root / "aura.db")
 
 
-class _CompletingFactory(SubagentSpawner[Agent]):
+class _CompletingFactory(SubagentSpawner[AgentSession]):
     """Spawns a child that finishes its astream immediately."""
 
     def __init__(self, tmp_path: Path) -> None:
@@ -73,10 +73,10 @@ class _CompletingFactory(SubagentSpawner[Agent]):
         agent_type: str = "general-purpose",
         task_id: str | None = None,
         model_spec: str | None = None,
-    ) -> Agent:
+    ) -> AgentSession:
         tmp_path = Path("/tmp/aura-subagent-lifecycle-tests")
         tmp_path.mkdir(parents=True, exist_ok=True)
-        return Agent(
+        return AgentSession(
             config=_minimal_config(),
             model=FakeChatModel(
                 turns=[FakeTurn(message=AIMessage(content="done-text"))],
@@ -85,7 +85,7 @@ class _CompletingFactory(SubagentSpawner[Agent]):
         )
 
 
-class _FailingFactory(SubagentSpawner[Agent]):
+class _FailingFactory(SubagentSpawner[AgentSession]):
     def __init__(self) -> None:
         pass
 
@@ -97,7 +97,7 @@ class _FailingFactory(SubagentSpawner[Agent]):
         agent_type: str = "general-purpose",
         task_id: str | None = None,
         model_spec: str | None = None,
-    ) -> Agent:
+    ) -> AgentSession:
         raise RuntimeError("spawn boom")
 
 
@@ -188,7 +188,7 @@ async def test_subagent_cancelled_carries_duration(tmp_path: Path) -> None:
     journal_module.reset()
     journal_module.configure(log)
 
-    class _SlowAgent(Agent):
+    class _SlowAgent(AgentSession):
         async def astream(
             self,
             prompt: str,
@@ -200,7 +200,7 @@ async def test_subagent_cancelled_carries_duration(tmp_path: Path) -> None:
             if False:
                 yield  # makes this an async generator with correct return type
 
-    class _SlowSpinFactory(SubagentSpawner[Agent]):
+    class _SlowSpinFactory(SubagentSpawner[AgentSession]):
         def __init__(self) -> None:
             pass
 
@@ -212,7 +212,7 @@ async def test_subagent_cancelled_carries_duration(tmp_path: Path) -> None:
             agent_type: str = "general-purpose",
             task_id: str | None = None,
             model_spec: str | None = None,
-        ) -> Agent:
+        ) -> AgentSession:
             _spin_path = Path("/tmp/aura-subagent-lifecycle-cancel")
             _spin_path.mkdir(parents=True, exist_ok=True)
             return _SlowAgent(

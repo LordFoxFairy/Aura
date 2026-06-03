@@ -12,9 +12,9 @@ import pytest
 from pydantic import BaseModel
 
 from aura.application.hooks.permission import make_permission_hook
+from aura.application.session import AgentSession
 from aura.config.loader import load_config
 from aura.config.schema import PermissionsConfig
-from aura.core.agent import Agent
 from aura.domain.events import (
     AssistantDelta,
     Final,
@@ -429,7 +429,7 @@ async def test_run_wires_permission_deny_ask_and_disable_bypass(
         lambda _root: RuleSet((Rule("write_file", None),)),
     )
     monkeypatch.setattr(headless, "make_permission_hook", fake_permission_hook)
-    monkeypatch.setattr(headless, "Agent", FakeAgent)
+    monkeypatch.setattr(headless, "AgentSession", FakeAgent)
     monkeypatch.setattr("desktop.host.headless.asyncio.StreamReader", FakeReader)
     monkeypatch.setattr(
         "desktop.host.headless.asyncio.StreamReaderProtocol",
@@ -469,7 +469,7 @@ async def test_run_refuses_configured_bypass_when_disable_bypass_true(
 
     class ExplodingAgent:
         def __init__(self, **_kwargs: Any) -> None:
-            raise AssertionError("Agent should not be constructed")
+            raise AssertionError("AgentSession should not be constructed")
 
     monkeypatch.setattr(headless, "_emit", emitted.append)
     monkeypatch.setattr(headless, "load_config", lambda: cfg)
@@ -490,7 +490,7 @@ async def test_run_refuses_configured_bypass_when_disable_bypass_true(
         "desktop.host.headless.perm_store.load_ask_ruleset",
         lambda _root: RuleSet((Rule("write_file", None),)),
     )
-    monkeypatch.setattr(headless, "Agent", ExplodingAgent)
+    monkeypatch.setattr(headless, "AgentSession", ExplodingAgent)
 
     assert await headless._run() == 1
     assert emitted == [{
@@ -611,7 +611,7 @@ async def test_session_driver_emits_exited_after_final_when_turn_completes(
 
     emitted: list[dict[str, Any]] = []
     _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
-    monkeypatch.setattr(headless, "Agent", FakeAgent)
+    monkeypatch.setattr(headless, "AgentSession", FakeAgent)
 
     reader = _ScriptedReader([
         b'{"kind":"prompt","text":"hi"}\n',
@@ -628,7 +628,7 @@ async def test_session_driver_emits_exited_after_final_when_turn_completes(
                 load_config_fn=load_config,
                 make_model_for_spec_fn=make_model_for_spec,
                 make_permission_hook_fn=make_permission_hook,
-                agent_cls=cast(type[Agent], FakeAgent),
+                agent_cls=cast(type[AgentSession], FakeAgent),
                 perm_store_module=perm_store,
             ),
         )
@@ -681,7 +681,7 @@ async def test_session_driver_emits_exited_exactly_once_on_clean_close(
 
     emitted: list[dict[str, Any]] = []
     _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
-    monkeypatch.setattr(headless, "Agent", FakeAgent)
+    monkeypatch.setattr(headless, "AgentSession", FakeAgent)
 
     # EOF immediately — clean close path through the while-loop.
     reader = _ScriptedReader([])
@@ -695,7 +695,7 @@ async def test_session_driver_emits_exited_exactly_once_on_clean_close(
         load_config_fn=load_config,
         make_model_for_spec_fn=make_model_for_spec,
         make_permission_hook_fn=make_permission_hook,
-        agent_cls=cast(type[Agent], FakeAgent),
+        agent_cls=cast(type[AgentSession], FakeAgent),
         perm_store_module=perm_store,
     )
     assert rc == 0

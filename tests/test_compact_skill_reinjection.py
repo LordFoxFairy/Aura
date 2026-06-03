@@ -13,8 +13,8 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.skill import Skill
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
@@ -28,15 +28,15 @@ def _config() -> AuraConfig:
     })
 
 
-def _agent(tmp_path: Path) -> Agent:
-    return Agent(
+def _agent(tmp_path: Path) -> AgentSession:
+    return AgentSession(
         config=_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="SUMMARY"))]),
         storage=SessionStorage(tmp_path / "aura.db"),
     )
 
 
-def _seed_history(agent: Agent, *, pairs: int = 10) -> None:
+def _seed_history(agent: AgentSession, *, pairs: int = 10) -> None:
     h: list[Any] = []
     for i in range(pairs):
         h.append(HumanMessage(content=f"u-{i}"))

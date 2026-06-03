@@ -73,7 +73,7 @@ def _default_storage() -> SessionStorage:
 
 
 class SubagentSpawner(Generic[A]):
-    """Create a standalone Agent for a single subagent run.
+    """Create a standalone AgentSession for a single subagent run.
 
     ``build_child`` is injected so this module never imports the concrete
     session type — the construction site binds ``A`` to its agent class.

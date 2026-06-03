@@ -7,7 +7,7 @@ Covers:
 - Empty name -> pydantic ValidationError before body runs.
 - Tool metadata: not destructive, read-only.
 - Tool is registered in the default ``tools.enabled`` list.
-- Tool is wired on the Agent and invokes through the real recorder.
+- Tool is wired on the AgentSession and invokes through the real recorder.
 - Arguments: skill with declared args renders placeholders; missing args
   raises ToolError naming the missing positional; skill with no declared
   args ignores incoming arguments (doesn't error).
@@ -22,8 +22,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.skill import Skill
 from aura.domain.tool import ToolError
 from aura.domain.tool_meta_access import meta_dict
@@ -52,7 +52,7 @@ def _skill(
 
 
 class _RecorderSpy:
-    """Fake recorder mirrors Agent.record_skill_invocation's signature."""
+    """Fake recorder mirrors AgentSession.record_skill_invocation's signature."""
 
     def __init__(self) -> None:
         self.calls: list[Skill] = []
@@ -193,13 +193,13 @@ def test_skill_tool_substitutes_skill_dir_and_session_id(tmp_path: Path) -> None
     assert "my-sid" in rendered
 
 
-def _make_agent(tmp_path: Path, skills: list[Skill]) -> Agent:
+def _make_agent(tmp_path: Path, skills: list[Skill]) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["skill"]},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "db"),

@@ -31,7 +31,7 @@ def build_default_registry(agent: AgentSession | None = None) -> CommandRegistry
 
     When ``agent`` is provided, also registers one ``SkillCommand`` per
     user-invocable skill and every MCP slash command harvested during
-    ``Agent.aconnect()``. Zero-arg form returns the static builtin set —
+    ``AgentSession.aconnect()``. Zero-arg form returns the static builtin set —
     used by tests and callers that don't need the dynamic surfaces.
     """
     registry = CommandRegistry()

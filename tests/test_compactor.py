@@ -25,8 +25,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 from aura.application.compact.compactor import Compactor
 from aura.application.compact.microcompact import MicrocompactPolicy
 from aura.application.compact.reactive import CompactResult, CompactSource
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
@@ -40,8 +40,8 @@ def _config() -> AuraConfig:
     })
 
 
-def _agent(tmp_path: Path, *, threshold: int = 10) -> Agent:
-    return Agent(
+def _agent(tmp_path: Path, *, threshold: int = 10) -> AgentSession:
+    return AgentSession(
         config=_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="x"))] * 20),
         storage=SessionStorage(tmp_path / "aura.db"),
@@ -50,7 +50,7 @@ def _agent(tmp_path: Path, *, threshold: int = 10) -> Agent:
 
 
 def _make_compactor(
-    agent: Agent,
+    agent: AgentSession,
     *,
     events: list[dict[str, Any]] | None = None,
     microcompact_policy: MicrocompactPolicy | None = None,
@@ -180,14 +180,14 @@ async def test_microcompact_writes_compact_event_to_journal(
 
 @pytest.mark.asyncio
 async def test_reactive_delegates_to_agent_compact(tmp_path: Path) -> None:
-    """reactive() routes through ``Agent.compact(source="reactive")``."""
+    """reactive() routes through ``AgentSession.compact(source="reactive")``."""
     agent = _agent(tmp_path)
     events: list[dict[str, Any]] = []
     compactor = _make_compactor(agent, events=events)
 
     seen: list[str] = []
 
-    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _ok(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         seen.append(source)
         return CompactResult(
             before_tokens=100, after_tokens=50,
@@ -195,7 +195,7 @@ async def test_reactive_delegates_to_agent_compact(tmp_path: Path) -> None:
         )
 
     history: list[Any] = []
-    with patch.object(Agent, "compact", _ok):
+    with patch.object(AgentSession, "compact", _ok):
         result = await compactor.reactive(history, agent.state.slots)
 
     assert seen == ["reactive"]
@@ -215,11 +215,14 @@ async def test_reactive_failure_emits_failed_outcome(tmp_path: Path) -> None:
     events: list[dict[str, Any]] = []
     compactor = _make_compactor(agent, events=events)
 
-    async def _boom(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _boom(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         raise RuntimeError("simulated")
 
     history: list[Any] = []
-    with patch.object(Agent, "compact", _boom), pytest.raises(RuntimeError, match="simulated"):
+    with (
+        patch.object(AgentSession, "compact", _boom),
+        pytest.raises(RuntimeError, match="simulated"),
+    ):
         await compactor.reactive(history, agent.state.slots)
 
     assert len(events) == 1
@@ -261,13 +264,13 @@ async def test_auto_above_threshold_runs_and_resets_breaker(
     events: list[dict[str, Any]] = []
     compactor = _make_compactor(agent, events=events)
 
-    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _ok(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         return CompactResult(
             before_tokens=100, after_tokens=20,
             source=source,
         )
 
-    with patch.object(Agent, "compact", _ok):
+    with patch.object(AgentSession, "compact", _ok):
         result = await compactor.auto(
             [], agent.state.slots, model="openai:gpt-4o-mini",
         )
@@ -288,7 +291,7 @@ async def test_auto_failure_increments_circuit_breaker(tmp_path: Path) -> None:
     The breaker limit comes from
     ``CompactConfig.max_consecutive_failures`` (default 3); after that
     many failures the next call short-circuits without invoking
-    ``Agent.compact`` again.
+    ``AgentSession.compact`` again.
     """
     agent = _agent(tmp_path, threshold=10)
     agent.state.total_tokens_used = 100
@@ -297,12 +300,12 @@ async def test_auto_failure_increments_circuit_breaker(tmp_path: Path) -> None:
 
     calls: list[str] = []
 
-    async def _fail(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _fail(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         calls.append(source)
         raise RuntimeError("compact failed")
 
     # Three failures in a row.
-    with patch.object(Agent, "compact", _fail):
+    with patch.object(AgentSession, "compact", _fail):
         for _ in range(3):
             with pytest.raises(RuntimeError):
                 await compactor.auto(
@@ -312,9 +315,9 @@ async def test_auto_failure_increments_circuit_breaker(tmp_path: Path) -> None:
     assert agent.state.slots.consecutive_compact_failures == 3
     assert len(calls) == 3
 
-    # Fourth attempt — breaker tripped, no more Agent.compact calls.
+    # Fourth attempt — breaker tripped, no more AgentSession.compact calls.
     pre = len(calls)
-    with patch.object(Agent, "compact", _fail):
+    with patch.object(AgentSession, "compact", _fail):
         result = await compactor.auto(
             [], agent.state.slots, model="openai:gpt-4o-mini",
         )
@@ -336,7 +339,7 @@ async def test_auto_breaker_limit_honors_config(tmp_path: Path) -> None:
         **cfg.model_dump(),
         "compact": {"max_consecutive_failures": 1},
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="x"))] * 5),
         storage=SessionStorage(tmp_path / "aura.db"),
@@ -347,11 +350,11 @@ async def test_auto_breaker_limit_honors_config(tmp_path: Path) -> None:
 
     calls: list[str] = []
 
-    async def _fail(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _fail(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         calls.append(source)
         raise RuntimeError("boom")
 
-    with patch.object(Agent, "compact", _fail):
+    with patch.object(AgentSession, "compact", _fail):
         with pytest.raises(RuntimeError):
             await compactor.auto(
                 [], agent.state.slots, model="openai:gpt-4o-mini",
@@ -379,14 +382,14 @@ async def test_manual_delegates_and_bypasses_breaker(tmp_path: Path) -> None:
 
     seen: list[str] = []
 
-    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _ok(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         seen.append(source)
         return CompactResult(
             before_tokens=10, after_tokens=5,
             source=source,
         )
 
-    with patch.object(Agent, "compact", _ok):
+    with patch.object(AgentSession, "compact", _ok):
         result = await compactor.manual([], agent.state.slots)
 
     assert seen == ["manual"]
@@ -411,13 +414,13 @@ async def test_event_emitter_payload_matches_spec(tmp_path: Path) -> None:
     events: list[dict[str, Any]] = []
     compactor = _make_compactor(agent, events=events)
 
-    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _ok(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         return CompactResult(
             before_tokens=42, after_tokens=7,
             source=source,
         )
 
-    with patch.object(Agent, "compact", _ok):
+    with patch.object(AgentSession, "compact", _ok):
         await compactor.manual([], agent.state.slots)
 
     assert len(events) == 1

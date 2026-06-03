@@ -137,7 +137,7 @@ def test_default_policy_blocks_reads_of_home_rc_files() -> None:
     ],
 )
 def test_reads_of_git_and_aura_are_allowed(path_str: str) -> None:
-    # Agent legitimately reads git metadata (git log) and aura config
+    # AgentSession legitimately reads git metadata (git log) and aura config
     # (self-introspection). Reads list MUST NOT block these.
     assert is_protected(path_str, DEFAULT_SAFETY, is_write=False) is False
 

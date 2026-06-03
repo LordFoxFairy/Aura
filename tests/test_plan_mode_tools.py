@@ -2,7 +2,7 @@
 
 Covers:
 
-- enter_plan_mode flips Agent.mode -> "plan" and returns the envelope.
+- enter_plan_mode flips AgentSession.mode -> "plan" and returns the envelope.
 - enter_plan_mode from plan mode is a no-op (previous_mode == "plan",
   note set).
 - exit_plan_mode from plan -> "default" (default to_mode).
@@ -108,7 +108,7 @@ def test_enter_plan_mode_from_plan_is_noop_with_note() -> None:
 def test_enter_plan_mode_saves_prior_mode_via_closure() -> None:
     # Entering plan from "accept_edits" stashes "accept_edits" via the
     # injected save closure — that's the single-writer contract the
-    # Agent relies on to restore the mode on exit.
+    # AgentSession relies on to restore the mode on exit.
     agent = _FakeAgent(mode="accept_edits")
     saved: list[str] = []
     tool = EnterPlanMode(

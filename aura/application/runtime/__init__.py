@@ -1,4 +1,4 @@
-"""Per-Agent runtime collaborators (session / tools / MCP sidecars)."""
+"""Per-AgentSession runtime collaborators (session / tools / MCP sidecars)."""
 from __future__ import annotations
 
 from aura.application.runtime.mcp import McpRuntime

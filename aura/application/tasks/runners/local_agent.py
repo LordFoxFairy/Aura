@@ -1,265 +1,33 @@
-"""In-process child Agent runner; fire-and-forget, cancellation via :meth:`abort`."""
+"""In-process child AgentSession runner; fire-and-forget, cancellation via :meth:`abort`."""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import os
 import time
-from datetime import UTC, datetime
-from pathlib import Path
-from typing import TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import BaseMessage
 
-from aura.application.hooks.protocols import PostModelHook
-from aura.application.loop_state import LoopState
 from aura.application.subagent_summary import AgentSummarizer
+from aura.application.tasks.runners.local_agent_io import (
+    capture_child_messages,
+    flush_metadata,
+    flush_transcript,
+    load_child_messages,
+    maybe_cleanup_completed_transcript,
+)
+from aura.application.tasks.runners.local_agent_support import (
+    DEFAULT_SUBAGENT_TIMEOUT_SEC,
+    make_token_observer,
+    resolve_timeout,
+)
 from aura.application.tasks.spawn_port import SpawnedAgent, SpawnPort
 from aura.application.tasks.store import TasksStore
 from aura.domain.events import Final, ToolCallStarted
-from aura.domain.task import TaskRecord, TaskStatus
 from aura.infrastructure.llm import make_summary_model_factory
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
-
-# 5 minute defense-in-depth ceiling; ``AURA_SUBAGENT_TIMEOUT_SEC<=0`` disables.
-DEFAULT_SUBAGENT_TIMEOUT_SEC: float = 300.0
-_TIMEOUT_ENV_VAR = "AURA_SUBAGENT_TIMEOUT_SEC"
-
-
-class SubagentMeta(TypedDict):
-    """Fixed shape of the ``.meta.json`` companion written next to a transcript."""
-
-    agent_type: str
-    task_id: str
-    description: str
-    model_spec: str
-    parent_session_id: str
-    cwd: str
-    started_at: float
-    started_at_iso: str
-    ended_at: float | None
-    ended_at_iso: str | None
-    status: TaskStatus
-    input_tokens: int
-    output_tokens: int
-
-
-def resolve_timeout(override: float | None) -> float | None:
-    """Pick the effective wallclock timeout (None == disabled).
-
-    Precedence: explicit override > env var > default. ``<= 0`` flows through as ``None``.
-    Malformed env values journal + fall through to the default.
-    """
-    if override is not None:
-        return override if override > 0 else None
-    raw = os.environ.get(_TIMEOUT_ENV_VAR)
-    if raw is not None:
-        try:
-            parsed = float(raw)
-        except ValueError:
-            journal.write(
-                "subagent_timeout_env_invalid",
-                var=_TIMEOUT_ENV_VAR,
-                value=raw,
-            )
-        else:
-            return parsed if parsed > 0 else None
-    return DEFAULT_SUBAGENT_TIMEOUT_SEC
-
-
-def make_token_observer(store: TasksStore, task_id: str) -> PostModelHook:
-    """post_model hook forwarding ``usage_metadata`` into the store; failures journaled."""
-    async def _observe(
-        *,
-        ai_message: AIMessage,
-        history: list[BaseMessage],  # noqa: ARG001 - protocol compliance
-        state: LoopState,  # noqa: ARG001 - protocol compliance
-        **_: object,
-    ) -> None:
-        try:
-            usage = ai_message.usage_metadata
-            if not usage:
-                return
-            in_t = int(usage.get("input_tokens", 0) or 0)
-            out_t = int(usage.get("output_tokens", 0) or 0)
-            store.record_token_usage(
-                task_id, input_tokens=in_t, output_tokens=out_t,
-            )
-        except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
-            journal.write(
-                "subagent_token_observer_error",
-                task_id=task_id,
-                error=f"{type(exc).__name__}: {exc}",
-            )
-
-    return _observe
-
-
-def flush_transcript(
-    *,
-    transcript_storage: SessionStorage,
-    task_id: str,
-    messages: list[BaseMessage],
-    store: TasksStore,
-    parent_session_id: str = "",
-    cwd: str = "",
-) -> Path | None:
-    """Write the child's transcript JSONL via the storage's path API."""
-    try:
-        cwd_arg: Path | None = Path(cwd) if cwd else None
-        parent_arg: str | None = parent_session_id or None
-        path = transcript_storage.write_subagent_transcript(
-            task_id,
-            messages,
-            parent_session_id=parent_arg,
-            cwd=cwd_arg,
-        )
-        store.set_transcript_path(task_id, path)
-        return path
-    except Exception as exc:  # noqa: BLE001  # persistence failure is non-fatal best-effort
-        journal.write(
-            "subagent_transcript_flush_error",
-            task_id=task_id,
-            error=f"{type(exc).__name__}: {exc}",
-        )
-        return None
-
-
-def maybe_cleanup_completed_transcript(
-    *,
-    agent: SpawnedAgent,
-    transcript_storage: SessionStorage,
-    task_id: str,
-    parent_session_id: str,
-    cwd: str,
-) -> None:
-    """Delete a completed subagent's transcript + meta files (opt-in; failures survive)."""
-    try:
-        if not agent.config.tools.cleanup_completed_subagent_transcripts:
-            return
-        cwd_arg: Path | None = Path(cwd) if cwd else None
-        parent_arg: str | None = parent_session_id or None
-        path_resolvers = (
-            ("subagent_transcript_path", transcript_storage.subagent_transcript_path),
-            ("subagent_metadata_path", transcript_storage.subagent_metadata_path),
-        )
-        for fn_name, resolve_path in path_resolvers:
-            target = resolve_path(
-                task_id, parent_session_id=parent_arg, cwd=cwd_arg,
-            )
-            try:
-                target.unlink(missing_ok=True)
-            except OSError as exc:
-                journal.write(
-                    "subagent_transcript_cleanup_error",
-                    task_id=task_id,
-                    file=fn_name,
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-        journal.write(
-            "subagent_transcript_cleaned",
-            task_id=task_id,
-            parent_session_id=parent_arg or "",
-        )
-    except Exception as exc:  # noqa: BLE001  # log + swallow; logging path must never crash caller
-        journal.write(
-            "subagent_transcript_cleanup_error",
-            task_id=task_id,
-            error=f"{type(exc).__name__}: {exc}",
-        )
-
-
-def flush_metadata(
-    *,
-    transcript_storage: SessionStorage,
-    record: TaskRecord,
-    parent_session_id: str,
-    cwd: str,
-) -> Path | None:
-    """Write the ``.meta.json`` companion file alongside the transcript."""
-    try:
-        cwd_arg: Path | None = Path(cwd) if cwd else None
-        parent_arg: str | None = parent_session_id or None
-        meta_path = transcript_storage.subagent_metadata_path(
-            record.id,
-            parent_session_id=parent_arg,
-            cwd=cwd_arg,
-        )
-        meta_path.parent.mkdir(parents=True, exist_ok=True)
-        started_iso = datetime.fromtimestamp(
-            record.started_at, tz=UTC,
-        ).isoformat()
-        ended_iso: str | None = None
-        if record.finished_at is not None:
-            ended_iso = datetime.fromtimestamp(
-                record.finished_at, tz=UTC,
-            ).isoformat()
-        meta: SubagentMeta = {
-            "agent_type": record.agent_type or "general-purpose",
-            "task_id": record.id,
-            "description": record.description,
-            "model_spec": record.model_spec or "",
-            "parent_session_id": parent_session_id or "",
-            "cwd": cwd or "",
-            "started_at": record.started_at,
-            "started_at_iso": started_iso,
-            "ended_at": record.finished_at,
-            "ended_at_iso": ended_iso,
-            "status": record.status,
-            "input_tokens": record.progress.input_tokens,
-            "output_tokens": record.progress.output_tokens,
-        }
-        tmp = meta_path.with_suffix(meta_path.suffix + ".tmp")
-        tmp.write_text(
-            json.dumps(meta, indent=2, ensure_ascii=False, default=str),
-            encoding="utf-8",
-        )
-        tmp.replace(meta_path)
-        return meta_path
-    except Exception as exc:  # noqa: BLE001  # persistence failure is non-fatal best-effort
-        journal.write(
-            "subagent_metadata_flush_error",
-            task_id=record.id,
-            error=f"{type(exc).__name__}: {exc}",
-        )
-        return None
-
-
-async def capture_child_messages(
-    agent: SpawnedAgent | None, store: TasksStore, task_id: str,
-) -> None:
-    """Pull the child's full message list onto the TaskRecord."""
-    if agent is None:
-        return
-    try:
-        msgs = agent.storage.load(agent.session_id)
-        rec = store.get(task_id)
-        if rec is None:
-            return
-        rec.messages = list(msgs)
-    except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
-        journal.write(
-            "subagent_capture_messages_error",
-            task_id=task_id,
-            error=f"{type(exc).__name__}: {exc}",
-        )
-
-
-def load_child_messages(
-    agent: SpawnedAgent | None, store: TasksStore, task_id: str,
-) -> list[BaseMessage]:
-    """Read the child's transcript for transcript-flush."""
-    rec = store.get(task_id)
-    if rec is not None and rec.messages:
-        return list(rec.messages)
-    if agent is None:
-        return []
-    with contextlib.suppress(Exception):
-        return list(agent.storage.load(agent.session_id))
-    return []
 
 
 class LocalAgentTask:
@@ -366,25 +134,44 @@ async def run_local_agent(
     store.record_started(task_id)
     agent: SpawnedAgent | None = None
     final_text = ""
-    summarizer = None
-    try:
-        # spawn() inside the try: spawn-time failure must flip the record to ``failed``.
-        try:
-            agent = factory.spawn(
-                record.prompt,
-                agent_type=record.agent_type or "general-purpose",
+    summarizer: AgentSummarizer | None = None
+
+    async def _finalize_run(*, require_agent: bool, cleanup: bool) -> None:
+        if transcript_storage is not None and (agent is not None or not require_agent):
+            flush_transcript(
+                transcript_storage=transcript_storage,
                 task_id=task_id,
-                model_spec=record.model_spec or None,
+                messages=load_child_messages(agent, store, task_id),
+                store=store,
+                parent_session_id=resolved_parent_session_id,
+                cwd=resolved_cwd,
             )
-        except TypeError as exc:
-            if "model_spec" in str(exc):
-                agent = factory.spawn(
-                    record.prompt,
-                    agent_type=record.agent_type or "general-purpose",
+            flush_metadata(
+                transcript_storage=transcript_storage,
+                record=record,
+                parent_session_id=resolved_parent_session_id,
+                cwd=resolved_cwd,
+            )
+            if cleanup and agent is not None:
+                maybe_cleanup_completed_transcript(
+                    agent=agent,
+                    transcript_storage=transcript_storage,
                     task_id=task_id,
+                    parent_session_id=resolved_parent_session_id,
+                    cwd=resolved_cwd,
                 )
-            else:
-                raise
+        if summarizer is not None:
+            await summarizer.stop()
+        if agent is not None:
+            await agent.aclose()
+
+    try:
+        agent = factory.spawn(
+            record.prompt,
+            agent_type=record.agent_type or "general-purpose",
+            task_id=task_id,
+            model_spec=record.model_spec or None,
+        )
         agent.hooks.post_model.append(make_token_observer(store, task_id))
         summary_factory = make_summary_model_factory(
             agent.config, agent.model, summary_spec=None,
@@ -423,25 +210,7 @@ async def run_local_agent(
             task_id=task_id,
             duration_sec=round(time.monotonic() - start_monotonic, 3),
         )
-        if transcript_storage is not None:
-            flush_transcript(
-                transcript_storage=transcript_storage,
-                task_id=task_id,
-                messages=load_child_messages(agent, store, task_id),
-                store=store,
-                parent_session_id=resolved_parent_session_id,
-                cwd=resolved_cwd,
-            )
-            flush_metadata(
-                transcript_storage=transcript_storage,
-                record=record,
-                parent_session_id=resolved_parent_session_id,
-                cwd=resolved_cwd,
-            )
-        if summarizer is not None:
-            await summarizer.stop()
-        if agent is not None:
-            await agent.aclose()
+        await _finalize_run(require_agent=False, cleanup=False)
         raise
     except TimeoutError as exc:
         await capture_child_messages(agent, store, task_id)
@@ -458,25 +227,7 @@ async def run_local_agent(
             duration_sec=round(time.monotonic() - start_monotonic, 3),
             cause=f"{type(exc).__name__}: {exc}",
         )
-        if transcript_storage is not None:
-            flush_transcript(
-                transcript_storage=transcript_storage,
-                task_id=task_id,
-                messages=load_child_messages(agent, store, task_id),
-                store=store,
-                parent_session_id=resolved_parent_session_id,
-                cwd=resolved_cwd,
-            )
-            flush_metadata(
-                transcript_storage=transcript_storage,
-                record=record,
-                parent_session_id=resolved_parent_session_id,
-                cwd=resolved_cwd,
-            )
-        if summarizer is not None:
-            await summarizer.stop()
-        if agent is not None:
-            await agent.aclose()
+        await _finalize_run(require_agent=False, cleanup=False)
     except Exception as exc:  # noqa: BLE001  # cleanup path must not propagate
         if agent is not None:
             await capture_child_messages(agent, store, task_id)
@@ -488,25 +239,7 @@ async def run_local_agent(
             error=err_msg,
             duration_sec=round(time.monotonic() - start_monotonic, 3),
         )
-        if transcript_storage is not None and agent is not None:
-            flush_transcript(
-                transcript_storage=transcript_storage,
-                task_id=task_id,
-                messages=load_child_messages(agent, store, task_id),
-                store=store,
-                parent_session_id=resolved_parent_session_id,
-                cwd=resolved_cwd,
-            )
-            flush_metadata(
-                transcript_storage=transcript_storage,
-                record=record,
-                parent_session_id=resolved_parent_session_id,
-                cwd=resolved_cwd,
-            )
-        if summarizer is not None:
-            await summarizer.stop()
-        if agent is not None:
-            await agent.aclose()
+        await _finalize_run(require_agent=True, cleanup=False)
     else:
         journal.write(
             "subagent_completed",
@@ -514,32 +247,7 @@ async def run_local_agent(
             duration_sec=round(time.monotonic() - start_monotonic, 3),
             final_text_chars=len(final_text),
         )
-        if transcript_storage is not None and agent is not None:
-            flush_transcript(
-                transcript_storage=transcript_storage,
-                task_id=task_id,
-                messages=load_child_messages(agent, store, task_id),
-                store=store,
-                parent_session_id=resolved_parent_session_id,
-                cwd=resolved_cwd,
-            )
-            flush_metadata(
-                transcript_storage=transcript_storage,
-                record=record,
-                parent_session_id=resolved_parent_session_id,
-                cwd=resolved_cwd,
-            )
-            maybe_cleanup_completed_transcript(
-                agent=agent,
-                transcript_storage=transcript_storage,
-                task_id=task_id,
-                parent_session_id=resolved_parent_session_id,
-                cwd=resolved_cwd,
-            )
-        if summarizer is not None:
-            await summarizer.stop()
-        if agent is not None:
-            await agent.aclose()
+        await _finalize_run(require_agent=True, cleanup=True)
     finally:
         if abort_watcher is not None and not abort_watcher.done():
             abort_watcher.cancel()

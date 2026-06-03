@@ -1,4 +1,4 @@
-"""Structural contract a teammate Agent sees of its bound TeamManager."""
+"""Structural contract a teammate AgentSession sees of its bound TeamManager."""
 
 from __future__ import annotations
 

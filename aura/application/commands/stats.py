@@ -154,8 +154,8 @@ def _safe_int(value: object) -> int:
 
 def _resolve_journal_path(agent: AgentSession) -> Path | None:
     """Live journal path → config default → None."""
-    live = journal_mod._path
-    if isinstance(live, Path):
+    live = journal_mod.current_path()
+    if live is not None:
         return live
     cfg = agent.config
     if cfg is None:  # pyright: ignore[reportUnnecessaryComparison]  # tests stub agent with config=None to exercise no-config path

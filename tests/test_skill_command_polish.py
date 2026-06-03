@@ -13,8 +13,8 @@ from aura.application.commands.builtin import HelpCommand
 from aura.application.commands.factory import build_default_registry
 from aura.application.commands.registry import CommandRegistry as _Reg
 from aura.application.commands.types import CommandResult, CommandSource
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.skill import Skill, SkillLayer
 from aura.infrastructure.persistence import journal as journal_module
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -47,13 +47,13 @@ def _skill(
     )
 
 
-def _agent(tmp_path: Path, skills: list[Skill] | None = None) -> Agent:
+def _agent(tmp_path: Path, skills: list[Skill] | None = None) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "db"),
@@ -267,7 +267,7 @@ class _StubCommand:
         self.allowed_tools: tuple[str, ...] = allowed_tools
         self.argument_hint: str | None = argument_hint
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         return CommandResult(handled=True, kind="print", text="ok")
 
 

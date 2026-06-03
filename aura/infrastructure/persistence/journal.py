@@ -40,6 +40,11 @@ def reset() -> None:
     _path = None
 
 
+def current_path() -> Path | None:
+    """Configured default journal path (ignores per-session scope)."""
+    return _path
+
+
 @contextlib.contextmanager
 def session_scope(path: Path) -> Generator[None, None, None]:
     """Route writes to ``path`` within this context; nests via contextvars."""

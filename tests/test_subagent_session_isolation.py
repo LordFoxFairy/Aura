@@ -1,7 +1,7 @@
 """Subagent session_id isolation (audit Tier S).
 
 Before this fix, :meth:`SubagentSpawner.spawn` hardcoded
-``session_id="subagent"`` on every child :class:`Agent`. Two concurrent
+``session_id="subagent"`` on every child :class:`AgentSession`. Two concurrent
 subagents under the same parent both wrote into
 :class:`SessionStorage` keyed by the same ``"subagent"`` literal, and
 ``storage.save`` is a ``DELETE WHERE session_id=? then INSERT`` — one
@@ -191,7 +191,7 @@ async def test_subagent_journal_events_carry_distinct_session_ids(
     # No event should carry the legacy literal "subagent".
     assert "subagent" not in session_values, (
         "journal still shows hardcoded 'subagent' session — per-task ids "
-        "did not reach the child Agent"
+        "did not reach the child AgentSession"
     )
 
 

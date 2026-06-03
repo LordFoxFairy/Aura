@@ -63,7 +63,7 @@ def _isolated_home(
     Before V12-G, the skills loader only scanned ``~/.aura/skills/`` which
     was rarely populated on dev machines. V12-G added ``~/.claude/skills/``
     as a claude-code-compat source — typically populated with superpowers +
-    other real skills. Without isolation, every Agent-constructing test
+    other real skills. Without isolation, every AgentSession-constructing test
     would transitively load those real skills, polluting ``Context.build``
     output and breaking position-sensitive assertions (``cleared_positions``
     in microcompact tests, the conditional-skill promotion test, etc).

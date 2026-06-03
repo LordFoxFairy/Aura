@@ -5,8 +5,8 @@ Exercises the manager-side surfaces for MCP resource exposure:
 - :class:`MCPManager` — discovery (``start_all`` now calls
   ``session.list_resources``), accessor (``resources_catalogue``), and
   on-demand read (``read_resource``).
-- Agent wiring — ``aconnect()`` exposes the live :class:`MCPManager`
-  on :attr:`Agent.mcp_manager` without auto-registering any
+- AgentSession wiring — ``aconnect()`` exposes the live :class:`MCPManager`
+  on :attr:`AgentSession.mcp_manager` without auto-registering any
   resource-reader tool (the CLI ``@server:uri`` preprocessor owns the
   resource surface as of v0.10.x).
 """
@@ -282,8 +282,8 @@ async def test_read_resource_unknown_uri_raises_with_known_list(
 async def test_agent_aconnect_exposes_manager_without_resource_tool(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any,
 ) -> None:
+    from aura.application.session import AgentSession
     from aura.config.schema import AuraConfig, StorageConfig
-    from aura.core.agent import Agent
     from aura.infrastructure.persistence.storage import SessionStorage
 
     cfg = AuraConfig(
@@ -295,7 +295,7 @@ async def test_agent_aconnect_exposes_manager_without_resource_tool(
     storage = SessionStorage(cfg.resolved_storage_path())
 
     async def _fake_start_all(self: Any) -> tuple[list[Any], list[Any]]:
-        # Simulate a manager that discovered 1 resource — Agent must still
+        # Simulate a manager that discovered 1 resource — AgentSession must still
         # only expose it via ``mcp_manager``, never as a tool.
         self._resources[("s", "doc://a")] = _fake_resource("doc://a", name="a")
         return [], []
@@ -305,7 +305,7 @@ async def test_agent_aconnect_exposes_manager_without_resource_tool(
     fake_model = MagicMock()
     fake_model.bind_tools = MagicMock(return_value=fake_model)
 
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=fake_model,
         storage=storage,

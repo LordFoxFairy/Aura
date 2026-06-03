@@ -1,12 +1,12 @@
-"""Tests for Workstream B3 — Agent.aclose timeout-bounded MCP shutdown.
+"""Tests for Workstream B3 — AgentSession.aclose timeout-bounded MCP shutdown.
 
 Contract (see `docs/specs/2026-04-23-aura-main-channel-parity.md` §B3):
 
-- ``Agent.aclose(*, mcp_timeout=5.0)`` is the canonical async shutdown entry.
+- ``AgentSession.aclose(*, mcp_timeout=5.0)`` is the canonical async shutdown entry.
   It runs ``MCPManager.stop_all`` under ``asyncio.wait_for`` and, on
   timeout, cancels the hanging coroutine + emits a ``mcp_close_timeout``
   journal event with the list of servers still in the ``connected`` state.
-- ``Agent.close()`` is a thin sync wrapper — no active event loop → spin
+- ``AgentSession.close()`` is a thin sync wrapper — no active event loop → spin
   one via ``asyncio.run(aclose(...))``; inside an active loop, it raises
   instead of the old fire-and-forget ``loop.create_task`` pattern.
 - Fast, error-free stop_all paths emit ``mcp_stopped``; unexpected
@@ -22,9 +22,9 @@ from typing import Any
 
 import pytest
 
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
 from aura.core import journal
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
@@ -56,7 +56,7 @@ def _journal_events(log_path: Path) -> list[dict[str, Any]]:
 class _HangingManager:
     """Fake MCPManager whose ``stop_all`` hangs forever on cancel-hostile sleep.
 
-    Mirrors the real manager's narrow public surface Agent.aclose relies on:
+    Mirrors the real manager's narrow public surface AgentSession.aclose relies on:
     ``stop_all`` coroutine + ``status()`` (for the ``servers_hanging`` field).
     """
 
@@ -77,7 +77,7 @@ class _HangingManager:
             raise
 
     def status(self) -> list[Any]:
-        # Agent computes servers_hanging from .status() entries whose state
+        # AgentSession computes servers_hanging from .status() entries whose state
         # is still "connected" at shutdown time.
         from aura.infrastructure.mcp.manager import MCPServerStatus
 
@@ -125,7 +125,7 @@ async def test_aclose_cancels_hanging_stop_all_within_timeout(
     """AC-B3-1: aclose with mcp_timeout=0.1 must return in <0.5s and journal.
 
     When ``mcp_manager.stop_all`` hangs (simulated by a 60s sleep), the
-    Agent must cancel it at the timeout boundary, emit
+    AgentSession must cancel it at the timeout boundary, emit
     ``mcp_close_timeout`` with ``elapsed_sec`` / ``timeout_sec`` /
     ``servers_hanging``, and return control to the caller — no leaked
     tasks, no fire-and-forget.
@@ -133,7 +133,7 @@ async def test_aclose_cancels_hanging_stop_all_within_timeout(
     log_path = tmp_path / "journal.jsonl"
     journal.configure(log_path)
     try:
-        agent = Agent(
+        agent = AgentSession(
             config=_minimal_config(),
             model=FakeChatModel(turns=[]),
             storage=_storage(tmp_path),
@@ -155,7 +155,7 @@ async def test_aclose_cancels_hanging_stop_all_within_timeout(
         # wait_for(cancel) and not through "fire-and-forget + return".
         assert fake_mgr.stop_called
         assert fake_mgr.cancelled
-        # Agent drops the manager reference on timeout so subsequent
+        # AgentSession drops the manager reference on timeout so subsequent
         # close() calls are idempotent no-ops.
         assert agent._mcp_manager is None  # noqa: SLF001
 
@@ -187,7 +187,7 @@ async def test_aclose_fast_path_emits_mcp_stopped_no_timeout_event(
     log_path = tmp_path / "journal.jsonl"
     journal.configure(log_path)
     try:
-        agent = Agent(
+        agent = AgentSession(
             config=_minimal_config(),
             model=FakeChatModel(turns=[]),
             storage=_storage(tmp_path),
@@ -227,7 +227,7 @@ async def test_aclose_unexpected_error_emits_mcp_close_error(
     log_path = tmp_path / "journal.jsonl"
     journal.configure(log_path)
     try:
-        agent = Agent(
+        agent = AgentSession(
             config=_minimal_config(),
             model=FakeChatModel(turns=[]),
             storage=_storage(tmp_path),
@@ -262,7 +262,7 @@ def test_sync_close_no_loop_runs_aclose_via_asyncio_run(tmp_path: Path) -> None:
     log_path = tmp_path / "journal.jsonl"
     journal.configure(log_path)
     try:
-        agent = Agent(
+        agent = AgentSession(
             config=_minimal_config(),
             model=FakeChatModel(turns=[]),
             storage=_storage(tmp_path),
@@ -296,7 +296,7 @@ async def test_sync_close_inside_running_loop_with_mcp_raises(tmp_path: Path) ->
     work to bound. See ``test_sync_close_inside_loop_no_mcp_is_sync_cleanup``
     below.
     """
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -312,11 +312,11 @@ async def test_sync_close_inside_loop_no_mcp_is_sync_cleanup(tmp_path: Path) -> 
     """Bare agent (no MCP) inside a running loop: close() does sync cleanup.
 
     Preserves the pre-B3 no-op contract for unit tests that build a
-    minimal Agent + call ``close()`` to release the SQLite handle. We
+    minimal AgentSession + call ``close()`` to release the SQLite handle. We
     don't need the async timeout machinery when there's no MCP manager
     to bound.
     """
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),

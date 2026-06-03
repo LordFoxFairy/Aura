@@ -1,6 +1,6 @@
 """/tasks — slash command listing subagent tasks.
 
-Renders a tiny fixed-width table; exercised here via the Agent-bound handle
+Renders a tiny fixed-width table; exercised here via the AgentSession-bound handle
 directly. Sorting by ``-started_at`` gives newest-first which is what a
 user scanning "what did I kick off recently" expects.
 """
@@ -13,8 +13,8 @@ import pytest
 
 from aura.application.commands.tasks import TasksCommand
 from aura.application.commands.tasks import TasksCommand as CapabilityTasksCommand
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
@@ -24,13 +24,13 @@ def test_tasks_command_core_facade_points_at_capabilities_module() -> None:
     assert TasksCommand.__module__ == "aura.application.commands.tasks"
 
 
-def _agent(tmp_path: Path) -> Agent:
+def _agent(tmp_path: Path) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "db"),

@@ -230,7 +230,7 @@ def test_clear_session_resets_invoked_skills(tmp_path: Path) -> None:
     out1 = ctx1.build([])
     assert any(str(m.content).startswith("<skill-invoked") for m in out1)
 
-    # Simulate /clear: rebuild Context with same skills list, same way Agent does.
+    # Simulate /clear: rebuild Context with same skills list, same way AgentSession does.
     ctx2 = Context(
         cwd=tmp_path,
         system_prompt="SYS",

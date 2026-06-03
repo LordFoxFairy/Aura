@@ -2,7 +2,7 @@
 
 Unit tests cover each stage in isolation (loader parses, SkillTool
 records, Context builds messages). This tier writes a real SKILL.md to
-disk, constructs an Agent with ``cwd`` pointing at the tmp dir, and
+disk, constructs an AgentSession with ``cwd`` pointing at the tmp dir, and
 asserts that after the LLM calls ``skill(...)`` the body the LLM sees
 on its NEXT turn contains the promised content.
 
@@ -71,7 +71,7 @@ class _CaptureChatModel(FakeChatModel):
 def _chdir_to(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the skill loader at ``path`` by switching cwd.
 
-    Agent.__init__ reads ``Path.cwd()`` once to seed :func:`load_skills`.
+    AgentSession.__init__ reads ``Path.cwd()`` once to seed :func:`load_skills`.
     Test uses monkeypatch.chdir so the rest of the session sees the same
     location (required for path-based conditional-skill activation).
     """
@@ -106,7 +106,7 @@ async def test_skill_invocation_injects_body_into_next_turn(
     turn_2 = FakeTurn(message=AIMessage(content="skill applied"))
 
     capture_model = _CaptureChatModel(turns=[turn_1, turn_2])
-    # Use build_integration_agent to get the full Agent machinery but swap in
+    # Use build_integration_agent to get the full AgentSession machinery but swap in
     # our capture model.
     agent, _ = build_integration_agent(
         tmp_path, [turn_1, turn_2], enabled_tools=["skill"],
@@ -248,13 +248,13 @@ async def test_conditional_skill_activation_promotes_to_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Conditional skill → not in registry at load → activate for matching
-    path → next Agent build has it in the registry.
+    path → next AgentSession build has it in the registry.
 
     The on-disk SKILL.md declares ``paths: ['src/**']`` so the loader
     stashes it in the module-level conditional bucket instead of the
     returned registry. After
     :func:`activate_conditional_skills_for_paths` matches a touched
-    path, a rebuilt Agent sees the skill in
+    path, a rebuilt AgentSession sees the skill in
     :class:`SkillRegistry` — the promotion is sticky across the process.
 
     Note: today's :class:`Context` filters out ``is_conditional()`` skills
@@ -275,7 +275,7 @@ async def test_conditional_skill_activation_promotes_to_registry(
     (tmp_path / "src" / "foo.py").write_text("# stub\n")
     _chdir_to(tmp_path, monkeypatch)
 
-    # First Agent: conditional skill is stashed in the module bucket, not
+    # First AgentSession: conditional skill is stashed in the module bucket, not
     # the registry.
     from aura.infrastructure.skills.loader import get_conditional_skills
 
@@ -285,7 +285,7 @@ async def test_conditional_skill_activation_promotes_to_registry(
         enabled_tools=["read_file"],
     )
     try:
-        # Bundled skills (F-0910-011) are present at every Agent init; the
+        # Bundled skills (F-0910-011) are present at every AgentSession init; the
         # invariant we care about is that the user's conditional ``pyhelp``
         # is stashed in the module bucket and NOT in the registry yet.
         registry_names = {s.name for s in agent1._skill_registry.list()}
@@ -302,7 +302,7 @@ async def test_conditional_skill_activation_promotes_to_registry(
     # The skill left the conditional bucket.
     assert [s.name for s in get_conditional_skills()] == []
 
-    # A fresh Agent — same cwd — now loads ``pyhelp`` into its registry.
+    # A fresh AgentSession — same cwd — now loads ``pyhelp`` into its registry.
     agent2, _ = build_integration_agent(
         tmp_path,
         [FakeTurn(message=AIMessage(content="idle"))],

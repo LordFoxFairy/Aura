@@ -13,7 +13,7 @@ from cli.completion import SlashCommandCompleter, resolve_history_path
 
 
 class _FakeCommand:
-    """Minimal Command-protocol stand-in — no Agent required."""
+    """Minimal Command-protocol stand-in — no AgentSession required."""
 
     source = "builtin"
     allowed_tools: tuple[str, ...] = ()

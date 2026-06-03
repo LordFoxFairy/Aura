@@ -21,8 +21,8 @@ from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
 from aura.application.loop import AgentLoop
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.abort import (
     AbortController,
     AbortException,
@@ -184,7 +184,7 @@ async def test_abort_before_any_ai_message_rolls_back_user_turn(
 
     object.__setattr__(model, "_agenerate", _slow_agenerate)
 
-    agent = Agent(
+    agent = AgentSession(
         config=cfg, model=model, storage=SessionStorage(tmp_path / "db"),
     )
 
@@ -252,7 +252,7 @@ async def test_abort_between_tool_batch_and_next_model_persists_balanced_history
         raise RuntimeError("should have aborted")
 
     object.__setattr__(model, "_agenerate", _first_then_hang)
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=model,
         storage=SessionStorage(tmp_path / "db"),
@@ -301,7 +301,7 @@ async def test_abort_after_partial_text_preserves_text(tmp_path: Path) -> None:
 
     object.__setattr__(model, "_agenerate", _hang)
 
-    agent = Agent(
+    agent = AgentSession(
         config=cfg, model=model, storage=SessionStorage(tmp_path / "db"),
     )
 
@@ -341,7 +341,7 @@ async def test_abort_after_partial_text_preserves_text(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_subagent_abort_cascades(tmp_path: Path) -> None:
-    # Build a parent Agent with task_create. Each subagent's first model
+    # Build a parent AgentSession with task_create. Each subagent's first model
     # turn is scripted to hang (5s) so the cascade has stuck children
     # to interrupt within 2s.
     cfg = AuraConfig.model_validate({
@@ -390,7 +390,7 @@ async def test_subagent_abort_cascades(tmp_path: Path) -> None:
 
     object.__setattr__(parent_model, "_agenerate", _conditional)
 
-    agent = Agent(
+    agent = AgentSession(
         config=cfg, model=parent_model,
         storage=SessionStorage(tmp_path / "db"),
     )

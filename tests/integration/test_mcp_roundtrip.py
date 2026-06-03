@@ -1,5 +1,5 @@
 """Integration: MCP manager discovery + resource reachability via the
-``Agent.mcp_manager`` accessor.
+``AgentSession.mcp_manager`` accessor.
 
 The v0.10.x architecture exposes MCP resources via the CLI-layer
 ``@server:uri`` attachment preprocessor (see :mod:`cli.attachments`
@@ -8,10 +8,10 @@ LLM-tool surface for resource reads — ``aconnect`` exposes the live
 manager and nothing more.
 
 This file covers what the integration tier still needs to assert at the
-manager-→-Agent boundary:
+manager-→-AgentSession boundary:
 
 1. ``aconnect`` exposes the live :class:`MCPManager` on
-   :attr:`Agent.mcp_manager` (the attachment preprocessor relies on this).
+   :attr:`AgentSession.mcp_manager` (the attachment preprocessor relies on this).
 2. ``aconnect`` never auto-registers a ``mcp_read_resource`` tool
    regardless of whether the catalogue has entries (parity with
    claude-code).
@@ -33,7 +33,7 @@ from tests.integration.conftest import build_integration_agent
 class FakeMCPManager:
     """Drop-in stand-in for :class:`aura.infrastructure.mcp.MCPManager`.
 
-    Exposes exactly the surface :meth:`Agent.aconnect` touches:
+    Exposes exactly the surface :meth:`AgentSession.aconnect` touches:
 
     - Constructed with a configs list (ignored by the fake).
     - :meth:`start_all` → ``(tools, commands)``.
@@ -50,7 +50,7 @@ class FakeMCPManager:
     ) -> None:
         self._configs = configs
         # uri -> text body. Caller hands this in via the class factory
-        # below; ``__init__`` ignores it because Agent.aconnect calls
+        # below; ``__init__`` ignores it because AgentSession.aconnect calls
         # ``MCPManager(self._config.mcp_servers)`` positionally.
         self._resources: dict[str, str] = resources or {}
 
@@ -87,7 +87,7 @@ class FakeMCPManager:
 
 def _make_manager_factory(resources: dict[str, str]) -> type:
     """Build a class that looks like ``MCPManager(configs)`` but preloads
-    ``resources``. Can't bind via partial because Agent calls the bare class.
+    ``resources``. Can't bind via partial because AgentSession calls the bare class.
     """
 
     class _BoundFake(FakeMCPManager):
@@ -129,12 +129,12 @@ async def test_aconnect_exposes_manager_without_auto_registering_tool(
     monkeypatch.setattr(agent_module, "MCPManager", fake_cls)
     monkeypatch.setattr(runtime_mcp, "MCPManager", fake_cls)
 
+    from aura.application.session import AgentSession
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
     from aura.infrastructure.persistence.storage import SessionStorage
 
     cfg = AuraConfig.model_validate(_cfg_with_one_server())
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "aura.db"),
@@ -161,12 +161,12 @@ async def test_aconnect_empty_catalogue_still_exposes_manager(
     monkeypatch.setattr(agent_module, "MCPManager", fake_cls)
     monkeypatch.setattr(runtime_mcp, "MCPManager", fake_cls)
 
+    from aura.application.session import AgentSession
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
     from aura.infrastructure.persistence.storage import SessionStorage
 
     cfg = AuraConfig.model_validate(_cfg_with_one_server())
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "aura.db"),

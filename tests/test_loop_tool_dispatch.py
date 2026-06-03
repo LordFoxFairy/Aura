@@ -16,9 +16,9 @@ from pydantic import BaseModel
 from aura.application.hooks import HookChain
 from aura.application.loop import AgentLoop
 from aura.application.loop_state import LoopState
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
 from aura.core import journal as journal_module
-from aura.core.agent import Agent
 from aura.domain.events import (
     AgentEvent,
     Final,
@@ -387,7 +387,7 @@ async def test_parallel_safe_tools_run_concurrently(tmp_path: Path) -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["slow_safe"]},
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg, model=model, storage=SessionStorage(tmp_path / "db"),
         available_tools={"slow_safe": slow},
     )

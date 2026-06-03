@@ -18,7 +18,7 @@ These tests are *contracts*, not implementation tests:
    successful run.
 
 Each test patches a tight surface (``Compactor.microcompact`` /
-``Agent.compact`` / model error stream) and asserts on call ordering,
+``AgentSession.compact`` / model error stream) and asserts on call ordering,
 counts, or raised types — no full compaction round-trip needed.
 """
 
@@ -36,8 +36,8 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from aura.application.compact import CompactResult, CompactSource
 from aura.application.compact.compactor import Compactor
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -60,8 +60,8 @@ def _agent(
     threshold: int = 0,
     turns: list[FakeTurn] | None = None,
     model: FakeChatModel | None = None,
-) -> Agent:
-    return Agent(
+) -> AgentSession:
+    return AgentSession(
         config=_minimal_config(),
         model=model or FakeChatModel(
             turns=turns or [FakeTurn(AIMessage(content="ok"))],
@@ -181,13 +181,13 @@ async def test_microcompact_runs_before_model_ainvoke(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_reactive_only_fires_on_prompt_too_long(tmp_path: Path) -> None:
     """Spec §6 #2 — a normal turn (no PTL exception) must NOT invoke
-    ``Agent.compact(source="reactive")``. A PTL turn must.
+    ``AgentSession.compact(source="reactive")``. A PTL turn must.
     """
     agent_ok = _agent(tmp_path / "ok")
     reactive_calls_ok: list[str] = []
     auto_calls_ok: list[str] = []
 
-    async def _spy_ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _spy_ok(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         if source == "reactive":
             reactive_calls_ok.append(source)
         elif source == "auto":
@@ -197,7 +197,7 @@ async def test_reactive_only_fires_on_prompt_too_long(tmp_path: Path) -> None:
             source=source,
         )
 
-    with patch.object(Agent, "compact", _spy_ok):
+    with patch.object(AgentSession, "compact", _spy_ok):
         async for _ in agent_ok.astream("hi"):
             pass
 
@@ -225,13 +225,13 @@ async def test_reactive_only_fires_on_prompt_too_long(tmp_path: Path) -> None:
     agent_ptl._storage.save(agent_ptl.session_id, seeded)
 
     reactive_calls_ptl: list[str] = []
-    orig_compact = Agent.compact
+    orig_compact = AgentSession.compact
 
-    async def _spy_ptl(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _spy_ptl(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         reactive_calls_ptl.append(source)
         return await orig_compact(self, source=source)
 
-    with patch.object(Agent, "compact", _spy_ptl):
+    with patch.object(AgentSession, "compact", _spy_ptl):
         async for _ in agent_ptl.astream("hi"):
             pass
 
@@ -256,7 +256,7 @@ async def test_auto_fires_post_turn_only(tmp_path: Path) -> None:
     event_count = 0
 
     async def _spy_auto(
-        self: Agent, *, source: CompactSource = "manual",
+        self: AgentSession, *, source: CompactSource = "manual",
     ) -> CompactResult:
         # Record the event-stream position at which the auto call lands.
         auto_call_indices.append(event_count)
@@ -267,7 +267,7 @@ async def test_auto_fires_post_turn_only(tmp_path: Path) -> None:
 
     from aura.domain.events import Final
 
-    with patch.object(Agent, "compact", _spy_auto):
+    with patch.object(AgentSession, "compact", _spy_auto):
         async for ev in agent.astream("hi"):
             event_count += 1
             if isinstance(ev, Final):
@@ -303,14 +303,14 @@ async def test_length_recovery_does_not_invoke_reactive(tmp_path: Path) -> None:
 
     reactive_calls: list[str] = []
 
-    async def _spy(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _spy(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         reactive_calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
             source=source,
         )
 
-    with patch.object(Agent, "compact", _spy):
+    with patch.object(AgentSession, "compact", _spy):
         async for _ in agent.astream("hi"):
             pass
 
@@ -344,12 +344,12 @@ async def test_circuit_breaker_disables_after_three_failures_and_resets_on_succe
 
     calls: list[str] = []
 
-    async def _fail(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _fail(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         calls.append(source)
         raise RuntimeError("simulated compact failure")
 
     # Three consecutive failing astream calls trip the breaker.
-    with patch.object(Agent, "compact", _fail):
+    with patch.object(AgentSession, "compact", _fail):
         for _ in range(3):
             with pytest.raises(RuntimeError):
                 async for _ in agent.astream("hi"):
@@ -361,7 +361,7 @@ async def test_circuit_breaker_disables_after_three_failures_and_resets_on_succe
     assert agent.state.slots.consecutive_compact_failures == 3
 
     # 4th turn — breaker is tripped → spy MUST NOT be re-entered.
-    with patch.object(Agent, "compact", _fail):
+    with patch.object(AgentSession, "compact", _fail):
         async for _ in agent.astream("hi"):
             pass
 
@@ -376,14 +376,14 @@ async def test_circuit_breaker_disables_after_three_failures_and_resets_on_succe
         agent.state.slots, consecutive_compact_failures=2,
     )
 
-    async def _ok(self: Agent, *, source: CompactSource = "manual") -> CompactResult:
+    async def _ok(self: AgentSession, *, source: CompactSource = "manual") -> CompactResult:
         calls.append(source)
         return CompactResult(
             before_tokens=0, after_tokens=0,
             source=source,
         )
 
-    with patch.object(Agent, "compact", _ok):
+    with patch.object(AgentSession, "compact", _ok):
         async for _ in agent.astream("hi"):
             pass
 

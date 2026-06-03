@@ -3,7 +3,7 @@
 Pure-function coverage of the per-turn prompt-view transform that replaces
 old tool_use/tool_result pair payloads with a clear marker. Scope here is
 ``aura.application.compact.microcompact`` only — integration into ``_invoke_model``
-and the Agent constructor surface are exercised by other test files.
+and the AgentSession constructor surface are exercised by other test files.
 
 Design anchors (from tasks/todo.md, session 2026-04-24):
 - View transform, not history mutation (pure functions, new lists).

@@ -11,19 +11,19 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from aura.application.commands.factory import build_default_registry
 from aura.application.commands.registry import dispatch
 from aura.application.compact import CompactResult
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
 
-def _agent(tmp_path: Path) -> Agent:
+def _agent(tmp_path: Path) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="SUM"))]),
         storage=SessionStorage(tmp_path / "db"),
@@ -38,7 +38,7 @@ def test_compact_command_registered_in_default_registry() -> None:
 
 @pytest.mark.asyncio
 async def test_compact_command_invokes_agent_compact() -> None:
-    mock_agent = MagicMock(spec=Agent)
+    mock_agent = MagicMock(spec=AgentSession)
     mock_agent.compact = AsyncMock(return_value=CompactResult(
         before_tokens=1000,
         after_tokens=1100,
@@ -53,7 +53,7 @@ async def test_compact_command_invokes_agent_compact() -> None:
 
 @pytest.mark.asyncio
 async def test_compact_command_prints_before_and_after_tokens() -> None:
-    mock_agent = MagicMock(spec=Agent)
+    mock_agent = MagicMock(spec=AgentSession)
     mock_agent.compact = AsyncMock(return_value=CompactResult(
         before_tokens=12345,
         after_tokens=6789,

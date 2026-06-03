@@ -8,17 +8,17 @@ import time
 from datetime import UTC, datetime
 
 from aura.application.commands.types import CommandKind, CommandResult, CommandSource
+from aura.application.session import AgentSession
 from aura.application.teams.manager import (
     TeamError,
     TeamManager,
     TeamViewSnapshot,
 )
-from aura.core.agent import Agent
 from aura.domain.team import BackendType, TeamRecord
 from aura.infrastructure.persistence.storage import SessionStorage
 
 
-def _set_active_team(agent: Agent, team_id: str | None) -> None:
+def _set_active_team(agent: AgentSession, team_id: str | None) -> None:
     agent.state.slots = dataclasses.replace(
         agent.state.slots, active_team=team_id,
     )
@@ -33,7 +33,7 @@ _HELP = """\
                                    REPL session — subsequent /team add /
                                    remove / send default to it.
   leave                            Clear the active team and (if joined)
-                                   detach the leader Agent from it.
+                                   detach the leader AgentSession from it.
   view [<name>]                    Show the active team's full status:
                                    members, recent messages, transcripts.
                                    Pass <name> to view a team you haven't
@@ -94,7 +94,7 @@ def _parse_add_args(rest: str) -> tuple[list[str], BackendType]:
     return positional, backend_type
 
 
-def _ensure_manager(agent: Agent) -> TeamManager:
+def _ensure_manager(agent: AgentSession) -> TeamManager:
     cached = agent._team_manager
     if isinstance(cached, TeamManager):
         return cached
@@ -110,7 +110,7 @@ def _ensure_manager(agent: Agent) -> TeamManager:
 
 
 def _resolve_team_id(
-    *, name: str, manager: TeamManager, agent: Agent,
+    *, name: str, manager: TeamManager, agent: AgentSession,
 ) -> str | None:
     """Resolve handle to slug; precedence: live team -> disk slug -> disk display name."""
     live = manager.team
@@ -252,7 +252,7 @@ class TeamCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = "<subcommand> [args]"
 
-    async def handle(self, arg: str, agent: Agent) -> CommandResult:
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
         if not arg.strip():
             return CommandResult(
                 handled=True, kind="view", text=_HELP,
@@ -271,7 +271,7 @@ class TeamCommand:
         )
 
     async def _dispatch(  # noqa: PLR0911,PLR0912 — tight verb table
-        self, verb: str, rest: str, agent: Agent,
+        self, verb: str, rest: str, agent: AgentSession,
     ) -> tuple[str, CommandKind]:
         mgr = _ensure_manager(agent)
         if verb == "help":
@@ -375,7 +375,7 @@ class TeamCommand:
         return f"unknown subcommand {verb!r} — try /team help", "print"
 
     async def _enter(
-        self, agent: Agent, mgr: TeamManager, rest: str,
+        self, agent: AgentSession, mgr: TeamManager, rest: str,
     ) -> tuple[str, CommandKind]:
         """Auto-join only when resolved team is the live one; off-record just sets pointer."""
         if not rest:
@@ -396,7 +396,7 @@ class TeamCommand:
             )
         return f"entered team {rest!r} (id={team_id}){joined_msg}", "print"
 
-    def _leave(self, agent: Agent) -> tuple[str, CommandKind]:
+    def _leave(self, agent: AgentSession) -> tuple[str, CommandKind]:
         prev = agent.state.slots.active_team
         _set_active_team(agent, None)
         joined = agent.team is not None
@@ -408,7 +408,7 @@ class TeamCommand:
         return f"left team {prev or '(none)'}{suffix}", "print"
 
     def _view(
-        self, agent: Agent, mgr: TeamManager, rest: str,
+        self, agent: AgentSession, mgr: TeamManager, rest: str,
     ) -> tuple[str, CommandKind]:
         if rest:
             target_team_id = _resolve_team_id(name=rest, manager=mgr, agent=agent)
@@ -425,7 +425,7 @@ class TeamCommand:
         return _render_view(mgr.view_state(target_team_id)), "view"
 
     def _teammate(
-        self, agent: Agent, mgr: TeamManager, rest: str,
+        self, agent: AgentSession, mgr: TeamManager, rest: str,
     ) -> tuple[str, CommandKind]:
         if not rest:
             return "usage: /team teammate <member>", "print"

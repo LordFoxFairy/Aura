@@ -18,9 +18,9 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from aura.application.session import AgentSession
 from aura.application.teams.mailbox import Mailbox, MailboxNotifier
 from aura.application.teams.team_port import TeamPort
-from aura.core.agent import Agent
 from aura.domain.abort import AbortController
 from aura.domain.team import (
     TEAM_LEADER_NAME,
@@ -169,7 +169,7 @@ class PaneBackend:
         *,
         team_id: str,
         member: TeammateMember,
-        agent: Agent,
+        agent: AgentSession,
         manager: TeamPort,
         storage: SessionStorage,
         stop_event: asyncio.Event,
@@ -178,7 +178,7 @@ class PaneBackend:
         notifier: MailboxNotifier | None = None,
     ) -> PaneHandle:
         """Split a pane, start the teammate subprocess; ``seed_prompt`` forwarded via CLI flag."""
-        del agent  # subprocess builds its own Agent
+        del agent  # subprocess builds its own AgentSession
         del notifier  # cross-process — asyncio queues can't span Python processes
         if not pane_backend_available():
             raise PaneBackendError(

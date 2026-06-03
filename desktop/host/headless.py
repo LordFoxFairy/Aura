@@ -8,8 +8,8 @@ import sys
 from typing import Any
 
 from aura.application.hooks.permission import make_permission_hook
+from aura.application.session import AgentSession
 from aura.config.loader import load_config
-from aura.core.agent import Agent
 from aura.infrastructure import permission_store as perm_store
 from aura.infrastructure.llm import make_model_for_spec
 from aura.infrastructure.wire.serialize import (
@@ -53,7 +53,7 @@ async def _run() -> int:
         load_config_fn=load_config,
         make_model_for_spec_fn=make_model_for_spec,
         make_permission_hook_fn=make_permission_hook,
-        agent_cls=Agent,
+        agent_cls=AgentSession,
         perm_store_module=perm_store,
     )
 

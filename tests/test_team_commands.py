@@ -11,9 +11,9 @@ from aura.application.commands.factory import build_default_registry
 from aura.application.commands.registry import dispatch
 from aura.application.commands.team import TeamCommand
 from aura.application.commands.team import TeamCommand as CapabilityTeamCommand
+from aura.application.session import AgentSession
 from aura.application.teams.manager import TeamManager
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.team import TeammateMember
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
@@ -24,7 +24,7 @@ def test_team_command_core_facade_points_at_capabilities_module() -> None:
     assert TeamCommand.__module__ == "aura.application.commands.team"
 
 
-def _members(agent: Agent) -> list[TeammateMember]:
+def _members(agent: AgentSession) -> list[TeammateMember]:
     """Read the live team's members through the leader's TeamManager.
 
     The manager is stored on a private attribute by ``_ensure_manager``;
@@ -34,7 +34,7 @@ def _members(agent: Agent) -> list[TeammateMember]:
     return mgr.list_members()
 
 
-def _agent(tmp_path: Path, *, teams_enabled: bool = True) -> Agent:
+def _agent(tmp_path: Path, *, teams_enabled: bool = True) -> AgentSession:
     # ``teams.enabled=True`` opens the gate so /team verbs reach handlers.
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
@@ -42,7 +42,7 @@ def _agent(tmp_path: Path, *, teams_enabled: bool = True) -> Agent:
         "tools": {"enabled": []},
         "teams": {"enabled": teams_enabled},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "sessions.db"),

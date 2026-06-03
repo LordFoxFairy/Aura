@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig, ToolsConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
@@ -30,8 +30,8 @@ def _custom_allowlist_cfg(tools: list[str]) -> AuraConfig:
     })
 
 
-def _agent(tmp_path: Path, cfg: AuraConfig | None = None) -> Agent:
-    return Agent(
+def _agent(tmp_path: Path, cfg: AuraConfig | None = None) -> AgentSession:
+    return AgentSession(
         config=cfg or _default_cfg(),
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "sessions.db"),

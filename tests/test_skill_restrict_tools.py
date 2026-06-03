@@ -41,8 +41,8 @@ from pydantic import BaseModel
 
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.permission.asker import AskerResponse
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.domain.skill import Skill
@@ -83,13 +83,13 @@ def _agent(
     tmp_path: Path,
     *,
     session_rules: SessionRuleSet | None = None,
-) -> Agent:
+) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "db"),

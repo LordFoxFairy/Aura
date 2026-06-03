@@ -9,9 +9,9 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
 from aura.core import journal as journal_module
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -33,7 +33,7 @@ async def test_astream_emits_layered_events(tmp_path: Path) -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[FakeTurn(message=AIMessage(content="hi"))]),
         storage=SessionStorage(tmp_path / "db"),

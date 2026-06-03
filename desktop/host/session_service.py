@@ -18,9 +18,9 @@ from aura.application.hooks import HookChain
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.hooks.protocols import PreToolHook
 from aura.application.permission.asker import AskerResponse
+from aura.application.session import AgentSession
 from aura.config.loader import load_config
 from aura.config.schema import AuraConfig, PermissionsConfig
-from aura.core.agent import Agent
 from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
 from aura.domain.permission.mode import Mode
 from aura.domain.permission.rule import Rule
@@ -149,7 +149,7 @@ async def run_session_driver(
     load_config_fn: Callable[[], AuraConfig] = load_config,
     make_model_for_spec_fn: Callable[[str, AuraConfig], BaseChatModel] = make_model_for_spec,
     make_permission_hook_fn: Callable[..., PreToolHook] = make_permission_hook,
-    agent_cls: type[Agent] = Agent,
+    agent_cls: type[AgentSession] = AgentSession,
     perm_store_module: PermStoreModule = perm_store,
 ) -> int:
     cfg = load_config_fn()

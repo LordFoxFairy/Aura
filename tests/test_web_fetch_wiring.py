@@ -1,6 +1,6 @@
-"""Round 4E + Round 5H: web_fetch singleton must be wired by Agent build.
+"""Round 4E + Round 5H: web_fetch singleton must be wired by AgentSession build.
 
-Agent construction calls ``set_default_model_factory(make_summary_model_factory(...))``
+AgentSession construction calls ``set_default_model_factory(make_summary_model_factory(...))``
 once. After that, the module-level ``web_fetch`` singleton can be invoked
 without raising the "no factory configured" ToolError.
 """
@@ -16,8 +16,8 @@ import pytest
 from langchain_core.messages import AIMessage
 
 import aura.tools.web_fetch  # noqa: F401 — ensure submodule is imported
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.tools.web_fetch import web_fetch
 from tests.conftest import FakeChatModel, FakeTurn
@@ -44,7 +44,7 @@ def _storage(tmp_path: Path) -> SessionStorage:
 def _isolate_factory() -> Any:
     """Reset the module-level factory between tests.
 
-    Other tests may build an Agent and leave the singleton wired to a
+    Other tests may build an AgentSession and leave the singleton wired to a
     FakeChatModel that's been GC'd; clear before + after each test.
     """
     wf_module.set_default_model_factory(None)
@@ -56,14 +56,14 @@ def _isolate_factory() -> Any:
 async def test_web_fetch_singleton_works_after_agent_build(
     tmp_path: Path,
 ) -> None:
-    """End-to-end: build Agent → ``web_fetch.ainvoke`` returns a summary.
+    """End-to-end: build AgentSession → ``web_fetch.ainvoke`` returns a summary.
 
     We monkeypatch the urllib fetch so the test stays offline, but the
-    summary path goes through the real factory wired by Agent
+    summary path goes through the real factory wired by AgentSession
     construction.
     """
     fake = FakeChatModel(turns=[FakeTurn(AIMessage(content="summary text"))])
-    Agent(
+    AgentSession(
         config=_minimal_config(),
         model=fake,
         storage=_storage(tmp_path),
@@ -98,7 +98,7 @@ async def test_summary_uses_main_model_when_no_summary_config(
     fake = FakeChatModel(
         turns=[FakeTurn(AIMessage(content="from main model"))],
     )
-    Agent(
+    AgentSession(
         config=_minimal_config(with_summary=False),
         model=fake,
         storage=_storage(tmp_path),

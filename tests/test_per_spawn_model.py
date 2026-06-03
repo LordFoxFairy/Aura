@@ -37,7 +37,7 @@ class _StubModel:
     """Minimal stand-in for a chat model — just remembers its kwargs.
 
     We don't need ``BaseChatModel`` semantics; the factory hands the
-    model through to Agent's constructor, and the per-spawn-model tests
+    model through to AgentSession's constructor, and the per-spawn-model tests
     assert on which spec resolved at the make_model_for_spec layer (so
     the model object never actually drives a turn).
     """

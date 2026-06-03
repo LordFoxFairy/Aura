@@ -15,10 +15,10 @@ from aura.application.hooks import HookChain
 from aura.application.hooks.file_watcher import FileWatcher, default_watch_paths
 from aura.application.hooks.logging import wrap_with_event_logger
 from aura.application.hooks.permission import make_permission_hook
+from aura.application.session import AgentSession, build_agent
 from aura.application.teams.runtime import run_teammate_main
 from aura.config.loader import load_config
 from aura.config.schema import AuraConfig, AuraConfigError, PermissionsConfig
-from aura.core.agent import Agent, build_agent
 from aura.domain.errors import AuraError
 from aura.domain.permission.defaults import DEFAULT_ALLOW_RULES
 from aura.domain.permission.mode import Mode
@@ -35,7 +35,7 @@ from cli._permission_asker import make_cli_asker, print_bypass_banner
 from cli._user_asker import make_cli_user_asker
 from cli.mcp_cli import handle_mcp
 
-AgentRef: TypeAlias = Agent | None
+AgentRef: TypeAlias = AgentSession | None
 _MODES: tuple[Mode, ...] = ("default", "bypass", "plan", "accept_edits")
 
 
@@ -126,7 +126,7 @@ def _make_parser() -> argparse.ArgumentParser:
         help="layer to remove from; 'auto' targets whichever currently owns the name",
     )
 
-    # Teammates talk to the leader via on-disk JSONL mailbox; argv only seeds Agent.
+    # Teammates talk to the leader via on-disk JSONL mailbox; argv only seeds AgentSession.
     teammate = subparsers.add_parser(
         "teammate",
         help="run an Aura teammate inside a subprocess (pane backend)",
@@ -289,7 +289,7 @@ def main() -> int:
             journal.write("permission_bypass_active")
         session = SessionRuleSet()
         asker = make_cli_asker(timeout=perm_cfg.prompt_timeout_sec)
-        # Forward-ref cell — hook reads Agent.mode live so shift+tab toggles propagate.
+        # Forward-ref cell — hook reads AgentSession.mode live so shift+tab toggles propagate.
         _agent_cell: list[AgentRef] = [None]
 
         def _live_mode() -> Mode:

@@ -150,14 +150,14 @@ async def test_aura_md_reload_consumer_refreshes_primary_memory(
 ) -> None:
     """End-to-end: AURA.md change → reload consumer → Context refresh.
 
-    The Agent is built first with one AURA.md content, then the test
+    The AgentSession is built first with one AURA.md content, then the test
     rewrites the file and invokes the reload consumer directly (no
     watcher in the loop — that's covered by the producer tests above).
     The consumer must clear the project_memory cache and re-load the
-    primary memory string on the Agent's Context.
+    primary memory string on the AgentSession's Context.
     """
+    from aura.application.session import AgentSession
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
     from aura.infrastructure.persistence.storage import SessionStorage
 
     monkeypatch.chdir(tmp_path)
@@ -182,7 +182,7 @@ async def test_aura_md_reload_consumer_refreshes_primary_memory(
 
     from tests.conftest import FakeChatModel
 
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "aura.db"),

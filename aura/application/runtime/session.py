@@ -1,4 +1,4 @@
-"""Session lifecycle + persistence sidecar for one :class:`Agent`."""
+"""Session lifecycle + persistence sidecar for one :class:`AgentSession`."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,7 +14,7 @@ from aura.infrastructure.wire.events import WireEvent
 
 
 class SessionRuntime:
-    """One per Agent; mirrors Agent's lifetime exactly."""
+    """One per AgentSession; mirrors AgentSession's lifetime exactly."""
 
     def __init__(
         self,

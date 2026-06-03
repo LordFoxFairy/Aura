@@ -112,7 +112,7 @@ async def test_meta_json_written_on_terminal_failure(
     store = TasksStore()
 
     class _MidStreamBoomAgent:
-        """Agent stub whose astream raises after first event."""
+        """AgentSession stub whose astream raises after first event."""
 
         _hooks = None
         _config = None

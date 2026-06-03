@@ -1,12 +1,12 @@
 """Shared fixtures for the integration tier.
 
-The integration tests build a *real* :class:`aura.core.agent.Agent`, with a
+The integration tests build a *real* :class:`aura.application.session.AgentSession`, with a
 real :class:`SessionStorage` (in-memory sqlite), real hook chain, real tool
 dispatch. Only the LLM (:class:`tests.conftest.FakeChatModel`) is faked.
 
 Two helpers shared across the tier:
 
-- :func:`build_integration_agent` — one-stop Agent constructor that wires a
+- :func:`build_integration_agent` — one-stop AgentSession constructor that wires a
   FakeChatModel + in-memory storage and lets the caller override tools,
   permission mode, hooks, and the question asker. Returns ``(agent, model)``.
 
@@ -32,8 +32,8 @@ import pytest
 from langchain_core.tools import BaseTool
 
 from aura.application.hooks import HookChain
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.events import AgentEvent
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills.loader import clear_conditional_state
@@ -91,22 +91,22 @@ def build_integration_agent(
     mode: str = "default",
     question_asker: UserAsker | None = None,
     cwd_for_skills: Path | None = None,
-) -> tuple[Agent, FakeChatModel]:
-    """Build a real ``Agent`` wired to a scripted FakeChatModel.
+) -> tuple[AgentSession, FakeChatModel]:
+    """Build a real ``AgentSession`` wired to a scripted FakeChatModel.
 
-    ``cwd_for_skills`` is the working dir the Agent inspects to load skills —
+    ``cwd_for_skills`` is the working dir the AgentSession inspects to load skills —
     used by the skill E2E tests to point at a tmp_path-backed ``.aura/skills``
     tree. Defaults to ``Path.cwd()`` (the inherited project's own skills).
     """
     config = make_integration_config(enabled_tools)
     model = FakeChatModel(turns=turns)
     storage = SessionStorage(tmp_path / "aura-integration.db")
-    # Agent.__init__ reads ``Path.cwd()`` to seed the skill loader; tests that
+    # AgentSession.__init__ reads ``Path.cwd()`` to seed the skill loader; tests that
     # want a tmp_path-backed skill tree chdir via monkeypatch before calling
     # this helper. Doing the chdir inside the helper would leak — tests that
     # use the ``skills_cwd`` fixture pass the expected path in for assertion.
     _ = cwd_for_skills  # accepted for documentation; the chdir is the caller's job
-    agent = Agent(
+    agent = AgentSession(
         config=config,
         model=model,
         storage=storage,
@@ -121,7 +121,7 @@ def build_integration_agent(
     return agent, model
 
 
-async def drain(agent: Agent, prompt: str) -> list[AgentEvent | dict[str, Any]]:
+async def drain(agent: AgentSession, prompt: str) -> list[AgentEvent | dict[str, Any]]:
     """Run ``agent.astream(prompt)`` to completion; return every event."""
     events: list[AgentEvent | dict[str, Any]] = []
     async for event in agent.astream(prompt):

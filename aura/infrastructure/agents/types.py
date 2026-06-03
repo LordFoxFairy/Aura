@@ -17,7 +17,7 @@ class AgentDef:
     - ``tools`` — tool-name allowlist. Empty frozenset = "inherit all from
       parent" sentinel (distinct from an explicit zero-tool allowlist).
     - ``system_prompt_suffix`` — appended verbatim to the parent's system
-      prompt when the child Agent is built.
+      prompt when the child AgentSession is built.
     """
 
     name: str

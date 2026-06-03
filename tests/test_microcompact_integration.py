@@ -1,9 +1,9 @@
 """Integration tests for the microcompact layer (v0.12 G2 — T4 + T5 + T6).
 
 Covers the wiring between the pure-function ``aura.application.compact.microcompact``
-surface and the turn loop / Agent constructor:
+surface and the turn loop / AgentSession constructor:
 
-- ``Agent(...)`` rejects misconfigurations at construction (keep_recent >=
+- ``AgentSession(...)`` rejects misconfigurations at construction (keep_recent >=
   trigger_pairs) with ``AuraConfigError``.
 - ``auto_microcompact_enabled=False`` disables the feature entirely
   (no markers appear in the outgoing prompt).
@@ -37,8 +37,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from aura.application.compact import MICROCOMPACT_CLEAR_MARKER
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core.agent import Agent
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
@@ -138,7 +138,7 @@ def _count_markers(messages: Sequence[BaseMessage]) -> int:
 def test_misconfig_keep_gte_trigger_raises_at_construction(tmp_path: Path) -> None:
     # keep_recent == trigger_pairs → impossible to ever clear anything.
     with pytest.raises(AuraConfigError) as excinfo:
-        Agent(
+        AgentSession(
             config=_minimal_config(),
             model=FakeChatModel(turns=[FakeTurn(AIMessage(content="x"))]),
             storage=_storage(tmp_path),
@@ -149,7 +149,7 @@ def test_misconfig_keep_gte_trigger_raises_at_construction(tmp_path: Path) -> No
 
     # keep_recent > trigger_pairs → same failure mode.
     with pytest.raises(AuraConfigError):
-        Agent(
+        AgentSession(
             config=_minimal_config(),
             model=FakeChatModel(turns=[FakeTurn(AIMessage(content="x"))]),
             storage=_storage(tmp_path / "db2"),
@@ -169,7 +169,7 @@ async def test_auto_microcompact_enabled_false_disables_feature(
     session_id = "session-disabled-flag"
     _seed_history(storage, session_id, n_pairs=20)
 
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=model,
         storage=storage,
@@ -206,7 +206,7 @@ async def test_trigger_pairs_zero_disables_feature(tmp_path: Path) -> None:
     session_id = "session-disabled-zero"
     _seed_history(storage, session_id, n_pairs=20)
 
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=model,
         storage=storage,
@@ -245,7 +245,7 @@ async def test_microcompact_applied_journal_event_emitted(tmp_path: Path) -> Non
         session_id = "journal-session"
         _seed_history(storage, session_id, n_pairs=10)
 
-        agent = Agent(
+        agent = AgentSession(
             config=_minimal_config(),
             model=model,
             storage=storage,
@@ -293,7 +293,7 @@ async def test_stored_history_unchanged_by_microcompact(tmp_path: Path) -> None:
     session_id = "storage-invariant-session"
     _seed_history(storage, session_id, n_pairs=10)
 
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=model,
         storage=storage,
@@ -336,7 +336,7 @@ async def test_ai_message_tool_calls_preserved_in_outgoing_prompt(
     session_id = "ai-preservation-session"
     _seed_history(storage, session_id, n_pairs=10)
 
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=model,
         storage=storage,

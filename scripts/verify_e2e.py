@@ -27,8 +27,8 @@ sys.path.insert(0, str(REPO))
 from langchain_core.messages import AIMessage  # noqa: E402
 
 from aura.application.commands.factory import build_default_registry  # noqa: E402
+from aura.application.session import AgentSession  # noqa: E402
 from aura.config.schema import AuraConfig  # noqa: E402
-from aura.core.agent import Agent  # noqa: E402
 from aura.infrastructure.persistence.storage import SessionStorage  # noqa: E402
 
 # The repo ships a small FakeChatModel for tests; we reuse it here.
@@ -48,7 +48,7 @@ def _check(label: str, cond: bool) -> bool:
     return cond
 
 
-def _build_agent(tmp: Path) -> Agent:
+def _build_agent(tmp: Path) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
@@ -61,7 +61,7 @@ def _build_agent(tmp: Path) -> Agent:
     })
     # FakeChatModel emits no turns by default — scenario 2 + 3 will replace
     # the model with one carrying scripted turns.
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp / "db"),
@@ -76,7 +76,7 @@ def _build_agent(tmp: Path) -> Agent:
 def scenario_skill(tmp: Path) -> bool:
     print("\n[1/3] Skill — superpowers SKILL.md loaded + registered as /superpowers")
     # The skill file is at tmp/.aura/skills/superpowers/SKILL.md — written
-    # by the setup script above this one. Agent.__init__ scans cwd's .aura/skills.
+    # by the setup script above this one. AgentSession.__init__ scans cwd's .aura/skills.
     import os
     original_cwd = os.getcwd()
     try:
@@ -177,7 +177,7 @@ async def scenario_subagent_dag(tmp: Path) -> bool:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": ["task_create", "task_get", "task_list"]},
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=parent_turns),
         storage=SessionStorage(tmp / "db2"),
@@ -256,7 +256,7 @@ async def scenario_write_project(tmp: Path) -> bool:
             "router": {"default": "openai:gpt-4o-mini"},
             "tools": {"enabled": ["write_file"]},
         })
-        agent = Agent(
+        agent = AgentSession(
             config=cfg,
             model=FakeChatModel(turns=turns),
             storage=SessionStorage(tmp / "db3"),

@@ -6,7 +6,7 @@ Covers the three acceptance criteria from
 - AC-G5-1: denials accumulate within a turn — every deny path
   (``safety_blocked`` / ``plan_mode_blocked`` / ``user_deny``) populates
   a :class:`PermissionDenial` reachable via
-  :meth:`Agent.last_turn_denials`.
+  :meth:`AgentSession.last_turn_denials`.
 - AC-G5-2: turn-start clears — turn N+1 opens with an empty list even
   when turn N accumulated denials.
 - AC-G5-3: the exposed view is read-only — consumer mutation attempts
@@ -33,8 +33,8 @@ from aura.application.hooks import HookChain
 from aura.application.hooks.permission import make_permission_hook
 from aura.application.loop_state import LoopState
 from aura.application.permission.asker import AskerResponse
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.permission.denials import PermissionDenial
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet, SessionRuleSet
@@ -262,7 +262,7 @@ def _ai_with_tool_calls(calls: list[ToolCall]) -> AIMessage:
     return AIMessage(content="", tool_calls=calls)
 
 
-async def _collect(agent: Agent, prompt: str) -> list[Any]:
+async def _collect(agent: AgentSession, prompt: str) -> list[Any]:
     events: list[Any] = []
     async for event in agent.astream(prompt):
         events.append(event)
@@ -288,7 +288,7 @@ async def test_last_turn_denials_accumulates_within_turn(tmp_path: Path) -> None
 
     Scripted model emits three tool_calls in a single AIMessage; plan-mode
     permission hook denies each one (tool names fall outside the plan
-    allow-list). After the turn completes, Agent.last_turn_denials()
+    allow-list). After the turn completes, AgentSession.last_turn_denials()
     surfaces all three in order.
     """
     model = FakeChatModel(turns=[
@@ -305,7 +305,7 @@ async def test_last_turn_denials_accumulates_within_turn(tmp_path: Path) -> None
         FakeTurn(AIMessage(content="done")),
     ])
     storage = SessionStorage(tmp_path / "aura.db")
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(["write_file"]),
         model=model,
         storage=storage,
@@ -341,7 +341,7 @@ async def test_last_turn_denials_resets_between_turns(tmp_path: Path) -> None:
         FakeTurn(AIMessage(content="t2 done")),
     ])
     storage = SessionStorage(tmp_path / "aura.db")
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(["write_file"]),
         model=model,
         storage=storage,
@@ -365,7 +365,7 @@ async def test_last_turn_denials_is_readonly_view(tmp_path: Path) -> None:
         FakeTurn(AIMessage(content="done")),
     ])
     storage = SessionStorage(tmp_path / "aura.db")
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(["write_file"]),
         model=model,
         storage=storage,
@@ -386,7 +386,7 @@ async def test_last_turn_denials_empty_before_any_turn(tmp_path: Path) -> None:
     """Defensive: calling before any turn returns the empty view without
     blowing up (common SDK pattern: inspect before first astream call)."""
     storage = SessionStorage(tmp_path / "aura.db")
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(["write_file"]),
         model=FakeChatModel(turns=[]),
         storage=storage,

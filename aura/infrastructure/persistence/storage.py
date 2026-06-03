@@ -14,7 +14,6 @@ Layout (v3, per-project nested)::
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -23,7 +22,8 @@ from pathlib import Path
 
 from langchain_core.messages import BaseMessage, messages_from_dict, messages_to_dict
 
-from aura.infrastructure.persistence import journal
+from aura.infrastructure.persistence import journal, storage_paths
+from aura.infrastructure.persistence.session_index import SessionIndex
 
 _PREVIEW_MAX_CHARS: int = 79
 
@@ -58,12 +58,6 @@ CREATE INDEX IF NOT EXISTS ix_messages_session ON messages(session_id, turn_inde
 """
 
 
-def _encode_cwd_str(cwd: Path) -> str:
-    """Encode an absolute cwd into the projects/ bucket name."""
-    abs_cwd = cwd if cwd.is_absolute() else (Path.cwd() / cwd).resolve()
-    return str(abs_cwd).replace(os.sep, "-")
-
-
 class SessionStorage:
     """SQLite + JSONL storage for per-session message lists."""
 
@@ -82,35 +76,42 @@ class SessionStorage:
         self._conn.executescript(_SCHEMA_SQL)
         self._conn.commit()
         self._append_lock = threading.Lock()
+        self._index = SessionIndex(storage_paths.index_path(self._path.parent))
 
     @property
     def path(self) -> Path:
         return self._path
 
     def _projects_dir(self) -> Path:
-        return self._path.parent / "projects"
+        return storage_paths.projects_dir(self._path.parent)
 
     def _encode_cwd(self, cwd: Path | None = None) -> str:
-        return _encode_cwd_str(cwd if cwd is not None else self._default_cwd)
+        return storage_paths.encode_cwd(cwd if cwd is not None else self._default_cwd)
 
     def _project_dir(self, cwd: Path | None = None) -> Path:
-        return self._projects_dir() / self._encode_cwd(cwd)
+        return storage_paths.project_dir(
+            self._path.parent, cwd if cwd is not None else self._default_cwd,
+        )
 
     def session_jsonl_path(
         self, session_id: str, *, cwd: Path | None = None,
     ) -> Path:
-        self._validate_session_id(session_id)
-        return self._project_dir(cwd) / f"{session_id}.jsonl"
+        return storage_paths.session_jsonl_path(
+            self._path.parent, cwd if cwd is not None else self._default_cwd, session_id,
+        )
 
     def memory_dir(self, *, cwd: Path | None = None) -> Path:
         # Lazy: not created until first write.
-        return self._project_dir(cwd) / "memory"
+        return storage_paths.memory_dir(
+            self._path.parent, cwd if cwd is not None else self._default_cwd,
+        )
 
     def session_dir(
         self, session_id: str, *, cwd: Path | None = None,
     ) -> Path:
-        self._validate_session_id(session_id)
-        return self._project_dir(cwd) / session_id
+        return storage_paths.session_dir(
+            self._path.parent, cwd if cwd is not None else self._default_cwd, session_id,
+        )
 
     def subagent_transcript_path(
         self,
@@ -120,16 +121,11 @@ class SessionStorage:
         cwd: Path | None = None,
     ) -> Path:
         """``parent_session_id=None`` falls back to the flat ad-hoc bucket."""
-        self._validate_task_id(task_id)
-        if parent_session_id is None:
-
-            return (
-                self._path.parent / "subagents" / f"agent-{task_id}.jsonl"
-            )
-        return (
-            self.session_dir(parent_session_id, cwd=cwd)
-            / "subagents"
-            / f"agent-{task_id}.jsonl"
+        return storage_paths.subagent_transcript_path(
+            self._path.parent,
+            cwd if cwd is not None else self._default_cwd,
+            task_id,
+            parent_session_id,
         )
 
     def subagent_metadata_path(
@@ -146,58 +142,6 @@ class SessionStorage:
         )
         return transcript.with_suffix(".meta.json")
 
-    def _index_path(self) -> Path:
-        return self._path.parent / "index.sqlite"
-
-    def _refresh_index_for_session(
-        self, session_id: str, jsonl_path: Path,
-    ) -> None:
-        index_path = self._index_path()
-        index_path.parent.mkdir(parents=True, exist_ok=True)
-        message_count = 0
-        first_prompt = ""
-        if jsonl_path.exists():
-            with jsonl_path.open("r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        env = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    payload = env.get("payload") if isinstance(env, dict) else None
-                    if not isinstance(payload, dict):
-                        payload = env if isinstance(env, dict) else None
-                    if payload is None:
-                        continue
-                    message_count += 1
-                    if (
-                        not first_prompt
-                        and payload.get("type") == "human"
-                    ):
-                        data = payload.get("data") or {}
-                        content = data.get("content")
-                        if isinstance(content, str):
-                            first_prompt = content
-        idx = sqlite3.connect(str(index_path))
-        try:
-            idx.executescript(_INDEX_SCHEMA_SQL)
-            idx.execute(
-                "INSERT INTO sessions("
-                "session_id, message_count, first_user_prompt, "
-                "created_at, last_used_at"
-                ") VALUES (?, ?, ?, datetime('now'), datetime('now')) "
-                "ON CONFLICT(session_id) DO UPDATE SET "
-                "  message_count = excluded.message_count, "
-                "  first_user_prompt = excluded.first_user_prompt, "
-                "  last_used_at = datetime('now')",
-                (session_id, message_count, first_prompt),
-            )
-            idx.commit()
-        finally:
-            idx.close()
-
     def close(self) -> None:
         self._conn.close()
 
@@ -208,12 +152,10 @@ class SessionStorage:
         self.close()
 
     def _validate_session_id(self, session_id: str) -> None:
-        if not session_id or "/" in session_id or ".." in session_id:
-            raise ValueError(f"invalid session_id: {session_id!r}")
+        storage_paths.validate_session_id(session_id)
 
     def _validate_task_id(self, task_id: str) -> None:
-        if not task_id or "/" in task_id or ".." in task_id:
-            raise ValueError(f"invalid task_id: {task_id!r}")
+        storage_paths.validate_task_id(task_id)
 
     def append(self, session_id: str, message: BaseMessage) -> None:
         """Append one envelope line + refresh the index; ``:memory:`` skips disk."""
@@ -243,7 +185,7 @@ class SessionStorage:
         with self._append_lock, jsonl_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(envelope, ensure_ascii=False))
             fh.write("\n")
-        self._refresh_index_for_session(session_id, jsonl_path)
+        self._index.refresh(session_id, jsonl_path)
 
     def write_subagent_transcript(
         self,
@@ -393,7 +335,7 @@ class SessionStorage:
                         fh.write(json.dumps(envelope, ensure_ascii=False))
                         fh.write("\n")
                 tmp.replace(jsonl_path)
-            self._refresh_index_for_session(session_id, jsonl_path)
+            self._index.refresh(session_id, jsonl_path)
         cur = self._conn.cursor()
         cur.execute("BEGIN")
         try:
@@ -465,47 +407,25 @@ class SessionStorage:
         jsonl_path = self.session_jsonl_path(session_id)
         if jsonl_path.exists():
             jsonl_path.unlink()
-        index_path = self._index_path()
-        if index_path.exists():
-            idx = sqlite3.connect(str(index_path))
-            try:
-                idx.execute(
-                    "DELETE FROM sessions WHERE session_id = ?",
-                    (session_id,),
-                )
-                idx.commit()
-            finally:
-                idx.close()
+        self._index.delete(session_id)
 
     def list_sessions(self, *, limit: int = 20) -> list[SessionMeta]:
         """Recent sessions newest-first; ``:memory:`` falls back to the in-process table."""
-        index_path = self._index_path()
         out: list[SessionMeta] = []
-        if index_path.exists():
-            idx = sqlite3.connect(str(index_path))
+        for row in self._index.recent(limit):
             try:
-                rows = idx.execute(
-                    "SELECT session_id, message_count, first_user_prompt, "
-                    "last_used_at FROM sessions ORDER BY last_used_at DESC, "
-                    "session_id ASC LIMIT ?",
-                    (limit,),
-                ).fetchall()
-            finally:
-                idx.close()
-            for sid, count, prompt, last in rows:
-                try:
-                    last_dt = datetime.strptime(last, "%Y-%m-%d %H:%M:%S")
-                except (TypeError, ValueError):
-                    last_dt = datetime.now()
-                out.append(SessionMeta(
-                    session_id=sid,
-                    created_at=last_dt,
-                    last_used_at=last_dt,
-                    message_count=int(count),
-                    first_user_prompt=_truncate_one_line(prompt or ""),
-                ))
-            if out:
-                return out
+                last_dt = datetime.strptime(row.last_used_at, "%Y-%m-%d %H:%M:%S")
+            except (TypeError, ValueError):
+                last_dt = datetime.now()
+            out.append(SessionMeta(
+                session_id=row.session_id,
+                created_at=last_dt,
+                last_used_at=last_dt,
+                message_count=row.message_count,
+                first_user_prompt=_truncate_one_line(row.first_user_prompt),
+            ))
+        if out:
+            return out
         cur = self._conn.cursor()
         cur.execute(
             """
@@ -542,7 +462,7 @@ class SessionStorage:
         return int(row[0]) if row else 0
 
     def list_team_ids(self) -> list[str]:
-        teams_root = self._teams_root()
+        teams_root = storage_paths.teams_root(self._path.parent)
         if not teams_root.is_dir():
             return []
         return sorted(p.name for p in teams_root.iterdir() if p.is_dir())
@@ -568,10 +488,7 @@ class SessionStorage:
         return path
 
     def _team_dir(self, team_id: str) -> Path:
-        return self._teams_root() / team_id
-
-    def _teams_root(self) -> Path:
-        return self._path.parent / "teams"
+        return storage_paths.team_dir(self._path.parent, team_id)
 
     def _first_user_prompt(self, session_id: str) -> str:
         cur = self._conn.cursor()
@@ -591,16 +508,6 @@ class SessionStorage:
             if msg_type == "human" and isinstance(content, str) and content:
                 return _truncate_one_line(content)
         return ""
-
-
-_INDEX_SCHEMA_SQL = (
-    "CREATE TABLE IF NOT EXISTS sessions("
-    "session_id TEXT PRIMARY KEY, "
-    "created_at TEXT NOT NULL DEFAULT (datetime('now')), "
-    "last_used_at TEXT NOT NULL DEFAULT (datetime('now')), "
-    "message_count INTEGER NOT NULL DEFAULT 0, "
-    "first_user_prompt TEXT NOT NULL DEFAULT '');"
-)
 
 
 def _truncate_one_line(text: str) -> str:

@@ -12,9 +12,9 @@ SendMessage). They verify:
   :class:`ToolRuntime` (identity check, not equality, so we catch any
   accidental fresh-construct bugs);
 - the registry constant ``STATEFUL_TOOL_FACTORIES`` lists every factory
-  in a stable order so ``Agent.__init__``'s loop is deterministic.
+  in a stable order so ``AgentSession.__init__``'s loop is deterministic.
 
-Tests deliberately avoid building an :class:`Agent` — the whole point
+Tests deliberately avoid building an :class:`AgentSession` — the whole point
 of the factory pattern is that wiring is exercisable in isolation.
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ from tests.conftest import FakeChatModel
 def test_stateful_tool_factory_is_runtime_checkable() -> None:
     """Protocol must be ``@runtime_checkable`` so ``isinstance`` works.
 
-    The eventual registration loop in :class:`Agent` will guard
+    The eventual registration loop in :class:`AgentSession` will guard
     ``factory.build(...)`` calls behind an ``isinstance`` check; that
     guard relies on this property of the Protocol.
     """
@@ -72,7 +72,7 @@ def test_todo_write_factory_satisfies_protocol_shape() -> None:
 
     These are the two members the registration loop reads — pinning
     the names + types here catches refactor drift before it bleeds
-    into Agent wiring.
+    into AgentSession wiring.
     """
     factory = TodoWriteFactory()
     assert factory.name == "todo_write"
@@ -86,7 +86,7 @@ def test_todo_write_factory_builds_tool_wired_to_runtime_state() -> None:
     :class:`LoopState` through to the tool. This test confirms the
     factory does NOT construct a fresh state — it forwards the one
     handed in. Equivalent to today's ``TodoWrite(state=self._state)``
-    line in ``Agent.__init__``.
+    line in ``AgentSession.__init__``.
     """
     state = LoopState()
     runtime = ToolRuntime(state=state)
@@ -197,7 +197,7 @@ def test_ask_user_question_factory_wires_runtime_asker() -> None:
 
 
 def test_ask_user_question_factory_rejects_missing_asker() -> None:
-    """Factory raises if Agent.__init__ forgot the fallback asker.
+    """Factory raises if AgentSession.__init__ forgot the fallback asker.
 
     Defensive guard — ``_unavailable_question_asker`` is meant to be
     threaded in even when no CLI was injected, so a None asker is a
@@ -247,7 +247,7 @@ def test_task_create_factory_rejects_missing_deps() -> None:
 def test_task_get_factory_wires_store() -> None:
     """TaskGetFactory hands runtime.tasks_store to TaskGet.
 
-    Identity check — TaskGet must read from the SAME store the Agent
+    Identity check — TaskGet must read from the SAME store the AgentSession
     writes to, otherwise task lookups silently miss.
     """
     store = TasksStore()
@@ -300,7 +300,7 @@ def test_task_stop_factory_wires_store_running_running_shells() -> None:
 
 
 def test_task_stop_factory_rejects_missing_running_shells() -> None:
-    """Factory rejects when ``running_shells`` is absent — Agent always
+    """Factory rejects when ``running_shells`` is absent — AgentSession always
     constructs an empty dict, so None signals a misconfig not "no
     shells running"."""
     store = TasksStore()
@@ -365,7 +365,7 @@ def test_send_message_factory_rejects_missing_providers() -> None:
 
 def test_stateful_tool_factories_registry_lists_all_seven_in_order() -> None:
     """``STATEFUL_TOOL_FACTORIES`` exports all 7 factories in the order
-    Agent.__init__ depends on (matches the historical if/elif sequence).
+    AgentSession.__init__ depends on (matches the historical if/elif sequence).
 
     Order matters because tool registration order can be observed via
     ``ToolRegistry.tools()`` iteration; pinning it here catches any
@@ -384,6 +384,6 @@ def test_stateful_tool_factories_registry_lists_all_seven_in_order() -> None:
         "send_message",
     ]
     # All entries satisfy the Protocol — the @runtime_checkable Protocol
-    # check guards the registration loop in Agent.__init__.
+    # check guards the registration loop in AgentSession.__init__.
     for factory in STATEFUL_TOOL_FACTORIES:
         assert isinstance(factory, StatefulToolFactory)

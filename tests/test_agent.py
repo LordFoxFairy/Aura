@@ -1,4 +1,4 @@
-"""Agent and ``build_agent`` contracts."""
+"""AgentSession and ``build_agent`` contracts."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
 from aura.application.memory import project_memory, rules
+from aura.application.session import AgentSession, build_agent
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core.agent import Agent, build_agent
 from aura.domain.events import Final
 from aura.domain.tool import ToolError, ToolResult
 from aura.infrastructure.llm import UnknownModelSpecError
@@ -53,13 +53,13 @@ def _agent(
     *,
     config: AuraConfig | None = None,
     hooks: HookChain | None = None,
-) -> Agent:
+) -> AgentSession:
     cfg = config or _minimal_config()
     model = FakeChatModel(turns=turns)
-    return Agent(config=cfg, model=model, storage=_storage(tmp_path), hooks=hooks)
+    return AgentSession(config=cfg, model=model, storage=_storage(tmp_path), hooks=hooks)
 
 
-async def _collect(agent: Agent, prompt: str) -> list[Any]:
+async def _collect(agent: AgentSession, prompt: str) -> list[Any]:
     events = []
     async for event in agent.astream(prompt):
         events.append(event)
@@ -70,7 +70,7 @@ async def _collect(agent: Agent, prompt: str) -> list[Any]:
 async def test_astream_yields_final_and_persists_on_success(tmp_path: Path) -> None:
     storage = _storage(tmp_path)
     model = FakeChatModel(turns=[FakeTurn(AIMessage(content="hello"))])
-    agent = Agent(config=_minimal_config(), model=model, storage=storage)
+    agent = AgentSession(config=_minimal_config(), model=model, storage=storage)
 
     events = await _collect(agent, "hi")
 
@@ -102,7 +102,7 @@ async def test_astream_persists_user_turn_on_cancellation(tmp_path: Path) -> Non
             return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **_)
 
     model = _SlowFakeChatModel()
-    agent = Agent(config=_minimal_config(), model=model, storage=storage)
+    agent = AgentSession(config=_minimal_config(), model=model, storage=storage)
 
     async def _run() -> None:
         async for _ in agent.astream("new prompt"):
@@ -132,7 +132,7 @@ async def test_astream_yields_cancelled_final_before_raising(tmp_path: Path) -> 
     hooks = HookChain(pre_model=[_canceller])
     model = FakeChatModel(turns=[FakeTurn(AIMessage(content="never"))])
     storage = _storage(tmp_path)
-    agent = Agent(config=_minimal_config(), model=model, storage=storage, hooks=hooks)
+    agent = AgentSession(config=_minimal_config(), model=model, storage=storage, hooks=hooks)
 
     events: list[Any] = []
     with pytest.raises(asyncio.CancelledError):
@@ -155,7 +155,7 @@ async def test_switch_model_via_router_alias(
 
     model_a = FakeChatModel(turns=[FakeTurn(AIMessage(content="first"))])
     storage = _storage(tmp_path)
-    agent = Agent(config=config, model=model_a, storage=storage)
+    agent = AgentSession(config=config, model=model_a, storage=storage)
 
     await _collect(agent, "turn1")
 
@@ -186,7 +186,7 @@ async def test_switch_model_via_direct_spec(
 
     model_a = FakeChatModel(turns=[FakeTurn(AIMessage(content="first"))])
     storage = _storage(tmp_path)
-    agent = Agent(config=config, model=model_a, storage=storage)
+    agent = AgentSession(config=config, model=model_a, storage=storage)
 
     await _collect(agent, "turn1")
 
@@ -225,7 +225,7 @@ async def test_clear_session_wipes_history(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_clear_session_wipes_read_state(tmp_path: Path) -> None:
-    # Regression guard for the must-read-first invariant: Agent.clear_session
+    # Regression guard for the must-read-first invariant: AgentSession.clear_session
     # rebuilds Context and swaps the hook closure. If either half silently
     # regresses — state leaks across /clear or the hook keeps pointing at the
     # old Context — previously-read files would still pass the must-read gate
@@ -273,7 +273,7 @@ def test_unknown_tool_name_in_config_raises_AuraConfigError(tmp_path: Path) -> N
     config = _minimal_config(enabled=["read_file", "ghost"])
     model = FakeChatModel()
     with pytest.raises(AuraConfigError) as exc_info:
-        Agent(config=config, model=model, storage=_storage(tmp_path))
+        AgentSession(config=config, model=model, storage=_storage(tmp_path))
     assert "ghost" in str(exc_info.value)
 
 
@@ -314,7 +314,7 @@ async def test_build_agent_factory_uses_modelfactory(
     monkeypatch.setattr(llm, "create", lambda provider, name: fake_model)
 
     agent = build_agent(config)
-    assert isinstance(agent, Agent)
+    assert isinstance(agent, AgentSession)
 
     events = await _collect(agent, "test")
     assert any(isinstance(e, Final) and e.message == "factory-output" for e in events)
@@ -347,7 +347,7 @@ async def test_agent_accepts_custom_available_tools(tmp_path: Path) -> None:
     })
 
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="done"))])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=model,
         storage=_storage(tmp_path),
@@ -368,7 +368,7 @@ async def test_agent_available_tools_overrides_builtins(tmp_path: Path) -> None:
 
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="x"))])
     with pytest.raises(AuraConfigError) as exc_info:
-        Agent(
+        AgentSession(
             config=cfg,
             model=model,
             storage=_storage(tmp_path),
@@ -398,7 +398,7 @@ async def test_agent_copies_available_tools_dict(tmp_path: Path) -> None:
 
     my_tools: dict[str, BaseTool] = {"t": t}
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="ok"))])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg, model=model, storage=_storage(tmp_path),
         available_tools=my_tools,
     )
@@ -414,7 +414,7 @@ async def test_agent_close_closes_storage(tmp_path: Path) -> None:
     cfg = _minimal_config()
     storage = _storage(tmp_path)
     model = FakeChatModel(turns=[])
-    agent = Agent(config=cfg, model=model, storage=storage)
+    agent = AgentSession(config=cfg, model=model, storage=storage)
 
     await agent.aclose()
 
@@ -428,7 +428,7 @@ async def test_agent_async_context_manager_closes_storage(tmp_path: Path) -> Non
     storage = _storage(tmp_path)
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="hi"))])
 
-    async with Agent(config=cfg, model=model, storage=storage) as agent:
+    async with AgentSession(config=cfg, model=model, storage=storage) as agent:
         async for _ in agent.astream("go"):
             pass
 
@@ -441,7 +441,7 @@ async def test_agent_respects_custom_session_id(tmp_path: Path) -> None:
     cfg = _minimal_config()
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="ok"))])
     storage = _storage(tmp_path)
-    agent = Agent(
+    agent = AgentSession(
         config=cfg, model=model, storage=storage, session_id="my-session",
     )
 
@@ -502,7 +502,7 @@ def test_build_agent_forwards_available_tools(
 async def test_clear_session_also_resets_state_counters(tmp_path: Path) -> None:
     cfg = _minimal_config(enabled=[])
     model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="hi"))])
-    agent = Agent(config=cfg, model=model, storage=_storage(tmp_path))
+    agent = AgentSession(config=cfg, model=model, storage=_storage(tmp_path))
 
     async for _ in agent.astream("x"):
         pass
@@ -519,7 +519,7 @@ def test_agent_current_model_reads_router_default(tmp_path: Path) -> None:
         "router": {"default": "openai:gpt-4o-mini", "opus": "openai:gpt-4o"},
         "tools": {"enabled": []},
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg, model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
     )
@@ -533,7 +533,7 @@ def test_agent_router_aliases_excludes_default(tmp_path: Path) -> None:
         "router": {"default": "openai:gpt-4o-mini", "opus": "openai:gpt-4o"},
         "tools": {"enabled": []},
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg, model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
     )
@@ -548,7 +548,7 @@ async def test_agent_builds_system_prompt(tmp_path: Path) -> None:
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[FakeTurn(message=AIMessage(content="hi"))]),
         storage=_storage(tmp_path),
@@ -581,7 +581,7 @@ async def test_system_prompt_prepended_to_model_messages(tmp_path: Path) -> None
             return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **_)
 
     cfg = _minimal_config(enabled=[])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=_CapturingFake(turns=[FakeTurn(message=AIMessage(content="hi"))]),
         storage=_storage(tmp_path),
@@ -600,7 +600,7 @@ async def test_system_prompt_prepended_to_model_messages(tmp_path: Path) -> None
 def test_build_agent_uses_default_hooks_when_none_supplied(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    from aura.core.agent import build_agent
+    from aura.application.session import build_agent
     from aura.infrastructure import llm
 
     fake = FakeChatModel(turns=[])
@@ -619,7 +619,7 @@ def test_build_agent_uses_default_hooks_when_none_supplied(
     agent = build_agent(cfg)
 
     # default_hooks wires post_model (usage tracking), post_tool (result-size
-    # budget), and Agent.__init__ adds pre_tool hooks (bash_safety,
+    # budget), and AgentSession.__init__ adds pre_tool hooks (bash_safety,
     # must_read_first). No pre_model hook since max_turns moved to the loop.
     assert len(agent._hooks.post_model) >= 1
     assert len(agent._hooks.post_tool) >= 1
@@ -715,7 +715,7 @@ async def test_storage_does_not_persist_context_memory_human_messages(
 
     storage = _storage(tmp_path)
     model = FakeChatModel(turns=[FakeTurn(AIMessage(content="hi"))])
-    agent = Agent(config=_minimal_config(), model=model, storage=storage)
+    agent = AgentSession(config=_minimal_config(), model=model, storage=storage)
 
     async for _ in agent.astream("go"):
         pass
@@ -759,7 +759,7 @@ class _CapturingFakeChatModel(FakeChatModel):
 
 def test_todo_write_registered_when_enabled(tmp_path: Path) -> None:
     cfg = _minimal_config(enabled=["todo_write"])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -787,7 +787,7 @@ async def test_todo_write_tool_call_injects_todos_on_next_turn(tmp_path: Path) -
         )),
         FakeTurn(message=AIMessage(content="ok")),
     ])
-    agent = Agent(config=cfg, model=model, storage=_storage(tmp_path))
+    agent = AgentSession(config=cfg, model=model, storage=_storage(tmp_path))
 
     async for _ in agent.astream("hi"):
         pass
@@ -820,7 +820,7 @@ async def test_clear_session_drops_session_rules_when_supplied(tmp_path: Path) -
 
     cfg = _minimal_config(enabled=[])
     model = FakeChatModel(turns=[])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg, model=model, storage=_storage(tmp_path),
         session_rules=session_rules,
     )
@@ -834,7 +834,7 @@ def test_clear_session_is_noop_when_session_rules_not_supplied(tmp_path: Path) -
     # Default path: session_rules kwarg omitted → clear_session must not raise.
     cfg = _minimal_config(enabled=[])
     model = FakeChatModel(turns=[])
-    agent = Agent(config=cfg, model=model, storage=_storage(tmp_path))
+    agent = AgentSession(config=cfg, model=model, storage=_storage(tmp_path))
     agent.clear_session()  # no session_rules to touch; must be a clean no-op
     agent.close()
 
@@ -842,7 +842,7 @@ def test_clear_session_is_noop_when_session_rules_not_supplied(tmp_path: Path) -
 def test_build_agent_threads_session_rules_into_agent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    from aura.core.agent import build_agent
+    from aura.application.session import build_agent
     from aura.domain.permission.rule import Rule
     from aura.domain.permission.session import SessionRuleSet
     from aura.infrastructure import llm
@@ -872,7 +872,7 @@ def test_ask_user_question_registered_even_without_asker_kwarg(tmp_path: Path) -
     """No CLI / no asker passed → tool is still registered so the LLM sees
     it in the bound-tools list; the failure surfaces only if it's invoked."""
     cfg = _minimal_config(enabled=["ask_user_question"])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -887,7 +887,7 @@ async def test_ask_user_question_without_asker_raises_ToolError_on_invoke(
     tmp_path: Path,
 ) -> None:
     cfg = _minimal_config(enabled=["ask_user_question"])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -911,7 +911,7 @@ async def test_ask_user_question_with_injected_asker_delegates(tmp_path: Path) -
         return {q.get("question", ""): "stub answer" for q in questions}
 
     cfg = _minimal_config(enabled=["ask_user_question"])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -935,7 +935,7 @@ async def test_ask_user_question_with_injected_asker_delegates(tmp_path: Path) -
 def test_build_agent_threads_question_asker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    from aura.core.agent import build_agent
+    from aura.application.session import build_agent
     from aura.infrastructure import llm
 
     fake = FakeChatModel(turns=[])
@@ -995,7 +995,7 @@ async def test_bash_safety_hook_blocks_zmodload_even_with_permission_allow(
         )),
         FakeTurn(message=AIMessage(content="done")),
     ])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg, model=model, storage=_storage(tmp_path), hooks=hooks,
     )
 
@@ -1024,7 +1024,7 @@ async def test_bash_safety_hook_installed_at_position_zero(tmp_path: Path) -> No
 
     hooks = HookChain(pre_tool=[_noop])
     cfg = _minimal_config(enabled=[])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -1046,7 +1046,7 @@ async def test_bash_safety_hook_survives_clear_session_at_position_zero(
 
     hooks = HookChain(pre_tool=[_noop])
     cfg = _minimal_config(enabled=[])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -1078,7 +1078,7 @@ async def test_clear_session_wipes_todos(tmp_path: Path) -> None:
         FakeTurn(message=AIMessage(content="ok")),
         FakeTurn(message=AIMessage(content="post-clear")),
     ])
-    agent = Agent(config=cfg, model=model, storage=_storage(tmp_path))
+    agent = AgentSession(config=cfg, model=model, storage=_storage(tmp_path))
 
     # Turn establishing todos.
     async for _ in agent.astream("hi"):
@@ -1156,7 +1156,7 @@ async def test_agent_aconnect_noop_when_no_mcp_servers(tmp_path: Path) -> None:
     """No configured MCP servers → aconnect is a silent no-op, no manager
     is instantiated, and no mcp commands are stored."""
     cfg = _minimal_config(enabled=[])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -1242,7 +1242,7 @@ async def test_agent_aconnect_registers_tools_into_registry(
             {"name": "gh", "command": "npx", "args": ["-y", "server"]},
         ],
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -1257,7 +1257,7 @@ async def test_agent_aconnect_registers_tools_into_registry(
 
 def test_agent_registers_task_tools_and_tasks_store(tmp_path: Path) -> None:
     cfg = _minimal_config(enabled=["task_create", "task_output"])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -1273,7 +1273,7 @@ def test_agent_registers_task_tools_and_tasks_store(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_agent_close_cancels_running_subagent_tasks(tmp_path: Path) -> None:
     cfg = _minimal_config(enabled=["task_create"])
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=_storage(tmp_path),
@@ -1328,14 +1328,14 @@ async def test_agent_aconnect_graceful_on_manager_failure(
             {"name": "bad", "command": "npx", "args": []},
         ],
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="still alive"))]),
         storage=_storage(tmp_path),
     )
     # Must not raise.
     await agent.aconnect()
-    # Agent is still usable.
+    # AgentSession is still usable.
     events = await _collect(agent, "hi")
     assert any(isinstance(e, Final) for e in events)
     await agent.aclose()
@@ -1348,7 +1348,7 @@ def test_agent_mode_defaults_to_default(tmp_path: Path) -> None:
 
 
 def test_agent_mode_respects_kwarg(tmp_path: Path) -> None:
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
         storage=_storage(tmp_path),
@@ -1359,7 +1359,7 @@ def test_agent_mode_respects_kwarg(tmp_path: Path) -> None:
 
 def test_build_agent_plumbs_mode_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # build_agent is the CLI's entry point — the ``mode`` kwarg must
-    # survive the trip to Agent or the bottom bar will silently show
+    # survive the trip to AgentSession or the bottom bar will silently show
     # "default" forever regardless of --bypass-permissions.
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
@@ -1384,7 +1384,7 @@ def test_agent_construct_bypass_refused_when_disable_bypass_true(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(AuraConfigError) as exc_info:
-        Agent(
+        AgentSession(
             config=_minimal_config(),
             model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
             storage=_storage(tmp_path),
@@ -1403,7 +1403,7 @@ def test_agent_construct_non_bypass_mode_unaffected_by_disable_bypass(
     # raised for all modes would make disable_bypass unusable in
     # practice).
     for mode in ("default", "plan", "accept_edits"):
-        agent = Agent(
+        agent = AgentSession(
             config=_minimal_config(),
             model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
             storage=_storage(tmp_path),
@@ -1419,7 +1419,7 @@ def test_agent_construct_non_bypass_mode_unaffected_by_disable_bypass(
 def test_agent_set_mode_bypass_refused_when_disable_bypass_true(
     tmp_path: Path,
 ) -> None:
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
         storage=_storage(tmp_path),
@@ -1441,7 +1441,7 @@ def test_agent_set_mode_non_bypass_allowed_with_disable_bypass(
 ) -> None:
     # Regression guard: disable_bypass must not break the shift+tab
     # cycle through default/plan/accept_edits.
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
         storage=_storage(tmp_path),
@@ -1465,7 +1465,7 @@ def test_agent_set_mode_bypass_allowed_when_disable_bypass_false(
     # Default — disable_bypass=False — must allow runtime switch to
     # bypass (this is what the --bypass-permissions-via-set_mode path
     # relies on).
-    agent = Agent(
+    agent = AgentSession(
         config=_minimal_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
         storage=_storage(tmp_path),
@@ -1483,7 +1483,7 @@ def test_build_agent_plumbs_disable_bypass_through(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # build_agent is the CLI's entry point — disable_bypass must make
-    # it through to Agent or the CLI-level guard is the only defense.
+    # it through to AgentSession or the CLI-level guard is the only defense.
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
@@ -1515,7 +1515,7 @@ def test_agent_context_window_honors_config_override(tmp_path: Path) -> None:
         "router": {"default": "openai:gpt-4o-mini"},  # would be 128k
         "context_window": 1_000_000,
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
         storage=_storage(tmp_path),
@@ -1552,7 +1552,7 @@ def test_agent_context_window_unknown_model_uses_safe_default(tmp_path: Path) ->
         "providers": [{"name": "unknown-vendor", "protocol": "openai"}],
         "router": {"default": "unknown-vendor:some-frontier-model-we-havent-tabled"},
     })
-    agent = Agent(
+    agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="ok"))]),
         storage=_storage(tmp_path),

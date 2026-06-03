@@ -13,14 +13,14 @@ from aura.application.commands.factory import (
     build_default_registry as build_capability_default_registry,
 )
 from aura.application.commands.registry import dispatch
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.llm import UnknownModelSpecError
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
 
-def _agent(tmp_path: Path) -> Agent:
+def _agent(tmp_path: Path) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {
@@ -29,7 +29,7 @@ def _agent(tmp_path: Path) -> Agent:
         },
         "tools": {"enabled": []},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "db"),
@@ -102,7 +102,7 @@ async def test_dispatch_exit(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_dispatch_clear_calls_agent_clear_session() -> None:
-    mock_agent = MagicMock(spec=Agent)
+    mock_agent = MagicMock(spec=AgentSession)
     r = build_default_registry()
     result = await dispatch("/clear", mock_agent, r)
     assert mock_agent.clear_session.called
@@ -124,7 +124,7 @@ async def test_dispatch_model_no_arg_shows_status(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_dispatch_model_with_router_alias() -> None:
-    mock_agent = MagicMock(spec=Agent)
+    mock_agent = MagicMock(spec=AgentSession)
     mock_agent.current_model = "openai:gpt-4o-mini"
 
     def _flip(spec: str) -> None:
@@ -142,7 +142,7 @@ async def test_dispatch_model_with_router_alias() -> None:
 
 @pytest.mark.asyncio
 async def test_dispatch_model_unknown_returns_error_text() -> None:
-    mock_agent = MagicMock(spec=Agent)
+    mock_agent = MagicMock(spec=AgentSession)
     mock_agent.switch_model.side_effect = UnknownModelSpecError(
         "model spec", "bogus-not-an-alias is not a router alias"
     )

@@ -2,17 +2,15 @@
 
 from aura.application.agent_context import AgentContext
 from aura.application.run_agent import run_agent
-from aura.application.session import AgentSession
+from aura.application.session import AgentSession, build_agent
 from aura.config.loader import load_config
 from aura.config.schema import AuraConfig, AuraConfigError
-from aura.core.agent import Agent, build_agent
 from aura.domain.agent_definition import AgentDefinition
 from aura.domain.errors import AuraError
 
 __version__ = "0.11.0"
 
 __all__ = [
-    "Agent",
     "AgentContext",
     "AgentDefinition",
     "AgentSession",

@@ -11,8 +11,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from aura.application.commands.factory import build_default_registry
 from aura.application.commands.registry import dispatch
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionMeta, SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
 
@@ -22,13 +22,13 @@ def _agent(
     turns: list[FakeTurn] | None = None,
     *,
     storage: SessionStorage | None = None,
-) -> Agent:
+) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=turns or []),
         storage=storage or SessionStorage(tmp_path / "db"),
@@ -124,8 +124,8 @@ def test_session_meta_timestamps_are_naive_datetimes(tmp_path: Path) -> None:
 def test_resume_restores_full_history(tmp_path: Path) -> None:
     """Switching session_id makes the agent see the previous session's history.
 
-    Setup: an Agent persists session "old" with 3 messages, swaps to
-    session "old" via :meth:`Agent.resume_session`, then reads back —
+    Setup: an AgentSession persists session "old" with 3 messages, swaps to
+    session "old" via :meth:`AgentSession.resume_session`, then reads back —
     must see the full 3-message history.
     """
     storage = SessionStorage(tmp_path / "db")
@@ -175,7 +175,7 @@ async def test_resume_with_invalid_id_errors_clearly(tmp_path: Path) -> None:
     assert out.handled
     assert out.kind == "print"
     assert "not found" in out.text
-    # Agent must NOT have been swapped to a bogus id.
+    # AgentSession must NOT have been swapped to a bogus id.
     assert agent.session_id == "default"
 
 

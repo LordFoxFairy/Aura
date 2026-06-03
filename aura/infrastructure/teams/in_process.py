@@ -14,10 +14,10 @@ import asyncio
 import contextlib
 from dataclasses import dataclass
 
+from aura.application.session import AgentSession
 from aura.application.teams.mailbox import MailboxNotifier
 from aura.application.teams.runtime import run_teammate
 from aura.application.teams.team_port import TeamPort
-from aura.core.agent import Agent
 from aura.domain.abort import AbortController
 from aura.domain.team import BackendType, TeammateMember
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -69,7 +69,7 @@ class InProcessBackend:
         *,
         team_id: str,
         member: TeammateMember,
-        agent: Agent,
+        agent: AgentSession,
         manager: TeamPort,
         storage: SessionStorage,
         stop_event: asyncio.Event,
@@ -95,7 +95,7 @@ class InProcessBackend:
         *,
         team_id: str,
         member: TeammateMember,
-        agent: Agent,
+        agent: AgentSession,
         manager: TeamPort,
         storage: SessionStorage,
         stop_event: asyncio.Event,

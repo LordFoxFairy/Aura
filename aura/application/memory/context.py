@@ -97,7 +97,7 @@ class Context:
     ) -> Context:
         """New Context with empty progressive state; `/clear` and `/compact` use this.
 
-        `carryover` seeds `_read_records` from a parent Agent's snapshot (subagent
+        `carryover` seeds `_read_records` from a parent AgentSession's snapshot (subagent
         spawn). `clear_reads=True` wipes them outright (`/clear`). The two are
         mutually exclusive. Default preserves reads — the file is still on disk
         after a compact.

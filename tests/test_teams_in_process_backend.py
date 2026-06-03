@@ -24,7 +24,7 @@ from aura.infrastructure.teams.registry import get_backend
 
 
 class _ScriptedAgent:
-    """Minimal Agent stand-in — yields a Final per astream call."""
+    """Minimal AgentSession stand-in — yields a Final per astream call."""
 
     def __init__(self, replies: list[str] | None = None) -> None:
         self.replies = replies or ["ack"]

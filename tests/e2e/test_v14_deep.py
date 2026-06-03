@@ -220,7 +220,7 @@ _SKILL_VISIBILITY_DRIVER = textwrap.dedent(
 
     registry = load_skills(cwd=cwd, home=home)
     # Build a Context snapshot to render <skills-available> the way the
-    # Agent does — the Skill dataclass with disable_model_invocation
+    # AgentSession does — the Skill dataclass with disable_model_invocation
     # MUST be filtered out of the model-facing render. ``model_visible()``
     # is the registry's own filter (excludes disable_model_invocation).
     ctx = Context(
@@ -363,7 +363,7 @@ _RESTRICT_TOOLS_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
     from aura.application.hooks import HookChain
     from aura.application.hooks.permission import make_permission_hook
     from aura.domain.permission.session import RuleSet, SessionRuleSet
@@ -422,13 +422,13 @@ _RESTRICT_TOOLS_DRIVER = textwrap.dedent(
             restrict_tools=frozenset({{"read_file"}}),
         )
         # Install lease via a pre_model hook — fires AFTER turn_count is
-        # incremented (Agent loop bumps turn_count before hooks run). This
+        # incremented (AgentSession loop bumps turn_count before hooks run). This
         # mirrors the runtime path where SkillCommand.handle installs the
         # lease just before the model sees the skill body.
         async def _install_lease(*, history, state, **_):
             install_restrict_lease(skill, state)
         from aura.application.hooks import HookChain as HC
-        agent = Agent(
+        agent = AgentSession(
             config=cfg,
             model=FakeChatModel(turns=turns),
             storage=storage,
@@ -501,7 +501,7 @@ _BYPASS_SEMANTICS_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
     from aura.application.hooks import HookChain
     from aura.application.hooks.permission import make_permission_hook
     from aura.domain.permission.safety import (
@@ -562,7 +562,7 @@ _BYPASS_SEMANTICS_DRIVER = textwrap.dedent(
 
     async def main() -> None:
         storage = SessionStorage(Path(db_path))
-        agent = Agent(
+        agent = AgentSession(
             config=cfg, model=FakeChatModel(turns=turns), storage=storage,
             hooks=HookChain(pre_tool=[hook]),
             session_id="e2e-bypass", auto_compact_threshold=0,
@@ -639,7 +639,7 @@ _DEDUP_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
     from aura.application.hooks import HookChain
     from aura.application.hooks.permission import make_permission_hook
     from aura.domain.permission.session import RuleSet, SessionRuleSet
@@ -691,7 +691,7 @@ _DEDUP_DRIVER = textwrap.dedent(
 
     async def main() -> None:
         storage = SessionStorage(Path(db_path))
-        agent = Agent(
+        agent = AgentSession(
             config=cfg, model=FakeChatModel(turns=turns), storage=storage,
             hooks=HookChain(pre_tool=[hook]),
             session_id="e2e-dedup", auto_compact_threshold=0,
@@ -946,7 +946,7 @@ _MICROCOMPACT_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
     from aura.infrastructure.persistence import journal
     from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel, FakeTurn
@@ -966,7 +966,7 @@ _MICROCOMPACT_DRIVER = textwrap.dedent(
     }})
 
     # Build a script: 4 turns each issuing a read_file tool call, then a
-    # final no-tool turn. Microcompact policy in the Agent ctor cleans
+    # final no-tool turn. Microcompact policy in the AgentSession ctor cleans
     # up old pairs once the threshold is hit.
     target = Path(db_path).parent / "data.txt"
     target.write_text("payload\\n")
@@ -1008,7 +1008,7 @@ _MICROCOMPACT_DRIVER = textwrap.dedent(
 
     async def main() -> None:
         storage = SessionStorage(Path(db_path))
-        agent = Agent(
+        agent = AgentSession(
             config=cfg, model=FakeChatModel(turns=turns), storage=storage,
             hooks=HookChain(pre_tool=[hook]),
             session_id="e2e-microcompact",
@@ -1018,7 +1018,7 @@ _MICROCOMPACT_DRIVER = textwrap.dedent(
             microcompact_keep_recent=1,
         )
         # Drive 5 turns by calling astream with a single prompt — the
-        # Agent loop handles the multi-turn tool dispatch naturally.
+        # AgentSession loop handles the multi-turn tool dispatch naturally.
         async for _ in agent.astream("please read the file four times"):
             pass
         # After astream returns, the persisted history still holds the
@@ -1090,7 +1090,7 @@ _AUTO_COMPACT_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
     from aura.infrastructure.persistence import journal
     from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel, FakeTurn
@@ -1114,7 +1114,7 @@ _AUTO_COMPACT_DRIVER = textwrap.dedent(
 
     async def main() -> None:
         storage = SessionStorage(Path(db_path))
-        agent = Agent(
+        agent = AgentSession(
             config=cfg, model=FakeChatModel(turns=turns), storage=storage,
             session_id="e2e-auto-compact",
             # Threshold > pinned estimate so the first astream's
@@ -1158,7 +1158,7 @@ _AUTO_COMPACT_DRIVER = textwrap.dedent(
 def test_e2e_auto_compact_emits_journal_event(tmp_path: Path) -> None:
     """Auto-compact contract: when ``total_tokens_used`` crosses the
     configured threshold, the ``auto_compact_triggered`` journal event
-    fires and ``Agent.compact(source='auto')`` runs to completion.
+    fires and ``AgentSession.compact(source='auto')`` runs to completion.
     """
     db_path = tmp_path / "session.db"
     journal_path = tmp_path / "journal.jsonl"
@@ -1198,7 +1198,7 @@ _AURA_MD_RELOAD_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
     from aura.application.hooks.file_watcher import FileWatcher
     from aura.infrastructure.persistence import journal
     from aura.infrastructure.persistence.storage import SessionStorage
@@ -1218,7 +1218,7 @@ _AURA_MD_RELOAD_DRIVER = textwrap.dedent(
 
     async def main() -> None:
         storage = SessionStorage(cwd / "session.db")
-        agent = Agent(
+        agent = AgentSession(
             config=cfg, model=FakeChatModel(turns=[]), storage=storage,
             session_id="e2e-reload",
         )
@@ -1251,8 +1251,8 @@ def test_e2e_aura_md_hot_reload_emits_event(tmp_path: Path) -> None:
     """V14-HOOK-CATALOG: writing to AURA.md mid-session fires
     ``file_changed`` on the FileWatcher, which the default
     ``make_aura_md_reload_hook`` consumes; that consumer journals
-    ``aura_md_reloaded`` and refreshes ``Agent._primary_memory`` and
-    ``Agent._context``.
+    ``aura_md_reloaded`` and refreshes ``AgentSession._primary_memory`` and
+    ``AgentSession._context``.
     """
     cwd = tmp_path / "proj"
     cwd.mkdir(parents=True)
@@ -1295,7 +1295,7 @@ _LONG_HISTORY_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
     from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel, FakeTurn
 
@@ -1311,10 +1311,10 @@ _LONG_HISTORY_DRIVER = textwrap.dedent(
     async def main() -> None:
         N = 50
         for i in range(N):
-            # Fresh storage per turn — Agent.aclose() closes the SQLite
+            # Fresh storage per turn — AgentSession.aclose() closes the SQLite
             # connection. Same DB file persists state across iterations.
             storage = SessionStorage(Path(db_path))
-            agent = Agent(
+            agent = AgentSession(
                 config=cfg,
                 model=FakeChatModel(turns=[
                     FakeTurn(AIMessage(content=f"reply turn {{i}}")),

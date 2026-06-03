@@ -2,7 +2,7 @@
 
 Uses a lightweight ``_FakeAgent`` holding only the ``mcp_manager`` slot,
 which is all :class:`MCPCommand` touches. This avoids spinning up the full
-Agent rig (storage, LLM fake, context builder) for what is pure command-
+AgentSession rig (storage, LLM fake, context builder) for what is pure command-
 dispatch + plain-text formatting logic.
 
 The manager itself is real (``MCPManager`` with mocked subprocess calls
@@ -19,7 +19,7 @@ from typing import Any, cast
 import pytest
 
 from aura.application.commands.mcp import MCPCommand
-from aura.core.agent import Agent
+from aura.application.session import AgentSession
 from aura.infrastructure.mcp.manager import MCPServerStatus
 
 
@@ -30,11 +30,11 @@ class _FakeAgent:
     mcp_manager: Any
 
 
-def _as_agent(fake: _FakeAgent) -> Agent:
-    """Cast helper — MCPCommand's handle() is typed as ``Agent`` but only
+def _as_agent(fake: _FakeAgent) -> AgentSession:
+    """Cast helper — MCPCommand's handle() is typed as ``AgentSession`` but only
     touches ``mcp_manager``, so duck-typing is safe at runtime.
     """
-    return cast(Agent, fake)
+    return cast(AgentSession, fake)
 
 
 class _SpyManager:

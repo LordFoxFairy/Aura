@@ -30,7 +30,7 @@ from aura.application.commands.git import (
     _git,
     _GitTimeoutError,
 )
-from aura.core.agent import Agent
+from aura.application.session import AgentSession
 
 
 def _run_git(cwd: Path, *args: str) -> None:
@@ -72,9 +72,9 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture
-def agent() -> Agent:
-    """MagicMock Agent — none of our commands touch agent state."""
-    return MagicMock(spec=Agent)
+def agent() -> AgentSession:
+    """MagicMock AgentSession — none of our commands touch agent state."""
+    return MagicMock(spec=AgentSession)
 
 
 def test_git_commands_registered_in_default_registry() -> None:
@@ -87,7 +87,7 @@ def test_git_commands_registered_in_default_registry() -> None:
 
 @pytest.mark.asyncio
 async def test_status_clean_tree_prints_working_tree_clean(
-    repo: Path, agent: Agent,
+    repo: Path, agent: AgentSession,
 ) -> None:
     _commit(repo, "a.txt", "hello\n", "initial")
 
@@ -100,7 +100,7 @@ async def test_status_clean_tree_prints_working_tree_clean(
 
 @pytest.mark.asyncio
 async def test_status_with_modified_files_shows_them(
-    repo: Path, agent: Agent,
+    repo: Path, agent: AgentSession,
 ) -> None:
     _commit(repo, "a.txt", "hello\n", "initial")
     (repo / "a.txt").write_text("changed\n")
@@ -120,7 +120,7 @@ async def test_status_with_modified_files_shows_them(
 
 @pytest.mark.asyncio
 async def test_status_not_a_repo_returns_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: Agent,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: AgentSession,
 ) -> None:
     # Plain tmp dir, NO git init — bare cwd outside any repo.
     non_repo = tmp_path / "plain"
@@ -139,7 +139,7 @@ async def test_status_not_a_repo_returns_error(
 
 @pytest.mark.asyncio
 async def test_diff_default_shows_stat_summary(
-    repo: Path, agent: Agent,
+    repo: Path, agent: AgentSession,
 ) -> None:
     _commit(repo, "a.txt", "one\ntwo\n", "initial")
     (repo / "a.txt").write_text("one\nchanged\n")
@@ -158,7 +158,7 @@ async def test_diff_default_shows_stat_summary(
 
 @pytest.mark.asyncio
 async def test_diff_full_shows_patch_body(
-    repo: Path, agent: Agent,
+    repo: Path, agent: AgentSession,
 ) -> None:
     _commit(repo, "a.txt", "one\ntwo\n", "initial")
     (repo / "a.txt").write_text("one\nchanged\n")
@@ -176,7 +176,7 @@ async def test_diff_full_shows_patch_body(
 
 @pytest.mark.asyncio
 async def test_diff_staged_shows_index_diff(
-    repo: Path, agent: Agent,
+    repo: Path, agent: AgentSession,
 ) -> None:
     _commit(repo, "a.txt", "one\n", "initial")
     (repo / "a.txt").write_text("one\ntwo\n")
@@ -200,7 +200,7 @@ async def test_diff_staged_shows_index_diff(
 
 
 @pytest.mark.asyncio
-async def test_diff_rejects_unknown_flag(agent: Agent) -> None:
+async def test_diff_rejects_unknown_flag(agent: AgentSession) -> None:
     result = await GitDiffCommand().handle("--bogus", agent)
     assert result.handled is True
     assert result.text.startswith("error:")
@@ -209,7 +209,7 @@ async def test_diff_rejects_unknown_flag(agent: Agent) -> None:
 
 @pytest.mark.asyncio
 async def test_diff_truncates_at_500_lines(
-    repo: Path, agent: Agent,
+    repo: Path, agent: AgentSession,
 ) -> None:
     # Seed with a 1000-line file, then rewrite it to trigger a huge diff.
     _commit(repo, "a.txt", "".join(f"{i}\n" for i in range(1000)), "seed")
@@ -227,7 +227,7 @@ async def test_diff_truncates_at_500_lines(
 
 @pytest.mark.asyncio
 async def test_log_empty_repo_prints_no_commits_yet(
-    repo: Path, agent: Agent,
+    repo: Path, agent: AgentSession,
 ) -> None:
     result = await GitLogCommand().handle("", agent)
 
@@ -237,7 +237,7 @@ async def test_log_empty_repo_prints_no_commits_yet(
 
 @pytest.mark.asyncio
 async def test_log_with_commits_shows_them(
-    repo: Path, agent: Agent,
+    repo: Path, agent: AgentSession,
 ) -> None:
     _commit(repo, "a.txt", "v1\n", "first")
     _commit(repo, "a.txt", "v2\n", "second")
@@ -255,7 +255,7 @@ async def test_log_with_commits_shows_them(
 
 @pytest.mark.asyncio
 async def test_log_respects_explicit_limit(
-    repo: Path, agent: Agent,
+    repo: Path, agent: AgentSession,
 ) -> None:
     for i in range(10):
         _commit(repo, "a.txt", f"v{i}\n", f"msg-number-{i:02d}-zzz")
@@ -277,7 +277,7 @@ async def test_log_respects_explicit_limit(
 
 @pytest.mark.asyncio
 async def test_log_clamps_count_above_100(
-    repo: Path, agent: Agent,
+    repo: Path, agent: AgentSession,
 ) -> None:
     _commit(repo, "a.txt", "v1\n", "only")
 
@@ -302,7 +302,7 @@ async def test_log_clamps_count_above_100(
 
 
 @pytest.mark.asyncio
-async def test_log_rejects_non_integer_arg(agent: Agent) -> None:
+async def test_log_rejects_non_integer_arg(agent: AgentSession) -> None:
     result = await GitLogCommand().handle("abc", agent)
     assert result.handled is True
     assert result.text.startswith("error:")
@@ -334,7 +334,7 @@ async def test_git_helper_raises_timeout(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_status_timeout_returns_friendly_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: Agent,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: AgentSession,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -363,7 +363,7 @@ async def test_status_timeout_returns_friendly_error(
 
 @pytest.mark.asyncio
 async def test_git_not_installed_returns_friendly_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: Agent,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent: AgentSession,
 ) -> None:
     monkeypatch.chdir(tmp_path)
 

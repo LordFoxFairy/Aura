@@ -13,8 +13,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 
 from aura.application.commands.builtin import ContextCommand
 from aura.application.commands.registry import CommandRegistry
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.skill import Skill
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel, FakeTurn
@@ -28,8 +28,8 @@ def _config() -> AuraConfig:
     })
 
 
-def _agent(tmp_path: Path) -> Agent:
-    return Agent(
+def _agent(tmp_path: Path) -> AgentSession:
+    return AgentSession(
         config=_config(),
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="x"))] * 5),
         storage=SessionStorage(tmp_path / "aura.db"),
@@ -148,7 +148,7 @@ async def test_context_command_shows_manual_compact_prompt_estimate(
 async def test_context_command_total_uses_live_microcompacted_history(
     tmp_path: Path,
 ) -> None:
-    agent = Agent(
+    agent = AgentSession(
         config=_config(),
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "aura.db"),

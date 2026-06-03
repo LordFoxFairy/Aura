@@ -5,7 +5,6 @@ from __future__ import annotations
 
 def test_aura_top_level_exports() -> None:
     from aura import (  # noqa: F401  # import is the assertion / fixture side-effect
-        Agent,
         AgentSession,
         AuraConfig,
         AuraConfigError,
@@ -14,8 +13,8 @@ def test_aura_top_level_exports() -> None:
         load_config,
     )
 
-    # Agent is a transitional alias for AgentSession (removed in P4).
-    assert Agent is AgentSession
+    # AgentSession is a transitional alias for AgentSession (removed in P4).
+    assert AgentSession is AgentSession
     assert AgentSession.__name__ == "AgentSession"
     assert AuraConfig.__name__ == "AuraConfig"
     assert AuraConfigError.__name__ == "AuraConfigError"
@@ -27,9 +26,9 @@ def test_aura_top_level_exports() -> None:
 
 def test_aura_core_exports() -> None:
     from aura.core import (  # noqa: F401  # import is the assertion / fixture side-effect
-        Agent,
         AgentEvent,
         AgentLoop,
+        AgentSession,
         AssistantDelta,
         AuraError,
         Final,

@@ -23,7 +23,7 @@ from aura import __version__
 from aura.application.commands import CommandRegistry
 from aura.application.commands.factory import build_default_registry
 from aura.application.commands.registry import dispatch
-from aura.core.agent import Agent
+from aura.application.session import AgentSession
 from aura.infrastructure.persistence import journal
 from cli.completion import SlashCommandCompleter, resolve_history_path
 from cli.render import Renderer
@@ -77,7 +77,7 @@ def _cycle_mode(current: str) -> str:
 
 
 def _build_mode_key_bindings(
-    agent: Agent,
+    agent: AgentSession,
     console: Console | None,
     ctrl_c_state: _CtrlCState | None = None,
 ) -> KeyBindings:
@@ -130,7 +130,7 @@ def _build_mode_key_bindings(
 
 def _build_prompt_session(
     registry: CommandRegistry,
-    agent: Agent | None = None,
+    agent: AgentSession | None = None,
     console: Console | None = None,
 ) -> PromptSession[str]:
     # ``agent=None`` skips Aura-specific bindings so history+completion tests can reuse this.
@@ -162,7 +162,7 @@ async def _default_input(prompt: str) -> str:
 
 
 async def run_repl_async(
-    agent: Agent,
+    agent: AgentSession,
     *,
     input_fn: InputFn | None = None,
     console: Console | None = None,
@@ -267,7 +267,7 @@ def _render_view(console: Console, text: str) -> None:
         console.print()
 
 
-def _render_welcome_panel(agent: Agent, glyph: str) -> Panel:
+def _render_welcome_panel(agent: AgentSession, glyph: str) -> Panel:
     """Build the welcome Panel with the given leading glyph."""
     cwd_display = str(Path.cwd())
     home = str(Path.home())
@@ -291,7 +291,7 @@ def _render_welcome_panel(agent: Agent, glyph: str) -> Panel:
     return Panel(body, border_style="cyan", padding=(0, 2), expand=False)
 
 
-def _print_welcome(agent: Agent, console: Console) -> None:
+def _print_welcome(agent: AgentSession, console: Console) -> None:
     # Non-TTY callers short-circuit the spinner animation.
     if not console.is_terminal:
         console.print(_render_welcome_panel(agent, _BANNER_SETTLE_GLYPH))
@@ -314,7 +314,7 @@ def _print_welcome(agent: Agent, console: Console) -> None:
         live.update(_render_welcome_panel(agent, _BANNER_SETTLE_GLYPH))
 
 
-def _print_verbose_summary(agent: Agent, console: Console) -> None:
+def _print_verbose_summary(agent: AgentSession, console: Console) -> None:
     state = agent.state
     console.print(
         f"[dim]\\[turn {state.turn_count} · "
@@ -324,7 +324,7 @@ def _print_verbose_summary(agent: Agent, console: Console) -> None:
 
 
 def _print_post_turn_status(
-    agent: Agent, console: Console, last_turn_seconds: float = 0.0,
+    agent: AgentSession, console: Console, last_turn_seconds: float = 0.0,
 ) -> None:
     del agent  # reserved for future per-agent decorations
     text = Text("done", style="dim")
@@ -337,7 +337,7 @@ def _print_post_turn_status(
     console.print(text)
 
 
-def _print_active_team_status(agent: Agent, console: Console) -> None:
+def _print_active_team_status(agent: AgentSession, console: Console) -> None:
     active_id = agent.state.slots.active_team
     if not active_id:
         return
@@ -350,7 +350,7 @@ def _print_active_team_status(agent: Agent, console: Console) -> None:
 
 
 async def _run_turn(
-    agent: Agent, prompt: str, renderer: Renderer, console: Console,
+    agent: AgentSession, prompt: str, renderer: Renderer, console: Console,
 ) -> float:
     del console  # reserved for future per-turn console hooks
 

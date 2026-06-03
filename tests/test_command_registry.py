@@ -28,13 +28,12 @@ from aura.application.commands.factory import build_default_registry
 from aura.application.commands.registry import CommandRegistry as CapabilityCommandRegistry
 from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.llm import UnknownModelSpecError
 from aura.infrastructure.persistence.storage import SessionStorage
 from tests.conftest import FakeChatModel
 
 
-def _agent(tmp_path: Path) -> Agent:
+def _agent(tmp_path: Path) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {
@@ -43,7 +42,7 @@ def _agent(tmp_path: Path) -> Agent:
         },
         "tools": {"enabled": []},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "db"),
@@ -210,7 +209,7 @@ async def test_exit_command_returns_kind_exit(tmp_path: Path) -> None:
 async def test_clear_command_invokes_agent_clear_session() -> None:
     r = CommandRegistry()
     r.register(ClearCommand())
-    mock_agent = MagicMock(spec=Agent)
+    mock_agent = MagicMock(spec=AgentSession)
 
     result = await r.dispatch("/clear", mock_agent)
 
@@ -224,7 +223,7 @@ async def test_clear_command_invokes_agent_clear_session() -> None:
 async def test_model_command_delegates_to_agent_switch_model() -> None:
     r = CommandRegistry()
     r.register(ModelCommand())
-    mock_agent = MagicMock(spec=Agent)
+    mock_agent = MagicMock(spec=AgentSession)
     # Simulate the live-spec flip: current_model returns "old" before
     # switch_model completes, then "opus" after.
     mock_agent.current_model = "openai:gpt-4o-mini"
@@ -247,7 +246,7 @@ async def test_model_command_delegates_to_agent_switch_model() -> None:
 async def test_model_command_handles_unknown_model_spec_error() -> None:
     r = CommandRegistry()
     r.register(ModelCommand())
-    mock_agent = MagicMock(spec=Agent)
+    mock_agent = MagicMock(spec=AgentSession)
     mock_agent.switch_model.side_effect = UnknownModelSpecError(
         "model spec", "bogus-not-an-alias is not a router alias"
     )

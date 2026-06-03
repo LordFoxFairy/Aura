@@ -26,7 +26,6 @@ from aura.application.tasks.run import run_task
 from aura.application.tasks.spawn import SubagentSpawner
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.abort import AbortController, current_abort_signal
 from aura.domain.task import TaskNotification
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -61,11 +60,11 @@ def _make_factory() -> SubagentSpawner[AgentSession]:
     )
 
 
-def _make_agent(tmp_path: Path) -> Agent:
-    """Build a real parent Agent so the listener wiring is exercised."""
+def _make_agent(tmp_path: Path) -> AgentSession:
+    """Build a real parent AgentSession so the listener wiring is exercised."""
     cfg = _cfg()
     storage = SessionStorage(tmp_path / "parent.db")
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[FakeTurn(AIMessage(content="parent"))]),
         storage=storage,
@@ -85,7 +84,7 @@ async def test_subagent_completion_pushes_notification_to_parent(
     agent = _make_agent(tmp_path)
     try:
         # Hand the agent's actual store to a factory so the listener
-        # registered in Agent.__init__ fires when the child terminates.
+        # registered in AgentSession.__init__ fires when the child terminates.
         store = agent._tasks_store
         factory = _make_factory()
         rec = store.create(description="probe", prompt="hi")
@@ -440,7 +439,7 @@ async def test_notification_for_failed_subagent_includes_error(
                 agent_type: str = "general-purpose",
                 task_id: str | None = None,
                 model_spec: str | None = None,
-            ) -> Agent:
+            ) -> AgentSession:
                 raise RuntimeError("explode")
 
         rec = store.create(description="boom", prompt="go")

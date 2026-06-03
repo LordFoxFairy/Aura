@@ -1,8 +1,8 @@
 """Phase 1 §5 — :class:`SessionRuntime` lifecycle in isolation.
 
-The whole point of extracting :class:`SessionRuntime` from the Agent
+The whole point of extracting :class:`SessionRuntime` from the AgentSession
 god object is that lifecycle behaviour can be exercised WITHOUT
-constructing a full Agent (no LangChain model, no HookChain, no
+constructing a full AgentSession (no LangChain model, no HookChain, no
 Context). These tests assert that contract directly: every case here
 constructs only :class:`SessionStorage` + :class:`SessionRuntime`.
 
@@ -76,7 +76,7 @@ def test_init_holds_session_rules_reference(
 def test_save_then_load_roundtrips_history(storage: SessionStorage) -> None:
     """Round-trip a couple of messages through the runtime — proves
     the storage delegation actually persists + reloads correctly
-    without going through the Agent layer."""
+    without going through the AgentSession layer."""
     rt = SessionRuntime(storage=storage, session_id="s-save")
     history = [
         HumanMessage(content="hello"),

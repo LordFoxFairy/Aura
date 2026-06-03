@@ -3,7 +3,7 @@
 Layout: one directory per skill, ``<name>/SKILL.md`` inside it. Layers in
 load order (user wins on name collisions):
 
-1. Managed (bundled) — opt-in via ``include_bundled=True`` (Agent.__init__).
+1. Managed (bundled) — opt-in via ``include_bundled=True`` (AgentSession.__init__).
 2. User — ``~/.aura/skills/<name>/SKILL.md`` and ``~/.claude/skills/``.
 3. Project — walk up from ``cwd`` to ``Path.home()`` exclusive.
 
@@ -17,109 +17,38 @@ Missing description → silent skip + ``skill_parse_failed`` journal event.
 from __future__ import annotations
 
 import re
-import shutil
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-import pathspec
 import yaml
 
 from aura.domain.skill import Skill, SkillLayer
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.skills.registry import SkillRegistry
+from aura.infrastructure.skills.skills_bundled import _bundled_skills_root
+from aura.infrastructure.skills.skills_conditional import (
+    activate_conditional_skills_for_paths,
+    activated_conditional_names,
+    clear_conditional_state,
+    get_conditional_skills,
+    is_activated,
+    stash_conditional,
+)
+
+__all__ = [
+    "activate_conditional_skills_for_paths",
+    "activated_conditional_names",
+    "clear_conditional_state",
+    "get_conditional_skills",
+    "load_skills",
+    "render_skill_body",
+]
 
 _AURA_DIR = ".aura"
 _CLAUDE_DIR = ".claude"
 _SKILLS_DIR = "skills"
 _SKILL_FILE = "SKILL.md"
-
-# Bundled skills materialize from code-defined content (below) into a
-# hidden runtime root under ``~/.aura/plugins`` so the active catalogue is
-# detached from the Python package layout.
-_BUNDLED_SKILLS_EXTRACTED_ROOT_NAME = "skills"
-_BUNDLED_CACHE_KEY = "aura-bundled-skills"
-_bundled_skills_extraction: tuple[str, Path] | None = None
-_BUNDLED_SKILL_FILES: dict[str, str] = {
-    "verify": """---
-description: Verify the most recent change works end-to-end before claiming done.
-when_to_use: Before responding \"done\" / \"fixed\" / \"passing\" — run real checks.
----
-# Verify
-
-Before claiming a task is complete:
-
-1. Run the project's tests (`make check`, `pytest`, `npm test`, etc.) and confirm
-   they pass.
-2. Re-run the specific failing case from the bug report — don't assume related
-   tests cover it.
-3. Read back the changed files to confirm the diff is what you intended.
-4. If the change touches a CLI / API surface, exercise it end-to-end at least
-   once instead of trusting unit tests alone.
-
-Evidence before assertions: paste the actual command output that proves the
-verification, not a paraphrase.
-""",
-    "simplify": """---
-description: Review the diff for reuse, dead code, and over-engineering before commit.
-when_to_use: After implementing a change, before committing — pause to simplify.
----
-# Simplify
-
-Pre-commit pass over the current diff:
-
-1. Is there an existing helper / utility that already does this? Reuse it
-   instead of duplicating.
-2. Did you add a flag, knob, or abstraction that no caller currently exercises?
-   Drop it — half-wired extensibility rots.
-3. Are comments explaining \"what\" instead of \"why\"? Strip the \"what\"; the
-   code shows what.
-4. Is there dead code (unreachable branches, unused imports, stale docstrings
-   referencing removed behavior)? Delete it.
-5. Could the same outcome be expressed with fewer lines, fewer types, or one
-   less indirection? Do it.
-
-The bar: would a staff engineer approve this diff as-is, or would they ask
-for one more pass? If the latter, do the pass now.
-""",
-    "code-review": """---
-description: Code review the pending diff with explicit pass/fail criteria.
-when_to_use: Before opening a PR or merging — surface real issues, not nits.
----
-# Code review
-
-Walk the diff with these checks. Surface only real issues; suppress nits.
-
-## Correctness
-- Does the code do what the description / spec / failing test says it should?
-- Are edge cases handled (empty input, None, concurrent access, partial
-  failure)?
-- Are error paths tested or at least exercised by the new code?
-
-## Safety
-- New `subprocess`, `eval`, `pickle.loads`, raw SQL string concat, or shell
-  interpolation? Check for injection.
-- New file writes / deletes outside an obviously-bounded path?
-- Secrets, tokens, internal hostnames in code or test fixtures?
-
-## Maintainability
-- Is the change minimal — only the lines that needed to change, changed?
-- Public API additions: is each one used by a caller in this same diff? If
-  not, defer them.
-- New abstraction layers: is there a second concrete user, or is this YAGNI?
-
-## Test quality
-- New behavior has at least one test that would fail against `main`.
-- Tests assert on observable behavior, not internal implementation details.
-- No `# type: ignore`, `# noqa`, or `pytest.skip` added without a reason in
-  the same line.
-
-Pass criteria: every check above is satisfied. If any check fails, file the
-issue against the diff before approving.
-""",
-}
 
 # Dual-namespace placeholders; new skills should prefer ``${AURA_*}``.
 _PLACEHOLDER_PAIRS: tuple[tuple[str, str], ...] = (
@@ -143,47 +72,6 @@ _RECOGNIZED_FRONTMATTER_FIELDS: frozenset[str] = frozenset({
     "allowed-tools", "restrict-tools", "argument-hint", "arguments",
     "version", "paths", "user-invocable", "disable-model-invocation",
 })
-
-# Module-global conditional-skill state — lifetime-scoped so activation
-# sticks across ``load_skills`` calls within one process.
-_conditional_skills: dict[str, Skill] = {}
-_activated_conditional_names: set[str] = set()
-
-
-@contextmanager
-def _bundled_skills_root(*, home_dir: Path | None = None) -> Iterator[Path | None]:
-    """Materialize bundled skills into a hidden runtime root; yield its path.
-
-    Root: ``<home>/.aura/plugins/bundled-skills/<cache-key>/skills``. Cached
-    across calls within one process; rebuilt on cache-key mismatch.
-    """
-    global _bundled_skills_extraction
-    resolved_home = (home_dir or Path.home()).resolve()
-
-    if _bundled_skills_extraction is not None:
-        cached_key, cached_root = _bundled_skills_extraction
-        if cached_key == _BUNDLED_CACHE_KEY and cached_root.is_dir():
-            yield cached_root
-            return
-        if cached_root.exists():
-            shutil.rmtree(cached_root)
-        _bundled_skills_extraction = None
-
-    extracted_root = (
-        resolved_home / ".aura" / "plugins" / "bundled-skills"
-        / _BUNDLED_CACHE_KEY / _BUNDLED_SKILLS_EXTRACTED_ROOT_NAME
-    )
-    if extracted_root.exists():
-        shutil.rmtree(extracted_root)
-    extracted_root.parent.mkdir(parents=True, exist_ok=True)
-    extracted_root.mkdir(parents=True, exist_ok=True)
-    for skill_name, body in _BUNDLED_SKILL_FILES.items():
-        skill_dir = extracted_root / skill_name
-        skill_dir.mkdir(parents=True, exist_ok=True)
-        (skill_dir / _SKILL_FILE).write_text(body, encoding="utf-8")
-    _bundled_skills_extraction = (_BUNDLED_CACHE_KEY, extracted_root)
-    yield extracted_root
-
 
 def load_skills(
     cwd: Path,
@@ -235,56 +123,6 @@ def load_skills(
             _install_or_drop(skill, registry, seen_source_paths)
 
     return registry
-
-
-def activate_conditional_skills_for_paths(
-    paths: list[str], cwd: Path,
-) -> list[str]:
-    """Activate stored conditional skills whose ``paths:`` match ``paths``.
-
-    Uses ``pathspec`` gitignore semantics. Activated skills are tracked in
-    ``_activated_conditional_names`` so subsequent ``load_skills`` calls
-    don't re-stash them as conditional. Returns the names newly activated.
-    """
-    if not _conditional_skills:
-        return []
-    cwd_resolved = cwd.resolve()
-    activated: list[str] = []
-    for name in list(_conditional_skills.keys()):
-        skill = _conditional_skills[name]
-        if not skill.paths:
-            _activated_conditional_names.add(name)
-            del _conditional_skills[name]
-            activated.append(name)
-            continue
-        try:
-            spec = pathspec.PathSpec.from_lines("gitignore", skill.paths)
-        except Exception:  # noqa: BLE001 — pathspec raises many exc types
-            continue
-        for raw_path in paths:
-            rel = _relative_to_cwd(raw_path, cwd_resolved)
-            if rel is not None and spec.match_file(rel):
-                _activated_conditional_names.add(name)
-                del _conditional_skills[name]
-                activated.append(name)
-                break
-    return activated
-
-
-def get_conditional_skills() -> list[Skill]:
-    """Return all skills currently stashed as conditional."""
-    return list(_conditional_skills.values())
-
-
-def activated_conditional_names() -> frozenset[str]:
-    """Return the set of skills activated this session."""
-    return frozenset(_activated_conditional_names)
-
-
-def clear_conditional_state() -> None:
-    """Reset the module-global conditional state (test hook)."""
-    _conditional_skills.clear()
-    _activated_conditional_names.clear()
 
 
 def render_skill_body(
@@ -357,10 +195,10 @@ def _install_or_drop(
     # Conditional skills go to the lazy bucket unless already activated;
     # flip ``activated`` so render-time filters see them as visible.
     if skill.is_conditional():
-        if skill.name in _activated_conditional_names:
+        if is_activated(skill.name):
             skill = replace(skill, activated=True)
         else:
-            _conditional_skills[skill.name] = skill
+            stash_conditional(skill)
             return
 
     if registry.get(skill.name) is not None:
@@ -547,20 +385,6 @@ def _coerce_bool(value: Any, *, default: bool) -> bool:
         if lower in ("false", "no", "0"):
             return False
     return default
-
-
-def _relative_to_cwd(raw_path: str, cwd: Path) -> str | None:
-    """Return ``raw_path`` as a cwd-relative POSIX string, or None if outside."""
-    p = Path(raw_path)
-    if p.is_absolute():
-        try:
-            return p.resolve().relative_to(cwd).as_posix()
-        except (ValueError, OSError):
-            return None
-    try:
-        return (cwd / p).resolve().relative_to(cwd).as_posix()
-    except ValueError:
-        return None
 
 
 def _emit_parse_failed(skill_file: Path, error: str) -> None:

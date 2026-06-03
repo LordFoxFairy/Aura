@@ -1,6 +1,6 @@
 """SkillRegistry — in-memory name-indexed store of loaded Skills.
 
-Populated once at Agent construction from :func:`load_skills`. Conditional
+Populated once at AgentSession construction from :func:`load_skills`. Conditional
 skills enter the registry only after activation moves them out of the
 loader's lazy bucket.
 """

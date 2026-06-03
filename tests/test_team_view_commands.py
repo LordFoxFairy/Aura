@@ -9,9 +9,9 @@ from typing import Any
 import pytest
 
 from aura.application.commands.team import TeamCommand
+from aura.application.session import AgentSession
 from aura.application.teams.manager import TeamManager
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.wire.serialize import team_message_to_wire
 from tests.conftest import FakeChatModel
@@ -28,7 +28,7 @@ def _stub_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-for-tests")
 
 
-def _agent(tmp_path: Path) -> Agent:
+def _agent(tmp_path: Path) -> AgentSession:
     # ``teams.enabled=True`` opens the gate so /team subcommands run.
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
@@ -36,7 +36,7 @@ def _agent(tmp_path: Path) -> Agent:
         "tools": {"enabled": []},
         "teams": {"enabled": True},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "sessions.db"),
@@ -48,7 +48,7 @@ async def _no_runtime(**_kwargs: Any) -> None:
     return
 
 
-def _install_no_runtime_manager(agent: Agent) -> TeamManager:
+def _install_no_runtime_manager(agent: AgentSession) -> TeamManager:
     """Replace the lazy-built manager with one whose runtime is a no-op.
 
     The default ``_ensure_manager`` would import the real ``run_teammate``
@@ -306,7 +306,7 @@ async def test_team_teammate_unknown_member_errors(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_clear_session_resets_active_team(tmp_path: Path) -> None:
-    """``Agent.clear_session`` rebinds ``state.slots.active_team=None``;
+    """``AgentSession.clear_session`` rebinds ``state.slots.active_team=None``;
     the active-team pointer must NOT survive a /clear."""
     agent = _agent(tmp_path)
     _install_no_runtime_manager(agent)

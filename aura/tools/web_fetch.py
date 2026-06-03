@@ -29,7 +29,7 @@ _PROMPT_MAX_CHARS = 4_000
 _CACHE_TTL_SEC = 15 * 60
 _CACHE_MAX_ENTRIES = 64
 
-# Module-level since every Agent shares the same web_fetch singleton.
+# Module-level since every AgentSession shares the same web_fetch singleton.
 _DEFAULT_MODEL_FACTORY: Callable[[], BaseChatModel] | None = None
 
 
@@ -123,7 +123,7 @@ def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> FetchedPage:
         raise ToolError(f"malformed URL (no host): {url}")
     _reject_private_host(parsed.hostname)
 
-    req = Request(url, headers={"User-Agent": "aura/0.1.0"})
+    req = Request(url, headers={"User-AgentSession": "aura/0.1.0"})
     try:
         with urlopen(req, timeout=timeout) as resp:  # noqa: S310 — scheme + private-host already validated above
             data = resp.read(_MAX_BYTES + 1)
@@ -315,7 +315,7 @@ class WebFetch(Tool):
             return _DEFAULT_MODEL_FACTORY
         raise ToolError(
             "web_fetch: no summary model factory configured — "
-            "Agent.__init__ usually wires this; build the tool with "
+            "AgentSession.__init__ usually wires this; build the tool with "
             "make_web_fetch(factory) for SDK use.",
         )
 

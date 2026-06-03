@@ -682,7 +682,7 @@ async def test_permission_audit_mode_reflects_mid_turn_switch(
     first = next(e for e in journal_events if e[0] == "permission_decision")
     assert first[1]["mode"] == "default"
 
-    # Simulate Agent.set_mode("plan") between turns.
+    # Simulate AgentSession.set_mode("plan") between turns.
     current_mode[0] = "plan"
 
     # Turn 2 — plan mode, write-adjacent tool is blocked by plan dry-run.

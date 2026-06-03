@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from aura.application.commands import CommandRegistry
+from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
-from aura.core.agent import Agent
 from aura.domain.skill import Skill
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills.command import SkillCommand
@@ -25,13 +25,13 @@ def _skill(name: str = "foo") -> Skill:
     )
 
 
-def _agent(tmp_path: Path) -> Agent:
+def _agent(tmp_path: Path) -> AgentSession:
     cfg = AuraConfig.model_validate({
         "providers": [{"name": "openai", "protocol": "openai"}],
         "router": {"default": "openai:gpt-4o-mini"},
         "tools": {"enabled": []},
     })
-    return Agent(
+    return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
         storage=SessionStorage(tmp_path / "db"),
@@ -47,7 +47,7 @@ def test_skill_command_source_has_no_type_checking_or_core_agent_import() -> Non
         / "command.py"
     ).read_text(encoding="utf-8")
     assert "TYPE_CHECKING" not in source
-    assert "aura.core.agent" not in source
+    assert "aura.application.session" not in source
 
 
 def test_skill_command_name_auto_prefixed_slash(tmp_path: Path) -> None:

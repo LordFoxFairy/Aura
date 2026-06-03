@@ -27,7 +27,7 @@ the scenario:
   file X, spawns a subagent via :class:`SubagentSpawner`, child sees X
   as ``fresh`` (G8 AC-G8-1 + row 9).
 - :func:`test_e2e_plan_mode_switch_audit_records_live_mode` — switching
-  the Agent's mode mid-session to ``plan`` and tripping a tool call
+  the AgentSession's mode mid-session to ``plan`` and tripping a tool call
   produces a ``permission_decision`` journal entry whose ``mode`` is the
   post-switch string ``"plan"``, not the startup value (B1 AC-B1-2 + rows
   10/11).
@@ -100,9 +100,9 @@ def _decode(b: bytes) -> str:
 
 _RESUME_DRIVER = textwrap.dedent(
     """
-    # Phase A ('pre'): build an Agent whose model hangs forever; spawn astream;
+    # Phase A ('pre'): build an AgentSession whose model hangs forever; spawn astream;
     # signal the parent after the pre-save lands; hang on purpose so the parent
-    # can SIGKILL us. Phase B ('post'): a fresh Agent re-opens the same DB at
+    # can SIGKILL us. Phase B ('post'): a fresh AgentSession re-opens the same DB at
     # the same session_id and writes the loaded history as JSON to stdout.
     import asyncio
     import json
@@ -118,7 +118,7 @@ _RESUME_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
     from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel
 
@@ -155,7 +155,7 @@ _RESUME_DRIVER = textwrap.dedent(
                 )
 
         storage = SessionStorage(Path(db_path))
-        agent = Agent(
+        agent = AgentSession(
             config=_cfg(),
             model=_Hanging(turns=[]),
             storage=storage,
@@ -294,7 +294,7 @@ _DENIALS_DRIVER = textwrap.dedent(
     sys.path.insert(0, {repo_root!r})
 
     from aura.config.schema import AuraConfig
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
     from aura.application.hooks import HookChain
     from aura.application.hooks.permission import make_permission_hook
     from aura.domain.permission.rule import Rule
@@ -350,7 +350,7 @@ _DENIALS_DRIVER = textwrap.dedent(
 
     async def main() -> None:
         storage = SessionStorage(Path(db_path))
-        agent = Agent(
+        agent = AgentSession(
             config=cfg,
             model=FakeChatModel(turns=turns),
             storage=storage,
@@ -381,7 +381,7 @@ _DENIALS_DRIVER = textwrap.dedent(
 
 def test_e2e_safety_deny_exposes_last_turn_denials(tmp_path: Path) -> None:
     """Rows 7-8 of the spec: a tool_call against ``/etc/passwd`` safety-blocks;
-    :meth:`Agent.last_turn_denials` surfaces a single ``safety_blocked`` record
+    :meth:`AgentSession.last_turn_denials` surfaces a single ``safety_blocked`` record
     with ``target='/etc/passwd'``.
 
     This is a real out-of-process run — we confirm the API is visible from a
@@ -545,7 +545,7 @@ _LIVE_MODE_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.core import journal
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
     from aura.application.hooks import HookChain
     from aura.application.hooks.permission import make_permission_hook
     from aura.domain.permission.session import RuleSet, SessionRuleSet
@@ -603,7 +603,7 @@ _LIVE_MODE_DRIVER = textwrap.dedent(
 
     async def main() -> None:
         storage = SessionStorage(Path(db_path))
-        agent = Agent(
+        agent = AgentSession(
             config=cfg,
             model=FakeChatModel(turns=turns),
             storage=storage,
@@ -692,7 +692,7 @@ _ACLOSE_DRIVER = textwrap.dedent(
 
     from aura.config.schema import AuraConfig
     from aura.core import journal
-    from aura.core.agent import Agent
+    from aura.application.session import AgentSession
     from aura.infrastructure.mcp.manager import MCPServerStatus
     from aura.infrastructure.persistence.storage import SessionStorage
     from tests.conftest import FakeChatModel
@@ -740,7 +740,7 @@ _ACLOSE_DRIVER = textwrap.dedent(
             "tools": {{"enabled": []}},
         }})
         storage = SessionStorage(Path(db_path))
-        agent = Agent(
+        agent = AgentSession(
             config=cfg,
             model=FakeChatModel(turns=[]),
             storage=storage,

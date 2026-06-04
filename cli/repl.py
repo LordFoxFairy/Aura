@@ -9,11 +9,10 @@ import sys
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
@@ -86,7 +85,7 @@ def _build_mode_key_bindings(
     state = ctrl_c_state if ctrl_c_state is not None else _CtrlCState()
 
     @kb.add("s-tab")
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         current = agent.mode
         if current == "bypass":
             return
@@ -94,7 +93,7 @@ def _build_mode_key_bindings(
         event.app.invalidate()
 
     @kb.add("escape")
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         # Non-eager so meta-key sequences (escape, enter) still match.
         if agent.mode == "bypass" or agent.mode == "default":
             return
@@ -102,15 +101,15 @@ def _build_mode_key_bindings(
         event.app.invalidate()
 
     @kb.add("escape", "enter")
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         event.current_buffer.insert_text("\n")
 
     @kb.add("c-j")
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         event.current_buffer.insert_text("\n")
 
     @kb.add("c-c")
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         # Three-state: text → clear; bare first → arm; bare second within window → exit.
         buffer = event.current_buffer
         now = time.monotonic()

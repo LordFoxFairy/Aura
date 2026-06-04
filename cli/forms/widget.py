@@ -8,7 +8,7 @@ from typing import Any, TypedDict
 from prompt_toolkit.application import Application
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import FormattedText
-from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding import KeyBindings, KeyPressEvent
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, VSplit, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
@@ -174,21 +174,21 @@ def _build_keybindings(
     in_text = Condition(lambda: state.is_free_text())
 
     @kb.add("up", filter=in_options)
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         n = len(state.current_options())
         if n:
             state.current_state.cursor = (state.current_state.cursor - 1) % n
             event.app.invalidate()
 
     @kb.add("down", filter=in_options)
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         n = len(state.current_options())
         if n:
             state.current_state.cursor = (state.current_state.cursor + 1) % n
             event.app.invalidate()
 
     @kb.add(" ", filter=in_options)
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         if not state.current_q.get("multi_select"):
             return
         cur = state.current_state.cursor
@@ -201,7 +201,7 @@ def _build_keybindings(
     @kb.add("enter")
     @kb.add("c-m")
     @kb.add("c-j")
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         _commit_current(state, answers)
         if state.index + 1 >= len(state.questions):
             state.finished = True
@@ -212,19 +212,19 @@ def _build_keybindings(
 
     @kb.add("escape", eager=True)
     @kb.add("c-c")
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         state.cancelled = True
         event.app.exit()
 
     @kb.add("backspace", filter=in_text)
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         buf = state.current_state.text_buffer
         if buf:
             state.current_state.text_buffer = buf[:-1]
             event.app.invalidate()
 
     @kb.add("<any>", filter=in_text)
-    def _(event: Any) -> None:
+    def _(event: KeyPressEvent) -> None:
         data = event.data
         if data and data.isprintable():
             state.current_state.text_buffer += data

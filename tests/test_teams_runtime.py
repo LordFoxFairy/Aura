@@ -85,6 +85,10 @@ class _ScriptedAgent:
     def team(self) -> TeamPort | None:
         return None
 
+    @property
+    def teammate(self) -> TeammateBinding | None:
+        return self._teammate
+
     async def astream(self, prompt: str, *, abort: Any = None) -> Any:
         self.prompts_seen.append(prompt)
         msg = self.replies[min(self._idx, len(self.replies) - 1)]

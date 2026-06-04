@@ -26,7 +26,7 @@ _WAIT_SLICE_SEC: float = 5.0
 
 
 def _task_tracking(agent: AgentSession) -> tuple[TasksStore, str] | None:
-    binding = agent._teammate
+    binding = agent.teammate
     if binding is None:
         return None
     return binding.tasks_store, binding.task_id

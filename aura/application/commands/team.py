@@ -95,7 +95,7 @@ def _parse_add_args(rest: str) -> tuple[list[str], BackendType]:
 
 
 def _ensure_manager(agent: AgentSession) -> TeamManager:
-    cached = agent._team_manager
+    cached = agent.team_manager
     if isinstance(cached, TeamManager):
         return cached
     mgr = TeamManager(
@@ -105,7 +105,7 @@ def _ensure_manager(agent: AgentSession) -> TeamManager:
         running_aborts=agent.running_aborts,
         tasks_store=agent.tasks_store,
     )
-    agent._team_manager = mgr
+    agent.attach_team_manager(mgr)
     return mgr
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from urllib.request import Request
 
 import pytest
 
@@ -55,6 +56,19 @@ def test_web_fetch_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert out["status"] == 200
     assert out["content"] == "hello world"
     assert out["truncated"] is False
+
+
+def test_web_fetch_sends_standard_user_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    _allow_all_hosts(monkeypatch)
+    captured: dict[str, Request] = {}
+
+    def _fake_urlopen(req: Request, timeout: object) -> _FakeResponse:
+        captured["req"] = req
+        return _FakeResponse(b"ok")
+
+    monkeypatch.setattr(_wf_mod, "urlopen", _fake_urlopen)
+    _fetch(url="https://example.com")
+    assert captured["req"].get_header("User-agent") == "aura/0.1.0"
 
 
 def test_web_fetch_truncation(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -697,6 +697,20 @@ class AgentSession:
         return self._team
 
     @property
+    def teammate(self) -> TeammateBinding | None:
+        """Task-tracking binding when running as a team member; else None."""
+        return self._teammate
+
+    @property
+    def team_manager(self) -> TeamPort | None:
+        """Lazily-cached /team command manager; distinct from the bound team."""
+        return self._team_manager
+
+    def attach_team_manager(self, manager: TeamPort) -> None:
+        """Cache the /team command manager for reuse across invocations."""
+        self._team_manager = manager
+
+    @property
     def pending_notifications(self) -> tuple[TaskNotification, ...]:
         """Read-only snapshot of queued TaskNotification records."""
         return self._session_runtime.pending_notifications

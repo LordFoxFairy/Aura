@@ -123,7 +123,7 @@ def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> FetchedPage:
         raise ToolError(f"malformed URL (no host): {url}")
     _reject_private_host(parsed.hostname)
 
-    req = Request(url, headers={"User-AgentSession": "aura/0.1.0"})
+    req = Request(url, headers={"User-Agent": "aura/0.1.0"})
     try:
         with urlopen(req, timeout=timeout) as resp:  # noqa: S310 — scheme + private-host already validated above
             data = resp.read(_MAX_BYTES + 1)

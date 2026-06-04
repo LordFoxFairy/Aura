@@ -1,11 +1,4 @@
-"""Two-layer mcp_servers.json store: global (~/.aura/) + project (<cwd>/.aura/).
-
-Merge invariants (consumed by load()):
-  - Global layer first; each project layer overrides by ``name``.
-  - Project walk goes outer→inner from cwd up to (excl.) $HOME; innermost wins.
-  - Missing file at any layer = empty list (first-run friendly).
-  - Validation runs through MCPServerConfig.model_validate at load time.
-"""
+"""Two-layer mcp_servers.json store: global (~/.aura/) merged under project (<cwd>/.aura/)."""
 
 from __future__ import annotations
 
@@ -33,8 +26,7 @@ def project_path(cwd: Path | None = None) -> Path:
 
 
 def _expand_in_place(item: dict[str, object], missing: list[str]) -> dict[str, object]:
-    # Recursively expand ${VAR} / ${VAR:-default} in string leaves on a fresh
-    # copy; missing refs accumulate in `missing` (deduped by the expander).
+    # Expand ${VAR} in string leaves on a fresh copy; missing refs accumulate in `missing`.
     def _walk(node: object) -> object:
         if isinstance(node, str):
             return expand_env_vars(node, _missing_log=missing)
@@ -58,16 +50,11 @@ def _load_layer(path: Path) -> list[MCPServerConfig]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"{path}: invalid JSON: {exc}") from exc
     if not isinstance(data, dict):
-        raise ValueError(
-            f"{path}: expected object at top level, got {type(data).__name__}"
-        )
+        raise ValueError(f"{path}: expected object at top level, got {type(data).__name__}")
     raw_servers = data.get("servers", [])
     if not isinstance(raw_servers, list):
-        raise ValueError(
-            f"{path}: 'servers' must be a list, got {type(raw_servers).__name__}"
-        )
-    # Expand ${VAR} refs before validation so command/args/env/url/headers
-    # round-trip transparently. Missing refs accumulate into one journal line.
+        raise ValueError(f"{path}: 'servers' must be a list, got {type(raw_servers).__name__}")
+    # Expand ${VAR} refs before validation so string fields round-trip transparently.
     missing: list[str] = []
     expanded: list[dict[str, object]] = []
     for item in raw_servers:
@@ -85,8 +72,7 @@ def _load_layer(path: Path) -> list[MCPServerConfig]:
 
 
 def _project_dirs_up_to_home(cwd: Path, home: Path) -> list[Path]:
-    # cwd → ... → (excl.) home, outer-first. cwd outside $HOME = [cwd] only,
-    # so a fake-home test setup doesn't walk into the developer's real FS.
+    # Outer-first up to (excl.) home; cwd outside $HOME stays [cwd] to avoid the real FS.
     try:
         cwd.relative_to(home)
     except ValueError:
@@ -116,7 +102,7 @@ def _load_project_layers(cwd: Path) -> list[list[MCPServerConfig]]:
             resolved_candidate = candidate.resolve()
         except OSError:
             resolved_candidate = candidate
-        # Skip if cwd == $HOME would otherwise double-count the global layer.
+        # Skip when cwd == $HOME would otherwise double-count the global layer.
         if resolved_candidate == global_file:
             continue
         layers.append(_load_layer(candidate))
@@ -127,8 +113,7 @@ def load() -> list[MCPServerConfig]:
     global_servers = _load_layer(global_path())
     project_layers = _load_project_layers(Path.cwd())
 
-    # Dict for override semantics + insertion order. pop-then-set so project
-    # entries take their own outer→inner position, not the global's.
+    # pop-then-set so a project entry takes its own position, not the global's.
     merged: dict[str, MCPServerConfig] = {s.name: s for s in global_servers}
     for layer in project_layers:
         for s in layer:

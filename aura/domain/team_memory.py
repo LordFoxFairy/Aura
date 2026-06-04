@@ -1,7 +1,4 @@
-"""Secret-scrubbing redactor for team-member message bodies.
-
-Conservative: false positives are OK, false negatives are not.
-"""
+"""Secret-scrubbing redactor for team-member message bodies."""
 
 from __future__ import annotations
 
@@ -39,7 +36,8 @@ def redact_secrets(text: str) -> str:
         return text
     # Env-style lines first so the value isn't eaten by the generic pattern.
     text = _ENV_LINE_RE.sub(
-        lambda m: f"{m.group('key')}={REDACTION_MARKER}", text,
+        lambda m: f"{m.group('key')}={REDACTION_MARKER}",
+        text,
     )
     for pattern in _SECRET_PATTERNS:
         text = pattern.sub(REDACTION_MARKER, text)

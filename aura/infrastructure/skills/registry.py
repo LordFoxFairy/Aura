@@ -1,9 +1,4 @@
-"""SkillRegistry — in-memory name-indexed store of loaded Skills.
-
-Populated once at AgentSession construction from :func:`load_skills`. Conditional
-skills enter the registry only after activation moves them out of the
-loader's lazy bucket.
-"""
+"""SkillRegistry — in-memory name-indexed store of loaded Skills."""
 
 from __future__ import annotations
 
@@ -12,8 +7,7 @@ from collections.abc import Iterable
 
 from aura.domain.skill import Skill
 
-# Alias so method annotations resolve to the builtin rather than the
-# ``list()`` method (mypy would complain ``Function is not a type``).
+# Alias so annotations resolve to the builtin, not the shadowing ``list()`` method.
 _List = builtins.list
 
 

@@ -1,4 +1,5 @@
 """Session lifecycle + persistence sidecar for one :class:`AgentSession`."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -29,9 +30,7 @@ class SessionRuntime:
         self._session_id = session_id
         if session_log_dir is not None:
             session_log_dir.mkdir(parents=True, exist_ok=True)
-            self._session_log_path: Path | None = (
-                session_log_dir / f"{self._session_id}.jsonl"
-            )
+            self._session_log_path: Path | None = session_log_dir / f"{self._session_id}.jsonl"
         else:
             self._session_log_path = None
         self._session_rules = session_rules
@@ -41,8 +40,7 @@ class SessionRuntime:
         self._session_start_fired: bool = False
         self._pending_notifications: list[TaskNotification] = []
         self._pending_protocol_events: list[WireEvent] = []
-        # One-shot: flows into the FIRST Context build only; clear/resume drop it
-        # so long-gone parent reads never resurrect.
+        # One-shot: flows into the FIRST Context build only; clear/resume drop it.
         self._carryover: ReadCarryover | None = carryover
 
     @property
@@ -148,21 +146,13 @@ class SessionRuntime:
         self._carryover = None
 
     def resume(self, session_id: str) -> int:
-        """Swap the live session_id; return the loaded message count.
-
-        Raises :class:`KeyError` if the requested session has no rows.
-        """
+        """Swap the live session_id; return the loaded count (raises KeyError if empty)."""
         history = self._storage.load(session_id)
         if not history:
-            raise KeyError(
-                f"session {session_id!r} has no persisted history"
-            )
-        # Re-target the log path BEFORE flipping session_id so journal
-        # attribution lands under the new session.
+            raise KeyError(f"session {session_id!r} has no persisted history")
+        # Re-target the log path BEFORE flipping session_id so journal attribution is correct.
         if self._session_log_path is not None:
-            self._session_log_path = (
-                self._session_log_path.parent / f"{session_id}.jsonl"
-            )
+            self._session_log_path = self._session_log_path.parent / f"{session_id}.jsonl"
         self._session_id = session_id
         self._partial_assistant_text = ""
         self._session_start_fired = False

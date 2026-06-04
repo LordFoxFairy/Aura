@@ -55,8 +55,7 @@ class Renderer:
         self._console = console
         self._markdown_enabled = markdown
         self._pending_text = ""
-        # Defer the ToolCallStarted line so the leading glyph can be set to
-        # the final ✓/✗ when completion arrives before any progress chunk.
+        # Defer ToolCallStarted so its glyph can become ✓/✗ if completion beats progress.
         self._pending_tool: tuple[str, dict[str, Any]] | None = None
 
     def on_event(self, event: AgentEvent) -> None:
@@ -94,11 +93,12 @@ class Renderer:
                 elif reason == "max_turns":
                     self._console.print(Text(" max turns reached", style="dim"))
                 elif reason == "length_recovery_exhausted":
-                    self._console.print(Text(
-                        " ⚠ output truncated by max_output_tokens after 3 retries"
-                        " — try /retry",
-                        style="yellow",
-                    ))
+                    self._console.print(
+                        Text(
+                            " ⚠ output truncated by max_output_tokens after 3 retries — try /retry",
+                            style="yellow",
+                        )
+                    )
 
     def _render_completed(self, event: ToolCallCompleted) -> None:
         pending = self._pending_tool
@@ -113,10 +113,7 @@ class Renderer:
             self._console.print(_render_tool_error(event.name, event.error))
             return
         formatter = _TOOL_RESULT_FORMATTERS.get(event.name)
-        summary = (
-            rich_escape(formatter(event.output))
-            if formatter is not None else None
-        )
+        summary = rich_escape(formatter(event.output)) if formatter is not None else None
         if pending is not None:
             name, args = pending
             head = (
@@ -149,8 +146,7 @@ class Renderer:
         name, args = self._pending_tool
         self._pending_tool = None
         self._console.print(
-            f"[dim]◆ {rich_escape(name)}"
-            f"({rich_escape(compact_args(args))})[/dim]",
+            f"[dim]◆ {rich_escape(name)}({rich_escape(compact_args(args))})[/dim]",
         )
 
     def _flush_pending(self) -> None:
@@ -265,9 +261,14 @@ _TOOL_RESULT_FORMATTERS: dict[str, Callable[[object], str]] = {
 }
 
 
-_SEARCH_COMMAND_TOOLS: frozenset[str] = frozenset({
-    "grep", "glob", "read_file", "web_search",
-})
+_SEARCH_COMMAND_TOOLS: frozenset[str] = frozenset(
+    {
+        "grep",
+        "glob",
+        "read_file",
+        "web_search",
+    }
+)
 
 
 def _extract_text(output: object) -> str | None:

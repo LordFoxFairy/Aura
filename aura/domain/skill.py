@@ -1,8 +1,4 @@
-"""Skill value type — directory-per-skill, claude-code-compatible.
-
-Identity = the resolved absolute path to ``SKILL.md`` (``source_path``).
-Two dirs that resolve to the same file (symlinks) are deduped by the loader.
-"""
+"""Skill value type — directory-per-skill, identified by resolved SKILL.md path."""
 
 from __future__ import annotations
 
@@ -15,8 +11,6 @@ SkillLayer = Literal["user", "project", "managed"]
 
 @dataclass(frozen=True)
 class Skill:
-    """A parsed skill file (``<base_dir>/SKILL.md``)."""
-
     name: str
     description: str
     body: str
@@ -26,8 +20,7 @@ class Skill:
     base_dir: Path | None = None
     when_to_use: str | None = None
     allowed_tools: frozenset[str] = field(default_factory=frozenset)
-    # ``restrict_tools``: strict whitelist (lease-scoped); distinct from the
-    # permissive ``allowed_tools``. Empty = no restriction.
+    # Lease-scoped strict whitelist (empty = no restriction); distinct from allowed_tools.
     restrict_tools: frozenset[str] = field(default_factory=frozenset)
     arguments: tuple[str, ...] = ()
     argument_hint: str | None = None

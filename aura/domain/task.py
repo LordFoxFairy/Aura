@@ -1,12 +1,4 @@
-"""TaskRecord — one dataclass per subagent / shell / teammate task.
-
-Invariants (enforced by TasksStore, not the dataclass):
-  - status / final_result / error / finished_at: set once on terminal transition.
-  - observed_at: set once after parent reads via task_get.
-  - messages: append-only while running.
-  - progress: mutated in place while running; bounded recent_activities ring.
-  - description / prompt / id / started_at: write-at-create, read-only after.
-"""
+"""TaskRecord — one dataclass per subagent / shell / teammate task."""
 
 from __future__ import annotations
 
@@ -44,8 +36,7 @@ class TaskRecord:
     prompt: str
     status: TaskStatus = "running"
     kind: TaskKind = "subagent"
-    # Selects subagent flavor; None for non-subagent kinds. Free-form str
-    # so the store layer doesn't re-import the registry just to persist.
+    # Free-form so the store layer needn't re-import the registry; None for non-subagent kinds.
     agent_type: str | None = None
     messages: list[BaseMessage] = field(default_factory=list)
     final_result: str | None = None

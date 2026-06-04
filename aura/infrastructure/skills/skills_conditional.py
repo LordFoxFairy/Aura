@@ -8,8 +8,7 @@ import pathspec
 
 from aura.domain.skill import Skill
 
-# Module-global conditional-skill state — lifetime-scoped so activation
-# sticks across ``load_skills`` calls within one process.
+# Process-lifetime state so activation sticks across ``load_skills`` calls.
 _conditional_skills: dict[str, Skill] = {}
 _activated_conditional_names: set[str] = set()
 
@@ -25,14 +24,10 @@ def is_activated(name: str) -> bool:
 
 
 def activate_conditional_skills_for_paths(
-    paths: list[str], cwd: Path,
+    paths: list[str],
+    cwd: Path,
 ) -> list[str]:
-    """Activate stored conditional skills whose ``paths:`` match ``paths``.
-
-    Uses ``pathspec`` gitignore semantics. Activated skills are tracked in
-    ``_activated_conditional_names`` so subsequent ``load_skills`` calls
-    don't re-stash them as conditional. Returns the names newly activated.
-    """
+    """Activate and return stashed skills whose ``paths:`` match (gitignore semantics)."""
     if not _conditional_skills:
         return []
     cwd_resolved = cwd.resolve()

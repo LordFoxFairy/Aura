@@ -1,9 +1,4 @@
-"""Permission PreToolHook — gates every tool call (spec §5).
-
-Decision order (short-circuit at first match): restrict-tools lease → deny rules →
-mode=bypass → safety → mode=plan → mode=accept_edits → ask rules → rule match
-(project then session) → ask (per-turn dedup, then user).
-"""
+"""Permission PreToolHook — gates every tool call through the layered decision order."""
 
 from __future__ import annotations
 
@@ -39,9 +34,7 @@ _PLAN_MODE_READ_TOOLS: frozenset[str] = frozenset(
     {"read_file", "grep", "glob", "task_get", "task_list"}
 )
 
-_PLAN_MODE_EXEMPT_TOOLS: frozenset[str] = frozenset(
-    {"enter_plan_mode", "exit_plan_mode"}
-)
+_PLAN_MODE_EXEMPT_TOOLS: frozenset[str] = frozenset({"enter_plan_mode", "exit_plan_mode"})
 
 _PLAN_PREVIEW_MAX_CHARS = 200
 
@@ -70,9 +63,7 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _plan_error_message(tool: BaseTool, args: dict[str, Any]) -> str:
-    return (
-        f"plan mode: would have called {tool.name}({_plan_args_preview(tool, args)})"
-    )
+    return f"plan mode: would have called {tool.name}({_plan_args_preview(tool, args)})"
 
 
 def _deny_message(decision: Decision, *, feedback: str = "") -> str:
@@ -80,9 +71,7 @@ def _deny_message(decision: Decision, *, feedback: str = "") -> str:
         case "safety_blocked":
             return "denied: protected path (safety policy)"
         case "restrict_tools_blocked":
-            return (
-                "denied: tool not in active skill's restrict-tools whitelist"
-            )
+            return "denied: tool not in active skill's restrict-tools whitelist"
         case "rule_deny":
             if decision.rule is not None:
                 return f"denied: deny rule `{decision.rule.to_string()}`"
@@ -109,10 +98,7 @@ def _install_always(
     project_root: Path,
     tool_name: str,
 ) -> None:
-    """Install ``response.rule`` per ``response.scope``.
-
-    Project-scope save failure: journal, degrade to session.
-    """
+    """Install ``response.rule``; a failed project-scope save degrades to session."""
     assert response.rule is not None
     match response.scope:
         case "project":
@@ -147,6 +133,7 @@ def make_permission_hook(
         _raw_mode_provider: Callable[[], Mode] = mode
     else:
         _frozen_mode: Mode = mode
+
         def _raw_mode_provider() -> Mode:
             return _frozen_mode
 
@@ -215,11 +202,13 @@ def make_permission_hook(
         )
         if decision.reason == "plan_mode_blocked":
             short_circuit = ToolResult(
-                ok=False, error=_plan_error_message(tool, args),
+                ok=False,
+                error=_plan_error_message(tool, args),
             )
         else:
             short_circuit = ToolResult(
-                ok=False, error=_deny_message(decision, feedback=feedback),
+                ok=False,
+                error=_deny_message(decision, feedback=feedback),
             )
         return Replace(result=short_circuit, decision=decision)
 
@@ -241,13 +230,7 @@ async def _decide(
     state: LoopState,
     ask_demote: bool = False,
 ) -> tuple[Decision, str]:
-    """Pick an outcome + return ``(decision, feedback)``.
-
-    ``ask_demote`` reflects whether an upstream hook in the same
-    pre_tool chain returned Ask; when true, auto-allow paths
-    (mode_bypass, mode_accept_edits, rule_allow, dedup-cache) are
-    demoted to the asker so the user still confirms (F-04-002).
-    """
+    """Pick an outcome; when ``ask_demote`` is set, auto-allow paths still route to the asker."""
     if has_active_lease(state) and not tool_allowed_by_lease(state, tool.name):
         return Decision(allow=False, reason="restrict_tools_blocked"), ""
 
@@ -272,11 +255,7 @@ async def _decide(
     ):
         return Decision(allow=False, reason="plan_mode_blocked"), ""
 
-    if (
-        mode == "accept_edits"
-        and tool.name in _ACCEPT_EDITS_TOOLS
-        and not ask_demote
-    ):
+    if mode == "accept_edits" and tool.name in _ACCEPT_EDITS_TOOLS and not ask_demote:
         return Decision(allow=True, reason="mode_accept_edits"), ""
 
     ask_match = ask_rules.matches(tool.name, args, tool)
@@ -364,6 +343,8 @@ async def _decide(
                 tool_name=tool.name,
             )
             decision = Decision(
-                allow=True, reason="user_always", rule=response.rule,
+                allow=True,
+                reason="user_always",
+                rule=response.rule,
             )
             return decision, feedback

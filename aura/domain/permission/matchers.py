@@ -1,9 +1,4 @@
-"""Tool-agnostic rule matchers used by Rule.matches for pattern rules.
-
-Matchers carry a .key attribute naming the args slot they inspect; the CLI
-reads this to render precise rule hints (KeyedRuleMatcher). External matchers
-may be plain callables without a key.
-"""
+"""Tool-agnostic rule matchers used by Rule.matches for pattern rules."""
 
 from __future__ import annotations
 

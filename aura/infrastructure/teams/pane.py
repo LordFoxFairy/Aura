@@ -1,10 +1,4 @@
-"""PaneBackend — teammate runs as a ``python -m cli teammate`` subprocess inside a tmux pane.
-
-Shutdown contract:
-
-- graceful: post ``shutdown_request`` to the inbox, await ``shutdown_response``, kill pane
-- force: ``tmux kill-pane`` directly; mailbox writes are atomic so on-disk state stays consistent
-"""
+"""PaneBackend — teammate runs as a ``python -m cli teammate`` subprocess in a tmux pane."""
 
 from __future__ import annotations
 
@@ -55,13 +49,11 @@ def _run_tmux(args: list[str]) -> str:
         raise PaneBackendError("tmux binary not found on PATH") from exc
     except subprocess.TimeoutExpired as exc:
         raise PaneBackendError(
-            f"tmux command timed out after {_TMUX_TIMEOUT_SEC}s: "
-            f"{shlex.join(cmd)}",
+            f"tmux command timed out after {_TMUX_TIMEOUT_SEC}s: {shlex.join(cmd)}",
         ) from exc
     if proc.returncode != 0:
         raise PaneBackendError(
-            f"tmux failed (rc={proc.returncode}): {shlex.join(cmd)}\n"
-            f"stderr: {proc.stderr.strip()}",
+            f"tmux failed (rc={proc.returncode}): {shlex.join(cmd)}\nstderr: {proc.stderr.strip()}",
         )
     return proc.stdout.strip()
 
@@ -109,7 +101,10 @@ class PaneHandle(BackendHandle):
         self.stop_event.set()
         # 50ms cadence matches the manager's internal waiter — bounds total latency by mailbox poll.
         acked = await asyncio.to_thread(
-            self._wait_for_ack, mailbox, baseline, timeout_sec,
+            self._wait_for_ack,
+            mailbox,
+            baseline,
+            timeout_sec,
         )
         await self._kill_pane()
         return acked
@@ -126,10 +121,7 @@ class PaneHandle(BackendHandle):
             for msg in mailbox.read_all(TEAM_LEADER_NAME):
                 if msg.msg_id in baseline:
                     continue
-                if (
-                    msg.sender == self.member_name
-                    and msg.kind == "shutdown_response"
-                ):
+                if msg.sender == self.member_name and msg.kind == "shutdown_response":
                     return True
             time.sleep(0.05)
         return False
@@ -145,7 +137,8 @@ class PaneHandle(BackendHandle):
             return
         try:
             await asyncio.to_thread(
-                _run_tmux, ["kill-pane", "-t", self.pane_id],
+                _run_tmux,
+                ["kill-pane", "-t", self.pane_id],
             )
         except PaneBackendError as exc:
             # Pane already gone is a success state — still journal for forensics.
@@ -182,8 +175,7 @@ class PaneBackend:
         del notifier  # cross-process — asyncio queues can't span Python processes
         if not pane_backend_available():
             raise PaneBackendError(
-                "pane backend requires tmux on PATH and an active tmux "
-                "session ($TMUX must be set)",
+                "pane backend requires tmux on PATH and an active tmux session ($TMUX must be set)",
             )
         pane_id = await asyncio.to_thread(
             _run_tmux,
@@ -235,10 +227,14 @@ class PaneBackend:
             "-m",
             "cli",
             "teammate",
-            "--team-id", team_id,
-            "--member", member.name,
-            "--storage-root", str(storage_root),
-            "--agent-type", member.agent_type,
+            "--team-id",
+            team_id,
+            "--member",
+            member.name,
+            "--storage-root",
+            str(storage_root),
+            "--agent-type",
+            member.agent_type,
         ]
         if member.model_name:
             argv.extend(["--model", member.model_name])

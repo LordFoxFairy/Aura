@@ -1,18 +1,4 @@
-"""Spawn an isolated child agent per subagent task.
-
-Invariants:
-- One-level recursion: every child has ``AGENT_DISALLOWED_TOOLS`` stripped, so a
-  subagent can never spawn another subagent.
-- Fresh chat model per spawn (the chat model classes are stateful — sharing risks
-  cross-talk).
-- MCP servers inherited at config level; each child runs its own ``aconnect`` so
-  parent and child hold INDEPENDENT connections to the same servers.
-- Permission rules inherited; ``SessionRuleSet`` is private to the child so
-  approvals do NOT leak back to the parent. Plan / accept_edits collapse to
-  ``default`` (no interactive UI); ``bypass`` inherits verbatim.
-- Storage defaults to in-memory sqlite so child transcripts don't pollute the
-  parent's session DB.
-"""
+"""Spawn an isolated child agent per subagent task."""
 
 from __future__ import annotations
 
@@ -75,11 +61,7 @@ def _default_storage() -> SessionStorage:
 
 @dataclass(frozen=True)
 class SpawnContext(Generic[A]):
-    """Inherited parent state a child agent is spawned from.
-
-    ``build_child`` is injected so this module never imports the concrete
-    session type — the construction site binds ``A`` to its agent class.
-    """
+    """Inherited parent state for a spawn; ``build_child`` injected to avoid a session import."""
 
     build_child: Callable[..., A]
     parent_config: AuraConfig
@@ -89,7 +71,7 @@ class SpawnContext(Generic[A]):
     parent_ruleset: RuleSet | None = None
     parent_safety: SafetyPolicy | None = None
     parent_mode_provider: Callable[[], str] | None = None
-    # ``parent_session`` is NOT inherited; kept for "child.session is fresh" verification only.
+    # Not inherited — child gets a fresh SessionRuleSet; held only for test inspection.
     parent_session: SessionRuleSet | None = None
     parent_deny_rules: RuleSet | None = None
     parent_ask_rules: RuleSet | None = None
@@ -152,8 +134,7 @@ class SubagentSpawner(Generic[A]):
     ) -> A:
         type_def = get_agent_def(agent_type)
 
-        # Restricted agent_type MUST raise on missing tools — silently dropping would
-        # hand the child a prompt promising tools it can't see.
+        # Restricted agent_type MUST raise on missing tools, not silently drop them.
         parent_enabled = list(self._ctx.parent_config.tools.enabled)
         if type_def.tools:
             missing = type_def.tools - set(parent_enabled)
@@ -171,22 +152,22 @@ class SubagentSpawner(Generic[A]):
         # One-level recursion: a subagent never spawns another subagent.
         child_tools = ToolsConfig(
             enabled=[
-                name for name in parent_enabled
+                name
+                for name in parent_enabled
                 if name not in AGENT_DISALLOWED_TOOLS
                 and (allowed_tools is None or name in allowed_tools)
                 and (effective_allow is None or name in effective_allow)
             ]
         )
-        child_cfg = self._ctx.parent_config.model_copy(
-            update={"tools": child_tools}
-        )
+        child_cfg = self._ctx.parent_config.model_copy(update={"tools": child_tools})
         if self._ctx.model_factory is not None:
             model = self._ctx.model_factory()
         elif model_spec is not None:
             model = llm.make_model_for_spec(model_spec, self._ctx.parent_config)
         else:
             provider, model_name = llm.resolve(
-                self._ctx.parent_model_spec, cfg=self._ctx.parent_config,
+                self._ctx.parent_model_spec,
+                cfg=self._ctx.parent_config,
             )
             model = llm.create(provider, model_name)
         storage = (self._ctx.storage_factory or _default_storage)()
@@ -220,15 +201,11 @@ class SubagentSpawner(Generic[A]):
             )
             child_hooks = HookChain(pre_tool=[perm_hook])
 
-        # Every subagent MUST hold a unique session_id: SessionStorage.save is
-        # DELETE-then-INSERT, so concurrent children sharing a key wipe each other.
+        # Unique session_id per child: save is DELETE-then-INSERT, so a shared key wipes peers.
         child_session_id = (
-            f"subagent-{task_id}"
-            if task_id is not None
-            else f"subagent-{uuid4().hex[:8]}"
+            f"subagent-{task_id}" if task_id is not None else f"subagent-{uuid4().hex[:8]}"
         )
-        # The child's inherited controller: registered with the parent so a single
-        # Ctrl+C cascades, and injected so the child re-raises on abort.
+        # Child controller registered with the parent so one Ctrl+C cascades.
         child_abort = AbortController()
         child_agent = self._ctx.build_child(
             config=child_cfg,

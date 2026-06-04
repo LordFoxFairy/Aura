@@ -45,11 +45,15 @@ class WebFetchParams(BaseModel):
 
     url: str = Field(description="HTTP(S) URL to fetch.")
     prompt: str = Field(
-        ..., min_length=1, max_length=_PROMPT_MAX_CHARS,
+        ...,
+        min_length=1,
+        max_length=_PROMPT_MAX_CHARS,
         description="Question / extraction goal for summarising the page.",
     )
     timeout: int = Field(
-        default=_DEFAULT_TIMEOUT, ge=1, le=120,
+        default=_DEFAULT_TIMEOUT,
+        ge=1,
+        le=120,
         description="Timeout in seconds (1-120).",
     )
     bypass_cache: bool = Field(
@@ -78,9 +82,7 @@ def _reject_private_host(host: str) -> None:
             or ip.is_reserved
             or ip.is_unspecified
         ):
-            raise ToolError(
-                f"refusing to fetch {host!r} — resolves to non-public IP {addr}"
-            )
+            raise ToolError(f"refusing to fetch {host!r} — resolves to non-public IP {addr}")
 
 
 class FetchedPage(TypedDict):
@@ -220,8 +222,7 @@ def _build_summary_prompt(prompt: str, body: str) -> str:
     )
 
 
-# Provider subclasses expose the model id under varying attrs:
-# Anthropic/others use model_name; OpenAI uses model.
+# Provider subclasses expose the model id under varying attrs (model_name vs model).
 @runtime_checkable
 class _HasModelName(Protocol):
     model_name: str
@@ -374,7 +375,9 @@ class WebFetch(Tool):
             )
         try:
             summary_text, truncated, model_name = await _run_summary(
-                model=summary_model, prompt=prompt, body=body,
+                model=summary_model,
+                prompt=prompt,
+                body=body,
             )
         except Exception as exc:  # noqa: BLE001  # swallowed at boundary; failure must not propagate
             return _failure_payload(

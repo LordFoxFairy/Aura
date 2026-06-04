@@ -1,10 +1,4 @@
-"""/status, /diff, /log — git-aware slash commands.
-
-Sub-second shell-outs to ``git``. ``/status`` returns rich-markup text;
-``/diff`` and ``/log`` emit ANSI-coloured output directly to ``stdout``
-(or an injected test writer) so git's SGR codes survive without a rich
-round-trip — and ``aura/core/**`` stays UI-framework-free.
-"""
+"""/status, /diff, /log — git slash commands shelling out to ``git``, passing ANSI through."""
 
 from __future__ import annotations
 
@@ -42,14 +36,18 @@ async def _git(
     """Run ``git <args>`` async; return ``(exit, stdout, stderr)``."""
     try:
         proc = await asyncio.create_subprocess_exec(
-            "git", *args, cwd=str(cwd),
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            "git",
+            *args,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
     except FileNotFoundError as exc:
         raise _GitNotInstalledError(str(exc)) from exc
     try:
         stdout_b, stderr_b = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout_s,
+            proc.communicate(),
+            timeout=timeout_s,
         )
     except TimeoutError as exc:
         # kill (not terminate) — child must be gone before the next slash cmd.
@@ -87,7 +85,10 @@ class GitStatusCommand:
         cwd = Path.cwd()
         try:
             code, stdout, stderr = await _git(
-                "status", "--short", "--branch", cwd=cwd,
+                "status",
+                "--short",
+                "--branch",
+                cwd=cwd,
             )
         except _GitNotInstalledError:
             return _not_installed_result()
@@ -97,11 +98,13 @@ class GitStatusCommand:
         if code != 0:
             if _not_a_repo(stderr):
                 return CommandResult(
-                    handled=True, kind="print",
+                    handled=True,
+                    kind="print",
                     text="error: not a git repository",
                 )
             return CommandResult(
-                handled=True, kind="print",
+                handled=True,
+                kind="print",
                 text=f"[dim]{stderr.strip() or 'git status failed'}[/dim]",
             )
         return CommandResult(handled=True, kind="view", text=_format_status(stdout))
@@ -194,7 +197,8 @@ class GitDiffCommand:
         for tok in flags:
             if tok not in {"--full", "--staged"}:
                 return CommandResult(
-                    handled=True, kind="print",
+                    handled=True,
+                    kind="print",
                     text=f"error: unknown flag {tok!r}",
                 )
 
@@ -215,17 +219,21 @@ class GitDiffCommand:
         if code != 0:
             if _not_a_repo(stderr):
                 return CommandResult(
-                    handled=True, kind="print",
+                    handled=True,
+                    kind="print",
                     text="error: not a git repository",
                 )
             return CommandResult(
-                handled=True, kind="print",
+                handled=True,
+                kind="print",
                 text=f"[dim]{stderr.strip() or 'git diff failed'}[/dim]",
             )
 
         if not stdout.strip():
             return CommandResult(
-                handled=True, kind="print", text="[dim]no changes[/dim]",
+                handled=True,
+                kind="print",
+                text="[dim]no changes[/dim]",
             )
         # Diff printed to stdout already; empty-text view triggers REPL pause.
         self._print_ansi(stdout)
@@ -239,10 +247,7 @@ class GitDiffCommand:
         write("\n".join(shown))
         write("\n")
         if truncated:
-            write(
-                "\x1b[2m… truncated (use --full or run `git diff` in "
-                "a shell)\x1b[0m\n"
-            )
+            write("\x1b[2m… truncated (use --full or run `git diff` in a shell)\x1b[0m\n")
 
 
 class GitLogCommand:
@@ -265,8 +270,12 @@ class GitLogCommand:
         cwd = Path.cwd()
         try:
             code, stdout, stderr = await _git(
-                "log", "--oneline", "--decorate", "--color=always",
-                f"-{n}", cwd=cwd,
+                "log",
+                "--oneline",
+                "--decorate",
+                "--color=always",
+                f"-{n}",
+                cwd=cwd,
             )
         except _GitNotInstalledError:
             return _not_installed_result()
@@ -276,7 +285,8 @@ class GitLogCommand:
         if code != 0:
             if _not_a_repo(stderr):
                 return CommandResult(
-                    handled=True, kind="print",
+                    handled=True,
+                    kind="print",
                     text="error: not a git repository",
                 )
             low = stderr.lower()
@@ -286,17 +296,21 @@ class GitLogCommand:
                 or "unknown revision" in low
             ):
                 return CommandResult(
-                    handled=True, kind="print",
+                    handled=True,
+                    kind="print",
                     text="[dim]no commits yet[/dim]",
                 )
             return CommandResult(
-                handled=True, kind="print",
+                handled=True,
+                kind="print",
                 text=f"[dim]{stderr.strip() or 'git log failed'}[/dim]",
             )
 
         if not stdout.strip():
             return CommandResult(
-                handled=True, kind="print", text="[dim]no commits yet[/dim]",
+                handled=True,
+                kind="print",
+                text="[dim]no commits yet[/dim]",
             )
         write = self._writer or sys.stdout.write
         write(stdout if stdout.endswith("\n") else stdout + "\n")
@@ -320,17 +334,17 @@ def _parse_log_count(arg: str) -> int | str:
 
 def _not_installed_result() -> CommandResult:
     return CommandResult(
-        handled=True, kind="print",
-        text="error: git CLI not installed (install git to use "
-             "/status /diff /log)",
+        handled=True,
+        kind="print",
+        text="error: git CLI not installed (install git to use /status /diff /log)",
     )
 
 
 def _timeout_result(cmd_name: str) -> CommandResult:
     return CommandResult(
-        handled=True, kind="print",
+        handled=True,
+        kind="print",
         text=(
-            f"error: {cmd_name} timed out after "
-            f"{_DEFAULT_TIMEOUT_S:.0f}s; run the command manually"
+            f"error: {cmd_name} timed out after {_DEFAULT_TIMEOUT_S:.0f}s; run the command manually"
         ),
     )

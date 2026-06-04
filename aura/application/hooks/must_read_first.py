@@ -1,8 +1,4 @@
-"""Must-read-first gate: mutation requires prior session read + matching (mtime, size).
-
-Scope: edit_file always; write_file only if target exists; bash on detected mutation
-idioms (sed -i, redirects, tee). Subshell/eval obfuscation slips past (shared gap).
-"""
+"""Must-read-first gate: mutation requires a prior fresh session read of the target."""
 
 from __future__ import annotations
 
@@ -54,7 +50,7 @@ def _extract_bash_mutation_targets(command: str) -> list[str]:
 
         for i, tok in enumerate(tokens):
             if tok == "sed" or tok.endswith("/sed"):
-                rest = tokens[i + 1:]
+                rest = tokens[i + 1 :]
                 if any(_has_inplace_flag(t) for t in rest):
                     last = _last_non_option_token(rest)
                     if last is not None:
@@ -63,7 +59,7 @@ def _extract_bash_mutation_targets(command: str) -> list[str]:
 
         for i, tok in enumerate(tokens):
             if tok == "tee" or tok.endswith("/tee"):
-                rest = tokens[i + 1:]
+                rest = tokens[i + 1 :]
                 last = _last_non_option_token(rest)
                 if last is not None:
                     targets.append(last)
@@ -77,7 +73,7 @@ def _extract_bash_mutation_targets(command: str) -> list[str]:
                 if target.startswith("/dev/") or target.startswith("("):
                     continue
                 targets.append(target)
-            elif (match := re.fullmatch(r"(\d*)?(>{1,2})(.*)", tok)):
+            elif match := re.fullmatch(r"(\d*)?(>{1,2})(.*)", tok):
                 suffix = match.group(3)
                 if suffix.startswith("&"):
                     continue
@@ -97,31 +93,21 @@ def _extract_bash_mutation_targets(command: str) -> list[str]:
 def _error_text(tool_name: str, reason: _ReadStatus, path: Path) -> str:
     if tool_name == "write_file":
         if reason == "stale":
-            return (
-                f"file has changed since last read. re-read before overwriting. "
-                f"(path={path})"
-            )
+            return f"file has changed since last read. re-read before overwriting. (path={path})"
         if reason == "partial":
             return (
                 f"file was only partially read. read_file({path}) fully "
                 f"(offset=0, limit=None) before overwriting."
             )
-        return (
-            f"file has not been read yet. read_file({path}) before overwriting."
-        )
+        return f"file has not been read yet. read_file({path}) before overwriting."
     if reason == "stale":
-        return (
-            f"file has changed since last read. re-read before editing. "
-            f"(path={path})"
-        )
+        return f"file has changed since last read. re-read before editing. (path={path})"
     if reason == "partial":
         return (
             f"file was only partially read. read_file({path}) fully "
             f"(offset=0, limit=None) before edit."
         )
-    return (
-        f"file has not been read yet. read_file({path}) before edit."
-    )
+    return f"file has not been read yet. read_file({path}) before edit."
 
 
 def make_must_read_first_hook(context: Context) -> PreToolHook:
@@ -197,7 +183,8 @@ def make_must_read_first_hook(context: Context) -> PreToolHook:
         )
         return Replace(
             result=ToolResult(
-                ok=False, error=_error_text(tool.name, status, resolved),
+                ok=False,
+                error=_error_text(tool.name, status, resolved),
             ),
             decision=Decision(allow=False, reason="safety_blocked"),
         )

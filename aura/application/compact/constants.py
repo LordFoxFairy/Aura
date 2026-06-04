@@ -25,7 +25,6 @@ AUTO_COMPACT_HEADROOM_TOKENS = 13_000
 
 
 def auto_compact_threshold_for(model_spec: str) -> int:
-    """``ctx_window - AUTO_COMPACT_HEADROOM_TOKENS``, floored at 1000."""
     window = get_context_window(model_spec)
     threshold = window - AUTO_COMPACT_HEADROOM_TOKENS
     return max(1_000, threshold)
@@ -36,16 +35,17 @@ MICROCOMPACT_TRIGGER_PAIRS = 5
 MICROCOMPACT_KEEP_RECENT = 3
 MICROCOMPACT_CLEAR_MARKER = "[Old tool result content cleared]"
 
-# High-volume / low-signal I/O — safe to compress. Excluded: subagent
-# lifecycle, todo_write, skill, ask_user_question, plan-mode, MCP reads.
-MICROCOMPACT_COMPACTABLE_TOOLS: frozenset[str] = frozenset({
-    "read_file",
-    "write_file",
-    "edit_file",
-    "bash",
-    "bash_background",
-    "grep",
-    "glob",
-    "web_fetch",
-    "web_search",
-})
+# High-volume / low-signal I/O — safe to compress.
+MICROCOMPACT_COMPACTABLE_TOOLS: frozenset[str] = frozenset(
+    {
+        "read_file",
+        "write_file",
+        "edit_file",
+        "bash",
+        "bash_background",
+        "grep",
+        "glob",
+        "web_fetch",
+        "web_search",
+    }
+)

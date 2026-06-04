@@ -1,9 +1,4 @@
-"""Core types for the slash-command abstraction.
-
-``Command`` is a ``Protocol`` — any object with the required attributes and
-``async def handle(...)`` satisfies it. This keeps command implementations
-structurally typed without forcing inheritance from an Aura base class.
-"""
+"""Core slash-command types; ``Command`` is a structural ``Protocol``, no base class needed."""
 
 from __future__ import annotations
 
@@ -36,7 +31,9 @@ class Command(Protocol[AgentT]):
     argument_hint: str | None
 
     async def handle(
-        self, arg: str, agent: AgentT,
+        self,
+        arg: str,
+        agent: AgentT,
     ) -> CommandResult:  # pragma: no cover - protocol stub
         ...
 

@@ -1,18 +1,4 @@
-"""Discover + parse skill directories from user + project layers.
-
-Layout: one directory per skill, ``<name>/SKILL.md`` inside it. Layers in
-load order (user wins on name collisions):
-
-1. Managed (bundled) — opt-in via ``include_bundled=True`` (AgentSession.__init__).
-2. User — ``~/.aura/skills/<name>/SKILL.md`` and ``~/.claude/skills/``.
-3. Project — walk up from ``cwd`` to ``Path.home()`` exclusive.
-
-Conditional skills (``paths:`` frontmatter) are stashed; activation moves
-them into the live registry on a matching file touch.
-
-Required frontmatter: ``description``. ``name`` overrides the dir name.
-Missing description → silent skip + ``skill_parse_failed`` journal event.
-"""
+"""Discover and parse skill directories across managed, user, and project layers."""
 
 from __future__ import annotations
 
@@ -56,20 +42,28 @@ _PLACEHOLDER_PAIRS: tuple[tuple[str, str], ...] = (
     ("${CLAUDE_SESSION_ID}", "session_id"),
 )
 
-# Inline ``!`cmd` `` shell-exec syntax. Aura does not execute these; detected
-# at load time so imported skills get a journal warning, then neutralised at
-# render time so the model doesn't see them as live exec directives.
+# Inline ``!`cmd` `` shell-exec syntax Aura never executes — warned at load, neutralised at render.
 _INLINE_CMD_PATTERN = "!`"
 _INLINE_CMD_REGEX = re.compile(r"!`([^`]+)`")
 
-# Frontmatter keys ``_build_skill`` interprets. Anything else gets a
-# ``skill_unsupported_frontmatter`` journal event so importing a skill with
-# (e.g.) ``model:`` / ``hooks:`` has an audit trail.
-_RECOGNIZED_FRONTMATTER_FIELDS: frozenset[str] = frozenset({
-    "name", "description", "when_to_use", "when-to-use",
-    "allowed-tools", "restrict-tools", "argument-hint", "arguments",
-    "version", "paths", "user-invocable", "disable-model-invocation",
-})
+# Interpreted frontmatter keys; anything else journals skill_unsupported_frontmatter for audit.
+_RECOGNIZED_FRONTMATTER_FIELDS: frozenset[str] = frozenset(
+    {
+        "name",
+        "description",
+        "when_to_use",
+        "when-to-use",
+        "allowed-tools",
+        "restrict-tools",
+        "argument-hint",
+        "arguments",
+        "version",
+        "paths",
+        "user-invocable",
+        "disable-model-invocation",
+    }
+)
+
 
 def load_skills(
     cwd: Path,
@@ -77,16 +71,7 @@ def load_skills(
     home: Path | None = None,
     include_bundled: bool = False,
 ) -> SkillRegistry:
-    """Scan managed + user + project layers; return a populated SkillRegistry.
-
-    Conditional skills (``paths:`` frontmatter) are held in the module's
-    conditional map — they enter the registry only via
-    :func:`activate_conditional_skills_for_paths`.
-
-    ``include_bundled`` defaults to False so layer-precedence tests stay
-    hermetic; production Agents pass True to opt into the verify / simplify
-    / code-review bundles.
-    """
+    """Scan managed + user + project layers into a populated SkillRegistry."""
     home_dir = (home or Path.home()).resolve()
     cwd_resolved = cwd.resolve()
 
@@ -128,12 +113,7 @@ def render_skill_body(
     session_id: str,
     argument_values: list[str] | None = None,
 ) -> str:
-    """Substitute skill-dir / session-id / per-arg placeholders in the body.
-
-    Dual-namespace: ``${AURA_*}`` and ``${CLAUDE_*}`` both substitute. Inline
-    ``!`cmd` `` syntax is neutralised first (Aura does not execute these);
-    fenced code blocks are preserved verbatim so example docs stay intact.
-    """
+    """Substitute skill-dir / session-id / per-arg placeholders after neutralising inline cmds."""
     body, _ = _sanitize_inline_cmds(skill.body)
     base_dir = skill.base_dir if skill.base_dir is not None else skill.source_path.parent
     replacements = {"base_dir": str(base_dir), "session_id": session_id}
@@ -146,11 +126,7 @@ def render_skill_body(
 
 
 def _sanitize_inline_cmds(body: str) -> tuple[str, list[str]]:
-    """Replace ``!`cmd` `` (outside fenced code blocks) with an inert note.
-
-    Returns ``(sanitized_body, original_commands)``. Stateful line-by-line
-    scan so the in-fence guard is well-defined.
-    """
+    """Replace ``!`cmd` `` outside fenced code blocks with an inert note."""
     lines = body.split("\n")
     in_fence = False
     fence_marker = "```"
@@ -185,13 +161,13 @@ def _install_or_drop(
     if skill.source_path in seen_source_paths:
         journal.write(
             "skill_duplicate_skipped",
-            name=skill.name, source_path=str(skill.source_path),
+            name=skill.name,
+            source_path=str(skill.source_path),
         )
         return
     seen_source_paths.add(skill.source_path)
 
-    # Conditional skills go to the lazy bucket unless already activated;
-    # flip ``activated`` so render-time filters see them as visible.
+    # Conditional skills wait in the lazy bucket unless already activated this session.
     if skill.is_conditional():
         if is_activated(skill.name):
             skill = replace(skill, activated=True)
@@ -212,10 +188,7 @@ def _install_or_drop(
 
 
 def _project_dirs_up_to_home(cwd: Path, home: Path) -> list[Path]:
-    """Return cwd, cwd.parent, ..., up to (but NOT including) ``home``.
-
-    Outer-first order so closer-to-cwd skills lose on name collisions.
-    """
+    """Outer-first cwd→parents up to (excl.) home so closer dirs lose collisions."""
     dirs: list[Path] = []
     current = cwd
     while True:
@@ -241,7 +214,8 @@ def _load_layer(skills_root: Path, *, layer: SkillLayer) -> list[Skill]:
     if legacy_files:
         journal.write(
             "skill_legacy_format_detected",
-            layer=layer, root=str(skills_root),
+            layer=layer,
+            root=str(skills_root),
             files=[str(f) for f in legacy_files],
         )
 
@@ -286,13 +260,13 @@ def _build_skill(skill_file: Path, *, layer: SkillLayer) -> Skill | None:
         except OSError:
             unsupported_source = str(skill_file)
         name_field = parsed.get("name")
-        unsupported_name = (
-            name_field if isinstance(name_field, str) else skill_file.parent.name
-        )
+        unsupported_name = name_field if isinstance(name_field, str) else skill_file.parent.name
         journal.write(
             "skill_unsupported_frontmatter",
-            name=unsupported_name, source_path=unsupported_source,
-            layer=layer, fields=unsupported_fields,
+            name=unsupported_name,
+            source_path=unsupported_source,
+            layer=layer,
+            fields=unsupported_fields,
         )
 
     name_override = parsed.get("name")
@@ -315,11 +289,8 @@ def _build_skill(skill_file: Path, *, layer: SkillLayer) -> Skill | None:
     except OSError:
         base_dir = skill_file.parent
 
-    # ``restrict-tools`` is a strict whitelist alongside the permissive
-    # ``allowed-tools``; two fields, two semantics.
     paths_raw = _coerce_str_list_field(parsed.get("paths"))
-    # ``foo/**`` is equivalent to ``foo`` under pathspec; collapse the
-    # suffix. All-match patterns become unconditional.
+    # ``foo/**`` equals ``foo`` under pathspec; all-match becomes unconditional.
     normalized_paths = [p[:-3] if p.endswith("/**") else p for p in paths_raw]
     normalized_paths = [p for p in normalized_paths if p]
     if normalized_paths and all(p == "**" for p in normalized_paths):
@@ -328,7 +299,9 @@ def _build_skill(skill_file: Path, *, layer: SkillLayer) -> Skill | None:
     if _INLINE_CMD_PATTERN in body:
         journal.write(
             "skill_inline_cmd_unsupported",
-            name=resolved_name, source_path=str(source), layer=layer,
+            name=resolved_name,
+            source_path=str(source),
+            layer=layer,
         )
 
     return Skill(
@@ -347,7 +320,8 @@ def _build_skill(skill_file: Path, *, layer: SkillLayer) -> Skill | None:
         paths=frozenset(normalized_paths),
         user_invocable=_coerce_bool(parsed.get("user-invocable"), default=True),
         disable_model_invocation=_coerce_bool(
-            parsed.get("disable-model-invocation"), default=False,
+            parsed.get("disable-model-invocation"),
+            default=False,
         ),
     )
 
@@ -409,5 +383,5 @@ def _split_frontmatter(raw: str) -> tuple[str | None, str]:
         return None, raw
     for idx in range(1, len(lines)):
         if lines[idx].rstrip("\r\n").rstrip() in {"---", "..."}:
-            return "".join(lines[1:idx]), "".join(lines[idx + 1:])
+            return "".join(lines[1:idx]), "".join(lines[idx + 1 :])
     return None, raw

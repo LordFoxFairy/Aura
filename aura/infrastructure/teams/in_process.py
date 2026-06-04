@@ -1,12 +1,4 @@
-"""InProcessBackend — wraps :func:`run_teammate` in an asyncio task on the leader's loop.
-
-Lifecycle map::
-
-    add_member / spawn        → asyncio.create_task(run_teammate(...))
-    aremove_member graceful   → stop_event.set() + await task
-    remove_member force       → abort.abort() + task.cancel()
-    cleanup_session_teams     → force_kill then rm -rf <team_dir>
-"""
+"""InProcessBackend — runs :func:`run_teammate` as an asyncio task on the leader's loop."""
 
 from __future__ import annotations
 
@@ -39,7 +31,8 @@ class InProcessHandle(BackendHandle):
         self.stop_event.set()
         try:
             await asyncio.wait_for(
-                asyncio.shield(self.task), timeout=timeout_sec,
+                asyncio.shield(self.task),
+                timeout=timeout_sec,
             )
             return True
         except TimeoutError:

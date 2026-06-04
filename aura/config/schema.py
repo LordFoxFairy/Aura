@@ -28,11 +28,22 @@ class ToolsConfig(BaseModel):
     enabled: list[str] = Field(
         default_factory=lambda: [
             "ask_user_question",
-            "bash", "bash_background", "edit_file",
-            "enter_plan_mode", "exit_plan_mode",
-            "glob", "grep", "read_file", "skill",
-            "task_create", "task_get", "task_list", "task_stop",
-            "todo_write", "web_fetch", "write_file",
+            "bash",
+            "bash_background",
+            "edit_file",
+            "enter_plan_mode",
+            "exit_plan_mode",
+            "glob",
+            "grep",
+            "read_file",
+            "skill",
+            "task_create",
+            "task_get",
+            "task_list",
+            "task_stop",
+            "todo_write",
+            "web_fetch",
+            "write_file",
         ],
     )
     cleanup_completed_subagent_transcripts: bool = Field(
@@ -93,17 +104,15 @@ class WebSearchConfig(BaseModel):
         description="Env var holding the API key (ignored for duckduckgo).",
     )
     max_results: int = Field(
-        default=5, ge=1, le=20,
+        default=5,
+        ge=1,
+        le=20,
         description="Default cap when web_search omits max_results.",
     )
 
 
 class RetryConfig(BaseModel):
-    """Retry policy wrapping the narrow model.ainvoke() in the agent loop.
-
-    Not applied to tool invocations (their own semantics). max_attempts=1
-    disables retry entirely; cap of 10 prevents stuck-provider hostage.
-    """
+    """Retry policy wrapping model.ainvoke() in the agent loop, not tool calls."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -118,32 +127,38 @@ class CompactConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     auto_threshold_buffer_tokens: int = Field(
-        default=13_000, ge=0,
+        default=13_000,
+        ge=0,
         description="Subtracted from context window to set the auto-compact threshold.",
     )
     max_files_to_restore: int = Field(
-        default=5, ge=0,
+        default=5,
+        ge=0,
         description="Cap on <recent-file> re-injects after a summary replaces history.",
     )
     max_tokens_per_file: int = Field(default=5_000, ge=0)
     max_summary_message_chars: int = Field(
-        default=6_000, ge=0,
+        default=6_000,
+        ge=0,
         description="Per-message cap while serialising history into the summary prompt.",
     )
     max_summary_tool_args_chars: int = Field(default=2_000, ge=0)
     fallback_summary_char_limit: int = Field(
-        default=12_000, ge=0,
+        default=12_000,
+        ge=0,
         description="Cap on the deterministic excerpt when no message fits the provider.",
     )
     max_summary_split_depth: int = Field(default=12, ge=1)
     max_consecutive_failures: int = Field(
-        default=3, ge=1,
+        default=3,
+        ge=1,
         description="Circuit breaker: N failed auto-compacts disable further auto firings.",
     )
     microcompact_trigger_pairs: int = Field(default=5, ge=0)
     microcompact_keep_recent: int = Field(default=3, ge=0)
     time_based_gap_threshold_minutes: int | None = Field(
-        default=None, ge=1,
+        default=None,
+        ge=1,
         description="If set, microcompact also fires after N min of assistant idle.",
     )
 
@@ -161,12 +176,7 @@ class TeamsConfig(BaseModel):
 
 
 class MCPServerConfig(BaseModel):
-    """One MCP server. Name namespaces tools as mcp__<name>__<tool>.
-
-    Transports (validated by _validate_transport_fields):
-      - stdio: requires command; url/headers must be unset.
-      - sse / streamable_http: requires url; command/env ignored.
-    """
+    """One MCP server; name namespaces its tools as mcp__<name>__<tool>."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -184,8 +194,7 @@ class MCPServerConfig(BaseModel):
         if self.transport == "stdio":
             if not self.command:
                 raise ValueError(
-                    f"MCP server {self.name!r}: 'command' is required for "
-                    "transport 'stdio'"
+                    f"MCP server {self.name!r}: 'command' is required for transport 'stdio'"
                 )
             if self.url is not None:
                 raise ValueError(
@@ -195,8 +204,7 @@ class MCPServerConfig(BaseModel):
         else:  # sse, streamable_http
             if not self.url:
                 raise ValueError(
-                    f"MCP server {self.name!r}: 'url' is required for "
-                    f"transport {self.transport!r}"
+                    f"MCP server {self.name!r}: 'url' is required for transport {self.transport!r}"
                 )
             if self.command is not None:
                 raise ValueError(
@@ -228,14 +236,14 @@ class AuraConfig(BaseModel):
         description="Retry for transient LLM errors; None = library defaults.",
     )
     context_window: int | None = Field(
-        default=None, gt=0,
+        default=None,
+        gt=0,
         description=(
             "Override context window for the status-bar pressure ratio only "
             "(does not change what the model accepts)."
         ),
     )
-    # Permission config lives in .aura/settings.json + settings.local.json,
-    # not here. Each file has ONE purpose.
+    # Permission config lives in .aura/settings{,.local}.json so each file has one purpose.
 
     @model_validator(mode="after")
     def _validate_cross_refs(self) -> AuraConfig:

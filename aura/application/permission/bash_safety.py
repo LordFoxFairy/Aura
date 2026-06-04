@@ -1,10 +1,4 @@
-"""Bash-command safety — Tier A hard floors no mode or rule can override.
-
-Pure policy (no I/O, no journaling). Failure-mode inversion: a bug in our
-own parser returns ``None`` rather than raising — a typo here would
-otherwise block every bash call. Rule-level signals (``shlex.split``
-raising as rule 12's trigger) still fail closed.
-"""
+"""Bash-command safety — Tier A hard floors no mode or rule can override."""
 
 from __future__ import annotations
 
@@ -52,29 +46,7 @@ _CHECKS = (
 
 
 def check_bash_safety(command: str) -> BashSafetyViolation | None:
-    """Return the first Tier A violation, or None.
-
-    Order (tested contract):
-      1. cr_outside_double_quote
-      2. command_substitution
-      3. obfuscated_execution
-      4. pipe_to_shell
-      5. zsh_dangerous_command
-      6. exec_destructive
-      7. destructive_removal
-      8. world_writable_chmod
-      9. root_chown
-     10. sed_inplace_system_path
-     11. redirect_to_system_path
-     12. malformed_with_separator
-     13. cd_git_compound
-
-    Rule 2 precedes rule 5 because ``$(zmodload x)`` tokenizes such that the
-    zsh rule never sees ``zmodload`` as a first token, yet bash expands the
-    substitution at runtime. Rule 3 precedes rule 4 because base64-into-shell
-    is a strict subset of pipe-to-shell but its dedicated error message
-    guides the model better.
-    """
+    """Return the first Tier A violation in ``_CHECKS`` order, or None."""
     if not command:
         return None
 
@@ -84,5 +56,5 @@ def check_bash_safety(command: str) -> BashSafetyViolation | None:
             if violation is not None:
                 return violation
         return None
-    except Exception:  # noqa: BLE001 — failure-mode inversion; see module docstring
+    except Exception:  # noqa: BLE001 — a parser bug must not block every bash call
         return None

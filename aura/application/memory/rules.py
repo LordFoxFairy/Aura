@@ -39,11 +39,8 @@ def load_rules(cwd: Path, *, force_reload: bool = False) -> RulesBundle:
     home = Path.home()
     _scan_layer(home / _AURA_DIR / _RULES_DIR, base_dir=home, bundle=bundle)
 
-    # Project layer is cwd-only: rules are project-level, not path-level —
-    # walk-up would leak ancestor project's rules into child projects.
-    _scan_layer(
-        resolved_cwd / _AURA_DIR / _RULES_DIR, base_dir=resolved_cwd, bundle=bundle
-    )
+    # Project layer is cwd-only: walk-up would leak an ancestor project's rules into children.
+    _scan_layer(resolved_cwd / _AURA_DIR / _RULES_DIR, base_dir=resolved_cwd, bundle=bundle)
 
     _warn_out_of_cwd_rules(bundle, resolved_cwd)
 
@@ -115,9 +112,11 @@ def _build_rule(md_path: Path, *, base_dir: Path) -> Rule | None:
             return None
         globs_or_skip = _extract_globs(parsed)
         if globs_or_skip is None:
-            actual_type = type(parsed["paths"]).__name__ if isinstance(
-                parsed, dict
-            ) and "paths" in parsed else type(parsed).__name__
+            actual_type = (
+                type(parsed["paths"]).__name__
+                if isinstance(parsed, dict) and "paths" in parsed
+                else type(parsed).__name__
+            )
             journal.write(
                 "rule_paths_invalid_type",
                 path=str(md_path),
@@ -171,10 +170,7 @@ def _split_frontmatter(raw: str) -> tuple[str | None, str]:
 
 
 def _extract_globs(parsed: object) -> tuple[str, ...] | None:
-    """Globs tuple, or ``None`` for a present-but-wrong-typed ``paths`` field.
-
-    ``()`` means "no ``paths`` field → unconditional"; ``None`` means "skip".
-    """
+    """Globs tuple; ``()`` = no ``paths`` field (unconditional); ``None`` = wrong-typed (skip)."""
     if not isinstance(parsed, dict):
         return ()
     if "paths" not in parsed:
@@ -224,8 +220,7 @@ def _truncate(body: str, *, byte_cap: int = _DEFAULT_BYTE_CAP) -> str:
 def _rule_matches_path(rule: Rule, resolved_path: Path) -> bool:
     match_target = _relative_or_absolute(resolved_path, rule.base_dir)
     for glob in rule.globs:
-        # pathspec raises various types (GitIgnorePatternError, re.error, …) on
-        # malformed globs — all swallowed and journaled.
+        # pathspec raises varied error types on malformed globs — all swallowed and journaled.
         try:
             spec = pathspec.PathSpec.from_lines("gitignore", [glob])
             if spec.match_file(match_target):

@@ -39,8 +39,7 @@ def build_tool(
     args_preview: ToolArgsPreview | None = None,
     timeout_sec: float | None = None,
 ) -> BaseTool:
-    # StructuredTool is a pydantic model with extra="ignore"; bypass
-    # validation to attach aura_metadata.
+    # StructuredTool is extra="ignore"; bypass validation to attach aura_metadata.
     tool = StructuredTool.from_function(
         func=func,
         coroutine=coroutine,

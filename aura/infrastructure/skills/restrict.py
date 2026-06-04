@@ -1,10 +1,4 @@
-"""V14 ``restrict-tools`` lease — strict whitelist scoped to a single turn.
-
-Companion to :func:`install_skill_allow_rules` in ``command.py``. The two
-layers stack: ``allowed_tools`` auto-allows declared tools for the session
-(``SessionRuleSet``); ``restrict_tools`` blocks every tool NOT in the union
-of declared sets for the response chain processing the skill body.
-"""
+"""``restrict-tools`` lease — strict per-turn whitelist blocking every undeclared tool."""
 
 from __future__ import annotations
 
@@ -12,27 +6,24 @@ from aura.application.loop_state import LoopState
 from aura.domain.skill import Skill
 from aura.domain.state_values import SkillRestrictLease
 
-# Internal tools the restrict-tools lease never blocks: ``ask_user_question``
-# powers the permission asker UX; enter/exit_plan_mode are mode controls.
-_INTERNAL_EXEMPT_TOOLS: frozenset[str] = frozenset({
-    "ask_user_question",
-    "enter_plan_mode",
-    "exit_plan_mode",
-})
+# Mode controls and the permission-asker UX the lease must never block.
+_INTERNAL_EXEMPT_TOOLS: frozenset[str] = frozenset(
+    {
+        "ask_user_question",
+        "enter_plan_mode",
+        "exit_plan_mode",
+    }
+)
 
 
 def install_restrict_lease(skill: Skill, state: LoopState) -> None:
-    """Install a turn-scoped restrict lease for ``skill`` on ``state``.
-
-    No-op when ``skill.restrict_tools`` is empty. Idempotent within the
-    same turn — re-invoking the same skill does not stack duplicate
-    entries.
-    """
+    """Install a turn-scoped restrict lease; no-op when empty, idempotent within a turn."""
     if not skill.restrict_tools:
         return
     leases = state.slots.skill_restrict_leases
     new_entry = SkillRestrictLease(
-        install_turn=state.turn_count, tools=frozenset(skill.restrict_tools),
+        install_turn=state.turn_count,
+        tools=frozenset(skill.restrict_tools),
     )
     if new_entry in leases:
         return
@@ -40,11 +31,7 @@ def install_restrict_lease(skill: Skill, state: LoopState) -> None:
 
 
 def _active_leases(state: LoopState) -> list[SkillRestrictLease]:
-    """Return non-expired leases, pruning expired ones in place.
-
-    A lease installed on turn N is active for turn N only; once
-    ``state.turn_count`` advances past N the lease is dropped.
-    """
+    """Return non-expired leases (active for their install turn only), pruning in place."""
     raw = state.slots.skill_restrict_leases
     if not raw:
         return []

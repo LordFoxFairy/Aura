@@ -1,9 +1,4 @@
-"""Permission rule parsed from strings like ``bash`` or ``bash(npm test)``.
-
-Match resolution: tool-name (exact, or fnmatch when * in self.tool) then
-content (None = tool-wide match; pattern delegates to the tool's
-rule_matcher metadata, absent matcher = no match).
-"""
+"""Permission rule parsed from strings like ``bash`` or ``bash(npm test)``."""
 
 from __future__ import annotations
 
@@ -47,9 +42,7 @@ class Rule:
         if self.content is None:
             return self.tool
         # Escape backslash before parens to keep the round-trip invertible.
-        escaped = (
-            self.content.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-        )
+        escaped = self.content.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
         return f"{self.tool}({escaped})"
 
     @classmethod

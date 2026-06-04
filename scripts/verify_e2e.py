@@ -1,26 +1,12 @@
-"""End-to-end verification script — runs against real disk layout + FakeChatModel.
-
-Usage: ``uv run python scripts/verify_e2e.py``
-
-Verifies (without requiring a real LLM or live MCP server):
-1. Skill loading — real ``tmp/.aura/skills/superpowers/SKILL.md`` → registered,
-   slash command exposed, context renders ``<skills-available>`` block.
-2. Subagent DAG — parent dispatches 3 subagents in parallel via the task_create
-   tool (explore / verify / plan types), results aggregate back into the store.
-3. Write-a-project — FakeChatModel scripted to issue write_file + edit_file
-   tool calls creating a Python project under ``tmp/demo_project/``.
-
-MCP is intentionally SKIPPED — a live MCP server binary isn't available
-in this sandbox; see the README section at the bottom for manual steps.
-"""
+"""End-to-end verification script — runs against real disk layout + FakeChatModel."""
 
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
-# Make sure we can import aura from the repo.
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
@@ -49,18 +35,28 @@ def _check(label: str, cond: bool) -> bool:
 
 
 def _build_agent(tmp: Path) -> AgentSession:
-    cfg = AuraConfig.model_validate({
-        "providers": [{"name": "openai", "protocol": "openai"}],
-        "router": {"default": "openai:gpt-4o-mini"},
-        "tools": {"enabled": [
-            "read_file", "write_file", "edit_file",
-            "grep", "glob", "bash",
-            "task_create", "task_get", "task_list", "task_stop",
-            "skill",
-        ]},
-    })
-    # FakeChatModel emits no turns by default — scenario 2 + 3 will replace
-    # the model with one carrying scripted turns.
+    cfg = AuraConfig.model_validate(
+        {
+            "providers": [{"name": "openai", "protocol": "openai"}],
+            "router": {"default": "openai:gpt-4o-mini"},
+            "tools": {
+                "enabled": [
+                    "read_file",
+                    "write_file",
+                    "edit_file",
+                    "grep",
+                    "glob",
+                    "bash",
+                    "task_create",
+                    "task_get",
+                    "task_list",
+                    "task_stop",
+                    "skill",
+                ]
+            },
+        }
+    )
+    # Scenarios 2+3 replace this turn-less model with one carrying scripted turns.
     return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
@@ -68,24 +64,14 @@ def _build_agent(tmp: Path) -> AgentSession:
     )
 
 
-# ---------------------------------------------------------------------------
-# Scenario 1 — skill
-# ---------------------------------------------------------------------------
-
-
 def scenario_skill(tmp: Path) -> bool:
     print("\n[1/3] Skill — superpowers SKILL.md loaded + registered as /superpowers")
-    # The skill file is at tmp/.aura/skills/superpowers/SKILL.md — written
-    # by the setup script above this one. AgentSession.__init__ scans cwd's .aura/skills.
-    import os
     original_cwd = os.getcwd()
     try:
         os.chdir(tmp)
         agent = _build_agent(tmp)
 
-        # (a) registry populated. The agent also loads bundled/user skills, so
-        # assert that this project skill is present instead of assuming it is
-        # the only available skill.
+        # The agent also loads bundled/user skills; assert this project skill is among them.
         skills = list(agent._skill_registry.list())
         skills_by_name = {skill.name: skill for skill in skills}
         ok = _check(
@@ -96,47 +82,58 @@ def scenario_skill(tmp: Path) -> bool:
             return False
 
         sk = skills_by_name["superpowers"]
-        ok = _check(
-            "frontmatter parsed: description, when_to_use, arguments, version",
-            bool(sk.description)
-            and bool(sk.when_to_use)
-            and sk.arguments == ("bug_description",)
-            and sk.version == "1.0.0",
-        ) and ok
+        ok = (
+            _check(
+                "frontmatter parsed: description, when_to_use, arguments, version",
+                bool(sk.description)
+                and bool(sk.when_to_use)
+                and sk.arguments == ("bug_description",)
+                and sk.version == "1.0.0",
+            )
+            and ok
+        )
 
-        ok = _check(
-            "source path resolved to SKILL.md inside superpowers/",
-            sk.source_path.name == "SKILL.md"
-            and sk.source_path.parent.name == "superpowers",
-        ) and ok
+        ok = (
+            _check(
+                "source path resolved to SKILL.md inside superpowers/",
+                sk.source_path.name == "SKILL.md" and sk.source_path.parent.name == "superpowers",
+            )
+            and ok
+        )
 
-        # (b) slash command registered like claude-code's /skill-name surface
         reg = build_default_registry(agent)
-        cmd = reg._commands.get("/superpowers")  # private attr ok for verification
-        ok = _check(
-            "/superpowers slash command registered",
-            cmd is not None,
-        ) and ok
+        cmd = reg._commands.get("/superpowers")
+        ok = (
+            _check(
+                "/superpowers slash command registered",
+                cmd is not None,
+            )
+            and ok
+        )
 
-        # (c) Context renders <skills-available> block with when_to_use
         ctx_msgs = agent._context.build([])
         rendered = "\n".join(
             getattr(m, "content", "") if isinstance(getattr(m, "content", ""), str) else ""
             for m in ctx_msgs
         )
-        ok = _check(
-            "<skills-available> block includes superpowers + when_to_use",
-            "<skills-available>" in rendered
-            and "superpowers" in rendered
-            and "Use this skill whenever" in rendered,
-        ) and ok
+        ok = (
+            _check(
+                "<skills-available> block includes superpowers + when_to_use",
+                "<skills-available>" in rendered
+                and "superpowers" in rendered
+                and "Use this skill whenever" in rendered,
+            )
+            and ok
+        )
 
-        # (d) skill tool is registered (empty-registry pattern: tool present because N >= 1)
         tool_names = {t.name for t in agent._registry.tools()}
-        ok = _check(
-            "skill tool is in LLM-visible tool set",
-            "skill" in tool_names,
-        ) and ok
+        ok = (
+            _check(
+                "skill tool is in LLM-visible tool set",
+                "skill" in tool_names,
+            )
+            and ok
+        )
 
         agent.close()
         return ok
@@ -144,118 +141,134 @@ def scenario_skill(tmp: Path) -> bool:
         os.chdir(original_cwd)
 
 
-# ---------------------------------------------------------------------------
-# Scenario 2 — subagent DAG (3 parallel)
-# ---------------------------------------------------------------------------
-
-
 async def scenario_subagent_dag(tmp: Path) -> bool:
     print("\n[2/3] Subagent DAG — parent dispatches 3 subagents in parallel")
-    # Script parent's LLM turn: one AIMessage with 3 parallel tool_calls to
-    # task_create, one per agent_type (explore / verify / plan).
     parent_tool_calls = [
-        {"id": "call_1", "name": "task_create", "args": {
-            "description": "scan repo", "prompt": "list top-level files",
-            "agent_type": "explore",
-        }},
-        {"id": "call_2", "name": "task_create", "args": {
-            "description": "audit pyproject", "prompt": "is the project well-formed",
-            "agent_type": "verify",
-        }},
-        {"id": "call_3", "name": "task_create", "args": {
-            "description": "plan next work", "prompt": "what to refactor",
-            "agent_type": "plan",
-        }},
+        {
+            "id": "call_1",
+            "name": "task_create",
+            "args": {
+                "description": "scan repo",
+                "prompt": "list top-level files",
+                "agent_type": "explore",
+            },
+        },
+        {
+            "id": "call_2",
+            "name": "task_create",
+            "args": {
+                "description": "audit pyproject",
+                "prompt": "is the project well-formed",
+                "agent_type": "verify",
+            },
+        },
+        {
+            "id": "call_3",
+            "name": "task_create",
+            "args": {
+                "description": "plan next work",
+                "prompt": "what to refactor",
+                "agent_type": "plan",
+            },
+        },
     ]
     parent_turns = [
         FakeTurn(message=AIMessage(content="", tool_calls=parent_tool_calls)),
         FakeTurn(message=AIMessage(content="3 subagents dispatched.")),
     ]
 
-    cfg = AuraConfig.model_validate({
-        "providers": [{"name": "openai", "protocol": "openai"}],
-        "router": {"default": "openai:gpt-4o-mini"},
-        "tools": {"enabled": ["task_create", "task_get", "task_list"]},
-    })
+    cfg = AuraConfig.model_validate(
+        {
+            "providers": [{"name": "openai", "protocol": "openai"}],
+            "router": {"default": "openai:gpt-4o-mini"},
+            "tools": {"enabled": ["task_create", "task_get", "task_list"]},
+        }
+    )
     agent = AgentSession(
         config=cfg,
         model=FakeChatModel(turns=parent_turns),
         storage=SessionStorage(tmp / "db2"),
     )
 
-    # Drive one turn; the task_create tool fires 3× and returns immediately
-    # with task_ids. The async subagent tasks run detached.
+    # task_create fires 3× and returns task_ids immediately; subagents run detached.
     events = []
     async for ev in agent.astream("do three things in parallel"):
         events.append(ev)
 
-    # Three task_ids should be in the store.
     all_tasks = agent._tasks_store.list()
     ok = _check(
         f"3 tasks created (got {len(all_tasks)})",
         len(all_tasks) == 3,
     )
 
-    ok = _check(
-        "each task carries an agent_type (explore/verify/plan)",
-        {t.agent_type for t in all_tasks} == {"explore", "verify", "plan"},
-    ) and ok
+    ok = (
+        _check(
+            "each task carries an agent_type (explore/verify/plan)",
+            {t.agent_type for t in all_tasks} == {"explore", "verify", "plan"},
+        )
+        and ok
+    )
 
-    # Cleanup — cancel any still-running subagents.
-    await asyncio.sleep(0.2)  # let them start so cancel actually does something
+    await asyncio.sleep(0.2)  # let subagents start so close() actually cancels them
     agent.close()
     return ok
-
-
-# ---------------------------------------------------------------------------
-# Scenario 3 — write a project in tmp/demo_project/
-# ---------------------------------------------------------------------------
 
 
 async def scenario_write_project(tmp: Path) -> bool:
     print("\n[3/3] Write-a-project — FakeChatModel scripts write_file calls")
     demo = tmp / "demo_project"
-    # Clean prior run.
     for f in demo.iterdir() if demo.exists() else ():
         if f.is_file():
             f.unlink()
 
-    import os
     original_cwd = os.getcwd()
     try:
         os.chdir(tmp)
 
-        # Script: model calls write_file 3× creating a mini Python project.
         write_calls = [
-            {"id": "w1", "name": "write_file", "args": {
-                "path": "demo_project/README.md",
-                "content": "# Demo\n\nGenerated by aura's e2e verifier.\n",
-            }},
-            {"id": "w2", "name": "write_file", "args": {
-                "path": "demo_project/main.py",
-                "content": "def greet() -> str:\n    return 'hello'\n",
-            }},
-            {"id": "w3", "name": "write_file", "args": {
-                "path": "demo_project/test_main.py",
-                "content": (
-                    "# Sibling-import: test runs from inside demo_project/,\n"
-                    "# so main.py is on sys.path without needing a package.\n"
-                    "from main import greet\n\n"
-                    "def test_greet() -> None:\n"
-                    "    assert greet() == 'hello'\n"
-                ),
-            }},
+            {
+                "id": "w1",
+                "name": "write_file",
+                "args": {
+                    "path": "demo_project/README.md",
+                    "content": "# Demo\n\nGenerated by aura's e2e verifier.\n",
+                },
+            },
+            {
+                "id": "w2",
+                "name": "write_file",
+                "args": {
+                    "path": "demo_project/main.py",
+                    "content": "def greet() -> str:\n    return 'hello'\n",
+                },
+            },
+            {
+                "id": "w3",
+                "name": "write_file",
+                "args": {
+                    "path": "demo_project/test_main.py",
+                    "content": (
+                        "# Sibling-import: test runs from inside demo_project/,\n"
+                        "# so main.py is on sys.path without needing a package.\n"
+                        "from main import greet\n\n"
+                        "def test_greet() -> None:\n"
+                        "    assert greet() == 'hello'\n"
+                    ),
+                },
+            },
         ]
         turns = [
             FakeTurn(message=AIMessage(content="", tool_calls=write_calls)),
             FakeTurn(message=AIMessage(content="Project scaffolded.")),
         ]
 
-        cfg = AuraConfig.model_validate({
-            "providers": [{"name": "openai", "protocol": "openai"}],
-            "router": {"default": "openai:gpt-4o-mini"},
-            "tools": {"enabled": ["write_file"]},
-        })
+        cfg = AuraConfig.model_validate(
+            {
+                "providers": [{"name": "openai", "protocol": "openai"}],
+                "router": {"default": "openai:gpt-4o-mini"},
+                "tools": {"enabled": ["write_file"]},
+            }
+        )
         agent = AgentSession(
             config=cfg,
             model=FakeChatModel(turns=turns),
@@ -270,26 +283,26 @@ async def scenario_write_project(tmp: Path) -> bool:
             "demo_project/README.md exists",
             (demo / "README.md").is_file(),
         )
-        ok = _check(
-            "demo_project/main.py exists + has greet()",
-            (demo / "main.py").is_file()
-            and "def greet" in (demo / "main.py").read_text(),
-        ) and ok
-        ok = _check(
-            "demo_project/test_main.py exists + has test",
-            (demo / "test_main.py").is_file()
-            and "def test_greet" in (demo / "test_main.py").read_text(),
-        ) and ok
+        ok = (
+            _check(
+                "demo_project/main.py exists + has greet()",
+                (demo / "main.py").is_file() and "def greet" in (demo / "main.py").read_text(),
+            )
+            and ok
+        )
+        ok = (
+            _check(
+                "demo_project/test_main.py exists + has test",
+                (demo / "test_main.py").is_file()
+                and "def test_greet" in (demo / "test_main.py").read_text(),
+            )
+            and ok
+        )
 
         agent.close()
         return ok
     finally:
         os.chdir(original_cwd)
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 
 async def _amain() -> int:

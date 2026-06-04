@@ -1,9 +1,4 @@
-"""Filesystem-defined subagent type registry.
-
-Built-in :class:`AgentDef` instances are merged with user-supplied markdown
-files under ``.aura/agents/``. Filesystem entries override built-ins so a
-project can customise (e.g. ``explore``'s prompt) without touching Aura code.
-"""
+"""Subagent type registry merging built-in AgentDefs with filesystem overrides."""
 
 from aura.infrastructure.agents.builtin import builtin_agents
 from aura.infrastructure.agents.loader import (

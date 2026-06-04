@@ -106,10 +106,7 @@ def _format_streamed(tail_bytes: bytes, total: int) -> tuple[str, bool]:
         return tail_bytes.decode("utf-8", errors="replace"), False
     dropped = total - len(tail_bytes)
     tail = tail_bytes.decode("utf-8", errors="replace")
-    marker = (
-        f"… ({dropped} bytes truncated; showing last {_MAX_OUTPUT_BYTES} "
-        f"of {total})\n"
-    )
+    marker = f"… ({dropped} bytes truncated; showing last {_MAX_OUTPUT_BYTES} of {total})\n"
     return marker + tail, True
 
 
@@ -233,11 +230,8 @@ class Bash(Tool):
     def _run(self, command: str, timeout: int = _DEFAULT_TIMEOUT) -> BashResult:
         raise NotImplementedError("bash is async-only; use `await bash.ainvoke(...)`")
 
-    async def _arun(
-        self, command: str, timeout: int = _DEFAULT_TIMEOUT
-    ) -> BashResult:
-        # New session/group: isolate Ctrl-C from agent TTY and enable killpg of the whole group.
-        # Heterogeneous by-platform: creationflags(int) | start_new_session(bool).
+    async def _arun(self, command: str, timeout: int = _DEFAULT_TIMEOUT) -> BashResult:
+        # New session/group: isolate Ctrl-C from the agent TTY and enable killpg of the group.
         spawn_kwargs: dict[str, Any] = {}
         if sys.platform == "win32":
             spawn_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -270,9 +264,7 @@ class Bash(Tool):
                 await gather_fut
 
         try:
-            stdout_result, stderr_result = await asyncio.wait_for(
-                gather_fut, timeout=timeout
-            )
+            stdout_result, stderr_result = await asyncio.wait_for(gather_fut, timeout=timeout)
         except TimeoutError as exc:
             await _cleanup()
             await _shutdown(proc)

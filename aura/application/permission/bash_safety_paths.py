@@ -7,7 +7,6 @@ import os
 from aura.application.permission.bash_safety_lex import _expand_braces
 
 # System-owned prefixes — writing under any is a Tier A hard floor even with user grant.
-# Intentionally omitted: /var (legit log/tmp subtrees), /opt (user-installed), /tmp (scratch).
 _SYSTEM_PATH_PREFIXES: tuple[str, ...] = (
     "/etc",
     "/usr",
@@ -25,19 +24,19 @@ _SYSTEM_PATH_PREFIXES: tuple[str, ...] = (
 )
 
 # /dev/... targets that are legitimate output discards / tty handles.
-_SAFE_DEV_TARGETS: frozenset[str] = frozenset({
-    "/dev/null",
-    "/dev/stdout",
-    "/dev/stderr",
-    "/dev/tty",
-    "/dev/fd",
-})
+_SAFE_DEV_TARGETS: frozenset[str] = frozenset(
+    {
+        "/dev/null",
+        "/dev/stdout",
+        "/dev/stderr",
+        "/dev/tty",
+        "/dev/fd",
+    }
+)
 
 
 def _is_system_path(path: str) -> bool:
-    """Tilde + env-var + brace expansion BEFORE prefix scan; glob (``/etc/*``)
-    still not resolved. If any brace alternative is a system path, the
-    whole expression is treated as one."""
+    """True if any tilde/env-var/brace expansion of ``path`` lands under a system prefix."""
     if not path:
         return False
     cleaned = path.strip("\"'")

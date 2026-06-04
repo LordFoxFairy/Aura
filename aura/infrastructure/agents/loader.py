@@ -1,24 +1,4 @@
-"""Filesystem loader for subagent type definitions.
-
-Built-in defs are merged with user-supplied markdown files under
-``.aura/agents/`` in the project root. Filesystem entries override
-built-ins (so a project can customise ``explore``'s prompt without
-touching Aura code).
-
-Format: markdown with YAML frontmatter::
-
-    ---
-    name: research
-    description: Deep-research subagent for long-context lookups.
-    tools: [read_file, grep, glob, web_fetch, web_search]
-    ---
-    You are a **Research** subagent. Take your time. Cite sources.
-
-Minimum required keys: ``name`` + ``description``. ``tools`` is optional
-(omitted → empty frozenset → "inherit all"); the markdown body becomes
-the ``system_prompt_suffix``. Unknown keys are ignored. Malformed files
-journal + skip; built-ins always remain available.
-"""
+"""Loader for filesystem subagent defs under .aura/agents/, overriding built-ins."""
 
 from __future__ import annotations
 
@@ -41,7 +21,6 @@ _FRONTMATTER_RE = re.compile(
 
 
 def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
-    """Split a markdown string into ``(frontmatter_dict, body)``."""
     match = _FRONTMATTER_RE.match(text)
     if match is None:
         return {}, text
@@ -59,7 +38,8 @@ def _agent_from_file(path: Path) -> AgentDef | None:
     except OSError as exc:
         journal.write(
             "agent_loader_read_error",
-            path=str(path), error=f"{type(exc).__name__}: {exc}",
+            path=str(path),
+            error=f"{type(exc).__name__}: {exc}",
         )
         return None
     fm, body = _parse_frontmatter(text)
@@ -68,7 +48,9 @@ def _agent_from_file(path: Path) -> AgentDef | None:
     if not name or not description:
         journal.write(
             "agent_loader_missing_fields",
-            path=str(path), has_name=bool(name), has_description=bool(description),
+            path=str(path),
+            has_name=bool(name),
+            has_description=bool(description),
         )
         return None
     tools_raw = fm.get("tools") or []
@@ -85,12 +67,7 @@ def _agent_from_file(path: Path) -> AgentDef | None:
 
 
 def load_agents(cwd: Path | str | None = None) -> dict[str, AgentDef]:
-    """Return ``{name: AgentDef}`` — built-ins merged with user files.
-
-    ``cwd`` is the project root searched for ``.aura/agents/*.md`` (defaults
-    to the current working directory). Filesystem entries override built-ins
-    of the same name.
-    """
+    """Built-ins merged with .aura/agents/*.md files, which override by name."""
     out = builtin_agents()
     base = Path(cwd) if cwd is not None else Path.cwd()
     agents_dir = base / _AGENTS_SUBDIR
@@ -101,7 +78,8 @@ def load_agents(cwd: Path | str | None = None) -> dict[str, AgentDef]:
     except OSError as exc:
         journal.write(
             "agent_loader_dir_error",
-            dir=str(agents_dir), error=f"{type(exc).__name__}: {exc}",
+            dir=str(agents_dir),
+            error=f"{type(exc).__name__}: {exc}",
         )
         return out
     for path in files:
@@ -112,11 +90,7 @@ def load_agents(cwd: Path | str | None = None) -> dict[str, AgentDef]:
 
 
 def get_agent_def(name: str, cwd: Path | str | None = None) -> AgentDef:
-    """Lookup an :class:`AgentDef` by name; raise ``ValueError`` if missing.
-
-    Error message enumerates valid names so the LLM (which sees this via
-    ToolError) can self-correct.
-    """
+    """Lookup by name; error enumerates valid names so the LLM can self-correct."""
     registry = load_agents(cwd)
     if name not in registry:
         valid = ", ".join(sorted(registry.keys()))

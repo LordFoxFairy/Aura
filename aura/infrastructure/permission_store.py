@@ -1,13 +1,4 @@
-"""Permission persistence — ``./.aura/settings{,.local}.json`` load/save.
-
-Merge invariants (load):
-
-- scalars (``mode`` / ``prompt_timeout_sec`` / ``statusline``) — local wins when set
-- lists (``allow`` / ``deny`` / ``ask`` / ``safety_exempt``) — concatenated, project first
-- ``disable_bypass`` — OR (local cannot relax a project kill switch)
-- unknown keys under ``permissions`` raise ``AuraConfigError`` naming the file
-- non-``permissions`` top-level sections are preserved on write
-"""
+"""Permission persistence — load/save of ./.aura/settings{,.local}.json."""
 
 from __future__ import annotations
 
@@ -59,11 +50,13 @@ def _read_top_level(settings: Path) -> dict[str, Any]:
         raw = json.loads(settings.read_text())
     except json.JSONDecodeError as exc:
         raise AuraConfigError(
-            source=str(settings), detail=f"invalid JSON: {exc}",
+            source=str(settings),
+            detail=f"invalid JSON: {exc}",
         ) from exc
     if not isinstance(raw, dict):
         raise AuraConfigError(
-            source=str(settings), detail="top-level JSON must be an object",
+            source=str(settings),
+            detail="top-level JSON must be an object",
         )
     return raw
 
@@ -111,33 +104,27 @@ def _validate_safety_exempt(cfg: PermissionsConfig, source: Path) -> None:
 
     home = str(Path.home())
     samples = [
-        s.replace("~", home, 1) if s.startswith("~") else s
-        for s in _PROTECTED_OVERLAP_SAMPLES
+        s.replace("~", home, 1) if s.startswith("~") else s for s in _PROTECTED_OVERLAP_SAMPLES
     ]
     protected_names: list[tuple[str, pathspec.PathSpec]] = []
     for protected in (*DEFAULT_PROTECTED_WRITES, *DEFAULT_PROTECTED_READS):
-        expanded = (
-            protected.replace("~", home, 1)
-            if protected.startswith("~")
-            else protected
+        expanded = protected.replace("~", home, 1) if protected.startswith("~") else protected
+        protected_names.append(
+            (
+                protected,
+                pathspec.PathSpec.from_lines("gitignore", [expanded]),
+            )
         )
-        protected_names.append((
-            protected,
-            pathspec.PathSpec.from_lines("gitignore", [expanded]),
-        ))
 
     for pattern in cfg.safety_exempt:
-        expanded_pat = (
-            pattern.replace("~", home, 1) if pattern.startswith("~") else pattern
-        )
+        expanded_pat = pattern.replace("~", home, 1) if pattern.startswith("~") else pattern
         try:
             spec = pathspec.PathSpec.from_lines("gitignore", [expanded_pat])
         except Exception as exc:  # noqa: BLE001  # any pathspec parser failure surfaces as config error
             raise AuraConfigError(
                 source=str(source),
                 detail=(
-                    f"safety_exempt pattern {pattern!r} is not a valid "
-                    f"gitignore-style glob: {exc}"
+                    f"safety_exempt pattern {pattern!r} is not a valid gitignore-style glob: {exc}"
                 ),
             ) from exc
         for sample in samples:
@@ -173,18 +160,9 @@ def load(project_root: Path) -> PermissionsConfig:
 
     merged: dict[str, Any] = {
         "mode": local_raw.get("mode") or project_raw.get("mode") or "default",
-        "allow": (
-            list(project_raw.get("allow") or [])
-            + list(local_raw.get("allow") or [])
-        ),
-        "deny": (
-            list(project_raw.get("deny") or [])
-            + list(local_raw.get("deny") or [])
-        ),
-        "ask": (
-            list(project_raw.get("ask") or [])
-            + list(local_raw.get("ask") or [])
-        ),
+        "allow": (list(project_raw.get("allow") or []) + list(local_raw.get("allow") or [])),
+        "deny": (list(project_raw.get("deny") or []) + list(local_raw.get("deny") or [])),
+        "ask": (list(project_raw.get("ask") or []) + list(local_raw.get("ask") or [])),
         "safety_exempt": (
             list(project_raw.get("safety_exempt") or [])
             + list(local_raw.get("safety_exempt") or [])
@@ -223,10 +201,7 @@ def _validate_known_tools(
         hint = f"; did you mean {suggestions[0]!r}?" if suggestions else ""
         raise AuraConfigError(
             source=source,
-            detail=(
-                f"unknown tool name in rule {rule.to_string()!r}: "
-                f"{rule.tool!r}{hint}"
-            ),
+            detail=(f"unknown tool name in rule {rule.to_string()!r}: {rule.tool!r}{hint}"),
         )
 
 
@@ -343,9 +318,9 @@ def ensure_local_settings(project_root: Path) -> tuple[Path, bool]:
             "permissions.allow to auto-approve tool calls without a "
             "prompt. Glob metachars (* and ?) are supported in rule "
             "content, so one rule covers a whole family. Examples: "
-            "\"bash(npm test)\" (exact), \"bash(npm install *)\" (glob — "
-            "covers every npm install variant), \"bash(ls *)\" (any ls), "
-            "\"read_file(/tmp)\" (path prefix), \"grep\" (tool-wide)."
+            '"bash(npm test)" (exact), "bash(npm install *)" (glob — '
+            'covers every npm install variant), "bash(ls *)" (any ls), '
+            '"read_file(/tmp)" (path prefix), "grep" (tool-wide).'
         ),
         "permissions": {
             "allow": [],

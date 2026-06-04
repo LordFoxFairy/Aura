@@ -62,8 +62,7 @@ def _extract_token_usage(ai_message: AIMessage) -> dict[str, int]:
     """Per-turn input/output/cache-read counts; missing fields degrade to 0."""
     out = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
 
-    # isinstance guards: usage_metadata is typed UsageMetadata|None, but a
-    # non-conforming provider (DashScope/Ollama) can hand back malformed values.
+    # isinstance guards: a non-conforming provider can hand back malformed values.
     usage = ai_message.usage_metadata
     if usage is not None:
         input_tokens = usage.get("input_tokens")
@@ -106,9 +105,7 @@ def make_usage_tracking_hook() -> PostModelHook:
                 if isinstance(ai_content, str)
                 else estimate_text_tokens(str(ai_content))
             )
-            state.total_tokens_used += (
-                per_turn["input_tokens"] + per_turn["output_tokens"]
-            )
+            state.total_tokens_used += per_turn["input_tokens"] + per_turn["output_tokens"]
 
         prev = state.slots.token_stats
         new_stats = TokenStats(
@@ -117,9 +114,7 @@ def make_usage_tracking_hook() -> PostModelHook:
             last_cache_read_tokens=per_turn["cache_read_tokens"],
             total_input_tokens=prev.total_input_tokens + per_turn["input_tokens"],
             total_output_tokens=prev.total_output_tokens + per_turn["output_tokens"],
-            total_cache_read_tokens=(
-                prev.total_cache_read_tokens + per_turn["cache_read_tokens"]
-            ),
+            total_cache_read_tokens=(prev.total_cache_read_tokens + per_turn["cache_read_tokens"]),
             turn_count=prev.turn_count + 1,
         )
         state.slots = dataclasses.replace(state.slots, token_stats=new_stats)
@@ -152,7 +147,8 @@ def default_hooks(
         post_model=[make_usage_tracking_hook()],
         post_tool=[
             make_size_budget_hook(
-                max_chars=max_result_size_chars, spill_dir=spill_dir,
+                max_chars=max_result_size_chars,
+                spill_dir=spill_dir,
             ),
         ],
     )

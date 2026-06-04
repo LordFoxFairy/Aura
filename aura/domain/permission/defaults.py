@@ -1,8 +1,4 @@
-"""Built-in default allow-rules merged with user rules at startup.
-
-Local-FS reads flow through the normal allow path (audit + safety still apply).
-ask_user_question is here because its own UI is the consent moment.
-"""
+"""Built-in default allow-rules merged with user rules at startup."""
 
 from __future__ import annotations
 

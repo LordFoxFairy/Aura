@@ -1,14 +1,4 @@
-"""Real-LLM end-to-end scenarios. Driven via subprocess + stdin pipe.
-
-Runs ``uv run aura`` with controlled inputs, asserts on captured output.
-Every scenario hits the REAL configured model (no FakeChatModel).
-
-Usage: ``uv run python scripts/verify_real_llm.py``
-       ``uv run python scripts/verify_real_llm.py --help``
-
-Requires: provider SDK installed (e.g. ``uv sync --extra all``) and the
-right API key env var (e.g. ``DEEPSEEK_API_KEY``). Run from repo root.
-"""
+"""Real-LLM end-to-end scenarios driven via ``uv run aura`` subprocess + stdin pipe."""
 
 from __future__ import annotations
 
@@ -77,13 +67,10 @@ def scenario(name: str):
                 sub_icon = "  ✓" if ok else "  ✗"
                 color = "\033[32m" if ok else "\033[31m"
                 print(f"    {color}{sub_icon}\033[0m {label}")
+
         return _runner
+
     return _wrap
-
-
-# ---------------------------------------------------------------------------
-# 1–6: slash commands (no LLM)
-# ---------------------------------------------------------------------------
 
 
 @scenario("boot + /help lists commands")
@@ -122,8 +109,7 @@ def s4(sc: Scenario) -> None:
     rc, out = _run(["/tasks"])
     sc.output = out
     sc.check("process exited 0", rc == 0)
-    # Either "no tasks" or just the aura> prompt reprinted — both acceptable;
-    # main assertion is it didn't crash.
+    # Empty list or a reprinted prompt are both fine; the assertion is "didn't crash".
     sc.check("no traceback", "Traceback" not in out)
 
 
@@ -141,11 +127,6 @@ def s6(sc: Scenario) -> None:
     sc.output = out
     sc.check("process exited 0", rc == 0)
     sc.check("no traceback", "Traceback" not in out)
-
-
-# ---------------------------------------------------------------------------
-# 7–12: real LLM scenarios
-# ---------------------------------------------------------------------------
 
 
 @scenario("real LLM: one-word reply")
@@ -170,9 +151,7 @@ def s8(sc: Scenario) -> None:
     sc.check("read_file tool invoked", "read_file" in out)
     sc.check(
         "README content surfaced",
-        ("# Aura" in out)
-        or ("lightweight Python agent" in out)
-        or ("README.md" in out),
+        ("# Aura" in out) or ("lightweight Python agent" in out) or ("README.md" in out),
     )
     sc.check("allowed: mode_bypass annotation", "mode_bypass" in out)
 
@@ -200,8 +179,7 @@ def s10(sc: Scenario) -> None:
         target.unlink()
     rc, out = _run(
         [
-            "write a file at tmp/llm_wrote_this.txt "
-            "containing the single line 'hello from llm'",
+            "write a file at tmp/llm_wrote_this.txt containing the single line 'hello from llm'",
         ],
         bypass=True,
         timeout=90,
@@ -232,8 +210,7 @@ def s11(sc: Scenario) -> None:
     sc.output = out
     sc.check("process exited 0", rc == 0)
     sc.check("task_create tool invoked", "task_create" in out)
-    # LLM may use agent_type="explore" or default — either is valid parity.
-    # The core assertion is "task dispatch actually happened".
+    # The core assertion is that a task dispatch actually happened.
     sc.check(
         "subagent dispatched (task_id or created marker present)",
         ("task_id" in out.lower())
@@ -244,8 +221,7 @@ def s11(sc: Scenario) -> None:
 
 @scenario("skill /superpowers slash invocation")
 def s12(sc: Scenario) -> None:
-    # /superpowers expects a positional arg per its `arguments: [bug_description]`
-    # frontmatter. We pipe it with a description, then /exit.
+    # /superpowers expects a positional arg per its `arguments: [bug_description]`.
     rc, out = _run(
         ["/superpowers auth login returns 500 on fresh user"],
         timeout=90,
@@ -253,11 +229,6 @@ def s12(sc: Scenario) -> None:
     sc.output = out
     sc.check("process exited 0", rc == 0)
     sc.check("no traceback", "Traceback" not in out)
-
-
-# ---------------------------------------------------------------------------
-# main
-# ---------------------------------------------------------------------------
 
 
 def main() -> int:

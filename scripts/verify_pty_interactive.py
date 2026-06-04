@@ -1,18 +1,8 @@
-"""PTY-driven interactive scenarios.
-
-Exercises the slices ``verify_real_llm.py`` can't reach because they
-need real keystrokes (arrow keys, Tab, Esc) delivered over a real
-terminal. Uses stdlib ``pty`` + ``select`` — no external deps.
-
-Scenarios:
-1. shift+tab cycles mode silently (no scrollback spam)
-2. bash tool under default mode triggers asker widget (real LLM call)
-
-Usage: ``uv run python scripts/verify_pty_interactive.py`` (configured env).
-"""
+"""PTY-driven interactive scenarios needing real keystrokes (arrow/Tab/Esc) over a terminal."""
 
 from __future__ import annotations
 
+import contextlib
 import os
 import pty
 import re
@@ -49,10 +39,7 @@ class _Pty:
     def expect(self, needle: str | re.Pattern, timeout: float = 10.0) -> str:
         """Read until needle appears; return captured text."""
         deadline = time.time() + timeout
-        pattern = (
-            needle if isinstance(needle, re.Pattern)
-            else re.compile(re.escape(needle))
-        )
+        pattern = needle if isinstance(needle, re.Pattern) else re.compile(re.escape(needle))
         while time.time() < deadline:
             r, _, _ = select.select([self.master_fd], [], [], 0.3)
             if r:
@@ -95,7 +82,6 @@ class _Pty:
             return None
 
     def close(self) -> None:
-        import contextlib
         with contextlib.suppress(OSError):
             os.close(self.master_fd)
         if self.proc.poll() is None:
@@ -111,8 +97,7 @@ def _ok(label: str, cond: bool) -> bool:
 
 
 def scenario_shift_tab_silent() -> bool:
-    """Send \\x1b[Z (shift+tab) three times and /exit. Assert zero scrollback
-    spam (no ``mode: X (press shift+tab…)`` lines in captured output)."""
+    """Cycling mode via shift+tab must not emit scrollback spam."""
     print("\n[1/2] shift+tab cycles mode silently — no scrollback spam")
     pty_ = _Pty(["uv", "run", "aura"])
     try:
@@ -133,25 +118,26 @@ def scenario_shift_tab_silent() -> bool:
         pty_.close()
 
     ok = _ok("process exited cleanly", rc is not None) and ok
-    ok = _ok(
-        "no 'mode: ... press shift+tab to cycle' spam",
-        "press shift+tab to cycle" not in tail,
-    ) and ok
-    ok = _ok(
-        "no 'mode:' scrollback spam at all",
-        "mode:" not in tail.replace("mode: deepseek", "").replace(
-            "model: deepseek", ""
-        ),
-    ) and ok
+    ok = (
+        _ok(
+            "no 'mode: ... press shift+tab to cycle' spam",
+            "press shift+tab to cycle" not in tail,
+        )
+        and ok
+    )
+    ok = (
+        _ok(
+            "no 'mode:' scrollback spam at all",
+            "mode:" not in tail.replace("mode: deepseek", "").replace("model: deepseek", ""),
+        )
+        and ok
+    )
     ok = _ok("no Python traceback", "Traceback (most" not in tail) and ok
     return ok
 
 
 def scenario_asker_widget_appears_under_real_llm() -> bool:
-    """Real LLM + default mode: LLM issues bash tool_call → asker widget
-    renders on the pty. Assert the widget's tell-tale signature appears
-    (numbered options / question text). Then send Esc to cancel so we
-    don't block on real approval (we only care that the WIDGET shipped)."""
+    """A real-LLM bash tool_call under default mode must render the asker widget."""
     print("\n[2/2] asker widget renders on real LLM tool-call (default mode)")
     pty_ = _Pty(["uv", "run", "aura"], boot_timeout=15.0)
     try:
@@ -161,24 +147,24 @@ def scenario_asker_widget_appears_under_real_llm() -> bool:
             return False
         # Real LLM turn: ask for a command that requires bash.
         pty_.send("run bash with command 'echo hello'\r")
-        # Wait for the widget to render. Its format includes numbered
-        # options like " 1. Yes " / " 4. No ". Look for "Run" question
-        # header OR any of the standard choice labels.
+        # Match the widget's question header or any standard choice label.
         widget = pty_.expect(
             re.compile(r"(Run bash|\s1\.\s|Yes,\s+and\s+always|\sNo\b)"),
             timeout=90.0,
         )
-        ok = _ok("asker widget rendered (found option label)",
-                 bool(re.search(
-                     r"(Run bash|\s1\.\s|Yes,\s+and\s+always|\sNo\b)",
-                     widget,
-                 ))) and ok
-        # We've proven the core claim (widget rendered under real LLM +
-        # default mode + bash tool_call). Dismissing the interactive
-        # widget from a piloted pty across widget-key-binding variants
-        # is fragile and orthogonal to what we're testing — the finally
-        # block's SIGKILL handles cleanup. Read a bit more of the buffer
-        # so we can still assert no traceback fired.
+        ok = (
+            _ok(
+                "asker widget rendered (found option label)",
+                bool(
+                    re.search(
+                        r"(Run bash|\s1\.\s|Yes,\s+and\s+always|\sNo\b)",
+                        widget,
+                    )
+                ),
+            )
+            and ok
+        )
+        # Don't dismiss the widget (fragile across key-binding variants); finally SIGKILLs.
         tail = pty_.read_all(timeout=3.0)
     finally:
         pty_.close()

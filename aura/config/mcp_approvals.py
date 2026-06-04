@@ -1,26 +1,4 @@
-"""User-scope approval store for project-layer MCP servers (RCE-gate).
-
-File format (~/.aura/mcp-approvals.json, schema v1)::
-
-    {
-      "version": 1,
-      "approvals": {
-        "<project_path_abs>": {
-          "<server_name>": {
-            "fingerprint": "<sha256-hex>",
-            "approved_at": "<iso8601-utc>"
-          }
-        }
-      }
-    }
-
-Invariants:
-  - Fingerprint covers transport + command + args + sorted env KEYS (not
-    values, so token rotation doesn't invalidate; key-set changes do).
-  - Writes go through os.replace after fsync; partial writes never observed.
-  - Malformed reads journal + return empty (re-prompt is safer than honoring).
-  - User-scope mcp_servers.json is NOT gated; only project-layer entries are.
-"""
+"""User-scope approval store gating project-layer MCP servers against RCE."""
 
 from __future__ import annotations
 
@@ -46,7 +24,7 @@ def approvals_path() -> Path:
 
 
 def project_key(cwd: Path | None = None) -> str:
-    # Resolve symlinks so ~/work/foo reached via /Volumes/dev/foo maps the same.
+    # Resolve symlinks so the same dir reached via two paths maps identically.
     base = cwd if cwd is not None else Path.cwd()
     try:
         return str(base.resolve())
@@ -99,8 +77,7 @@ def _load_raw() -> dict[str, Any]:
 
 
 def _normalise(raw: dict[str, Any]) -> dict[str, dict[str, _Approval]]:
-    # Forward-compatible: unknown top-level keys ignored, malformed entries
-    # dropped so hand-edits can't take the agent down.
+    # Drop malformed entries so hand-edits can't take the agent down.
     out: dict[str, dict[str, _Approval]] = {}
     approvals = raw.get("approvals")
     if not isinstance(approvals, dict):
@@ -136,13 +113,11 @@ def is_approved(cfg: MCPServerConfig, *, project: str | None = None) -> bool:
 
 
 def approval_state(
-    cfg: MCPServerConfig, *, project: str | None = None,
+    cfg: MCPServerConfig,
+    *,
+    project: str | None = None,
 ) -> str:
-    """Return ``"approved"`` / ``"changed"`` / ``"unapproved"``.
-
-    Tristate so callers can distinguish cold first-run from stale approval
-    (config drifted since approval).
-    """
+    """Tristate so callers distinguish cold first-run from drifted approval."""
     bucket = load_for_project(project=project)
     entry = bucket.get(cfg.name)
     if entry is None:
@@ -157,7 +132,9 @@ def _atomic_write(payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # delete=False: we rename the temp out from under the fd before close.
     fd, tmp_name = tempfile.mkstemp(
-        prefix=".mcp-approvals.", suffix=".tmp", dir=str(path.parent),
+        prefix=".mcp-approvals.",
+        suffix=".tmp",
+        dir=str(path.parent),
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -175,10 +152,11 @@ def _atomic_write(payload: dict[str, Any]) -> None:
 
 
 def approve(
-    cfg: MCPServerConfig, *, project: str | None = None,
+    cfg: MCPServerConfig,
+    *,
+    project: str | None = None,
 ) -> None:
     # Idempotent: re-approving refreshes fingerprint + timestamp.
-    # Last-writer-wins on concurrent calls but neither is corrupted.
     raw = _load_raw()
     approvals = raw.get("approvals")
     if not isinstance(approvals, dict):
@@ -211,8 +189,7 @@ def revoke(name: str, *, project: str | None = None) -> bool:
         return False
     del bucket[name]
     if not bucket:
-        # Drop empty bucket so the file doesn't accumulate stale projects.
-        del approvals[key]
+        del approvals[key]  # drop empty bucket so the file doesn't accumulate stale projects
     payload = {
         "version": _SCHEMA_VERSION,
         "approvals": approvals,

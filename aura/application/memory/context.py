@@ -74,17 +74,13 @@ class Context:
         self._nested_fragments: list[NestedFragment] = []
         self._matched_rule_paths: set[Path] = set()
         self._matched_rules: list[Rule] = []
-        # _skills_available is static (constructor-injected); _invoked_skills is
-        # append-only via record_skill_invocation, dedup by source_path.
         self._skills_available: list[Skill] = list(skills) if skills else []
         self._invoked_skill_paths: set[Path] = set()
         self._invoked_skills: list[Skill] = []
-        # Must-read-first invariant: edit_file requires a prior read_file on the
-        # same resolved path AND the file unchanged since. (mtime, size) compared
-        # — lighter than content hash, equivalent in practice.
+        # Must-read-first: edit needs a prior read of the same path, unchanged since (mtime, size).
         self._read_records: dict[Path, ReadRecord] = {}
         if carryover is not None:
-            # Parent's full reads become non-partial seeds.
+            # Parent's full reads seed as non-partial.
             for path, record in carryover.records.items():
                 self._read_records[path] = ReadRecord(
                     mtime=record.mtime_at_read,
@@ -103,13 +99,7 @@ class Context:
         carryover: ReadCarryover | None = None,
         clear_reads: bool = False,
     ) -> Context:
-        """New Context with empty progressive state; `/clear` and `/compact` use this.
-
-        `carryover` seeds `_read_records` from a parent AgentSession's snapshot (subagent
-        spawn). `clear_reads=True` wipes them outright (`/clear`). The two are
-        mutually exclusive. Default preserves reads — the file is still on disk
-        after a compact.
-        """
+        """New Context, empty progressive state; carryover seeds reads or clear_reads wipes them."""
         if carryover is not None and clear_reads:
             raise ValueError(
                 "fresh(): pass either carryover or clear_reads=True, not both",
@@ -129,8 +119,7 @@ class Context:
         if clear_reads:
             new_ctx._read_records = {}
         elif carryover is None:
-            # Shallow copy so the old instance (alive in journal-replay paths)
-            # doesn't retroactively see new records.
+            # Copy so the old instance (alive in journal-replay) won't see new records.
             new_ctx._read_records = dict(self._read_records)
         return new_ctx
 
@@ -190,11 +179,14 @@ class Context:
         except OSError:
             return
         self._read_records[resolved] = ReadRecord(
-            mtime=st.st_mtime, size=st.st_size, partial=partial,
+            mtime=st.st_mtime,
+            size=st.st_size,
+            partial=partial,
         )
 
     def read_status(
-        self, path: Path,
+        self,
+        path: Path,
     ) -> Literal["never_read", "stale", "partial", "fresh"]:
         """Read-state vs session: stale = fingerprint differs or path gone; partial = sliced."""
         try:
@@ -284,30 +276,24 @@ class Context:
     def _nested_fragment_messages(self) -> list[BaseMessage]:
         return [
             HumanMessage(
-                f'<nested-memory path="{fragment.source}">\n'
-                f"{fragment.content}\n"
-                "</nested-memory>"
+                f'<nested-memory path="{fragment.source}">\n{fragment.content}\n</nested-memory>'
             )
             for fragment in self._nested_fragments
         ]
 
     def _rule_messages(self) -> list[BaseMessage]:
         return [
-            HumanMessage(
-                f'<rule src="{rule.source_path}">\n'
-                f"{rule.content}\n"
-                "</rule>"
-            )
+            HumanMessage(f'<rule src="{rule.source_path}">\n{rule.content}\n</rule>')
             for rule in self._matched_rules
         ]
 
     def _skill_messages(self, bp: _Breakpointer) -> list[BaseMessage]:
         messages: list[BaseMessage] = []
-        # Sorted by name so set-preserving registry reorderings don't churn the
-        # prompt-cache prefix. Hides user-only and unactivated-conditional skills.
+        # Sorted by name so registry reorderings don't churn the prompt-cache prefix.
         visible_skills = sorted(
             (
-                s for s in self._skills_available
+                s
+                for s in self._skills_available
                 if not s.disable_model_invocation and not s.is_conditional()
             ),
             key=lambda s: s.name,
@@ -320,19 +306,13 @@ class Context:
                     line += f" [when to use: {s.when_to_use}]"
                 available_lines.append(line)
             skills_msg = HumanMessage(
-                "<skills-available>\n"
-                + "\n".join(available_lines)
-                + "\n</skills-available>"
+                "<skills-available>\n" + "\n".join(available_lines) + "\n</skills-available>"
             )
             bp.stamp(skills_msg)
             messages.append(skills_msg)
         for skill in self._invoked_skills:
             messages.append(
-                HumanMessage(
-                    f'<skill-invoked name="{skill.name}">\n'
-                    f"{skill.body}\n"
-                    "</skill-invoked>"
-                )
+                HumanMessage(f'<skill-invoked name="{skill.name}">\n{skill.body}\n</skill-invoked>')
             )
         return messages
 

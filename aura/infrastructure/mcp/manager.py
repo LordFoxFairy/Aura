@@ -21,12 +21,15 @@ from pydantic import AnyUrl
 
 from aura.application.commands.types import Command
 from aura.config import mcp_approvals, mcp_store
-from aura.config.env import expand_env_vars
 from aura.config.schema import AuraConfigError
 from aura.infrastructure.mcp.adapter import (
     add_aura_metadata,
     make_mcp_command,
     normalize_resource_contents,
+)
+from aura.infrastructure.mcp.connection_builder import (
+    build_connections,
+    build_one_connection,
 )
 from aura.infrastructure.mcp.types import (
     MCPServerConfig,
@@ -558,73 +561,15 @@ class MCPManager:
         self._client = None
 
     def _build_connections(self) -> dict[str, Any]:
-        connections: dict[str, Any] = {}
-        for cfg in self._configs:
-            connections.update(self._build_one_connection(cfg))
-        return connections
+        return build_connections(
+            self._configs, message_handler_for=_make_list_changed_logger
+        )
 
     @staticmethod
     def _build_one_connection(cfg: MCPServerConfig) -> dict[str, Any]:
-        """Build one library ``connections`` entry with env expansion + audit hook.
-
-        Invariant: an unresolved ``${VAR}`` with no default raises
-        :class:`RuntimeError` rather than silently substituting empty.
-        """
-        missing: list[str] = []
-
-        def _expand(text: str | None) -> str | None:
-            if text is None:
-                return None
-            return expand_env_vars(text, _missing_log=missing)
-
-        session_kwargs = {
-            "message_handler": _make_list_changed_logger(cfg.name),
-        }
-
-        if cfg.transport == "stdio":
-            command = _expand(cfg.command)
-            args = [expand_env_vars(a, _missing_log=missing) for a in cfg.args]
-            env_raw = cfg.env or {}
-            env = {
-                k: expand_env_vars(v, _missing_log=missing)
-                for k, v in env_raw.items()
-            }
-            if missing:
-                raise RuntimeError(
-                    f"MCP server {cfg.name!r}: unresolved environment "
-                    f"variable(s) in stdio config: "
-                    f"{sorted(set(missing))} "
-                    "(define them in the parent shell or supply "
-                    "${VAR:-default})"
-                )
-            return {
-                cfg.name: {
-                    "transport": "stdio",
-                    "command": command,
-                    "args": args,
-                    "env": env if env else None,
-                    "session_kwargs": session_kwargs,
-                }
-            }
-        conn: dict[str, Any] = {
-            "transport": cfg.transport,
-            "url": _expand(cfg.url),
-            "session_kwargs": session_kwargs,
-        }
-        if cfg.headers:
-            conn["headers"] = {
-                k: expand_env_vars(v, _missing_log=missing)
-                for k, v in cfg.headers.items()
-            }
-        if missing:
-            raise RuntimeError(
-                f"MCP server {cfg.name!r}: unresolved environment "
-                f"variable(s) in {cfg.transport} config: "
-                f"{sorted(set(missing))} "
-                "(define them in the parent shell or supply "
-                "${VAR:-default})"
-            )
-        return {cfg.name: conn}
+        return build_one_connection(
+            cfg, message_handler_for=_make_list_changed_logger
+        )
 
     def _config_by_name(self, name: str) -> MCPServerConfig | None:
         for cfg in self._configs_all:

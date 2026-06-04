@@ -7,7 +7,8 @@ import io
 from rich.console import Console
 
 from aura.domain.events import PermissionAudit, ToolCallCompleted, ToolCallStarted
-from cli.render import Renderer, _hint_for_error, _render_tool_error
+from aura.tools.errors import hint_for_error
+from cli.render import Renderer, _render_tool_error
 
 
 def _capture() -> tuple[Renderer, io.StringIO]:
@@ -34,25 +35,25 @@ def test_error_panel_includes_tool_name() -> None:
 
 
 def test_hint_matched_for_not_found() -> None:
-    hint = _hint_for_error("read_file", "not found: missing.py")
+    hint = hint_for_error("read_file", "not found: missing.py")
     assert hint is not None
     assert "path" in hint.lower()
 
 
 def test_hint_matched_for_must_read_first() -> None:
-    hint = _hint_for_error("edit_file", "file has not been read yet")
+    hint = hint_for_error("edit_file", "file has not been read yet")
     assert hint is not None
     assert "read_file" in hint
 
 
 def test_hint_matched_for_ripgrep_missing() -> None:
-    hint = _hint_for_error("grep", "ripgrep (rg) on PATH not found")
+    hint = hint_for_error("grep", "ripgrep (rg) on PATH not found")
     assert hint is not None
     assert "brew install ripgrep" in hint or "install" in hint.lower()
 
 
 def test_no_hint_for_unknown_error() -> None:
-    hint = _hint_for_error("bash", "something entirely unexpected happened xyz123")
+    hint = hint_for_error("bash", "something entirely unexpected happened xyz123")
     assert hint is None
 
 

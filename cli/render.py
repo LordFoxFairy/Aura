@@ -29,10 +29,6 @@ _FOLD_HEAD_LINES = 10
 _FOLD_TAIL_LINES = 5
 
 
-def _hint_for_error(tool_name: str, error: str) -> str | None:
-    return hint_for_error(tool_name, error)
-
-
 _MD_PATTERNS = (
     re.compile(r"^#{1,6}\s", re.MULTILINE),
     re.compile(r"^\s*[-*+]\s", re.MULTILINE),
@@ -327,7 +323,7 @@ def _render_folded(console: Console, text: str) -> None:
 
 def _render_tool_error(tool_name: str, error: str) -> Panel:
     body = Text(error, style="red")
-    hint = _hint_for_error(tool_name, error)
+    hint = hint_for_error(tool_name, error)
     if hint is not None:
         body.append("\n\n")
         body.append(hint, style="dim")

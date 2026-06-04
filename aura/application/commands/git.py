@@ -77,10 +77,6 @@ class GitStatusCommand:
     allowed_tools: tuple[str, ...] = ()
     argument_hint: str | None = None
 
-    def __init__(self, *, writer: Writer | None = None) -> None:
-        # Symmetry with /diff /log; /status renders via CommandResult.text, never writes here.
-        self._writer = writer
-
     async def handle(self, arg: str, agent: AgentT) -> CommandResult:
         cwd = Path.cwd()
         try:

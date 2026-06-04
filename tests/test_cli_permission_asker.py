@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -209,4 +210,16 @@ async def test_cancel_maps_to_deny(monkeypatch: pytest.MonkeyPatch) -> None:
     resp = await asker(
         tool=_generic_tool(), args={"arg": ""}, rule_hint=None,
     )
+    assert resp.choice == "deny"
+
+
+@pytest.mark.asyncio
+async def test_timeout_maps_to_deny(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _hang(_q: list[FormQuestionDict]) -> dict[str, str]:
+        await asyncio.sleep(10)
+        return {}
+
+    monkeypatch.setattr(_permission_asker, "render_form", _hang)
+    asker: Callable[..., Awaitable[Any]] = make_cli_asker(timeout=0.01)
+    resp = await asker(tool=_generic_tool(), args={"arg": ""}, rule_hint=None)
     assert resp.choice == "deny"

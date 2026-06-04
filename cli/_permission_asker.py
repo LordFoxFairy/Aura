@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Literal
 
 from langchain_core.tools import BaseTool
@@ -144,11 +145,7 @@ def _translate(
     raise ValueError(f"unrecognised permission-asker label: {label!r}")
 
 
-def make_cli_asker(
-    console: Console | None = None,  # noqa: ARG001 — reserved for future audit-line printing
-    *,
-    timeout: float | None = None,  # noqa: ARG001 — render_form does not currently honor a timeout
-) -> PermissionAsker:
+def make_cli_asker(*, timeout: float | None = None) -> PermissionAsker:
     async def _ask(
         *,
         tool: BaseTool,
@@ -157,9 +154,11 @@ def make_cli_asker(
     ) -> AskerResponse:
         questions = _build_questions(tool, args)
         journal.write("permission_asked", tool=tool.name)
+        form = render_form(questions)
+        guarded = form if timeout is None else asyncio.wait_for(form, timeout)
         try:
-            answers = await render_form(questions)
-        except FormCancelled:
+            answers = await guarded
+        except (FormCancelled, TimeoutError):
             journal.write("permission_answered", tool=tool.name, choice="deny")
             return AskerResponse(choice="deny")
         label = answers.get(_PERMISSION_QUESTION, "")

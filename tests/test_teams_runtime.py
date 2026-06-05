@@ -13,13 +13,18 @@ from aura.application.session import AgentSession
 from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import Mailbox
 from aura.application.teams.manager import TeamManager
-from aura.application.teams.runtime import _format_envelope, run_teammate
+from aura.application.teams.runtime import (
+    _format_envelope,
+    run_teammate,
+    run_teammate_main,
+)
 from aura.application.teams.team_port import TeammateBinding, TeamPort
 from aura.config.schema import AuraConfig
 from aura.domain.abort import AbortController, AbortException
 from aura.domain.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
-from aura.domain.team import TeamMessage, TeamMessageKind
+from aura.domain.team import TeamMessage, TeamMessageKind, TeamRecord
 from aura.infrastructure.persistence.storage import SessionStorage
+from aura.infrastructure.wire.events import CoordinationEvent
 from tests.conftest import FakeChatModel
 
 
@@ -387,3 +392,215 @@ async def test_runtime_breaks_loop_on_abort_during_turn(tmp_path: Path) -> None:
     ))
     await asyncio.wait_for(task, timeout=10)  # abort breaks the loop without stop.set()
     assert agent.prompts_seen  # the turn was attempted before aborting
+
+
+class _RecordingTeam:
+    """TeamPort stub recording shutdown acks so the runtime's confirm/send path is observable."""
+
+    def __init__(self, *, is_active: bool = True) -> None:
+        self.is_active = is_active
+        self.team: TeamRecord | None = None
+        self.pending_protocol_events: tuple[CoordinationEvent, ...] = ()
+        self.confirmed: list[tuple[str, str]] = []
+        self.sent: list[tuple[str, str, str, TeamMessageKind]] = []
+
+    @property
+    def storage(self) -> SessionStorage:
+        raise NotImplementedError
+
+    def post_message(self, msg: TeamMessage) -> None: ...
+
+    def send(
+        self,
+        *,
+        sender: str,
+        recipient: str,
+        body: str,
+        kind: TeamMessageKind = "text",
+    ) -> list[TeamMessage]:
+        self.sent.append((sender, recipient, body, kind))
+        return []
+
+    def confirm_shutdown(self, member_name: str, *, body: str = "") -> None:
+        self.confirmed.append((member_name, body))
+
+    def drain_protocol_events(self) -> list[CoordinationEvent]:
+        return []
+
+    async def cleanup_session_teams(self) -> None: ...
+
+
+class _TeamAgent(_ScriptedAgent):
+    """ScriptedAgent bound to a TeamPort so the shutdown ack branch can be exercised."""
+
+    def __init__(self, team: TeamPort, replies: list[str] | None = None) -> None:
+        super().__init__(replies=replies)
+        self._team = team
+
+    @property
+    def team(self) -> TeamPort | None:
+        return self._team
+
+
+@pytest.mark.asyncio
+async def test_runtime_shutdown_acks_via_active_team(tmp_path: Path) -> None:
+    """Active team must receive confirm_shutdown + a shutdown_response so the leader unblocks."""
+    storage = _storage(tmp_path)
+    team = _RecordingTeam(is_active=True)
+    agent = _TeamAgent(team)
+    box = Mailbox(storage, "team-a")
+    box.append(_msg(kind="shutdown_request", body="wind down"))
+    _agent: Any = agent
+    task = asyncio.create_task(run_teammate(
+        agent=_agent, team_id="team-a", member_name="alice",
+        storage=storage, stop_event=asyncio.Event(), abort=AbortController(),
+    ))
+    await asyncio.wait_for(task, timeout=15)
+    assert agent.prompts_seen == []  # shutdown short-circuits before any model turn
+    assert team.confirmed == [("alice", "wind down")]
+    assert team.sent == [("alice", "leader", "shutting down: wind down", "shutdown_response")]
+
+
+@pytest.mark.asyncio
+async def test_runtime_shutdown_skips_team_acks_when_inactive(tmp_path: Path) -> None:
+    """An inactive team is not acked — only the in-process active path round-trips to the leader."""
+    storage = _storage(tmp_path)
+    team = _RecordingTeam(is_active=False)
+    agent = _TeamAgent(team)
+    box = Mailbox(storage, "team-a")
+    box.append(_msg(kind="shutdown_request", body="halt"))
+    _agent: Any = agent
+    task = asyncio.create_task(run_teammate(
+        agent=_agent, team_id="team-a", member_name="alice",
+        storage=storage, stop_event=asyncio.Event(), abort=AbortController(),
+    ))
+    await asyncio.wait_for(task, timeout=15)
+    assert team.confirmed == []  # is_active gate suppresses the ack
+    assert team.sent == []
+    assert box.read_unseen("alice") == []  # message still acked/consumed
+
+
+@pytest.mark.asyncio
+async def test_runtime_ignores_non_text_non_shutdown_kinds(tmp_path: Path) -> None:
+    """A lone shutdown_response yields no text turn — only text kinds drive the model."""
+    storage = _storage(tmp_path)
+    agent = _ScriptedAgent()
+    stop = asyncio.Event()
+    box = Mailbox(storage, "team-a")
+    box.append(_msg(kind="shutdown_response", body="ok"))
+    _agent: Any = agent
+    task = asyncio.create_task(run_teammate(
+        agent=_agent, team_id="team-a", member_name="alice",
+        storage=storage, stop_event=stop, abort=AbortController(),
+    ))
+    for _ in range(40):
+        await asyncio.sleep(0.05)
+        if box.read_unseen("alice") == []:
+            break
+    stop.set()
+    await asyncio.wait_for(task, timeout=10)
+    assert agent.prompts_seen == []  # response-only batch never reaches a turn
+
+
+class _ClosableAgent:
+    """build_agent stand-in recording aclose so run_teammate_main's finally is observable."""
+
+    def __init__(self) -> None:
+        self.closed = 0
+
+    async def aclose(self, *, mcp_timeout: float = 5.0) -> None:
+        self.closed += 1
+
+
+def _minimal_config() -> AuraConfig:
+    return AuraConfig.model_validate({
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+    })
+
+
+@pytest.mark.asyncio
+async def test_run_teammate_main_returns_zero_and_closes_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Entry point must always tear the agent down and report success once the loop returns."""
+    agent = _ClosableAgent()
+    seen: dict[str, Any] = {}
+
+    def _fake_build(config: AuraConfig, *, session_id: str = "") -> Any:
+        seen["session_id"] = session_id
+        seen["default"] = config.router["default"]
+        return agent
+
+    async def _fake_run(**kwargs: Any) -> None:
+        seen["ran"] = kwargs["member_name"]
+
+    monkeypatch.setattr(
+        "aura.application.teams.runtime.load_config", _minimal_config,
+    )
+    monkeypatch.setattr("aura.application.teams.runtime.build_agent", _fake_build)
+    monkeypatch.setattr("aura.application.teams.runtime.run_teammate", _fake_run)
+
+    rc = await run_teammate_main(
+        team_id="t1", member_name="bob", storage_root=str(tmp_path),
+    )
+    assert rc == 0
+    assert agent.closed == 1  # finally closed the agent exactly once
+    assert seen["session_id"] == "team-t1-bob"
+    assert seen["default"] == "openai:gpt-4o-mini"  # no model override applied
+    assert seen["ran"] == "bob"
+
+
+@pytest.mark.asyncio
+async def test_run_teammate_main_applies_model_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """model_name must rewrite router['default'] so the teammate uses the chosen model."""
+    captured: dict[str, str] = {}
+
+    def _fake_build(config: AuraConfig, *, session_id: str = "") -> Any:
+        captured["default"] = config.router["default"]
+        return _ClosableAgent()
+
+    async def _fake_run(**kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "aura.application.teams.runtime.load_config", _minimal_config,
+    )
+    monkeypatch.setattr("aura.application.teams.runtime.build_agent", _fake_build)
+    monkeypatch.setattr("aura.application.teams.runtime.run_teammate", _fake_run)
+
+    rc = await run_teammate_main(
+        team_id="t2", member_name="carol", storage_root=str(tmp_path),
+        model_name="openai:gpt-4o", agent_type="explore", system_prompt="hi",
+    )
+    assert rc == 0
+    assert captured["default"] == "openai:gpt-4o"  # override merged into router
+
+
+@pytest.mark.asyncio
+async def test_run_teammate_main_closes_agent_even_when_loop_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crashing loop must still flow through aclose — the finally is the only teardown path."""
+    agent = _ClosableAgent()
+
+    def _fake_build(config: AuraConfig, *, session_id: str = "") -> Any:
+        return agent
+
+    async def _fake_run(**kwargs: Any) -> None:
+        raise RuntimeError("loop exploded")
+
+    monkeypatch.setattr(
+        "aura.application.teams.runtime.load_config", _minimal_config,
+    )
+    monkeypatch.setattr("aura.application.teams.runtime.build_agent", _fake_build)
+    monkeypatch.setattr("aura.application.teams.runtime.run_teammate", _fake_run)
+
+    with pytest.raises(RuntimeError, match="loop exploded"):
+        await run_teammate_main(
+            team_id="t3", member_name="dave", storage_root=str(tmp_path),
+        )
+    assert agent.closed == 1  # finally ran despite the loop raising

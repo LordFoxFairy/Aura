@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel
 
 from aura.application.hooks.permission import make_permission_hook
+from aura.application.hooks.protocols import PreToolHook
 from aura.application.session import AgentSession
 from aura.config.loader import load_config
-from aura.config.schema import PermissionsConfig
+from aura.config.schema import AuraConfig, PermissionsConfig
 from aura.domain.events import (
     AssistantDelta,
     Final,
@@ -22,6 +26,7 @@ from aura.domain.events import (
     ToolCallProgress,
     ToolCallStarted,
 )
+from aura.domain.permission.outcome import Outcome
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.session import RuleSet
 from aura.infrastructure import permission_store as perm_store
@@ -702,3 +707,639 @@ async def test_session_driver_emits_exited_exactly_once_on_clean_close(
     kinds = [ev["event"] for ev in emitted]
     assert kinds.count("exited") == 1
     assert kinds[-1] == "exited"
+
+
+class _NoOpAgent:
+    """Minimal agent satisfying the driver's lifecycle + state-snapshot contract."""
+
+    session_id = "session-1"
+    current_model = "p1:fake-model"
+    mode = "default"
+    pinned_tokens_estimate = 0
+    context_window = 0
+
+    def __init__(self, **_kwargs: Any) -> None:
+        from aura.application.loop_state import LoopSlots
+
+        self.state = SimpleNamespace(slots=LoopSlots())
+
+    async def astream(self, _prompt: str) -> Any:
+        if False:  # pragma: no cover - turn body unused by these branch tests
+            yield None
+
+    def drain_protocol_events(self) -> list[dict[str, Any]]:
+        return []
+
+    @property
+    def pending_protocol_events(self) -> tuple[dict[str, Any], ...]:
+        return ()
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _emitter(emitted: list[dict[str, Any]]) -> session_service.EventEmitter:
+    """A nominal EventEmitter; ``list.append`` is not a structural match for mypy."""
+
+    def emit(payload: dict[str, Any]) -> None:
+        emitted.append(payload)
+
+    return emit
+
+
+async def _wait_for_event(emitted: list[dict[str, Any]], event: str) -> None:
+    """Yield to the loop until ``event`` appears on the emitted wire."""
+    while not any(ev.get("event") == event for ev in emitted):
+        await asyncio.sleep(0)
+
+
+def _as_agent_cls(fake: Any) -> type[AgentSession]:
+    """Bridge a fake agent class into the driver's nominal ``type[AgentSession]``."""
+    bridged: type[AgentSession] = fake
+    return bridged
+
+
+def _const_config(cfg: Any) -> Callable[[], AuraConfig]:
+    """A zero-arg loader returning a fake config typed as the driver expects."""
+    bridged: AuraConfig = cfg
+
+    def _load() -> AuraConfig:
+        return bridged
+
+    return _load
+
+
+def _const_model(model: Any) -> Callable[[str, AuraConfig], BaseChatModel]:
+    """A spec→model factory returning a fake model typed as the driver expects."""
+    bridged: BaseChatModel = model
+
+    def _make(_spec: str, _cfg: AuraConfig) -> BaseChatModel:
+        return bridged
+
+    return _make
+
+
+def _run_driver_with(
+    reader: session_service.RequestReader,
+    emitted: list[dict[str, Any]],
+    agent_cls: Any = _NoOpAgent,
+) -> Any:
+    """Invoke the driver with the offline fakes the harness already wires."""
+    return session_service.run_session_driver(
+        emit=_emitter(emitted),
+        reader=reader,
+        load_config_fn=load_config,
+        make_model_for_spec_fn=make_model_for_spec,
+        make_permission_hook_fn=make_permission_hook,
+        agent_cls=_as_agent_cls(agent_cls),
+        perm_store_module=perm_store,
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_driver_reports_bad_json_on_top_level_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed NDJSON must surface a structured error, not crash the loop."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    reader = _ScriptedReader([b"{not json}\n"])
+    rc = await _run_driver_with(reader, emitted)
+
+    assert rc == 0
+    errors = [ev for ev in emitted if ev["event"] == "error"]
+    assert any(ev["message"].startswith("bad request:") for ev in errors)
+    assert emitted[-1] == {"event": "exited"}
+
+
+@pytest.mark.asyncio
+async def test_session_driver_rejects_unknown_top_level_kind(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unsupported request kind is refused explicitly, never silently dropped."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    reader = _ScriptedReader([b'{"kind":"teleport"}\n'])
+    rc = await _run_driver_with(reader, emitted)
+
+    assert rc == 0
+    assert {
+        "event": "error",
+        "message": "unsupported request kind: 'teleport'",
+    } in emitted
+
+
+@pytest.mark.asyncio
+async def test_session_driver_rejects_missing_kind_as_unsupported(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A request object lacking ``kind`` resolves to None and is refused."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    reader = _ScriptedReader([b'{"text":"orphan"}\n'])
+    rc = await _run_driver_with(reader, emitted)
+
+    assert rc == 0
+    assert {
+        "event": "error",
+        "message": "unsupported request kind: None",
+    } in emitted
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        b'{"kind":"prompt","text":""}\n',
+        b'{"kind":"prompt"}\n',
+        b'{"kind":"prompt","text":123}\n',
+        b'{"kind":"prompt","text":null}\n',
+    ],
+)
+@pytest.mark.asyncio
+async def test_session_driver_rejects_empty_or_non_string_prompt(
+    line: bytes,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Empty/absent/non-str prompt text must never start a turn — guard the boundary."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    reader = _ScriptedReader([line])
+    rc = await _run_driver_with(reader, emitted)
+
+    assert rc == 0
+    assert {"event": "error", "message": "empty prompt"} in emitted
+    assert not any(ev["event"] == "final" for ev in emitted)
+
+
+@pytest.mark.asyncio
+async def test_session_driver_top_level_permission_response_without_pending_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stray permission_response outside any turn reports no-pending, not silence."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    reader = _ScriptedReader([b'{"kind":"permission_response","id":"ghost"}\n'])
+    rc = await _run_driver_with(reader, emitted)
+
+    assert rc == 0
+    assert {
+        "event": "error",
+        "message": "no pending permission request for id='ghost'",
+    } in emitted
+
+
+@pytest.mark.asyncio
+async def test_session_driver_emits_error_when_router_default_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A config without router['default'] must fail fast with rc=1, not boot half-open."""
+    emitted: list[dict[str, Any]] = []
+    cfg: Any = SimpleNamespace(
+        router={},
+        storage=SimpleNamespace(path=str(tmp_path / "sessions.jsonl")),
+        tools=SimpleNamespace(enabled=["web_fetch"]),
+    )
+    reader = _ScriptedReader([])
+    rc = await session_service.run_session_driver(
+        emit=_emitter(emitted),
+        reader=reader,
+        load_config_fn=_const_config(cfg),
+        make_model_for_spec_fn=make_model_for_spec,
+        make_permission_hook_fn=make_permission_hook,
+        agent_cls=_as_agent_cls(_NoOpAgent),
+        perm_store_module=perm_store,
+    )
+
+    assert rc == 1
+    assert emitted == [{
+        "event": "error",
+        "message": "config.router['default'] is missing — cannot start headless",
+    }]
+
+
+class _ExplodingPermStore:
+    """A perm store whose first lookup raises — exercises the corrupt-config guard."""
+
+    def load(self, _project_root: Path) -> PermissionsConfig:
+        raise ValueError("corrupt permissions.json")
+
+    def load_ruleset(
+        self,
+        _project_root: Path,
+        *,
+        known_tool_names: Any = None,
+    ) -> RuleSet:
+        raise AssertionError("load_ruleset must not run after load() raises")
+
+    def load_deny_ruleset(self, _project_root: Path) -> RuleSet:
+        raise AssertionError("unreachable")
+
+    def load_ask_ruleset(self, _project_root: Path) -> RuleSet:
+        raise AssertionError("unreachable")
+
+
+@pytest.mark.asyncio
+async def test_session_driver_corrupt_permissions_config_returns_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A throwing permission store is reported as a typed error and aborts with rc=1."""
+    emitted: list[dict[str, Any]] = []
+    cfg: Any = SimpleNamespace(
+        router={"default": "p1:fake-model"},
+        storage=SimpleNamespace(path=str(tmp_path / "sessions.jsonl")),
+        tools=SimpleNamespace(enabled=["web_fetch"]),
+    )
+    perm_module: session_service.PermStoreModule = _ExplodingPermStore()
+    reader = _ScriptedReader([])
+    rc = await session_service.run_session_driver(
+        emit=_emitter(emitted),
+        reader=reader,
+        load_config_fn=_const_config(cfg),
+        make_model_for_spec_fn=_const_model(object()),
+        make_permission_hook_fn=make_permission_hook,
+        agent_cls=_as_agent_cls(_NoOpAgent),
+        perm_store_module=perm_module,
+    )
+
+    assert rc == 1
+    assert emitted == [{
+        "event": "error",
+        "message": "permissions config: ValueError: corrupt permissions.json",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_session_driver_drive_turn_swallows_stream_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A turn-body crash is reported as one error event, never poisoning the loop."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    class ExplodingTurnAgent(_NoOpAgent):
+        async def astream(self, _prompt: str) -> Any:
+            raise RuntimeError("turn blew up")
+            if False:  # pragma: no cover - generator marker
+                yield None
+
+    reader = _ScriptedReader([b'{"kind":"prompt","text":"go"}\n'])
+    rc = await _run_driver_with(reader, emitted, agent_cls=ExplodingTurnAgent)
+
+    assert rc == 0
+    assert {
+        "event": "error",
+        "message": "RuntimeError: turn blew up",
+    } in emitted
+    assert emitted[-1] == {"event": "exited"}
+
+
+class _MidTurnAgent(_NoOpAgent):
+    """Holds a turn open until ``release`` is set, then emits one Final."""
+
+    release: asyncio.Event
+
+    def __init__(self, **_kwargs: Any) -> None:
+        super().__init__(**_kwargs)
+        self.release = asyncio.Event()
+
+    async def astream(self, _prompt: str) -> Any:
+        await asyncio.wait_for(self.release.wait(), timeout=5)
+        yield Final("done")
+
+
+class _MidTurnReader:
+    """Feeds mid-turn lines, then releases the turn, then signals EOF.
+
+    The driver polls ``readline`` while the turn runs; this reader hands out
+    the scripted mid-turn lines first and only frees the turn once they are
+    consumed, making the mid-turn dispatch branches deterministic.
+    """
+
+    def __init__(self, lines: list[bytes], release: asyncio.Event) -> None:
+        self._lines = list(lines)
+        self._release = release
+
+    async def readline(self) -> bytes:
+        if self._lines:
+            return self._lines.pop(0)
+        self._release.set()
+        return b""
+
+
+@pytest.mark.asyncio
+async def test_session_driver_mid_turn_rejects_non_permission_and_bad_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """During a turn only permission_response is accepted; others/bad-JSON error out."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    release = asyncio.Event()
+
+    class BoundAgent(_MidTurnAgent):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.release = release
+
+    reader = _MidTurnReader(
+        [
+            b'{"kind":"prompt","text":"hi"}\n',
+            b'{"kind":"prompt","text":"interrupt"}\n',
+            b"{bad mid turn}\n",
+        ],
+        release,
+    )
+    rc = await _run_driver_with(reader, emitted, agent_cls=BoundAgent)
+
+    assert rc == 0
+    messages = [ev["message"] for ev in emitted if ev["event"] == "error"]
+    assert (
+        "only permission_response accepted mid-turn; got kind='prompt'" in messages
+    )
+    assert any(m.startswith("bad request mid-turn:") for m in messages)
+    assert any(ev["event"] == "final" for ev in emitted)
+    assert emitted[-1] == {"event": "exited"}
+
+
+@pytest.mark.asyncio
+async def test_session_driver_mid_turn_feeds_permission_response(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mid-turn permission_response routes to the asker, not the error channel."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    release = asyncio.Event()
+
+    class BoundAgent(_MidTurnAgent):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.release = release
+
+    reader = _MidTurnReader(
+        [
+            b'{"kind":"prompt","text":"hi"}\n',
+            b'{"kind":"permission_response","id":"none-pending"}\n',
+        ],
+        release,
+    )
+    rc = await _run_driver_with(reader, emitted, agent_cls=BoundAgent)
+
+    assert rc == 0
+    messages = [ev["message"] for ev in emitted if ev["event"] == "error"]
+    assert "no pending permission request for id='none-pending'" in messages
+    assert not any("mid-turn" in m for m in messages)
+    assert emitted[-1] == {"event": "exited"}
+
+
+class _TimeoutThenEofReader:
+    """Yields a prompt, raises TimeoutError once mid-turn, then EOF.
+
+    The driver wraps each mid-turn ``readline`` in ``wait_for``; a raised
+    TimeoutError lands on the ``continue`` branch with no real wall-clock wait.
+    """
+
+    def __init__(self, release: asyncio.Event) -> None:
+        self._prompt_sent = False
+        self._timed_out = False
+        self._release = release
+
+    async def readline(self) -> bytes:
+        if not self._prompt_sent:
+            self._prompt_sent = True
+            return b'{"kind":"prompt","text":"hi"}\n'
+        if not self._timed_out:
+            self._timed_out = True
+            raise TimeoutError
+        self._release.set()
+        return b""
+
+
+@pytest.mark.asyncio
+async def test_session_driver_mid_turn_readline_timeout_keeps_polling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A poll timeout must loop again, not abort the turn — the turn still finalizes."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    release = asyncio.Event()
+
+    class BoundAgent(_MidTurnAgent):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.release = release
+
+    reader = _TimeoutThenEofReader(release)
+    rc = await _run_driver_with(reader, emitted, agent_cls=BoundAgent)
+
+    assert rc == 0
+    assert any(ev["event"] == "final" for ev in emitted)
+    assert not any(ev["event"] == "error" for ev in emitted)
+    assert emitted[-1] == {"event": "exited"}
+
+
+@pytest.mark.asyncio
+async def test_session_driver_mid_turn_stdin_close_denies_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EOF while a turn is blocked on a permission ask must deny it, not hang."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    captured: dict[str, Any] = {}
+
+    class AskingAgent(_NoOpAgent):
+        async def astream(self, _prompt: str) -> Any:
+            asker = captured["asker"]
+            response = await asker(
+                tool=_make_tool(),
+                args={"value": "x"},
+                rule_hint=Rule("demo", None),
+            )
+            captured["choice"] = response.choice
+            captured["feedback"] = response.feedback
+            yield Final("done")
+
+    def capturing_hook(**kwargs: Any) -> PreToolHook:
+        captured["asker"] = kwargs["asker"]
+
+        async def _hook(**_kw: Any) -> Outcome:
+            raise AssertionError("hook body unused")
+
+        return _hook
+
+    class BlockUntilRequestedReader:
+        """Hold EOF until a permission_request is on the wire, proving a pending ask."""
+
+        def __init__(self) -> None:
+            self._prompt_sent = False
+
+        async def readline(self) -> bytes:
+            if not self._prompt_sent:
+                self._prompt_sent = True
+                return b'{"kind":"prompt","text":"hi"}\n'
+            await asyncio.wait_for(
+                _wait_for_event(emitted, "permission_request"), timeout=5,
+            )
+            return b""
+
+    reader = BlockUntilRequestedReader()
+    rc = await session_service.run_session_driver(
+        emit=_emitter(emitted),
+        reader=reader,
+        load_config_fn=load_config,
+        make_model_for_spec_fn=make_model_for_spec,
+        make_permission_hook_fn=capturing_hook,
+        agent_cls=_as_agent_cls(AskingAgent),
+        perm_store_module=perm_store,
+    )
+
+    assert rc == 0
+    assert captured["choice"] == "deny"
+    assert captured["feedback"] == "stdin_closed"
+    assert emitted[-1] == {"event": "exited"}
+
+
+@pytest.mark.asyncio
+async def test_session_driver_mid_turn_permission_response_resolves_pending_ask(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A matching mid-turn permission_response must resolve the blocked ask, not error."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    captured: dict[str, Any] = {}
+
+    class AskingAgent(_NoOpAgent):
+        async def astream(self, _prompt: str) -> Any:
+            asker = captured["asker"]
+            response = await asker(
+                tool=_make_tool(),
+                args={"value": "x"},
+                rule_hint=Rule("demo", None),
+            )
+            captured["choice"] = response.choice
+            captured["feedback"] = response.feedback
+            yield Final("done")
+
+    def capturing_hook(**kwargs: Any) -> PreToolHook:
+        captured["asker"] = kwargs["asker"]
+
+        async def _hook(**_kw: Any) -> Outcome:
+            raise AssertionError("hook body unused")
+
+        return _hook
+
+    class AnswerWhenRequestedReader:
+        """Feed an accept response only once the asker has a live pending request."""
+
+        def __init__(self) -> None:
+            self._prompt_sent = False
+            self._answered = False
+
+        async def readline(self) -> bytes:
+            if not self._prompt_sent:
+                self._prompt_sent = True
+                return b'{"kind":"prompt","text":"hi"}\n'
+            if not self._answered:
+                self._answered = True
+                await asyncio.wait_for(
+                    _wait_for_event(emitted, "permission_request"), timeout=5,
+                )
+                req_id = next(
+                    ev["id"] for ev in emitted if ev["event"] == "permission_request"
+                )
+                payload = {
+                    "kind": "permission_response",
+                    "id": req_id,
+                    "choice": "accept",
+                    "feedback": "ok",
+                }
+                return (json.dumps(payload) + "\n").encode("utf-8")
+            return b""
+
+    reader = AnswerWhenRequestedReader()
+    rc = await session_service.run_session_driver(
+        emit=_emitter(emitted),
+        reader=reader,
+        load_config_fn=load_config,
+        make_model_for_spec_fn=make_model_for_spec,
+        make_permission_hook_fn=capturing_hook,
+        agent_cls=_as_agent_cls(AskingAgent),
+        perm_store_module=perm_store,
+    )
+
+    assert rc == 0
+    assert captured["choice"] == "accept"
+    assert captured["feedback"] == "ok"
+    assert not any(
+        ev["event"] == "error" and "no pending" in ev["message"] for ev in emitted
+    )
+    assert emitted[-1] == {"event": "exited"}
+
+
+@pytest.mark.asyncio
+async def test_session_driver_cancel_mid_turn_cancels_inflight_turn_then_exits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancelling the driver mid-turn must cancel the live turn and still emit exited."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    turn_started = asyncio.Event()
+    turn_cancelled = asyncio.Event()
+
+    class HangingAgent(_NoOpAgent):
+        async def astream(self, _prompt: str) -> Any:
+            turn_started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                turn_cancelled.set()
+                raise
+            yield Final("unreachable")
+
+    class HangingReader:
+        """Emit a prompt, then block forever so the turn stays in-flight."""
+
+        def __init__(self) -> None:
+            self._prompt_sent = False
+
+        async def readline(self) -> bytes:
+            if not self._prompt_sent:
+                self._prompt_sent = True
+                return b'{"kind":"prompt","text":"hi"}\n'
+            await asyncio.sleep(60)
+            return b""
+
+    reader = HangingReader()
+    driver = asyncio.create_task(
+        _run_driver_with(reader, emitted, agent_cls=HangingAgent),
+    )
+    await asyncio.wait_for(turn_started.wait(), timeout=5)
+    driver.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await asyncio.wait_for(driver, timeout=5)
+
+    assert turn_cancelled.is_set()
+    assert emitted[-1] == {"event": "exited"}

@@ -16,7 +16,7 @@ from aura.application.teams.manager import TeamManager
 from aura.application.teams.runtime import _format_envelope, run_teammate
 from aura.application.teams.team_port import TeammateBinding, TeamPort
 from aura.config.schema import AuraConfig
-from aura.domain.abort import AbortController
+from aura.domain.abort import AbortController, AbortException
 from aura.domain.events import Final, PermissionAudit, ToolCallProgress, ToolCallStarted
 from aura.domain.team import TeamMessage, TeamMessageKind
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -332,3 +332,58 @@ async def test_team_view_snapshot_includes_additive_lifecycle_state(
     member = next(m for m in snap.members if m.name == "alice")
     assert member.status == "active"
     assert member.lifecycle_state == "idle"
+
+
+class _RaisingAgent(_ScriptedAgent):
+    async def astream(self, prompt: str, *, abort: Any = None) -> Any:
+        self.prompts_seen.append(prompt)
+        raise RuntimeError("turn blew up")
+        yield  # noqa: W0101 — unreachable; marks this an async generator
+
+
+class _AbortingAgent(_ScriptedAgent):
+    async def astream(self, prompt: str, *, abort: Any = None) -> Any:
+        self.prompts_seen.append(prompt)
+        raise AbortException
+        yield  # noqa: W0101 — unreachable; marks this an async generator
+
+
+@pytest.mark.asyncio
+async def test_runtime_survives_per_turn_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A turn that raises is journaled and skipped — one bad message can't kill the teammate."""
+    events: list[str] = []
+    monkeypatch.setattr(
+        "aura.infrastructure.persistence.journal.write",
+        lambda name, **_: events.append(name),
+    )
+    storage = _storage(tmp_path)
+    Mailbox(storage, "team-a").append(_msg(body="boom"))
+    agent: Any = _RaisingAgent()
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_teammate(
+        agent=agent, team_id="team-a", member_name="alice",
+        storage=storage, stop_event=stop, abort=AbortController(),
+    ))
+    for _ in range(40):
+        await asyncio.sleep(0.05)
+        if "team_runtime_turn_failed" in events:
+            break
+    stop.set()
+    await asyncio.wait_for(task, timeout=10)  # completes cleanly, not crashed
+    assert "team_runtime_turn_failed" in events
+
+
+@pytest.mark.asyncio
+async def test_runtime_breaks_loop_on_abort_during_turn(tmp_path: Path) -> None:
+    """An AbortException mid-turn exits the loop on its own — not swallowed as a normal failure."""
+    storage = _storage(tmp_path)
+    Mailbox(storage, "team-a").append(_msg(body="go"))
+    agent: Any = _AbortingAgent()
+    task = asyncio.create_task(run_teammate(
+        agent=agent, team_id="team-a", member_name="alice",
+        storage=storage, stop_event=asyncio.Event(), abort=AbortController(),
+    ))
+    await asyncio.wait_for(task, timeout=10)  # abort breaks the loop without stop.set()
+    assert agent.prompts_seen  # the turn was attempted before aborting

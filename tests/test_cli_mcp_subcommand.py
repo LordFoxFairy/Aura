@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -11,6 +12,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+
+from cli.mcp_cli import handle_mcp
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -515,3 +518,470 @@ def test_mcp_help_mentions_scope_flag(
         assert choice in result.stdout, (
             f"expected scope choice {choice!r} in `aura mcp add --help`"
         )
+
+
+# ---------------------------------------------------------------------------
+# In-process handler tests.
+#
+# The subprocess tests above prove the wired CLI; these call ``handle_mcp``
+# directly so every error branch (arg-parse failures, scope/env validation,
+# transport mismatches, store-read failures) is exercised cheaply and the
+# printed text + exit code are asserted together. ``Path.home`` is pinned to
+# ``home`` and cwd to ``project`` (a child of home) so global resolves under
+# home and project under cwd — never the developer's real ``~/.aura``.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mcp_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Path, Path]:
+    """Pin ``Path.home`` and cwd into a sandbox so the store stays hermetic."""
+    home = tmp_path
+    project = home / "project"
+    project.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.chdir(project)
+    return home, project
+
+
+def _add_ns(
+    name: str,
+    *,
+    transport: str = "stdio",
+    scope: str | None = None,
+    env: list[str] | None = None,
+    command_args: list[str] | None = None,
+) -> argparse.Namespace:
+    """Build the ``add`` Namespace the CLI parser would hand to ``handle_mcp``."""
+    return argparse.Namespace(
+        mcp_action="add",
+        name=name,
+        transport=transport,
+        scope=scope,
+        env=env,
+        command_args=command_args if command_args is not None else [],
+    )
+
+
+def _remove_ns(name: str, *, scope: str | None = None) -> argparse.Namespace:
+    """Build the ``remove`` Namespace the CLI parser would hand to ``handle_mcp``."""
+    return argparse.Namespace(mcp_action="remove", name=name, scope=scope)
+
+
+def _store_servers(path: Path) -> list[dict[str, object]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    servers = data["servers"]
+    assert isinstance(servers, list)
+    return servers
+
+
+# --- dispatch -------------------------------------------------------------
+
+
+def test_handle_mcp_missing_action_is_user_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Calling ``aura mcp`` with no sub-action must fail loudly with usage, not silently no-op."""
+    rc = handle_mcp(argparse.Namespace(mcp_action=None))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "missing mcp action" in captured.err
+    assert "{add|list|remove}" in captured.err
+    assert captured.out == ""
+
+
+def test_handle_mcp_unknown_action_is_user_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An unrecognised mcp_action must hit the dispatch fallthrough, not crash or misdispatch."""
+    rc = handle_mcp(argparse.Namespace(mcp_action="frobnicate"))
+    assert rc == 1
+    assert "missing mcp action" in capsys.readouterr().err
+
+
+# --- _parse_env_pairs (via add) -------------------------------------------
+
+
+def test_add_env_pair_without_equals_fails_loudly(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A malformed --env pair lacking '=' must fail loudly, not silently drop the variable."""
+    home, _ = mcp_env
+    rc = handle_mcp(_add_ns("s", env=["NOEQUALS"], command_args=["cmd"]))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "KEY=VALUE" in captured.err
+    assert "no '=' found" in captured.err
+    # Nothing was persisted — a rejected add must not write a partial store.
+    assert not (home / ".aura" / "mcp_servers.json").exists()
+
+
+def test_add_env_pair_with_empty_key_fails_loudly(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An --env pair with an empty key (=VALUE) is unusable and must be rejected, not stored."""
+    home, _ = mcp_env
+    rc = handle_mcp(_add_ns("s", env=["=orphanvalue"], command_args=["cmd"]))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "empty key" in captured.err
+    assert not (home / ".aura" / "mcp_servers.json").exists()
+
+
+def test_add_env_value_may_contain_equals(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The split must be on the FIRST '=' only, so base64/URL values keep their inner '='."""
+    home, _ = mcp_env
+    rc = handle_mcp(
+        _add_ns("s", env=["TOKEN=a=b=c"], command_args=["cmd"]),
+    )
+    assert rc == 0
+    capsys.readouterr()
+    servers = _store_servers(home / ".aura" / "mcp_servers.json")
+    assert servers[0]["env"] == {"TOKEN": "a=b=c"}
+
+
+# --- _resolve_write_scope (via add) ---------------------------------------
+
+
+def test_add_unknown_scope_fails_loudly(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A scope outside {global,project} (e.g. argv tampering) must be rejected before any write."""
+    home, project = mcp_env
+    rc = handle_mcp(_add_ns("s", scope="local", command_args=["cmd"]))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "unknown scope: 'local'" in captured.err
+    assert not (home / ".aura" / "mcp_servers.json").exists()
+    assert not (project / ".aura" / "mcp_servers.json").exists()
+
+
+def test_add_explicit_global_scope_writes_under_home(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Explicit --scope global must resolve the home layer, mirroring the omitted-flag default."""
+    home, project = mcp_env
+    rc = handle_mcp(_add_ns("g", scope="global", command_args=["gcmd"]))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "(global)" in out
+    assert (home / ".aura" / "mcp_servers.json").is_file()
+    assert not (project / ".aura" / "mcp_servers.json").exists()
+
+
+# --- _cmd_add: stdio branch ----------------------------------------------
+
+
+def test_add_stdio_without_command_tokens_fails_loudly(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """stdio with no command after '--' is unrunnable and must be rejected with usage."""
+    home, _ = mcp_env
+    rc = handle_mcp(_add_ns("s", transport="stdio", command_args=[]))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "stdio transport requires a command" in captured.err
+    assert not (home / ".aura" / "mcp_servers.json").exists()
+
+
+def test_add_stdio_persists_command_and_args(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """stdio add must split tokens into command + args and echo the joined invocation back."""
+    home, _ = mcp_env
+    rc = handle_mcp(
+        _add_ns("s", transport="stdio", command_args=["npx", "-y", "pkg"]),
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Added stdio MCP server 's'" in out
+    assert "npx -y pkg" in out
+    assert f"File modified: {home / '.aura' / 'mcp_servers.json'}" in out
+    servers = _store_servers(home / ".aura" / "mcp_servers.json")
+    assert servers[0]["command"] == "npx"
+    assert servers[0]["args"] == ["-y", "pkg"]
+
+
+# --- _cmd_add: sse / streamable_http branch ------------------------------
+
+
+def test_add_http_transport_without_url_fails_loudly(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A URL-based transport with no token after '--' has no endpoint and must be rejected."""
+    home, _ = mcp_env
+    rc = handle_mcp(
+        _add_ns("s", transport="sse", command_args=[]),
+    )
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "sse transport requires a URL" in captured.err
+    assert not (home / ".aura" / "mcp_servers.json").exists()
+
+
+def test_add_http_transport_with_extra_tokens_fails_loudly(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A URL transport takes one token; surplus tokens are ambiguous and must be rejected."""
+    home, _ = mcp_env
+    rc = handle_mcp(
+        _add_ns(
+            "s",
+            transport="streamable_http",
+            command_args=["https://a.example", "https://b.example"],
+        ),
+    )
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "exactly one URL" in captured.err
+    assert "got 2 tokens" in captured.err
+    assert not (home / ".aura" / "mcp_servers.json").exists()
+
+
+def test_add_http_transport_persists_url(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A well-formed sse add must store and echo the single URL, with no command field set."""
+    home, _ = mcp_env
+    rc = handle_mcp(
+        _add_ns("remote", transport="sse", command_args=["https://mcp.example/mcp"]),
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Added sse MCP server 'remote'" in out
+    assert "https://mcp.example/mcp" in out
+    servers = _store_servers(home / ".aura" / "mcp_servers.json")
+    assert servers[0]["url"] == "https://mcp.example/mcp"
+    assert servers[0]["command"] is None
+
+
+# --- _cmd_add: idempotency / duplicate ------------------------------------
+
+
+def test_add_same_server_twice_in_same_scope_rejected(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Re-adding a name in the same layer must fail loudly — add is not silently idempotent."""
+    home, _ = mcp_env
+    assert handle_mcp(_add_ns("dup", command_args=["a"])) == 0
+    capsys.readouterr()
+    rc = handle_mcp(_add_ns("dup", command_args=["b"]))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "already exists" in captured.err
+    assert "aura mcp remove dup" in captured.err
+    # The original entry is untouched — the second add did not overwrite it.
+    servers = _store_servers(home / ".aura" / "mcp_servers.json")
+    assert [s["name"] for s in servers] == ["dup"]
+    assert servers[0]["command"] == "a"
+
+
+def test_add_same_name_across_scopes_allowed(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The per-layer duplicate check must allow the same name in both scopes (the override path)."""
+    home, project = mcp_env
+    assert handle_mcp(_add_ns("shared", scope="global", command_args=["g"])) == 0
+    assert handle_mcp(_add_ns("shared", scope="project", command_args=["p"])) == 0
+    capsys.readouterr()
+    assert _store_servers(home / ".aura" / "mcp_servers.json")[0]["command"] == "g"
+    assert _store_servers(project / ".aura" / "mcp_servers.json")[0]["command"] == "p"
+
+
+# --- _cmd_list ------------------------------------------------------------
+
+
+def test_list_empty_store_prints_placeholder_in_process(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An empty store must surface a human placeholder and exit 0, not an empty/blank table."""
+    rc = handle_mcp(argparse.Namespace(mcp_action="list"))
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "(no MCP servers configured)" in captured.out
+
+
+def test_list_tags_each_row_with_its_scope(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """list must re-derive each row's origin layer so users see global vs project per server."""
+    handle_mcp(_add_ns("g1", scope="global", command_args=["gcmd"]))
+    handle_mcp(_add_ns("p1", scope="project", command_args=["pcmd"]))
+    capsys.readouterr()
+    rc = handle_mcp(argparse.Namespace(mcp_action="list"))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "NAME" in out and "SCOPE" in out and "TRANSPORT" in out
+    g_line = next(line for line in out.splitlines() if line.startswith("g1"))
+    p_line = next(line for line in out.splitlines() if line.startswith("p1"))
+    assert "global" in g_line
+    assert "project" in p_line
+
+
+def test_list_renders_url_for_http_transport_row(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A non-stdio row's COMMAND cell must show its URL, not blank, so remotes stay legible."""
+    handle_mcp(
+        _add_ns("remote", transport="sse", command_args=["https://mcp.example/x"]),
+    )
+    capsys.readouterr()
+    handle_mcp(argparse.Namespace(mcp_action="list"))
+    out = capsys.readouterr().out
+    remote_line = next(line for line in out.splitlines() if line.startswith("remote"))
+    assert "sse" in remote_line
+    assert "https://mcp.example/x" in remote_line
+
+
+def test_list_surfaces_corrupt_store_as_error(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A corrupt store must fail loudly with a diagnostic, not crash or render a half-table."""
+    home, _ = mcp_env
+    store = home / ".aura" / "mcp_servers.json"
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_text("{ this is not json", encoding="utf-8")
+    rc = handle_mcp(argparse.Namespace(mcp_action="list"))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "error:" in captured.err
+    assert "invalid JSON" in captured.err
+
+
+# --- _cmd_remove ----------------------------------------------------------
+
+
+def test_remove_auto_targets_resolved_layer(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Omitting --scope must remove from whichever layer resolves the name (project wins)."""
+    home, project = mcp_env
+    handle_mcp(_add_ns("shared", scope="global", command_args=["g"]))
+    handle_mcp(_add_ns("shared", scope="project", command_args=["p"]))
+    capsys.readouterr()
+    rc = handle_mcp(_remove_ns("shared"))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Removed MCP server 'shared' (project)" in out
+    # Project entry gone, global survivor intact.
+    assert _store_servers(project / ".aura" / "mcp_servers.json") == []
+    assert [s["name"] for s in _store_servers(home / ".aura" / "mcp_servers.json")] == ["shared"]
+
+
+def test_remove_auto_unknown_name_is_user_error(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Auto-removing a name absent from every layer must fail loudly; a no-op delete is an error."""
+    rc = handle_mcp(_remove_ns("ghost"))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "not found" in captured.err
+    assert "project layers" in captured.err
+
+
+def test_remove_explicit_scope_targets_only_that_layer(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Explicit --scope global removes the shadowed global entry, leaving project intact."""
+    home, project = mcp_env
+    handle_mcp(_add_ns("shared", scope="global", command_args=["g"]))
+    handle_mcp(_add_ns("shared", scope="project", command_args=["p"]))
+    capsys.readouterr()
+    rc = handle_mcp(_remove_ns("shared", scope="global"))
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "(global)" in out
+    assert _store_servers(home / ".aura" / "mcp_servers.json") == []
+    assert [s["name"] for s in _store_servers(project / ".aura" / "mcp_servers.json")] == ["shared"]
+
+
+def test_remove_explicit_unknown_scope_fails_loudly(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An invalid explicit --scope on remove must be rejected, not silently fall back to auto."""
+    rc = handle_mcp(_remove_ns("anything", scope="weird"))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "unknown scope: 'weird'" in captured.err
+
+
+def test_remove_absent_from_explicit_scope_is_user_error(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Removing a name absent from the named layer must fail loudly, even if it exists elsewhere."""
+    home, project = mcp_env
+    handle_mcp(_add_ns("proj-only", scope="project", command_args=["p"]))
+    capsys.readouterr()
+    rc = handle_mcp(_remove_ns("proj-only", scope="global"))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "not found" in captured.err
+    # The project entry it lives in is untouched.
+    assert [s["name"] for s in _store_servers(project / ".aura" / "mcp_servers.json")] == [
+        "proj-only",
+    ]
+
+
+def test_remove_then_remove_again_is_idempotency_guard(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A second remove of an already-removed name must fail loudly, not silently succeed twice."""
+    handle_mcp(_add_ns("once", scope="global", command_args=["c"]))
+    capsys.readouterr()
+    assert handle_mcp(_remove_ns("once", scope="global")) == 0
+    capsys.readouterr()
+    rc = handle_mcp(_remove_ns("once", scope="global"))
+    assert rc == 1
+    assert "not found" in capsys.readouterr().err
+
+
+# --- store-read failures during add/remove --------------------------------
+
+
+def _corrupt_layer(home_or_project: Path) -> Path:
+    store = home_or_project / ".aura" / "mcp_servers.json"
+    store.parent.mkdir(parents=True, exist_ok=True)
+    store.write_text("}{ not json", encoding="utf-8")
+    return store
+
+
+def test_add_http_empty_url_token_is_schema_crash(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An empty URL token for a URL transport must be caught by the schema, not stored blank."""
+    home, _ = mcp_env
+    rc = handle_mcp(_add_ns("s", transport="sse", command_args=[""]))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "error:" in captured.err
+    assert "url" in captured.err.lower()
+    assert not (home / ".aura" / "mcp_servers.json").exists()
+
+
+def test_add_surfaces_corrupt_target_layer_as_error(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """If the target layer is unreadable, add must fail loudly on the dup check, not overwrite."""
+    home, _ = mcp_env
+    _corrupt_layer(home)
+    rc = handle_mcp(_add_ns("s", scope="global", command_args=["cmd"]))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "error:" in captured.err
+    assert "invalid JSON" in captured.err
+
+
+def test_remove_surfaces_corrupt_target_layer_as_error(
+    mcp_env: tuple[Path, Path], capsys: pytest.CaptureFixture[str],
+) -> None:
+    """If the scoped layer is unreadable, remove must fail loudly rather than delete blindly."""
+    home, _ = mcp_env
+    _corrupt_layer(home)
+    rc = handle_mcp(_remove_ns("s", scope="global"))
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "error:" in captured.err
+    assert "invalid JSON" in captured.err

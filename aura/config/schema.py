@@ -11,7 +11,7 @@ from aura.domain.errors import AuraError
 
 
 class ProviderConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     name: str
     protocol: Literal["openai", "anthropic", "ollama"]
@@ -23,7 +23,7 @@ class ProviderConfig(BaseModel):
 
 
 class ToolsConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     enabled: list[str] = Field(
         default_factory=lambda: [
@@ -64,7 +64,7 @@ class ToolsConfig(BaseModel):
 
 
 class StorageConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     path: str = Field(
         default="~/.aura/sessions.db",
@@ -73,7 +73,7 @@ class StorageConfig(BaseModel):
 
 
 class UIConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     markdown: bool = Field(
         default=True,
@@ -86,14 +86,14 @@ class UIConfig(BaseModel):
 
 
 class LogConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     enabled: bool = False
     path: str = "~/.aura/logs/events.jsonl"
 
 
 class WebSearchConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     provider: Literal["duckduckgo"] = Field(
         default="duckduckgo",
@@ -114,7 +114,7 @@ class WebSearchConfig(BaseModel):
 class RetryConfig(BaseModel):
     """Retry policy wrapping model.ainvoke() in the agent loop, not tool calls."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     max_attempts: int = Field(default=3, ge=1, le=10)
     base_delay_s: float = Field(default=1.0, gt=0)
@@ -124,7 +124,7 @@ class RetryConfig(BaseModel):
 class CompactConfig(BaseModel):
     """Compaction tunables. Invariant: microcompact_keep_recent < trigger_pairs."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     auto_threshold_buffer_tokens: int = Field(
         default=13_000,
@@ -164,7 +164,7 @@ class CompactConfig(BaseModel):
 
 
 class TeamsConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     enabled: bool = Field(
         default=False,
@@ -178,7 +178,7 @@ class TeamsConfig(BaseModel):
 class MCPServerConfig(BaseModel):
     """One MCP server; name namespaces its tools as mcp__<name>__<tool>."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     name: str
     transport: Literal["stdio", "sse", "streamable_http"] = "stdio"
@@ -215,7 +215,7 @@ class MCPServerConfig(BaseModel):
 
 
 class AuraConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     providers: list[ProviderConfig] = Field(
         default_factory=lambda: [
@@ -279,7 +279,7 @@ class AuraConfigError(AuraError):
 
 
 class StatusLineConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     command: str = ""
     timeout_ms: int = 500
@@ -300,7 +300,7 @@ class StatusLineConfig(BaseModel):
 
 
 class PermissionsConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(strict=True, extra="forbid")
 
     mode: Literal["default", "bypass", "plan", "accept_edits"] = "default"
     allow: list[str] = Field(default_factory=list)

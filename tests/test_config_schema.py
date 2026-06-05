@@ -263,3 +263,29 @@ def test_aura_config_rejects_permissions_key() -> None:
             "router": {"default": "x:m"},
             "permissions": {"mode": "bypass", "allow": ["bash"]},
         })
+
+
+@pytest.mark.parametrize(
+    ("patch", "bad_loc"),
+    [
+        ({"context_window": "100"}, "context_window"),
+        ({"retry": {"max_attempts": "3"}}, "max_attempts"),
+        ({"retry": {"base_delay_s": "1.0"}}, "base_delay_s"),
+        ({"teams": {"enabled": 1}}, "enabled"),
+        ({"teams": {"enabled": "true"}}, "enabled"),
+    ],
+)
+def test_strict_mode_rejects_type_confused_config(
+    patch: dict[str, object], bad_loc: str,
+) -> None:
+    """Untrusted config JSON must reject string/int-for-bool type confusion under
+    strict=True, never silently coerce — a quoted number hides an authoring bug."""
+    base: dict[str, object] = {
+        "providers": [{"name": "openai", "protocol": "openai"}],
+        "router": {"default": "openai:gpt-4o-mini"},
+        "tools": {"enabled": []},
+    }
+    base.update(patch)
+    with pytest.raises(ValidationError) as exc:
+        AuraConfig.model_validate(base)
+    assert any(bad_loc in str(e["loc"]) for e in exc.value.errors())

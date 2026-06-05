@@ -1,7 +1,9 @@
-"""Stateful-tool factory protocol + per-tool factories."""
+"""Builders mapping a stable tool name to its runtime-wired stateful tool."""
+
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from langchain_core.tools import BaseTool
 
@@ -15,118 +17,75 @@ from aura.tools.task_stop import TaskStop
 from aura.tools.todo_write import TodoWrite
 
 
-@runtime_checkable
-class StatefulToolFactory(Protocol):
-    """Each factory carries a ``name`` and a :meth:`build` returning a wired tool."""
-
+@dataclass(frozen=True)
+class StatefulToolFactory:
     name: str
-
-    def build(self, runtime: ToolRuntime) -> BaseTool: ...
-
-
-class TodoWriteFactory:
-    name: str = "todo_write"
-
-    def build(self, runtime: ToolRuntime) -> BaseTool:
-        return TodoWrite(state=runtime.state)
+    build: Callable[[ToolRuntime], BaseTool]
 
 
-class AskUserQuestionFactory:
-    name: str = "ask_user_question"
-
-    def build(self, runtime: ToolRuntime) -> BaseTool:
-        if runtime.asker is None:  # pragma: no cover  # AgentSession always wires a fallback
-            raise RuntimeError(
-                "AskUserQuestionFactory.build requires runtime.asker."
-            )
-        return AskUserQuestion(asker=runtime.asker)
+def _todo_write(runtime: ToolRuntime) -> BaseTool:
+    return TodoWrite(state=runtime.state)
 
 
-class TaskCreateFactory:
-    name: str = "task_create"
-
-    def build(self, runtime: ToolRuntime) -> BaseTool:
-        if (
-            runtime.tasks_store is None
-            or runtime.spawner is None
-            or runtime.running_tasks is None
-        ):
-            raise RuntimeError(
-                "TaskCreateFactory.build requires tasks_store, "
-                "spawner, and running_tasks on the runtime."
-            )
-        return TaskCreate(
-            store=runtime.tasks_store,
-            spawner=runtime.spawner,
-            running=runtime.running_tasks,
-            transcript_storage=runtime.transcript_storage,
-        )
+def _ask_user_question(runtime: ToolRuntime) -> BaseTool:
+    if runtime.asker is None:
+        raise RuntimeError("ask_user_question requires runtime.asker")
+    return AskUserQuestion(asker=runtime.asker)
 
 
-class TaskGetFactory:
-    name: str = "task_get"
-
-    def build(self, runtime: ToolRuntime) -> BaseTool:
-        if runtime.tasks_store is None:
-            raise RuntimeError(
-                "TaskGetFactory.build requires runtime.tasks_store."
-            )
-        return TaskGet(store=runtime.tasks_store)
-
-
-class TaskListFactory:
-    name: str = "task_list"
-
-    def build(self, runtime: ToolRuntime) -> BaseTool:
-        if runtime.tasks_store is None:
-            raise RuntimeError(
-                "TaskListFactory.build requires runtime.tasks_store."
-            )
-        return TaskList(store=runtime.tasks_store)
+def _task_create(runtime: ToolRuntime) -> BaseTool:
+    if runtime.tasks_store is None or runtime.spawner is None or runtime.running_tasks is None:
+        raise RuntimeError("task_create requires tasks_store, spawner, running_tasks")
+    return TaskCreate(
+        store=runtime.tasks_store,
+        spawner=runtime.spawner,
+        running=runtime.running_tasks,
+        transcript_storage=runtime.transcript_storage,
+    )
 
 
-class TaskStopFactory:
-    name: str = "task_stop"
-
-    def build(self, runtime: ToolRuntime) -> BaseTool:
-        if (
-            runtime.tasks_store is None
-            or runtime.running_tasks is None
-            or runtime.running_shells is None
-        ):
-            raise RuntimeError(
-                "TaskStopFactory.build requires tasks_store, running_tasks, "
-                "and running_shells on the runtime."
-            )
-        return TaskStop(
-            store=runtime.tasks_store,
-            running=runtime.running_tasks,
-            running_shells=runtime.running_shells,
-        )
+def _task_get(runtime: ToolRuntime) -> BaseTool:
+    if runtime.tasks_store is None:
+        raise RuntimeError("task_get requires tasks_store")
+    return TaskGet(store=runtime.tasks_store)
 
 
-class SendMessageFactory:
-    """Outside a team the tool surfaces a clean ToolError; gating lives on :class:`AgentSession`."""
+def _task_list(runtime: ToolRuntime) -> BaseTool:
+    if runtime.tasks_store is None:
+        raise RuntimeError("task_list requires tasks_store")
+    return TaskList(store=runtime.tasks_store)
 
-    name: str = "send_message"
 
-    def build(self, runtime: ToolRuntime) -> BaseTool:
-        if runtime.team_provider is None or runtime.member_name_provider is None:
-            raise RuntimeError(
-                "SendMessageFactory.build requires team_provider + member_name_provider.",
-            )
-        return SendMessage(
-            team_provider=runtime.team_provider,
-            member_name_provider=runtime.member_name_provider,
-        )
+def _task_stop(runtime: ToolRuntime) -> BaseTool:
+    if (
+        runtime.tasks_store is None
+        or runtime.running_tasks is None
+        or runtime.running_shells is None
+    ):
+        raise RuntimeError("task_stop requires tasks_store, running_tasks, running_shells")
+    return TaskStop(
+        store=runtime.tasks_store,
+        running=runtime.running_tasks,
+        running_shells=runtime.running_shells,
+    )
+
+
+def _send_message(runtime: ToolRuntime) -> BaseTool:
+    # Gating lives on AgentSession; outside a team the tool surfaces a clean ToolError.
+    if runtime.team_provider is None or runtime.member_name_provider is None:
+        raise RuntimeError("send_message requires team_provider, member_name_provider")
+    return SendMessage(
+        team_provider=runtime.team_provider,
+        member_name_provider=runtime.member_name_provider,
+    )
 
 
 STATEFUL_TOOL_FACTORIES: list[StatefulToolFactory] = [
-    TodoWriteFactory(),
-    AskUserQuestionFactory(),
-    TaskCreateFactory(),
-    TaskGetFactory(),
-    TaskListFactory(),
-    TaskStopFactory(),
-    SendMessageFactory(),
+    StatefulToolFactory("todo_write", _todo_write),
+    StatefulToolFactory("ask_user_question", _ask_user_question),
+    StatefulToolFactory("task_create", _task_create),
+    StatefulToolFactory("task_get", _task_get),
+    StatefulToolFactory("task_list", _task_list),
+    StatefulToolFactory("task_stop", _task_stop),
+    StatefulToolFactory("send_message", _send_message),
 ]

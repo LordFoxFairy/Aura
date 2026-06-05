@@ -9,7 +9,12 @@ import pytest
 
 from aura.application.commands.factory import build_default_registry
 from aura.application.commands.registry import dispatch
-from aura.application.commands.team import TeamCommand
+from aura.application.commands.team import (
+    TeamCommand,
+    _AddUsageError,
+    _format_age,
+    _parse_add_args,
+)
 from aura.application.commands.team import TeamCommand as CapabilityTeamCommand
 from aura.application.session import AgentSession
 from aura.application.teams.manager import TeamManager
@@ -36,12 +41,14 @@ def _members(agent: AgentSession) -> list[TeammateMember]:
 
 def _agent(tmp_path: Path, *, teams_enabled: bool = True) -> AgentSession:
     # ``teams.enabled=True`` opens the gate so /team verbs reach handlers.
-    cfg = AuraConfig.model_validate({
-        "providers": [{"name": "openai", "protocol": "openai"}],
-        "router": {"default": "openai:gpt-4o-mini"},
-        "tools": {"enabled": []},
-        "teams": {"enabled": teams_enabled},
-    })
+    cfg = AuraConfig.model_validate(
+        {
+            "providers": [{"name": "openai", "protocol": "openai"}],
+            "router": {"default": "openai:gpt-4o-mini"},
+            "tools": {"enabled": []},
+            "teams": {"enabled": teams_enabled},
+        }
+    )
     return AgentSession(
         config=cfg,
         model=FakeChatModel(turns=[]),
@@ -138,7 +145,8 @@ def _fake_openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_team_add_default_backend_is_in_process(
-    tmp_path: Path, _fake_openai_key: None,
+    tmp_path: Path,
+    _fake_openai_key: None,
 ) -> None:
     """``/team add alice`` defaults to in_process — backend not surfaced."""
     agent = _agent(tmp_path)
@@ -149,13 +157,13 @@ async def test_team_add_default_backend_is_in_process(
     # backend suffix is suppressed for the default value (terse output).
     assert "backend=" not in result.text
     members = _members(agent)
-    assert any(m.name == "alice" and m.backend_type == "in_process"
-               for m in members)
+    assert any(m.name == "alice" and m.backend_type == "in_process" for m in members)
 
 
 @pytest.mark.asyncio
 async def test_team_add_explicit_in_process_backend(
-    tmp_path: Path, _fake_openai_key: None,
+    tmp_path: Path,
+    _fake_openai_key: None,
 ) -> None:
     """``--backend in_process`` is accepted explicitly + persisted."""
     agent = _agent(tmp_path)
@@ -163,8 +171,7 @@ async def test_team_add_explicit_in_process_backend(
     await cmd.handle("create demo", agent)
     result = await cmd.handle("add bob --backend in_process", agent)
     assert "added" in result.text
-    member = next(m for m in _members(agent)
-                  if m.name == "bob")
+    member = next(m for m in _members(agent) if m.name == "bob")
     assert member.backend_type == "in_process"
 
 
@@ -205,7 +212,8 @@ async def test_team_add_unknown_backend_rejected(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_team_add_backend_flag_anywhere(
-    tmp_path: Path, _fake_openai_key: None,
+    tmp_path: Path,
+    _fake_openai_key: None,
 ) -> None:
     """``--backend`` can precede positional args — flag-position-agnostic."""
     agent = _agent(tmp_path)
@@ -213,11 +221,11 @@ async def test_team_add_backend_flag_anywhere(
     await cmd.handle("create demo", agent)
     # Flag interleaved between positional args.
     result = await cmd.handle(
-        "add eve general-purpose --backend in_process", agent,
+        "add eve general-purpose --backend in_process",
+        agent,
     )
     assert "added" in result.text
-    member = next(m for m in _members(agent)
-                  if m.name == "eve")
+    member = next(m for m in _members(agent) if m.name == "eve")
     assert member.agent_type == "general-purpose"
     assert member.backend_type == "in_process"
 
@@ -231,3 +239,57 @@ async def test_team_add_backend_missing_value(tmp_path: Path) -> None:
     result = await cmd.handle("add frank --backend", agent)
     assert "usage" in result.text.lower()
     assert "backend" in result.text.lower()
+
+
+@pytest.mark.parametrize(
+    ("now", "then", "expected"),
+    [
+        (1000.0, None, "-"),
+        (1000.0, 1000.0, "0s ago"),
+        (1000.0, 1030.0, "0s ago"),  # future timestamp clamps to 0, never negative
+        (1000.0, 941.0, "59s ago"),
+        (1000.0, 940.0, "1m ago"),  # 60s bucket boundary
+        (1000.0, 1000.0 - 3599, "59m ago"),
+        (1000.0, 1000.0 - 3600, "1h ago"),  # 3600s boundary
+        (1000.0, 1000.0 - 86399, "23h ago"),
+        (1000.0, 1000.0 - 86400, "1d ago"),  # 86400s boundary
+    ],
+)
+def test_format_age_buckets_and_clamps_future(
+    now: float,
+    then: float | None,
+    expected: str,
+) -> None:
+    """Age buckets gate the /team table layout; a future or boundary value must not skew them."""
+    assert _format_age(now, then) == expected
+
+
+@pytest.mark.parametrize(
+    ("rest", "positional", "backend"),
+    [
+        ("", [], "in_process"),
+        ("alice", ["alice"], "in_process"),
+        ("alice bob", ["alice", "bob"], "in_process"),
+        ("--backend pane alice", ["alice"], "pane"),
+        ("alice --backend pane", ["alice"], "pane"),  # --backend may trail positionals
+        ("--backend in_process alice", ["alice"], "in_process"),
+    ],
+)
+def test_parse_add_args_keeps_positionals_and_backend(
+    rest: str,
+    positional: list[str],
+    backend: str,
+) -> None:
+    """Positional order must survive an interleaved --backend flag, or members get mis-named."""
+    pos, be = _parse_add_args(rest)
+    assert pos == positional
+    assert be == backend
+
+
+@pytest.mark.parametrize(
+    "rest", ["--backend", "alice --backend", "--backend bogus", "a --backend zzz b"]
+)
+def test_parse_add_args_rejects_missing_or_unknown_backend(rest: str) -> None:
+    """A dangling or unknown --backend must fail loudly, not silently default the backend."""
+    with pytest.raises(_AddUsageError):
+        _parse_add_args(rest)

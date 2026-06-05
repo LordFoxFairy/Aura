@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -36,6 +36,8 @@ from aura.config import mcp_approvals, mcp_store
 from aura.config.schema import MCPServerConfig
 from aura.core import journal
 from aura.infrastructure.mcp.manager import MCPManager
+
+_RemoteTransport = Literal["sse", "streamable_http"]
 
 
 class _P(BaseModel):
@@ -56,7 +58,8 @@ def _fake_tool(name: str) -> StructuredTool:
 
 @pytest.fixture
 def isolated_home(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Path:
     """Redirect ``Path.home()`` + cwd into ``tmp_path``.
 
@@ -99,17 +102,22 @@ def _stub_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
     monkeypatch.setattr(manager_mod, "MultiServerMCPClient", _make_client)
     monkeypatch.setattr(
-        MCPManager, "_list_prompts", staticmethod(_empty_prompts),
+        MCPManager,
+        "_list_prompts",
+        staticmethod(_empty_prompts),
     )
     monkeypatch.setattr(
-        MCPManager, "_list_resources", staticmethod(_empty_resources),
+        MCPManager,
+        "_list_resources",
+        staticmethod(_empty_resources),
     )
     return fake_client
 
 
 @pytest.mark.asyncio
 async def test_unapproved_server_not_loaded_at_startup(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A project-layer server with no approval must not be spawned.
 
@@ -142,7 +150,8 @@ async def test_unapproved_server_not_loaded_at_startup(
 
 @pytest.mark.asyncio
 async def test_approved_server_loads_when_fingerprint_matches(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A pre-approved project server with matching fingerprint loads silently.
 
@@ -168,7 +177,8 @@ async def test_approved_server_loads_when_fingerprint_matches(
 
 @pytest.mark.asyncio
 async def test_approval_invalidated_when_command_changes(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Approving config-A then loading config-B (different command) re-prompts.
 
@@ -181,7 +191,9 @@ async def test_approval_invalidated_when_command_changes(
     mcp_approvals.approve(cfg_old)
 
     cfg_new = MCPServerConfig(
-        name="srv", command="curl", args=["evil.sh"],
+        name="srv",
+        command="curl",
+        args=["evil.sh"],
     )
     mgr = MCPManager([cfg_new], project_server_names={"srv"})
     assert "srv" in mgr.unapproved_server_names()
@@ -190,7 +202,8 @@ async def test_approval_invalidated_when_command_changes(
 
 @pytest.mark.asyncio
 async def test_user_scope_servers_skip_approval_check(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A user-scope (non-project-layer) server loads without approval.
 
@@ -212,7 +225,8 @@ async def test_user_scope_servers_skip_approval_check(
 
 @pytest.mark.asyncio
 async def test_approve_persists_to_user_state(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``manager.approve`` writes the approval to the user-scope JSON file.
 
@@ -246,7 +260,8 @@ async def test_approve_persists_to_user_state(
 
 @pytest.mark.asyncio
 async def test_revoke_disconnects_and_removes_approval(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``manager.revoke`` removes the approval AND tears the live connection down.
 
@@ -288,21 +303,17 @@ def test_concurrent_approval_writes_are_atomic(
     half-written intermediate. A leftover ``.tmp`` file would also be
     a smell (would mean the temp-file cleanup path leaks).
     """
-    configs = [
-        MCPServerConfig(name=f"srv{i}", command="npx", args=[f"a{i}"])
-        for i in range(10)
-    ]
+    configs = [MCPServerConfig(name=f"srv{i}", command="npx", args=[f"a{i}"]) for i in range(10)]
     for cfg in configs:
         mcp_approvals.approve(cfg)
 
     raw = json.loads(mcp_approvals.approvals_path().read_text(encoding="utf-8"))
     project_key = mcp_approvals.project_key()
-    assert set(raw["approvals"][project_key].keys()) == {
-        f"srv{i}" for i in range(10)
-    }
+    assert set(raw["approvals"][project_key].keys()) == {f"srv{i}" for i in range(10)}
     # No leftover temp files in the parent directory.
     leftovers = [
-        p.name for p in mcp_approvals.approvals_path().parent.iterdir()
+        p.name
+        for p in mcp_approvals.approvals_path().parent.iterdir()
         if p.name.startswith(".mcp-approvals.") and p.suffix == ".tmp"
     ]
     assert leftovers == []
@@ -310,7 +321,8 @@ def test_concurrent_approval_writes_are_atomic(
 
 @pytest.mark.asyncio
 async def test_journal_records_unapproved_attempt(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Every unapproved project-server load attempt writes ONE journal line.
 
@@ -336,7 +348,8 @@ async def test_journal_records_unapproved_attempt(
 
 @pytest.mark.asyncio
 async def test_mcp_reload_picks_up_new_servers(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Adding a server post-construction lands in the manager via ``reload``.
 
@@ -358,7 +371,8 @@ async def test_mcp_reload_picks_up_new_servers(
 
 @pytest.mark.asyncio
 async def test_mcp_reload_drops_removed_servers(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Reloading without a previously-known server removes it from status().
 
@@ -382,7 +396,8 @@ async def test_mcp_reload_drops_removed_servers(
 
 @pytest.mark.asyncio
 async def test_unapproved_server_visible_via_mcp_list(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The ``/mcp`` slash command surfaces unapproved servers + a CTA.
 
@@ -432,15 +447,23 @@ def test_fingerprint_stable_across_env_value_rotation() -> None:
     env *key* still re-prompts — that's a meaningful change.
     """
     a = MCPServerConfig(
-        name="x", command="npx", args=[], env={"TOKEN": "old-secret"},
+        name="x",
+        command="npx",
+        args=[],
+        env={"TOKEN": "old-secret"},
     )
     b = MCPServerConfig(
-        name="x", command="npx", args=[], env={"TOKEN": "new-secret"},
+        name="x",
+        command="npx",
+        args=[],
+        env={"TOKEN": "new-secret"},
     )
     assert mcp_approvals.fingerprint(a) == mcp_approvals.fingerprint(b)
 
     c = MCPServerConfig(
-        name="x", command="npx", args=[],
+        name="x",
+        command="npx",
+        args=[],
         env={"TOKEN": "old-secret", "EXTRA_KEY": "x"},
     )
     assert mcp_approvals.fingerprint(a) != mcp_approvals.fingerprint(c)
@@ -473,7 +496,8 @@ def test_revoke_idempotent_returns_false_on_missing(
 
 @pytest.mark.asyncio
 async def test_approve_unknown_server_returns_clean_error(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``/mcp approve <not-in-config>`` reports a textual error, not a stack.
 
@@ -490,7 +514,8 @@ async def test_approve_unknown_server_returns_clean_error(
 
 @pytest.mark.asyncio
 async def test_user_scope_approve_is_noop(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Approving a user-scope server returns a friendly no-op.
 
@@ -508,7 +533,8 @@ async def test_user_scope_approve_is_noop(
 
 @pytest.mark.asyncio
 async def test_auto_detect_project_names_from_store(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Manager built without ``project_server_names`` consults the store.
 
@@ -533,7 +559,8 @@ async def test_auto_detect_project_names_from_store(
 
 @pytest.mark.asyncio
 async def test_reload_via_slash_command_picks_up_disk_changes(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``/mcp reload`` triggers a re-read of ``mcp_store`` and updates state.
 
@@ -565,7 +592,8 @@ async def test_reload_via_slash_command_picks_up_disk_changes(
 
 
 def test_project_key_resolves_symlinks(
-    isolated_home: Path, monkeypatch: pytest.MonkeyPatch,
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A symlinked cwd resolves to the same project key as the canonical path.
 
@@ -581,3 +609,407 @@ def test_project_key_resolves_symlinks(
     a = mcp_approvals.project_key(real)
     b = mcp_approvals.project_key(link)
     assert a == b
+
+
+# ── boundary matrix: project_key OSError fallback ──────────────────
+
+
+def test_project_key_falls_back_to_absolute_when_resolve_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If ``resolve()`` raises OSError, the key still derives from ``absolute()``.
+
+    A broken symlink loop or an unreadable mount can make ``resolve()``
+    throw; the approval gate must still produce a stable project key
+    instead of crashing the whole session at startup.
+    """
+    target = Path("/some/odd/cwd")
+
+    def _boom(self: Path, strict: bool = False) -> Path:
+        raise OSError("simulated resolve failure")
+
+    # WHY: force the OSError arm without touching the real filesystem.
+    monkeypatch.setattr(Path, "resolve", _boom)
+    assert mcp_approvals.project_key(target) == str(target.absolute())
+
+
+def test_project_key_defaults_to_cwd_when_arg_is_none(
+    isolated_home: Path,
+) -> None:
+    """``project_key(None)`` resolves the *current* working directory.
+
+    The startup path calls ``project_key()`` with no argument; this
+    pins that the cwd branch is exercised and matches an explicit
+    ``Path.cwd()`` lookup so the two call sites can never diverge.
+    """
+    assert mcp_approvals.project_key(None) == mcp_approvals.project_key(
+        Path.cwd(),
+    )
+
+
+# ── boundary matrix: fingerprint over non-stdio transports ─────────
+
+
+@pytest.mark.parametrize("transport", ["sse", "streamable_http"])
+def test_fingerprint_covers_url_for_remote_transports(
+    transport: _RemoteTransport,
+) -> None:
+    """For sse/streamable_http servers the URL is part of the fingerprint.
+
+    A project repo could swap a trusted remote endpoint for an
+    attacker-controlled one; the gate must treat a URL diff as a
+    material change and force re-approval, exactly as it does for a
+    stdio command diff.
+    """
+    good = MCPServerConfig(
+        name="x",
+        transport=transport,
+        url="https://good.example/mcp",
+    )
+    evil = MCPServerConfig(
+        name="x",
+        transport=transport,
+        url="https://evil.example/mcp",
+    )
+    assert mcp_approvals.fingerprint(good) != mcp_approvals.fingerprint(evil)
+
+
+@pytest.mark.parametrize("transport", ["sse", "streamable_http"])
+def test_fingerprint_remote_keys_not_values(
+    transport: _RemoteTransport,
+) -> None:
+    """Remote headers fingerprint by *key set*, not by secret value.
+
+    Auth bearer tokens rotate; re-prompting on every rotation would be
+    hostile. Adding a NEW header key (a new capability surface) still
+    re-prompts — symmetric with the stdio env-key rule.
+    """
+    base = MCPServerConfig(
+        name="x",
+        transport=transport,
+        url="https://h.example",
+        headers={"Authorization": "Bearer old"},
+    )
+    rotated = MCPServerConfig(
+        name="x",
+        transport=transport,
+        url="https://h.example",
+        headers={"Authorization": "Bearer new"},
+    )
+    extra_key = MCPServerConfig(
+        name="x",
+        transport=transport,
+        url="https://h.example",
+        headers={"Authorization": "Bearer old", "X-Trace": "on"},
+    )
+    assert mcp_approvals.fingerprint(base) == mcp_approvals.fingerprint(rotated)
+    assert mcp_approvals.fingerprint(base) != mcp_approvals.fingerprint(extra_key)
+
+
+def test_fingerprint_stdio_and_remote_never_collide() -> None:
+    """A stdio server and a remote server never share a fingerprint.
+
+    The transport tag is hashed first, so an empty-command stdio entry
+    and an empty-url remote entry can't alias each other — preventing a
+    cross-transport approval swap.
+    """
+    stdio = MCPServerConfig(name="x", command="npx", args=[])
+    remote = MCPServerConfig(
+        name="x",
+        transport="sse",
+        url="https://e.example",
+    )
+    assert mcp_approvals.fingerprint(stdio) != mcp_approvals.fingerprint(remote)
+
+
+# ── boundary matrix: _load_raw corruption tolerance ────────────────
+
+
+def test_load_raw_returns_empty_when_file_absent(isolated_home: Path) -> None:
+    """A missing approvals file is a cold first-run, not an error.
+
+    ``_load_raw`` must return ``{}`` so the very first ``aura`` run on a
+    machine doesn't explode trying to read a file that was never written.
+    """
+    assert not mcp_approvals.approvals_path().exists()
+    assert mcp_approvals._load_raw() == {}
+
+
+def test_load_raw_on_corrupt_json_returns_empty_and_journals(
+    isolated_home: Path,
+) -> None:
+    """Hand-corrupted JSON degrades to empty state AND drops a breadcrumb.
+
+    A truncated/garbled approvals file (editor crash, disk-full) must
+    not brick the agent; it falls back to ``unapproved`` everywhere and
+    journals ``mcp_approvals_load_failed`` so the operator can diagnose.
+    """
+    path = mcp_approvals.approvals_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not valid json", encoding="utf-8")
+
+    log_path = isolated_home / "journal.jsonl"
+    journal.configure(log_path)
+    try:
+        assert mcp_approvals._load_raw() == {}
+    finally:
+        journal.reset()
+    assert "mcp_approvals_load_failed" in log_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "blob",
+    ["[]", '"a string"', "42", "true", "null"],
+)
+def test_load_raw_rejects_non_object_top_level(
+    isolated_home: Path,
+    blob: str,
+) -> None:
+    """A JSON file whose root isn't an object is treated as empty.
+
+    Valid-JSON-but-wrong-shape (an array, a scalar) would otherwise
+    flow into ``_normalise`` and risk an attribute error; clamping it to
+    ``{}`` keeps the parse path total over any well-formed JSON value.
+    """
+    path = mcp_approvals.approvals_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(blob, encoding="utf-8")
+    assert mcp_approvals._load_raw() == {}
+
+
+# ── boundary matrix: _normalise drops malformed entries ────────────
+
+
+@pytest.mark.parametrize(
+    "approvals_value",
+    [None, [], "x", 0, 12, ("tuple",)],
+)
+def test_normalise_handles_non_dict_approvals(
+    approvals_value: Any,
+) -> None:
+    """A missing/non-dict ``approvals`` key yields an empty projection.
+
+    Guards against a hand-edit that replaces the ``approvals`` object
+    with a list or deletes it; the gate must read this as "nothing
+    approved" rather than raising.
+    """
+    assert mcp_approvals._normalise({"approvals": approvals_value}) == {}
+    assert mcp_approvals._normalise({}) == {}
+
+
+def test_normalise_skips_malformed_project_and_server_rows() -> None:
+    """Each malformed row is dropped independently; valid rows survive.
+
+    A single bad hand-edit (non-string project key, non-dict server
+    bucket, missing fingerprint/timestamp) must not nuke the *other*
+    legitimately-approved servers — partial corruption stays partial.
+    """
+    raw: dict[str, Any] = {
+        "approvals": {
+            "/proj": {
+                "good": {"fingerprint": "fp", "approved_at": "2026-01-01"},
+                "bad_entry_not_dict": "oops",
+                "missing_ts": {"fingerprint": "fp"},
+                "missing_fp": {"approved_at": "2026-01-01"},
+                "wrong_type_fp": {"fingerprint": 7, "approved_at": "x"},
+                123: {"fingerprint": "fp", "approved_at": "x"},  # non-str name
+            },
+            "/proj_bad_servers": "not a dict",
+            456: {"good": {"fingerprint": "f", "approved_at": "t"}},  # non-str key
+        },
+    }
+    out = mcp_approvals._normalise(raw)
+    assert set(out) == {"/proj"}
+    assert set(out["/proj"]) == {"good"}
+    assert out["/proj"]["good"] == mcp_approvals._Approval(
+        fingerprint="fp",
+        approved_at="2026-01-01",
+    )
+
+
+def test_normalise_drops_project_whose_every_entry_is_malformed() -> None:
+    """A project whose entries are all junk produces no bucket at all.
+
+    Exercises the ``if bucket:`` guard — an empty bucket must not be
+    written back, otherwise ``load_for_project`` would report a phantom
+    project with zero servers and confuse ``/mcp list``.
+    """
+    raw: dict[str, Any] = {
+        "approvals": {"/only_junk": {"x": "not-a-dict", "y": 9}},
+    }
+    assert mcp_approvals._normalise(raw) == {}
+
+
+# ── boundary matrix: approval_state tristate ───────────────────────
+
+
+def test_approval_state_is_unapproved_for_unknown_server(
+    isolated_home: Path,
+) -> None:
+    """A server with no stored entry reports ``unapproved`` (cold first-run).
+
+    The tristate exists so the REPL can distinguish "never seen" from
+    "drifted"; ``unapproved`` drives the first-time approval prompt.
+    """
+    cfg = MCPServerConfig(name="fresh", command="npx", args=[])
+    assert mcp_approvals.approval_state(cfg) == "unapproved"
+
+
+def test_approval_state_is_approved_then_changed_on_drift(
+    isolated_home: Path,
+) -> None:
+    """Same config → ``approved``; a command diff → ``changed``, not silent.
+
+    The whole point of the tristate is that a drifted fingerprint maps
+    to ``changed`` (re-prompt) rather than collapsing into ``unapproved``
+    — the operator needs to know the entry was tampered with, not just
+    that it's ungated.
+    """
+    cfg = MCPServerConfig(name="srv", command="npx", args=["-y", "good"])
+    mcp_approvals.approve(cfg)
+    assert mcp_approvals.approval_state(cfg) == "approved"
+
+    drifted = MCPServerConfig(name="srv", command="curl", args=["evil.sh"])
+    assert mcp_approvals.approval_state(drifted) == "changed"
+
+
+# ── boundary matrix: _atomic_write failure leaves no temp turd ─────
+
+
+def test_atomic_write_cleans_up_tmp_on_serialisation_failure(
+    isolated_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the write blows up mid-flight, the temp file is unlinked, error re-raised.
+
+    A failed approve must not (a) leave a half-written ``.tmp`` littering
+    ``~/.aura`` nor (b) silently swallow the failure — the caller has to
+    learn the approval did NOT persist.
+    """
+    boom = RuntimeError("disk exploded")
+
+    def _explode(*args: Any, **kwargs: Any) -> None:
+        raise boom
+
+    # WHY: json.dump is the first thing inside the try-block fd context;
+    # the module resolves it through the stdlib json global, so patching
+    # stdlib json.dump intercepts the exact call site.
+    monkeypatch.setattr(json, "dump", _explode)
+
+    cfg = MCPServerConfig(name="srv", command="npx", args=[])
+    with pytest.raises(RuntimeError, match="disk exploded"):
+        mcp_approvals.approve(cfg)
+
+    parent = mcp_approvals.approvals_path().parent
+    leftovers = [
+        p.name
+        for p in parent.iterdir()
+        if p.name.startswith(".mcp-approvals.") and p.suffix == ".tmp"
+    ]
+    assert leftovers == []
+    assert not mcp_approvals.approvals_path().exists()
+
+
+# ── boundary matrix: approve idempotency + revoke guard clauses ────
+
+
+def test_approve_twice_is_idempotent_single_entry(isolated_home: Path) -> None:
+    """Re-approving the same config refreshes in place, never duplicates.
+
+    Idempotence is a stated contract: a double-click on ``/mcp approve``
+    must yield exactly one entry (latest timestamp), not a growing list
+    that bloats the user-scope file.
+    """
+    cfg = MCPServerConfig(name="srv", command="npx", args=["-y", "pkg"])
+    mcp_approvals.approve(cfg)
+    first = mcp_approvals.load_for_project()["srv"].approved_at
+    mcp_approvals.approve(cfg)
+
+    bucket = mcp_approvals.load_for_project()
+    assert list(bucket) == ["srv"]
+    assert bucket["srv"].fingerprint == mcp_approvals.fingerprint(cfg)
+    # Refreshed-or-equal timestamp; never regresses.
+    assert bucket["srv"].approved_at >= first
+
+
+def test_revoke_keeps_sibling_servers_in_same_project(
+    isolated_home: Path,
+) -> None:
+    """Revoking one server in a multi-entry project leaves the bucket intact.
+
+    Exercises the "non-empty bucket → keep the project key" arm: the
+    project must NOT be deleted while other approved servers remain, or
+    those siblings would silently lose their approval.
+    """
+    keep = MCPServerConfig(name="keep", command="npx", args=[])
+    drop = MCPServerConfig(name="drop", command="npx", args=[])
+    mcp_approvals.approve(keep)
+    mcp_approvals.approve(drop)
+
+    assert mcp_approvals.revoke("drop") is True
+    raw = mcp_approvals._load_raw()
+    key = mcp_approvals.project_key()
+    assert set(raw["approvals"][key]) == {"keep"}
+
+
+def test_revoke_drops_empty_project_key(isolated_home: Path) -> None:
+    """Revoking the last server in a project removes the whole project key.
+
+    Stops the user-scope file from accumulating stale empty
+    ``{project: {}}`` shells over a long-lived machine's lifetime.
+    """
+    only = MCPServerConfig(name="solo", command="npx", args=[])
+    mcp_approvals.approve(only)
+    key = mcp_approvals.project_key()
+    assert key in mcp_approvals._load_raw()["approvals"]
+
+    assert mcp_approvals.revoke("solo") is True
+    assert key not in mcp_approvals._load_raw().get("approvals", {})
+
+
+def test_revoke_returns_false_when_approvals_corrupt(
+    isolated_home: Path,
+) -> None:
+    """Revoke on a file whose ``approvals`` isn't a dict is a no-op False.
+
+    A corrupt/hand-mangled file must make revoke report "nothing
+    removed" rather than raising — symmetric with the missing-entry
+    idempotence guarantee.
+    """
+    path = mcp_approvals.approvals_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"approvals": ["not", "a", "dict"]}), "utf-8")
+    assert mcp_approvals.revoke("anything") is False
+
+
+def test_revoke_returns_false_when_project_present_but_name_absent(
+    isolated_home: Path,
+) -> None:
+    """Revoking an absent name inside a real project bucket is False, no write.
+
+    Hits the ``name not in bucket`` arm distinctly from the corrupt-file
+    arm: the project exists and is well-formed, but the target server
+    was never approved — still a clean no-op.
+    """
+    other = MCPServerConfig(name="other", command="npx", args=[])
+    mcp_approvals.approve(other)
+    assert mcp_approvals.revoke("never_approved") is False
+    # Sibling untouched.
+    assert "other" in mcp_approvals.load_for_project()
+
+
+def test_is_approved_false_for_unknown_and_drifted(isolated_home: Path) -> None:
+    """``is_approved`` is False for both unknown servers and drifted configs.
+
+    The boolean fast-path used at connect time must reject an unseen
+    server (entry is None) and a tampered one (fingerprint mismatch)
+    alike — either way the server is not safe to auto-spawn.
+    """
+    cfg = MCPServerConfig(name="srv", command="npx", args=["good"])
+    assert mcp_approvals.is_approved(cfg) is False  # unknown
+
+    mcp_approvals.approve(cfg)
+    assert mcp_approvals.is_approved(cfg) is True
+
+    drifted = MCPServerConfig(name="srv", command="curl", args=["evil"])
+    assert mcp_approvals.is_approved(drifted) is False  # changed

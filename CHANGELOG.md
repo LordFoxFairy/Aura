@@ -2,6 +2,24 @@
 
 Notable changes to Aura. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versions follow [SemVer](https://semver.org/).
 
+## [0.19.0] — 2026-06-06 — 全仓质量革命：god-object 拆分 + 五维极致抛光 + 95% 覆盖
+
+Two-phase quality pass, 15 commits, every commit `make check` green. Tests **2613 → 3255 (+642)**; coverage **89% → 95%**. All behavior-preserving (no public-API or wire-format change) except the two genuine fixes called out below. No new `# type: ignore` / `cast` / `TYPE_CHECKING` / deferred-import introduced (production count stays 0).
+
+### Phase 1 — god-object splits + correctness + hygiene (6 commits)
+- **fix(web_fetch): real shipped bug** — outbound HTTP header was `User-AgentSession` (a botched `Agent`→`AgentSession` rename hit the string literal; only occurrence repo-wide); now `User-Agent`, with a regression test.
+- **fix(permission): honor `prompt_timeout_sec`** — the documented 300s prompt-timeout config was silently ignored (half-wired); `make_cli_asker`/`make_cli_user_asker` now wrap `render_form` in `asyncio.wait_for`, mapping timeout → deny/blank, with regression tests. Dropped the dead `console` params + `GitStatusCommand._writer` + a no-op `_hint_for_error` wrapper.
+- **refactor(mcp): split `mcp/manager.py` 822→767** — extracted stateless connection-building into `connection_builder.py` (env-expansion via message-handler DI). Remaining resource/reconnect/approval seams kept as a cohesive connection-state-machine.
+- **refactor(teams): split `teams/manager.py` 974→818** — extracted `view.py` (`TeamViewBuilder` projection) + `lifecycle.py` (`LifecycleEmitter` event queue) + `state.py` (leaf, breaks an import cycle); collaborators wired via injected `team()` callable + shared `_members` dict, no back-ref cycle. Member provisioning/shutdown/messaging/persistence kept as the cohesive core.
+- **refactor(encapsulation):** `AgentSession` gains public `teammate`/`team_manager` accessors, killing 2 cross-module private penetrations.
+- **refactor(hygiene):** comment/docstring sweep across 45 files (29 multi-line module docstrings → ≤1-line WHY; multi-line `#` blocks, decorative/parity/process-tag comments removed); `event: Any` → `KeyPressEvent` at the prompt_toolkit boundary.
+
+### Phase 2 — extreme polish: 5 dimensions + 95% coverage (9 commits)
+- **dim-2 Pydantic:** `strict=True` on all 13 config `BaseModel`s (verified safe — strict accepts int→float, so zero hand-edited-config friction; only rejects genuine type confusion) + parametrized Schema-crash proof-test.
+- **dim-3 anti-ceremony:** flattened the Java-style tool factory — 7 stateless `*Factory` classes + a `runtime_checkable` Protocol collapsed to one `@dataclass(frozen=True) StatefulToolFactory(name, build)` + module build-functions.
+- **dim-1 / dim-4 verified-compliant:** dead-code audit (false positives confirmed live/test-pinned); `print` is legitimate CLI output, broad `except` sites all rollback+re-raise or emit+degrade, hang points use `asyncio.wait_for`.
+- **dim-5 coverage 89→95%** (+642 tests): boundary-test matrices (Schema-crash / null-zero / numeric / idempotency) with intent-verifying docstrings across commands, store, config, skills, teams, plus the "infra" layer reached without real TTY/tmux/subprocess (pt `Application.run_async` driver harness for `forms/widget`, mocked tmux seam for `teams/pane`, argv+capsys for `__main__`, NDJSON-feed for `session_service`).
+
 ## [Unreleased] — Phase 1-4 architecture refactor + teams feature gate + persistence layout alignment + audit MED clearance
 
 Headline: Phases 1-4 of the architecture refactor (per `docs/superpowers/specs/2026-05-10-aura-architecture-vision.md`) land the typed `LoopSlots` + `Outcome` + `Compactor` foundation, the typed `ToolMetadata` + `StatefulToolFactory` tool surface, the `SessionRuntime` + `McpRuntime` extractions, the unified tool-error wire shape, the typed `ReadCarryover` + `Context.fresh()` + cwd-boundary unification on the context layer, and the real `Compactor` class with `CompactionTrigger` + `CompactConfig` + AG-UI `aura.compact.event` lifecycle visibility. 37 commits, 2615 → 2801 tests (+186). Plus the prior unreleased work: the teams (multi-agent swarm) subsystem is now feature-gated, default off, mirroring claude-code's `isAgentSwarmsEnabled()`. Same-release the persistence layout flips to the per-project nested shape that claude-code ships. Version bumps `0.17.0 → 0.18.0`. **40/40 OPEN MED audit findings (2026-04-25 audit) closed across 17 commits — see Audit-MED-clearance section below.**

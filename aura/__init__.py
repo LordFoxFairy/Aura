@@ -6,7 +6,7 @@ from aura.config.schema import AuraConfig, AuraConfigError
 from aura.domain.agent_definition import AgentDefinition
 from aura.domain.errors import AuraError
 
-__version__ = "0.11.0"
+__version__ = "0.19.0"
 
 __all__ = [
     "AgentDefinition",

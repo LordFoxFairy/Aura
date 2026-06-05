@@ -7,7 +7,7 @@ packages = ["aura", "cli", "desktop/host"]
 
 [project]
 name = "aura-agent"
-version = "0.18.0"
+version = "0.19.0"
 description = "A general-purpose Python agent with an explicit async loop and LangChain as the LLM client layer."
 requires-python = ">=3.11"
 license = "MIT"

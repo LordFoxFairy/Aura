@@ -898,6 +898,34 @@ async def test_session_driver_top_level_permission_response_without_pending_erro
     } in emitted
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        b'{"kind":"prompt","text":"hi","bogus":1}\n',  # extra field on prompt
+        b'{"kind":"permission_response","id":"x","bogus":1}\n',  # extra on perm resp
+        b'{"kind":"permission_response","choice":"accept"}\n',  # missing required id
+        b'{"kind":"permission_response","id":123}\n',  # wrong-type id (int)
+    ],
+)
+@pytest.mark.asyncio
+async def test_session_driver_rejects_structural_violations_as_bad_request(
+    line: bytes,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pydantic extra=forbid / missing / wrong-type → 'bad request:', never a turn."""
+    emitted: list[dict[str, Any]] = []
+    _build_minimal_driver_env(tmp_path, monkeypatch, emitted)
+
+    reader = _ScriptedReader([line])
+    rc = await _run_driver_with(reader, emitted)
+
+    assert rc == 0
+    errors = [ev for ev in emitted if ev["event"] == "error"]
+    assert any(ev["message"].startswith("bad request:") for ev in errors)
+    assert not any(ev["event"] == "final" for ev in emitted)
+
+
 @pytest.mark.asyncio
 async def test_session_driver_emits_error_when_router_default_missing(
     tmp_path: Path,

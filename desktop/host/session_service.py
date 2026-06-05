@@ -4,15 +4,25 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import sys
 from collections.abc import Callable, Iterable
+from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol
 from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 
 from aura.application.hooks import HookChain
 from aura.application.hooks.permission import make_permission_hook
@@ -36,6 +46,65 @@ from aura.infrastructure.llm import make_model_for_spec
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.wire.serialize import agent_state_to_wire, permission_request_to_wire
 from aura.infrastructure.wire.stream import stream_agent_wire
+
+_KNOWN_KINDS = ("prompt", "permission_response")
+
+
+class _PromptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["prompt"]
+    # Non-str/missing text coerces to "" so the empty-prompt guard owns the reject.
+    text: str = ""
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _coerce_text(cls, value: object) -> str:
+        return value if isinstance(value, str) else ""
+
+
+class _PermissionResponseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["permission_response"]
+    id: str
+    choice: str = "deny"
+    feedback: str = ""
+    scope: str | None = None
+
+
+_InboundRequest = Annotated[
+    _PromptRequest | _PermissionResponseRequest,
+    Field(discriminator="kind"),
+]
+_INBOUND_ADAPTER: TypeAdapter[_PromptRequest | _PermissionResponseRequest] = TypeAdapter(
+    _InboundRequest,
+)
+
+
+class _RejectReason(Enum):
+    DECODE = "decode"  # malformed JSON or shape that fails Pydantic validation
+    UNKNOWN_KIND = "unknown_kind"  # valid object, kind absent or not a known tag
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _Rejected:
+    reason: _RejectReason
+    detail: str  # decode → exception text; unknown_kind → repr(kind)
+
+
+def _parse_inbound(
+    line: bytes,
+) -> _PromptRequest | _PermissionResponseRequest | _Rejected:
+    try:
+        raw = json.loads(line.decode("utf-8").strip())
+    except json.JSONDecodeError as exc:
+        return _Rejected(_RejectReason.DECODE, str(exc))
+    kind = raw.get("kind") if isinstance(raw, dict) else None
+    if kind not in _KNOWN_KINDS:
+        return _Rejected(_RejectReason.UNKNOWN_KIND, repr(kind))
+    try:
+        return _INBOUND_ADAPTER.validate_python(raw)
+    except ValidationError as exc:
+        return _Rejected(_RejectReason.DECODE, str(exc))
 
 
 class EventEmitter(Protocol):
@@ -248,51 +317,60 @@ async def run_session_driver(
             line = await active_reader.readline()
             if not line:
                 break
-            try:
-                request = json.loads(line.decode("utf-8").strip())
-            except json.JSONDecodeError as exc:
-                emit({"event": "error", "message": f"bad request: {exc}"})
+            req = _parse_inbound(line)
+            if isinstance(req, _Rejected):
+                if req.reason is _RejectReason.UNKNOWN_KIND:
+                    emit({
+                        "event": "error",
+                        "message": f"unsupported request kind: {req.detail}",
+                    })
+                else:
+                    emit({"event": "error", "message": f"bad request: {req.detail}"})
                 continue
 
-            kind = request.get("kind")
-            if kind == "permission_response":
-                feed_permission_response(asker=asker, payload=request, emit=emit)
+            if isinstance(req, _PermissionResponseRequest):
+                feed_permission_response(asker=asker, payload=req.model_dump(), emit=emit)
                 continue
 
-            if kind == "prompt":
-                text = request.get("text", "")
-                if not isinstance(text, str) or not text:
-                    emit({"event": "error", "message": "empty prompt"})
+            if not req.text:
+                emit({"event": "error", "message": "empty prompt"})
+                continue
+            turn_task = asyncio.create_task(_drive_turn(req.text))
+            while not turn_task.done():
+                try:
+                    line = await asyncio.wait_for(active_reader.readline(), timeout=0.1)
+                except TimeoutError:
                     continue
-                turn_task = asyncio.create_task(_drive_turn(text))
-                while not turn_task.done():
-                    try:
-                        line = await asyncio.wait_for(active_reader.readline(), timeout=0.1)
-                    except TimeoutError:
-                        continue
-                    if not line:
-                        asker.deny_all_pending(feedback="stdin_closed")
-                        break
-                    try:
-                        sub = json.loads(line.decode("utf-8").strip())
-                    except json.JSONDecodeError as exc:
-                        emit({"event": "error", "message": f"bad request mid-turn: {exc}"})
-                        continue
-                    if sub.get("kind") == "permission_response":
-                        feed_permission_response(asker=asker, payload=sub, emit=emit)
+                if not line:
+                    asker.deny_all_pending(feedback="stdin_closed")
+                    break
+                sub = _parse_inbound(line)
+                if isinstance(sub, _Rejected):
+                    if sub.reason is _RejectReason.DECODE:
+                        emit({
+                            "event": "error",
+                            "message": f"bad request mid-turn: {sub.detail}",
+                        })
                     else:
                         emit({
                             "event": "error",
                             "message": (
                                 "only permission_response accepted mid-turn; "
-                                f"got kind={sub.get('kind')!r}"
+                                f"got kind={sub.detail}"
                             ),
                         })
-                await turn_task
-                turn_task = None
-                continue
-
-            emit({"event": "error", "message": f"unsupported request kind: {kind!r}"})
+                elif isinstance(sub, _PermissionResponseRequest):
+                    feed_permission_response(asker=asker, payload=sub.model_dump(), emit=emit)
+                else:
+                    emit({
+                        "event": "error",
+                        "message": (
+                            "only permission_response accepted mid-turn; "
+                            "got kind='prompt'"
+                        ),
+                    })
+            await turn_task
+            turn_task = None
     finally:
         # Await after cancel so ``final`` flushes before ``exited`` on the wire.
         if turn_task is not None and not turn_task.done():

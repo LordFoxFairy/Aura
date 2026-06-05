@@ -1063,3 +1063,384 @@ async def test_subagent_inherited_read_blocked_when_file_deleted(
     assert isinstance(outcome, Replace)
     assert outcome.result.ok is False
     assert outcome.decision.allow is False
+
+
+# ---------------------------------------------------------------------------
+# Appended boundary tests: uncovered branches in the read-gating decision,
+# bash-target extraction, and path normalization. No real TTY/subprocess —
+# all seams are exercised via the in-process hook and a monkeypatched
+# ``Path.resolve`` where an OSError must be simulated.
+# ---------------------------------------------------------------------------
+
+
+def _raise_oserror_resolve(_self: Path, strict: bool = False) -> Path:
+    """Stand-in for ``Path.resolve`` that always fails — feeds the OSError seam."""
+    raise OSError("simulated resolve failure")
+
+
+@pytest.mark.parametrize("bad_command", [None, "", 0, [], {}])
+@pytest.mark.asyncio
+async def test_bash_non_string_or_empty_command_bypasses(
+    tmp_path: Path,
+    bad_command: object,
+) -> None:
+    """A bash call whose ``command`` arg is missing/empty/non-str cannot be
+    parsed for mutation targets, so the gate must fail-open (bypass) rather
+    than crash — schema-crash resilience on the tool-arg boundary."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": bad_command},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_missing_command_key_bypasses(tmp_path: Path) -> None:
+    """A bash args dict with no ``command`` key at all (args.get → None) must
+    bypass cleanly — the gate never assumes the key is present."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_target_resolve_oserror_is_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If resolving a detected bash mutation target raises OSError (e.g. a
+    path the OS refuses to canonicalise), that target is silently skipped so
+    one un-resolvable token cannot wedge the whole command — fail-open at the
+    resolve seam, not a hard crash."""
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "cfg.toml"
+    target.write_text("k = 1\n")
+    hook = make_must_read_first_hook(ctx)
+    monkeypatch.setattr(Path, "resolve", _raise_oserror_resolve)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": f"sed -i 's/1/2/' {target}"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_fd_dup_redirect_is_not_a_mutation_target(
+    tmp_path: Path,
+) -> None:
+    """``2>&1`` duplicates a file descriptor — it is NOT a file write, so it
+    must never be treated as a mutation target (the ``&`` suffix guard). A
+    pure ``cmd 2>&1`` with no real redirect target stays a passthrough."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "grep x file 2>&1"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_unbalanced_quote_segment_is_skipped(tmp_path: Path) -> None:
+    """A command segment with an unbalanced quote makes ``shlex.split`` raise
+    ValueError; that segment must be skipped (not crash the gate) so a
+    syntactically broken command degrades gracefully to passthrough."""
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "out.txt"
+    target.write_text("old\n")
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "echo 'unterminated"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_empty_segments_between_separators_are_skipped(
+    tmp_path: Path,
+) -> None:
+    """Consecutive separators (``;;``) yield empty segments that tokenize to
+    [] and must be skipped without error — the splitter is robust to malformed
+    chaining."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "ls ;; pwd"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_leading_separator_yields_empty_segment_skipped(
+    tmp_path: Path,
+) -> None:
+    """A command that starts with a separator (``; ls``) splits into an empty
+    leading segment that tokenizes to []; that segment must be skipped without
+    error — leading/dangling separators degrade to passthrough."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "; ls"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_fd_prefixed_dangling_redirect_at_end_is_ignored(
+    tmp_path: Path,
+) -> None:
+    """A trailing fd-prefixed redirect token (``2>``) with no following file
+    (compact form, empty suffix, last token) has no real target; the gate must
+    not index past the token list — malformed fd redirect is treated as no
+    mutation, never an IndexError."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "echo hi 2>"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_fd_prefixed_spaced_redirect_to_unread_file_blocks(
+    tmp_path: Path,
+) -> None:
+    """A fd-prefixed redirect with a spaced filename (``cmd 2> file``) writes
+    that file; when the target was never read it must be blocked exactly like a
+    plain ``> file`` redirect — fd-numbered stderr/stdout redirects are real
+    writes, not exempt."""
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "err.log"
+    target.write_text("old\n")
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": f"run_thing 2> {target}"},
+        state=LoopState(),
+    )
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert "would mutate" in (sc.error or "")
+
+
+@pytest.mark.asyncio
+async def test_bash_dangling_redirect_operator_at_end_is_ignored(
+    tmp_path: Path,
+) -> None:
+    """A bare ``>`` as the final token has no following filename; the gate must
+    not index past the token list — a malformed redirect is treated as no
+    mutation, never an IndexError."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "echo hi >"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_compact_redirect_to_dev_is_ignored(tmp_path: Path) -> None:
+    """A compact ``>/dev/null`` token (operator+suffix fused) targets a device
+    node, which must be excluded just like the spaced ``> /dev/null`` form —
+    device sinks are never gated."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "ls >/dev/null"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_sed_long_inplace_flag_is_blocked(tmp_path: Path) -> None:
+    """The GNU long form ``sed --in-place`` must be recognised as an in-place
+    mutation exactly like ``-i`` — otherwise the gate is trivially bypassed by
+    spelling the flag out."""
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "cfg.toml"
+    target.write_text("k = 1\n")
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": f"sed --in-place 's/1/2/' {target}"},
+        state=LoopState(),
+    )
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert "would mutate" in (sc.error or "")
+
+
+@pytest.mark.asyncio
+async def test_bash_sed_inplace_with_suffix_value_is_blocked(
+    tmp_path: Path,
+) -> None:
+    """``sed --in-place=.bak`` (backup-suffix form) is still an in-place edit
+    of the target and must be blocked when the file was never read."""
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "cfg.toml"
+    target.write_text("k = 1\n")
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": f"sed --in-place=.bak 's/1/2/' {target}"},
+        state=LoopState(),
+    )
+    sc = _sc(outcome)
+    assert sc is not None
+    assert sc.ok is False
+    assert "would mutate" in (sc.error or "")
+
+
+@pytest.mark.asyncio
+async def test_bash_sed_long_non_inplace_flag_does_not_block(
+    tmp_path: Path,
+) -> None:
+    """A non-mutating GNU long flag such as ``--quiet`` must NOT be mistaken
+    for in-place editing; without ``-i`` the sed command reads-only and the
+    gate stays a passthrough."""
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "cfg.toml"
+    target.write_text("k = 1\n")
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": f"sed --quiet 's/1/2/' {target}"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_sed_inplace_with_no_file_argument_is_ignored(
+    tmp_path: Path,
+) -> None:
+    """``sed -i`` whose only remaining tokens are options (no filename) yields
+    no extractable target; the gate must treat it as no mutation rather than
+    crash when the last-non-option lookup returns None."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "sed -i -n"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.parametrize("bad_path", [None, "", 0, [], {}])
+@pytest.mark.asyncio
+async def test_edit_file_non_string_or_empty_path_bypasses(
+    tmp_path: Path,
+    bad_path: object,
+) -> None:
+    """An edit_file call whose ``path`` arg is missing/empty/non-str cannot be
+    gated, so the hook fails open instead of raising — schema-crash resilience
+    on the path boundary."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_edit_tool(),
+        args={"path": bad_path, "old_str": "a", "new_str": "b"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_write_file_missing_path_key_bypasses(tmp_path: Path) -> None:
+    """A write_file args dict without a ``path`` key (args.get → None) must
+    bypass cleanly rather than crash — the gate never assumes the key exists."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    outcome = await hook(
+        tool=_write_tool(),
+        args={},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_edit_file_path_resolve_oserror_bypasses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If canonicalising the edit target raises OSError, the gate cannot decide
+    safely and must fail open (bypass) instead of propagating — mirrors the
+    bash-target resolve seam for the file tools."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    monkeypatch.setattr(Path, "resolve", _raise_oserror_resolve)
+    outcome = await hook(
+        tool=_edit_tool(),
+        args={"path": "/some/path", "old_str": "a", "new_str": "b"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_write_file_path_resolve_oserror_bypasses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """write_file shares the same resolve seam as edit_file: an OSError while
+    canonicalising the target must bypass, never crash the hook."""
+    ctx = _ctx(tmp_path)
+    hook = make_must_read_first_hook(ctx)
+    monkeypatch.setattr(Path, "resolve", _raise_oserror_resolve)
+    outcome = await hook(
+        tool=_write_tool(),
+        args={"path": "/some/path"},
+        state=LoopState(),
+    )
+    assert _sc(outcome) is None
+
+
+@pytest.mark.asyncio
+async def test_bash_block_is_idempotent_across_repeated_calls(
+    tmp_path: Path,
+) -> None:
+    """Firing the same unread-target bash mutation twice must yield the same
+    block both times — the gate holds no per-call state that could let a
+    second attempt slip through."""
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "cfg.toml"
+    target.write_text("k = 1\n")
+    hook = make_must_read_first_hook(ctx)
+    cmd = f"sed -i 's/1/2/' {target}"
+    first = await hook(
+        tool=_bash_tool(), args={"command": cmd}, state=LoopState(),
+    )
+    second = await hook(
+        tool=_bash_tool(), args={"command": cmd}, state=LoopState(),
+    )
+    sc1 = _sc(first)
+    sc2 = _sc(second)
+    assert sc1 is not None and sc2 is not None
+    assert sc1.ok is False and sc2.ok is False
+    assert sc1.error == sc2.error

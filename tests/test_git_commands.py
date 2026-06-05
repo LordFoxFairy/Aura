@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import io
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -27,8 +28,13 @@ from aura.application.commands.git import (
     GitDiffCommand,
     GitLogCommand,
     GitStatusCommand,
+    _format_branch_line,
+    _format_file_line,
+    _format_status,
     _git,
+    _GitNotInstalledError,
     _GitTimeoutError,
+    _parse_log_count,
 )
 from aura.application.session import AgentSession
 
@@ -375,3 +381,356 @@ async def test_git_not_installed_returns_friendly_error(
 
     assert result.handled is True
     assert "git CLI not installed" in result.text
+
+
+def _stub_git(
+    code: int, stdout: str, stderr: str,
+) -> Callable[..., Any]:
+    """Build a ``_git`` replacement returning a fixed ``(code, out, err)``.
+
+    Mocks at the subprocess seam so generic-failure / not-a-repo branches
+    are exercised without shelling out — git would never naturally emit
+    an arbitrary nonzero stderr on a healthy repo.
+    """
+
+    async def fake(*_a: str, **_kw: Any) -> tuple[int, str, str]:
+        return code, stdout, stderr
+
+    return fake
+
+
+def _raise_git(exc: BaseException) -> Callable[..., Any]:
+    """Build a ``_git`` replacement that raises ``exc`` on call."""
+
+    async def fake(*_a: str, **_kw: Any) -> tuple[int, str, str]:
+        raise exc
+
+    return fake
+
+
+# --- _parse_log_count: numeric-boundary matrix --------------------------
+
+
+@pytest.mark.parametrize(
+    ("arg", "expected"),
+    [
+        ("0", 1),       # below min clamps up to _LOG_MIN
+        ("-1", 1),      # negative clamps up, never a negative -N flag
+        ("-9999", 1),   # extreme negative still clamps to min
+        ("1", 1),       # exact lower bound passes through
+        ("100", 100),   # exact upper bound passes through
+        ("101", 100),   # above max clamps down to _LOG_MAX
+        ("999999", 100),  # extreme positive clamps to max
+        ("", 20),       # empty arg falls back to _LOG_DEFAULT
+        ("   ", 20),    # whitespace-only treated as empty
+        ("  7  ", 7),   # surrounding whitespace is stripped
+    ],
+)
+def test_parse_log_count_clamps_to_valid_window(
+    arg: str, expected: int,
+) -> None:
+    """/log N must clamp into [1,100] so we never pass git a bogus -N."""
+    assert _parse_log_count(arg) == expected
+
+
+@pytest.mark.parametrize(
+    "arg",
+    ["abc", "1.5", "0x10", "nan", "inf", "1e3", "  not-a-number  "],
+)
+def test_parse_log_count_rejects_non_integer(arg: str) -> None:
+    """Non-integer counts must surface an error string, never crash int()."""
+    out = _parse_log_count(arg)
+    assert isinstance(out, str)
+    assert out.startswith("error:")
+
+
+# --- _format_status / helpers: empty + ahead/behind/gone edges ----------
+
+
+def test_format_status_empty_raw_is_clean() -> None:
+    """Truly empty porcelain (no branch header) means a clean tree."""
+    assert _format_status("") == "[dim]working tree clean[/dim]"
+
+
+def test_format_status_branch_header_only_is_clean() -> None:
+    """A ``##`` header with zero file lines still renders clean, not blank."""
+    out = _format_status("## main...origin/main")
+    assert "on branch main" in out
+    assert "working tree clean" in out
+
+
+def test_format_branch_line_reports_ahead_behind() -> None:
+    """Ahead/behind counts must be humanised so users see divergence."""
+    out = _format_branch_line("## main...origin/main [ahead 2, behind 3]")
+    assert "on branch main" in out
+    assert "2 ahead" in out
+    assert "3 behind" in out
+
+
+def test_format_branch_line_reports_gone_upstream() -> None:
+    """A deleted upstream must be flagged, not silently dropped."""
+    out = _format_branch_line("## feat...origin/feat [gone]")
+    assert "upstream gone" in out
+
+
+def test_format_branch_line_no_upstream_has_no_suffix() -> None:
+    """A branch with no tracking info renders bare, no trailing separator."""
+    out = _format_branch_line("## solo")
+    assert out == "[bold cyan]on branch solo[/bold cyan]"
+
+
+def test_format_branch_line_handles_no_space_prefix() -> None:
+    """Some porcelain emits ``##branch`` without a space; strip it anyway."""
+    out = _format_branch_line("##detached")
+    assert "on branch detached" in out
+
+
+@pytest.mark.parametrize(
+    ("line", "style"),
+    [
+        ("?? new.txt", "dim"),
+        (" M edited.txt", "yellow"),
+        (" D gone.txt", "red"),
+        ("A  added.txt", "green"),
+        ("UU conflict.txt", "red"),
+        ("XY weird.txt", "dim"),  # unknown code falls back to dim
+    ],
+)
+def test_format_file_line_styles_by_status_code(
+    line: str, style: str,
+) -> None:
+    """Each two-char status code maps to its colour so users scan fast."""
+    out = _format_file_line(line)
+    assert out == f"[{style}]{line}[/{style}]"
+
+
+@pytest.mark.parametrize("line", ["", "?", "M"])
+def test_format_file_line_passthrough_when_too_short(line: str) -> None:
+    """Lines shorter than a status code are returned verbatim, never sliced."""
+    assert _format_file_line(line) == line
+
+
+# --- error paths via the _git seam (no real subprocess) -----------------
+
+
+@pytest.mark.asyncio
+async def test_status_generic_failure_surfaces_stderr(
+    agent: AgentSession,
+) -> None:
+    """A nonzero git that isn't a missing-repo must echo its stderr dimmed."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(1, "", "fatal: index file corrupt"),
+    ):
+        result = await GitStatusCommand().handle("", agent)
+    assert result.handled is True
+    assert "index file corrupt" in result.text
+
+
+@pytest.mark.asyncio
+async def test_status_generic_failure_empty_stderr_has_fallback(
+    agent: AgentSession,
+) -> None:
+    """Nonzero exit with empty stderr must still say something, not blank."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(1, "", ""),
+    ):
+        result = await GitStatusCommand().handle("", agent)
+    assert "git status failed" in result.text
+
+
+@pytest.mark.asyncio
+async def test_diff_not_a_repo_returns_error(agent: AgentSession) -> None:
+    """/diff outside a repo must produce the same friendly not-a-repo line."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(128, "", "fatal: not a git repository (or any parent)"),
+    ):
+        result = await GitDiffCommand().handle("", agent)
+    assert result.handled is True
+    assert "not a git repository" in result.text
+
+
+@pytest.mark.asyncio
+async def test_diff_generic_failure_empty_stderr_has_fallback(
+    agent: AgentSession,
+) -> None:
+    """/diff nonzero with no stderr falls back to a stable error label."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(1, "", ""),
+    ):
+        result = await GitDiffCommand().handle("", agent)
+    assert "git diff failed" in result.text
+
+
+@pytest.mark.asyncio
+async def test_diff_not_installed_returns_friendly_error(
+    agent: AgentSession,
+) -> None:
+    """/diff must catch a missing git binary, not bubble a raw OSError."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_raise_git(_GitNotInstalledError("git: not found")),
+    ):
+        result = await GitDiffCommand().handle("", agent)
+    assert "git CLI not installed" in result.text
+
+
+@pytest.mark.asyncio
+async def test_diff_timeout_returns_friendly_error(
+    agent: AgentSession,
+) -> None:
+    """/diff timeout must name the command so the user knows what stalled."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_raise_git(_GitTimeoutError("git timed out after 5s")),
+    ):
+        result = await GitDiffCommand().handle("", agent)
+    assert "/diff timed out" in result.text
+
+
+@pytest.mark.asyncio
+async def test_log_not_a_repo_returns_error(agent: AgentSession) -> None:
+    """/log outside a repo must produce the friendly not-a-repo line."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(128, "", "fatal: not a git repository"),
+    ):
+        result = await GitLogCommand().handle("", agent)
+    assert "not a git repository" in result.text
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "fatal: your current branch 'main' does not have any commits yet",
+        "fatal: bad default revision 'HEAD'",
+        "fatal: ambiguous argument 'HEAD': unknown revision",
+    ],
+)
+@pytest.mark.asyncio
+async def test_log_empty_history_variants_say_no_commits(
+    stderr: str, agent: AgentSession,
+) -> None:
+    """All of git's empty-history stderr phrasings map to one calm message."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(128, "", stderr),
+    ):
+        result = await GitLogCommand().handle("", agent)
+    assert "no commits yet" in result.text
+
+
+@pytest.mark.asyncio
+async def test_log_generic_failure_empty_stderr_has_fallback(
+    agent: AgentSession,
+) -> None:
+    """/log nonzero with unrecognised empty stderr falls back to a label."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(1, "", ""),
+    ):
+        result = await GitLogCommand().handle("", agent)
+    assert "git log failed" in result.text
+
+
+@pytest.mark.asyncio
+async def test_log_generic_failure_surfaces_stderr(
+    agent: AgentSession,
+) -> None:
+    """An unexpected /log failure echoes git's own stderr, dimmed."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(1, "", "error: pathspec 'nope' did not match"),
+    ):
+        result = await GitLogCommand().handle("", agent)
+    assert "pathspec 'nope'" in result.text
+
+
+@pytest.mark.asyncio
+async def test_log_not_installed_returns_friendly_error(
+    agent: AgentSession,
+) -> None:
+    """/log must catch a missing git binary like the other commands do."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_raise_git(_GitNotInstalledError("git: not found")),
+    ):
+        result = await GitLogCommand().handle("", agent)
+    assert "git CLI not installed" in result.text
+
+
+@pytest.mark.asyncio
+async def test_log_timeout_returns_friendly_error(
+    agent: AgentSession,
+) -> None:
+    """/log timeout must name itself so the user knows which command hung."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_raise_git(_GitTimeoutError("git timed out after 5s")),
+    ):
+        result = await GitLogCommand().handle("", agent)
+    assert "/log timed out" in result.text
+
+
+@pytest.mark.asyncio
+async def test_log_empty_stdout_says_no_commits(
+    agent: AgentSession,
+) -> None:
+    """Exit 0 but whitespace-only stdout still means an empty history."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(0, "   \n", ""),
+    ):
+        result = await GitLogCommand().handle("", agent)
+    assert "no commits yet" in result.text
+
+
+@pytest.mark.asyncio
+async def test_log_appends_trailing_newline_when_missing(
+    agent: AgentSession,
+) -> None:
+    """A final line without its own newline must still be terminated once."""
+    console = _capture_buf()
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(0, "abc123 only commit", ""),
+    ):
+        result = await GitLogCommand(writer=console.write).handle("", agent)
+    out = console.getvalue()
+    assert out == "abc123 only commit\n"
+    assert result.kind == "view"
+    assert result.text == ""
+
+
+@pytest.mark.asyncio
+async def test_log_preserves_existing_trailing_newline(
+    agent: AgentSession,
+) -> None:
+    """Output already newline-terminated must not gain a second blank line."""
+    console = _capture_buf()
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(0, "abc123 only\n", ""),
+    ):
+        await GitLogCommand(writer=console.write).handle("", agent)
+    assert console.getvalue() == "abc123 only\n"
+
+
+@pytest.mark.asyncio
+async def test_diff_default_writer_falls_back_to_stdout(
+    agent: AgentSession,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """With no injected writer, the diff must reach the real stdout seam."""
+    with patch(
+        "aura.application.commands.git._git",
+        new=_stub_git(0, "diff --git a/x b/x\n+hello\n", ""),
+    ):
+        result = await GitDiffCommand().handle("--full", agent)
+    captured = capsys.readouterr()
+    assert "hello" in captured.out
+    assert result.kind == "view"
+    assert result.text == ""

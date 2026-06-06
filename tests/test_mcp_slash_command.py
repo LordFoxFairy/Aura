@@ -20,7 +20,7 @@ import pytest
 
 from aura.application.commands.mcp import MCPCommand
 from aura.application.session import AgentSession
-from aura.infrastructure.mcp.types import MCPServerStatus
+from aura.infrastructure.mcp.types import MCPServerConfig, MCPServerStatus
 
 
 @dataclass
@@ -363,3 +363,207 @@ def test_mcp_command_has_expected_surface() -> None:
     assert cmd.name == "/mcp"
     assert cmd.source == "builtin"
     assert cmd.description
+
+
+class _ReloadSpyManager(_SpyManager):
+    """Adds a ``reload`` seam so we can drive the ``/mcp reload`` branch."""
+
+    def __init__(
+        self,
+        statuses: list[MCPServerStatus] | None = None,
+        *,
+        reload_result: str = "+1 -0",
+    ) -> None:
+        super().__init__(statuses=statuses)
+        self.reload_calls: list[list[MCPServerConfig]] = []
+        self._reload_result = reload_result
+
+    async def reload(self, configs: list[MCPServerConfig]) -> str:
+        self.reload_calls.append(list(configs))
+        return self._reload_result
+
+
+@pytest.mark.asyncio
+async def test_mcp_reload_without_manager_returns_friendly_error() -> None:
+    """``/mcp reload`` with no manager must degrade to a message, not crash."""
+    agent = _FakeAgent(mcp_manager=None)
+    result = await MCPCommand().handle("reload", _as_agent(agent))
+    assert result.handled is True
+    assert result.kind == "print"
+    assert "no MCP manager" in result.text
+
+
+@pytest.mark.asyncio
+async def test_mcp_reload_passes_loaded_configs_and_surfaces_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``/mcp reload`` must re-read the store and hand the configs to the manager."""
+    loaded: list[MCPServerConfig] = []
+    monkeypatch.setattr(
+        "aura.application.commands.mcp.mcp_store.load", lambda: loaded
+    )
+    spy = _ReloadSpyManager(reload_result="+2 -1")
+    agent = _FakeAgent(mcp_manager=spy)
+    result = await MCPCommand().handle("reload", _as_agent(agent))
+    assert spy.reload_calls == [loaded]
+    assert result.text == "+2 -1"
+    assert result.kind == "print"
+
+
+@pytest.mark.asyncio
+async def test_mcp_reload_store_failure_is_swallowed_at_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A store read blowing up must surface as a print, never propagate out."""
+
+    def _boom() -> list[MCPServerConfig]:
+        raise RuntimeError("corrupt mcp_store.json")
+
+    monkeypatch.setattr("aura.application.commands.mcp.mcp_store.load", _boom)
+    spy = _ReloadSpyManager()
+    agent = _FakeAgent(mcp_manager=spy)
+    result = await MCPCommand().handle("reload", _as_agent(agent))
+    assert result.handled is True
+    assert "reload failed" in result.text
+    assert "corrupt mcp_store.json" in result.text
+    # Manager.reload must NOT run when the config load fails.
+    assert spy.reload_calls == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_reload_is_idempotent_across_repeated_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Repeated reloads stay deterministic — each forwards a fresh config read."""
+    monkeypatch.setattr(
+        "aura.application.commands.mcp.mcp_store.load", lambda: []
+    )
+    spy = _ReloadSpyManager(reload_result="+0 -0")
+    agent = _FakeAgent(mcp_manager=spy)
+    first = await MCPCommand().handle("reload", _as_agent(agent))
+    second = await MCPCommand().handle("reload", _as_agent(agent))
+    assert first.text == second.text == "+0 -0"
+    assert len(spy.reload_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_appends_unapproved_approval_hint() -> None:
+    """Unapproved project-layer servers must get a call-to-action footer so the
+    operator knows they exist and how to load them."""
+    statuses = [
+        MCPServerStatus(
+            name="connected-srv", transport="stdio", state="connected",
+            error_message=None, tool_count=1, resource_count=0, prompt_count=0,
+        ),
+        MCPServerStatus(
+            name="pending-a", transport="stdio", state="unapproved",
+            error_message=None, tool_count=0, resource_count=0, prompt_count=0,
+        ),
+        MCPServerStatus(
+            name="pending-b", transport="sse", state="unapproved",
+            error_message=None, tool_count=0, resource_count=0, prompt_count=0,
+        ),
+    ]
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=statuses))
+    result = await MCPCommand().handle("list", _as_agent(agent))
+    assert result.kind == "view"
+    assert "unapproved project-layer servers: pending-a, pending-b" in result.text
+    assert "/mcp approve <name>" in result.text
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_no_hint_when_nothing_unapproved() -> None:
+    """A clean fleet must not show the approval footer — no false prompts."""
+    statuses = [
+        MCPServerStatus(
+            name="ok", transport="stdio", state="connected",
+            error_message=None, tool_count=0, resource_count=0, prompt_count=0,
+        ),
+    ]
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=statuses))
+    result = await MCPCommand().handle("list", _as_agent(agent))
+    assert "unapproved" not in result.text
+    assert "/mcp approve" not in result.text
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_truncates_overlong_error_message() -> None:
+    """A pathologically long error must be clipped with an ellipsis so one bad
+    server can't blow out the status table width."""
+    long_msg = "x" * 200
+    statuses = [
+        MCPServerStatus(
+            name="broken", transport="stdio", state="error",
+            error_message=long_msg, tool_count=0,
+            resource_count=0, prompt_count=0,
+        ),
+    ]
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=statuses))
+    result = await MCPCommand().handle("list", _as_agent(agent))
+    assert "…" in result.text
+    assert long_msg not in result.text
+    # Clipped body stays well under the raw length.
+    assert len("x" * 200) > max(len(line) for line in result.text.splitlines())
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_error_row_without_message_shows_unknown() -> None:
+    """An errored server with no message must still render a non-empty cell."""
+    statuses = [
+        MCPServerStatus(
+            name="broken", transport="stdio", state="error",
+            error_message=None, tool_count=0,
+            resource_count=0, prompt_count=0,
+        ),
+    ]
+    agent = _FakeAgent(mcp_manager=_SpyManager(statuses=statuses))
+    result = await MCPCommand().handle("list", _as_agent(agent))
+    assert "error: unknown error" in result.text
+
+
+@pytest.mark.asyncio
+async def test_mcp_toggle_joins_multiword_target() -> None:
+    """A server name with spaces must be re-joined intact before dispatch."""
+    spy = _SpyManager(
+        statuses=[
+            MCPServerStatus(
+                name="my server", transport="stdio", state="disabled",
+                error_message=None, tool_count=0,
+                resource_count=0, prompt_count=0,
+            ),
+        ],
+    )
+    agent = _FakeAgent(mcp_manager=spy)
+    result = await MCPCommand().handle("enable my server", _as_agent(agent))
+    assert spy.enable_calls == ["my server"]
+    assert result.kind == "print"
+
+
+@pytest.mark.asyncio
+async def test_mcp_toggle_strips_surrounding_whitespace_in_target() -> None:
+    """Extra inter-token spaces collapse to a single clean target name."""
+    spy = _SpyManager(
+        statuses=[
+            MCPServerStatus(
+                name="github", transport="stdio", state="disabled",
+                error_message=None, tool_count=0,
+                resource_count=0, prompt_count=0,
+            ),
+        ],
+    )
+    agent = _FakeAgent(mcp_manager=spy)
+    result = await MCPCommand().handle("enable   github   ", _as_agent(agent))
+    assert spy.enable_calls == ["github"]
+    assert result.handled is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_toggle_unknown_action_reports_unknown_subcommand() -> None:
+    """The ``_toggle`` defensive fall-through maps an unexpected action to the
+    same unknown-subcommand error the dispatcher emits."""
+    spy = _SpyManager(statuses=[])
+    agent = _FakeAgent(mcp_manager=spy)
+    result = await MCPCommand()._toggle(_as_agent(agent), "bogus", "x")
+    assert "unknown" in result.text.lower()
+    assert "'bogus'" in result.text
+    assert spy.enable_calls == []

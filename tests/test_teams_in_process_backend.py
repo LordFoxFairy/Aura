@@ -177,3 +177,146 @@ def test_member_default_backend_type_is_in_process() -> None:
     record = TeamRecord.model_validate_json(legacy_json)
     assert record.members[0].backend_type == "in_process"
     assert record.members[0].tmux_pane_id is None
+
+
+async def _gate_forever(gate: asyncio.Event) -> None:
+    """Block until the gate is set; lets a test pin a task in the running state."""
+    await gate.wait()
+
+
+def _handle_for(
+    task: asyncio.Task[None],
+    *,
+    abort: AbortController | None = None,
+) -> InProcessHandle:
+    """Build a handle around a caller-controlled task, isolating handle semantics."""
+    return InProcessHandle(
+        task=task,
+        stop_event=asyncio.Event(),
+        abort=abort or AbortController(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_shutdown_short_circuits_when_task_already_done() -> None:
+    """A handle whose task already exited must report graceful success without re-signalling."""
+    done = asyncio.Event()
+    done.set()
+    task = asyncio.create_task(_gate_forever(done))
+    await task
+    handle = _handle_for(task)
+    assert handle.is_alive() is False
+    ok = await handle.shutdown(timeout_sec=10.0)
+    assert ok is True
+    # Early return must not flip the cooperative stop signal.
+    assert handle.stop_event.is_set() is False
+
+
+@pytest.mark.asyncio
+async def test_shutdown_force_kills_and_returns_false_on_timeout() -> None:
+    """A teammate that ignores the stop signal past the deadline is force-killed, yielding False."""
+    gate = asyncio.Event()
+    task = asyncio.create_task(_gate_forever(gate))
+    await asyncio.sleep(0)
+    handle = _handle_for(task)
+    ok = await handle.shutdown(timeout_sec=0.05)
+    assert ok is False
+    assert handle.stop_event.is_set() is True
+    assert handle.is_alive() is False
+    assert handle.abort.aborted is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_absorbs_caller_cancel_and_shields_task() -> None:
+    """A cancelled shutdown caller must not tear down the teammate; the shield keeps it alive."""
+    gate = asyncio.Event()
+    task = asyncio.create_task(_gate_forever(gate))
+    await asyncio.sleep(0)
+    handle = _handle_for(task)
+    waiter = asyncio.ensure_future(handle.shutdown(timeout_sec=10.0))
+    await asyncio.sleep(0)
+    waiter.cancel()
+    settled = await waiter
+    # The cancel is absorbed; shutdown reports the still-running task as not-done.
+    assert settled is False
+    assert handle.is_alive() is True
+    gate.set()
+    await task
+
+
+@pytest.mark.asyncio
+async def test_force_kill_skips_abort_when_already_aborted() -> None:
+    """A pre-aborted handle must not re-abort; force_kill still tears the task down idempotently."""
+    abort = AbortController()
+    abort.abort("prior_reason")
+    gate = asyncio.Event()
+    task = asyncio.create_task(_gate_forever(gate))
+    await asyncio.sleep(0)
+    handle = _handle_for(task, abort=abort)
+    await handle.force_kill()
+    assert handle.is_alive() is False
+    # The original abort reason is preserved (idempotent controller).
+    assert handle.abort.reason == "prior_reason"
+
+
+class _RaisingAbort(AbortController):
+    """Abort controller whose abort() raises, exercising force_kill's defensive suppression."""
+
+    def abort(self, reason: str = "aborted") -> None:
+        raise RuntimeError("abort backend exploded")
+
+
+@pytest.mark.asyncio
+async def test_force_kill_swallows_abort_failure() -> None:
+    """A failing abort backend must never crash tear-down; the task is still cancelled."""
+    abort = _RaisingAbort()
+    gate = asyncio.Event()
+    task = asyncio.create_task(_gate_forever(gate))
+    await asyncio.sleep(0)
+    handle = _handle_for(task, abort=abort)
+    await handle.force_kill()
+    assert handle.is_alive() is False
+
+
+@pytest.mark.asyncio
+async def test_force_kill_on_finished_task_skips_cancel() -> None:
+    """force_kill on a naturally-finished task aborts the signal but issues no redundant cancel."""
+    gate = asyncio.Event()
+    gate.set()
+    task = asyncio.create_task(_gate_forever(gate))
+    await task
+    abort = AbortController()
+    handle = _handle_for(task, abort=abort)
+    await handle.force_kill()
+    assert handle.abort.aborted is True
+    assert handle.is_alive() is False
+
+
+@pytest.mark.asyncio
+async def test_spawn_sync_matches_async_spawn(tmp_path: Path) -> None:
+    """spawn and spawn_sync are the same construction path; the async wrapper adds no I/O."""
+    storage = _storage(tmp_path)
+    backend = InProcessBackend()
+    member = TeammateMember(name="bob")
+    stop = asyncio.Event()
+    abort = AbortController()
+    _agent: Any = _ScriptedAgent()
+    _manager: Any = None
+    handle = backend.spawn_sync(
+        team_id="team-b",
+        member=member,
+        agent=_agent,
+        manager=_manager,
+        storage=storage,
+        stop_event=stop,
+        abort=abort,
+        seed_prompt=None,
+    )
+    try:
+        assert isinstance(handle, InProcessHandle)
+        assert handle.pane_id is None
+        assert handle.stop_event is stop
+        assert handle.abort is abort
+        assert handle.task.get_name() == "aura-teammate-bob"
+    finally:
+        await handle.force_kill()

@@ -21,11 +21,12 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from aura.application.hooks import HookChain
 from aura.application.session import AgentSession
 from aura.application.tasks.runners import LocalAgentTask, local_agent_io
+from aura.application.tasks.runners.local_agent import run_local_agent
 from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.application.tasks.spawn_port import SpawnedAgent
 from aura.application.tasks.store import TasksStore
 from aura.config.schema import AuraConfig
-from aura.domain.events import AgentEvent
+from aura.domain.events import AgentEvent, Final, ToolCallStarted
 from aura.domain.task import TaskRecord
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -566,3 +567,379 @@ async def test_load_child_messages_swallows_storage_error_returns_empty(
     monkeypatch.setattr(agent.storage, "load", _boom)
     out = local_agent_io.load_child_messages(agent, store, rec.id)
     assert out == []
+
+
+# --- run_local_agent: timeout / cancel / driver-error / abort-cascade branches ---
+
+
+class _FakeSpawnedAgent:
+    """Scripted child whose event stream + close behaviour drive the runner branches."""
+
+    def __init__(
+        self,
+        *,
+        events: list[AgentEvent] | None = None,
+        stream_error: BaseException | None = None,
+        yield_ticks: int = 0,
+    ) -> None:
+        # A real :memory: SessionStorage so capture_child_messages' load() works.
+        self._storage = SessionStorage(Path(":memory:"))
+        self._hooks = HookChain()
+        self._events = events or []
+        # stream_error raises from inside astream after the scripted events drain.
+        # Feeding TimeoutError / CancelledError here drives the runner's matching
+        # except-branches deterministically — identical to a real asyncio.timeout
+        # deadline or parent-abort cancel, but with zero wallclock-race flakiness.
+        self._stream_error = stream_error
+        # yield_ticks > 0 hands control back via sleep(0) ticks (no wallclock) so a
+        # pre-armed abort watcher gets scheduled and lands its cancel mid-stream.
+        self._yield_ticks = yield_ticks
+        self.closed = False
+
+    @property
+    def config(self) -> AuraConfig:
+        return _cfg()
+
+    @property
+    def model(self) -> BaseChatModel:
+        return FakeChatModel()
+
+    @property
+    def storage(self) -> SessionStorage:
+        return self._storage
+
+    @property
+    def session_id(self) -> str:
+        return "fake-child"
+
+    @property
+    def hooks(self) -> HookChain:
+        return self._hooks
+
+    async def astream(
+        self, prompt: str,  # noqa: ARG002  # matches SpawnedAgent.astream signature
+    ) -> AsyncIterator[AgentEvent | dict[str, Any]]:
+        for event in self._events:
+            yield event
+        for _ in range(self._yield_ticks):
+            await asyncio.sleep(0)
+        if self._stream_error is not None:
+            raise self._stream_error
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class _FakeSpawnPort:
+    """Minimal SpawnPort feeding one scripted child; spawn may itself raise."""
+
+    def __init__(
+        self,
+        *,
+        agent: _FakeSpawnedAgent | None = None,
+        abort_event: asyncio.Event | None = None,
+        spawn_error: Exception | None = None,
+    ) -> None:
+        self._agent = agent
+        self._abort_event = abort_event
+        self._spawn_error = spawn_error
+
+    @property
+    def parent_model_spec(self) -> str:
+        return "openai:gpt-4o-mini"
+
+    @property
+    def abort_event(self) -> asyncio.Event | None:
+        return self._abort_event
+
+    def validate_model_spec(self, spec: str) -> None:  # noqa: ARG002  # Protocol noop
+        return
+
+    def spawn(
+        self,
+        prompt: str,  # noqa: ARG002  # matches SpawnPort.spawn signature
+        allowed_tools: list[str] | None = None,  # noqa: ARG002  # ditto
+        *,
+        agent_type: str = "general-purpose",  # noqa: ARG002  # ditto
+        task_id: str | None = None,  # noqa: ARG002  # ditto
+        model_spec: str | None = None,  # noqa: ARG002  # ditto
+    ) -> SpawnedAgent:
+        if self._spawn_error is not None:
+            raise self._spawn_error
+        assert self._agent is not None
+        return self._agent
+
+
+@pytest.mark.asyncio
+async def test_wait_for_terminal_noop_when_never_started() -> None:
+    """An unstarted task must await cleanly — no AttributeError on the null handle."""
+    store = TasksStore()
+    factory = _factory_with_reply("x")
+    rec = store.create(description="d", prompt="p")
+    task = LocalAgentTask(store=store, factory=factory, task_id=rec.id)
+    await task.wait_for_terminal()
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_run_local_agent_missing_record_short_circuits() -> None:
+    """A vanished task_id must return before spawning — no child, no store mutation."""
+    store = TasksStore()
+    agent = _FakeSpawnedAgent(events=[Final(message="never")])
+    factory = _FakeSpawnPort(agent=agent)
+    await run_local_agent(
+        store=store,
+        factory=factory,
+        task_id="ghost",
+        timeout_sec=None,
+        transcript_storage=None,
+        parent_session_id=None,
+        cwd=None,
+    )
+    assert not agent.closed
+    assert store.get("ghost") is None
+
+
+@pytest.mark.asyncio
+async def test_run_local_agent_records_tool_activity_and_final() -> None:
+    """A ToolCallStarted bumps tool_count; a Final supplies the completed result text."""
+    store = TasksStore()
+    rec = store.create(description="d", prompt="p")
+    agent = _FakeSpawnedAgent(events=[
+        ToolCallStarted(name="Bash", input={}),
+        Final(message="all done"),
+    ])
+    factory = _FakeSpawnPort(agent=agent)
+    await run_local_agent(
+        store=store,
+        factory=factory,
+        task_id=rec.id,
+        timeout_sec=None,
+        transcript_storage=None,
+        parent_session_id=None,
+        cwd=None,
+    )
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.final_result == "all done"
+    assert refreshed.progress.tool_count == 1
+    assert agent.closed
+
+
+@pytest.mark.asyncio
+async def test_run_local_agent_timeout_marks_failed_with_ceiling_message() -> None:
+    """A deadline TimeoutError fails the task with the override-hint ceiling message."""
+    store = TasksStore()
+    rec = store.create(description="d", prompt="p")
+    # TimeoutError from the stream is indistinguishable to the runner from an
+    # asyncio.timeout deadline — both land in the same except-branch.
+    agent = _FakeSpawnedAgent(stream_error=TimeoutError())
+    factory = _FakeSpawnPort(agent=agent)
+    await run_local_agent(
+        store=store,
+        factory=factory,
+        task_id=rec.id,
+        timeout_sec=12.5,
+        transcript_storage=None,
+        parent_session_id=None,
+        cwd=None,
+    )
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    assert refreshed.error is not None
+    assert "subagent_timeout" in refreshed.error
+    assert "12.5s" in refreshed.error
+    assert agent.closed
+
+
+@pytest.mark.asyncio
+async def test_run_local_agent_driver_error_marks_failed_and_closes() -> None:
+    """A child stream blow-up is captured as a typed failure, not a propagated crash."""
+    store = TasksStore()
+    rec = store.create(description="d", prompt="p")
+    agent = _FakeSpawnedAgent(
+        events=[ToolCallStarted(name="Read", input={})],
+        stream_error=RuntimeError("driver exploded"),
+    )
+    factory = _FakeSpawnPort(agent=agent)
+    await run_local_agent(
+        store=store,
+        factory=factory,
+        task_id=rec.id,
+        timeout_sec=None,
+        transcript_storage=None,
+        parent_session_id=None,
+        cwd=None,
+    )
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    assert refreshed.error == "RuntimeError: driver exploded"
+    assert agent.closed
+
+
+@pytest.mark.asyncio
+async def test_run_local_agent_spawn_failure_marks_failed_without_agent() -> None:
+    """spawn() raising before assignment must still fail-mark the task, never abort cleanup."""
+    store = TasksStore()
+    rec = store.create(description="d", prompt="p")
+    factory = _FakeSpawnPort(spawn_error=ValueError("no model"))
+    await run_local_agent(
+        store=store,
+        factory=factory,
+        task_id=rec.id,
+        timeout_sec=None,
+        transcript_storage=None,
+        parent_session_id=None,
+        cwd=None,
+    )
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    assert refreshed.error == "ValueError: no model"
+
+
+@pytest.mark.asyncio
+async def test_run_local_agent_cancelled_marks_cancelled_and_reraises() -> None:
+    """A cancel mid-stream marks the task cancelled, flushes, then re-raises to caller."""
+    store = TasksStore()
+    rec = store.create(description="d", prompt="p")
+    # CancelledError from the stream mirrors a parent-abort / Ctrl+C cancellation.
+    agent = _FakeSpawnedAgent(stream_error=asyncio.CancelledError())
+    factory = _FakeSpawnPort(agent=agent)
+    with pytest.raises(asyncio.CancelledError):
+        await run_local_agent(
+            store=store,
+            factory=factory,
+            task_id=rec.id,
+            timeout_sec=None,
+            transcript_storage=None,
+            parent_session_id=None,
+            cwd=None,
+        )
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.status == "cancelled"
+    assert agent.closed
+
+
+@pytest.mark.asyncio
+async def test_run_local_agent_arms_abort_watcher_and_tears_it_down() -> None:
+    """A non-null parent abort Event arms a watcher that is torn down on clean exit."""
+    store = TasksStore()
+    rec = store.create(description="d", prompt="p")
+    # A never-fired abort Event still forces the watcher-arming branch; the finally
+    # block must cancel that watcher so the unfired Event leaves no live waiter.
+    abort = asyncio.Event()
+    agent = _FakeSpawnedAgent(events=[Final(message="done")])
+    factory = _FakeSpawnPort(agent=agent, abort_event=abort)
+    await run_local_agent(
+        store=store,
+        factory=factory,
+        task_id=rec.id,
+        timeout_sec=None,
+        transcript_storage=None,
+        parent_session_id=None,
+        cwd=None,
+    )
+    # Yield once so the cancelled watcher is reaped before we inspect the Event.
+    await asyncio.sleep(0)
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert not abort.is_set()
+    leaked = [
+        t for t in asyncio.all_tasks()
+        if (t.get_name() or "").startswith("aura-subagent-abort-watch")
+    ]
+    assert leaked == []
+
+
+@pytest.mark.asyncio
+async def test_run_local_agent_fired_abort_watcher_cancels_in_flight_run() -> None:
+    """A pre-armed parent abort Event makes the watcher cancel the running child."""
+    store = TasksStore()
+    rec = store.create(description="d", prompt="p")
+    # Pre-set: the watcher's wait() resolves on its first scheduled tick; yield_ticks
+    # hands control to it so its cancel() lands while the stream is still in flight.
+    abort = asyncio.Event()
+    abort.set()
+    agent = _FakeSpawnedAgent(events=[Final(message="interrupted")], yield_ticks=50)
+    factory = _FakeSpawnPort(agent=agent, abort_event=abort)
+    runner = asyncio.create_task(
+        run_local_agent(
+            store=store,
+            factory=factory,
+            task_id=rec.id,
+            timeout_sec=None,
+            transcript_storage=None,
+            parent_session_id=None,
+            cwd=None,
+        )
+    )
+    # gather(return_exceptions) captures the re-raised CancelledError as a value so
+    # cross-task cancellation cannot leak past this await under any scheduler timing.
+    (outcome,) = await asyncio.gather(runner, return_exceptions=True)
+    # The watcher firing its cancel() is what this test pins down; the exact final
+    # status depends on which await point the cancel lands at, so accept either a
+    # mid-stream cancel (marked) or a pre-stream cancel (still running) — both prove
+    # the watcher ran. The mark-cancelled bookkeeping is pinned deterministically by
+    # test_run_local_agent_cancelled_marks_cancelled_and_reraises.
+    assert isinstance(outcome, asyncio.CancelledError)
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.status in {"cancelled", "running"}
+
+
+@pytest.mark.asyncio
+async def test_run_local_agent_completed_flushes_transcript_and_metadata(
+    tmp_path: Path,
+) -> None:
+    """A completed run with transcript_storage must persist both transcript + meta files."""
+    store = TasksStore()
+    rec = store.create(description="d", prompt="p")
+    storage = _disk_storage(tmp_path)
+    agent = _FakeSpawnedAgent(events=[Final(message="done")])
+    factory = _FakeSpawnPort(agent=agent)
+    await run_local_agent(
+        store=store,
+        factory=factory,
+        task_id=rec.id,
+        timeout_sec=None,
+        transcript_storage=storage,
+        parent_session_id="parent-9",
+        cwd=str(tmp_path),
+    )
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.transcript_path is not None
+    assert refreshed.transcript_path.exists()
+    meta_path = storage.subagent_metadata_path(rec.id, parent_session_id="parent-9")
+    assert meta_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_run_local_agent_timeout_zero_ceiling_is_disabled(tmp_path: Path) -> None:
+    """timeout_sec<=0 disables the ceiling: resolve_timeout yields None, run completes."""
+    store = TasksStore()
+    rec = store.create(description="d", prompt="p")
+    agent = _FakeSpawnedAgent(events=[Final(message="ok")])
+    factory = _FakeSpawnPort(agent=agent)
+    await run_local_agent(
+        store=store,
+        factory=factory,
+        task_id=rec.id,
+        timeout_sec=0.0,
+        transcript_storage=None,
+        parent_session_id=None,
+        cwd=str(tmp_path),
+    )
+    refreshed = store.get(rec.id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert refreshed.final_result == "ok"

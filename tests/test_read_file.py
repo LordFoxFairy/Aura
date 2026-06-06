@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from pydantic import ValidationError
@@ -243,3 +245,100 @@ def test_validate_input_accepts_regular_path(tmp_path: Path) -> None:
     result = read_file.validate_input({"path": str(tmp_path / "any.txt")})
     assert result.invalid is False
     assert result.reason == ""
+
+
+class _UnresolvablePath:
+    """Stand-in whose ``resolve`` raises, modelling an OS that refuses to
+    canonicalise a hostile path (e.g. ENAMETOOLONG / symlink ELOOP).
+    """
+
+    def __init__(self, raised: type[OSError | RuntimeError]) -> None:
+        self._raised = raised
+
+    def resolve(self, strict: bool = False) -> Path:
+        raise self._raised("cannot resolve")
+
+
+@pytest.mark.parametrize("raised", [OSError, RuntimeError])
+def test_validate_input_failsafe_when_resolve_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    raised: type[OSError | RuntimeError],
+) -> None:
+    """If the OS cannot canonicalise the path, the device guard must not
+    crash the whole validation pass; it degrades to 'structurally valid'
+    so the real not-found/decode error surfaces on the runtime path.
+    """
+    # The package re-exports the tool instance under the dotted name, so the
+    # real module (which owns ``Path``) must be reached via sys.modules.
+    module: ModuleType = sys.modules["aura.tools.read_file"]
+    monkeypatch.setattr(module, "Path", lambda _path: _UnresolvablePath(raised))
+    result = read_file.validate_input({"path": "/dev/stdin"})
+    assert result.invalid is False
+    assert result.reason == ""
+
+
+async def test_run_rejects_blocked_device_via_public_invoke() -> None:
+    """ainvoke bypasses the validate_input gate, so the runtime guard
+    itself must refuse kernel/interactive device endpoints; without it a
+    /dev/stdin read would block the agent forever.
+    """
+    with pytest.raises(ToolError, match="refusing to read"):
+        await read_file.ainvoke({"path": "/dev/stdin"})
+
+
+async def test_run_blocked_device_message_names_device(tmp_path: Path) -> None:
+    """The refusal must explain WHY (device endpoint) so the agent can
+    self-correct rather than blindly retrying the same blocking path.
+    """
+    with pytest.raises(ToolError, match="device"):
+        await read_file.ainvoke({"path": "/dev/zero"})
+
+
+def test_validate_input_non_str_path_is_structurally_valid() -> None:
+    """A non-string path can't be a known blocked device, so the schema
+    layer (not the device guard) owns rejecting it; validate_input must
+    not choke on the wrong type and instead defer downstream.
+    """
+    result = read_file.validate_input({"path": 123})
+    assert isinstance(result, ValidationResult)
+    assert result.invalid is False
+    assert result.reason == ""
+
+
+async def test_token_budget_overflow_rejected(tmp_path: Path) -> None:
+    """A file under the 1 MB byte cap can still blow the ~25k-token
+    budget once decoded; the tool must refuse rather than flood the
+    model context, steering the caller toward offset+limit slicing.
+    """
+    f = tmp_path / "verbose.txt"
+    # 100,004 two-byte lines ⇒ 200,008 bytes (< 1 MB, no head-truncation)
+    # ⇒ 200,008 chars ⇒ ~50,002 tokens, double the 25k budget.
+    f.write_bytes(b"a\n" * 100_004)
+    with pytest.raises(ToolError, match="too large"):
+        await read_file.ainvoke({"path": str(f)})
+
+
+async def test_token_budget_overflow_is_idempotent(tmp_path: Path) -> None:
+    """Refusing an over-budget read is read-only and must stay
+    deterministic: a retry of the identical request raises the same
+    error, never partially succeeding on the second call.
+    """
+    f = tmp_path / "verbose2.txt"
+    f.write_bytes(b"a\n" * 100_004)
+    for _ in range(2):
+        with pytest.raises(ToolError, match="too large"):
+            await read_file.ainvoke({"path": str(f)})
+
+
+async def test_token_budget_slicing_escapes_overflow(tmp_path: Path) -> None:
+    """The very file that overflows in full must read fine once sliced —
+    proving offset+limit is the documented escape hatch, not just that
+    the cap fires.
+    """
+    f = tmp_path / "verbose3.txt"
+    f.write_bytes(b"a\n" * 100_004)
+    out = await read_file.ainvoke({"path": str(f), "limit": 5})
+    assert out["content"] == "a\n" * 5
+    assert out["lines"] == 5
+    assert out["total_lines"] == 100_004
+    assert out["partial"] is True

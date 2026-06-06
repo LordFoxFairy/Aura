@@ -22,14 +22,16 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from aura.application.loop_state import LoopState
 from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
+from aura.domain.permission.session import SessionRuleSet
 from aura.domain.skill import Skill
 from aura.domain.tool import ToolError
 from aura.domain.tool_meta_access import meta_dict
 from aura.infrastructure.persistence.storage import SessionStorage
 from aura.infrastructure.skills.registry import SkillRegistry
-from aura.tools.skill import SkillTool
+from aura.tools.skill import SkillResult, SkillTool, _preview
 from tests.conftest import FakeChatModel
 
 
@@ -236,3 +238,227 @@ def test_skill_tool_wired_on_agent_dedups_across_double_invocation(
         assert contents.count('<skill-invoked name="once">') == 1
     finally:
         agent.close()
+
+
+def _gated_skill(
+    name: str = "gated",
+    *,
+    allowed_tools: frozenset[str] = frozenset(),
+    restrict_tools: frozenset[str] = frozenset(),
+    disable_model_invocation: bool = False,
+) -> Skill:
+    """Skill carrying permission/restrict metadata the success path must honour."""
+    return Skill(
+        name=name,
+        description=f"Description of {name}.",
+        body=f"# Body of {name}",
+        source_path=Path(f"/tmp/{name}.md"),
+        layer="user",
+        allowed_tools=allowed_tools,
+        restrict_tools=restrict_tools,
+        disable_model_invocation=disable_model_invocation,
+    )
+
+
+def test_skill_tool_hidden_skill_surfaces_as_missing() -> None:
+    """A model-hidden skill must look absent so retry can't probe hidden ones."""
+    hidden = _gated_skill("secret", disable_model_invocation=True)
+    reg = SkillRegistry([hidden, _skill("public")])
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy)
+    with pytest.raises(ToolError) as excinfo:
+        tool.invoke({"name": "secret"})
+    msg = str(excinfo.value)
+    assert "secret" in msg
+    # The hidden skill itself never appears in the available list it leaks.
+    assert "'secret'" not in msg.split("available:")[1]
+    assert "public" in msg
+    assert spy.calls == []
+
+
+def test_skill_tool_available_list_excludes_hidden_skills() -> None:
+    """Unknown-name error lists only model-visible skills, never hidden ones."""
+    reg = SkillRegistry(
+        [_skill("shown"), _gated_skill("masked", disable_model_invocation=True)]
+    )
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy)
+    with pytest.raises(ToolError) as excinfo:
+        tool.invoke({"name": "ghost"})
+    available = str(excinfo.value).split("available:")[1]
+    assert "shown" in available
+    assert "masked" not in available
+
+
+def test_skill_tool_installs_session_allow_rules_for_declared_tools() -> None:
+    """A skill's allowed-tools become session auto-allow rules on invocation."""
+    rules = SessionRuleSet()
+    skill = _gated_skill("granter", allowed_tools=frozenset({"bash", "read"}))
+    reg = SkillRegistry([skill])
+    spy = _RecorderSpy()
+    tool = SkillTool(
+        recorder=spy,
+        registry=reg,
+        session_rules_provider=lambda: rules,
+    )
+    tool.invoke({"name": "granter"})
+    installed = {r.tool for r in rules.rules()}
+    assert installed == {"bash", "read"}
+
+
+def test_skill_tool_allow_rules_are_idempotent_across_double_invoke() -> None:
+    """Invoking a skill twice must not duplicate its session allow rules."""
+    rules = SessionRuleSet()
+    skill = _gated_skill("twice", allowed_tools=frozenset({"bash"}))
+    reg = SkillRegistry([skill])
+    tool = SkillTool(
+        recorder=_RecorderSpy(),
+        registry=reg,
+        session_rules_provider=lambda: rules,
+    )
+    tool.invoke({"name": "twice"})
+    tool.invoke({"name": "twice"})
+    assert len(rules.rules()) == 1
+
+
+def test_skill_tool_installs_restrict_lease_when_loop_state_present() -> None:
+    """A restrict-tools skill leases a turn-scoped whitelist into loop state."""
+    state = LoopState(turn_count=3)
+    skill = _gated_skill("locked", restrict_tools=frozenset({"read"}))
+    reg = SkillRegistry([skill])
+    tool = SkillTool(
+        recorder=_RecorderSpy(),
+        registry=reg,
+        loop_state_provider=lambda: state,
+    )
+    tool.invoke({"name": "locked"})
+    leases = state.slots.skill_restrict_leases
+    assert len(leases) == 1
+    assert leases[0].install_turn == 3
+    assert leases[0].tools == frozenset({"read"})
+
+
+def test_skill_tool_restrict_lease_idempotent_within_one_turn() -> None:
+    """Re-invoking the same restrict skill in one turn must not stack leases."""
+    state = LoopState(turn_count=0)
+    skill = _gated_skill("guard", restrict_tools=frozenset({"read"}))
+    reg = SkillRegistry([skill])
+    tool = SkillTool(
+        recorder=_RecorderSpy(),
+        registry=reg,
+        loop_state_provider=lambda: state,
+    )
+    tool.invoke({"name": "guard"})
+    tool.invoke({"name": "guard"})
+    assert len(state.slots.skill_restrict_leases) == 1
+
+
+def test_skill_tool_no_restrict_metadata_leaves_loop_state_clean() -> None:
+    """A skill without restrict-tools must not write any lease (no-op branch)."""
+    state = LoopState(turn_count=1)
+    reg = SkillRegistry([_skill("plain")])
+    tool = SkillTool(
+        recorder=_RecorderSpy(),
+        registry=reg,
+        loop_state_provider=lambda: state,
+    )
+    tool.invoke({"name": "plain"})
+    assert state.slots.skill_restrict_leases == []
+
+
+def test_skill_tool_no_allowed_tools_leaves_rules_empty() -> None:
+    """A skill with no allowed-tools must not mutate the session rule set."""
+    rules = SessionRuleSet()
+    reg = SkillRegistry([_skill("bare")])
+    tool = SkillTool(
+        recorder=_RecorderSpy(),
+        registry=reg,
+        session_rules_provider=lambda: rules,
+    )
+    tool.invoke({"name": "bare"})
+    assert rules.rules() == ()
+
+
+async def test_skill_tool_async_path_records_and_returns_envelope() -> None:
+    """The async tool entry must behave identically to the sync one."""
+    reg = SkillRegistry([_skill("acme")])
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy)
+    result: SkillResult = await tool.ainvoke({"name": "acme"})
+    assert result == {
+        "skill": "acme",
+        "invoked": True,
+        "source": "/tmp/acme.md",
+    }
+    assert len(spy.calls) == 1
+    assert spy.calls[0].name == "acme"
+
+
+async def test_skill_tool_async_unknown_name_raises_tool_error() -> None:
+    """The async path enforces the same unknown-skill guard as the sync path."""
+    reg = SkillRegistry([_skill("known")])
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy)
+    with pytest.raises(ToolError):
+        await tool.ainvoke({"name": "absent"})
+    assert spy.calls == []
+
+
+def test_skill_tool_empty_argument_list_with_declared_args_raises() -> None:
+    """An explicit empty arguments list still trips the missing-args guard."""
+    skill = _skill("needy", body="Hello ${who}", arguments=("who",))
+    reg = SkillRegistry([skill])
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy)
+    with pytest.raises(ToolError) as excinfo:
+        tool.invoke({"name": "needy", "arguments": []})
+    assert "who" in str(excinfo.value)
+    assert spy.calls == []
+
+
+def test_skill_tool_extra_arguments_beyond_declared_are_truncated() -> None:
+    """Surplus positional args are dropped; only declared placeholders render."""
+    skill = _skill("solo", body="X=${x}", arguments=("x",))
+    reg = SkillRegistry([skill])
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy)
+    tool.invoke({"name": "solo", "arguments": ["used", "ignored"]})
+    assert spy.calls[0].body == "X=used"
+
+
+def test_skill_tool_invocation_is_idempotent_on_recorder() -> None:
+    """Two identical invocations each record once; no silent dedup at the tool."""
+    reg = SkillRegistry([_skill("repeat")])
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy)
+    tool.invoke({"name": "repeat"})
+    tool.invoke({"name": "repeat"})
+    assert len(spy.calls) == 2
+
+
+def test_skill_tool_unicode_name_routes_to_registry_lookup() -> None:
+    """Non-ASCII skill names must resolve exactly, not be mangled by the lookup."""
+    reg = SkillRegistry([_skill("café-技能")])
+    spy = _RecorderSpy()
+    tool = _tool(reg, spy)
+    result = tool.invoke({"name": "café-技能"})
+    assert result["skill"] == "café-技能"
+    assert result["invoked"] is True
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ({"name": "do"}, "skill: do"),
+        ({"name": "do", "arguments": []}, "skill: do"),
+        ({"name": "do", "arguments": None}, "skill: do"),
+        ({"name": "do", "arguments": ["a", "b"]}, "skill: do(a b)"),
+        ({"name": "do", "arguments": [1, 2]}, "skill: do(1 2)"),
+        ({}, "skill: "),
+    ],
+)
+def test_skill_tool_preview_renders_compact_invocation_line(
+    args: dict[str, object], expected: str,
+) -> None:
+    """The args-preview powers the live transcript; it must never raise on edges."""
+    assert _preview(args) == expected

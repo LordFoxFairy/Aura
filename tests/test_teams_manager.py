@@ -16,13 +16,13 @@ from aura.application.loop_state import LoopState
 from aura.application.session import AgentSession
 from aura.application.tasks.spawn import SpawnContext, SubagentSpawner
 from aura.application.tasks.store import TasksStore
-from aura.application.teams.manager import TeamError, TeamManager
+from aura.application.teams.manager import Member, TeamError, TeamManager
 from aura.config.schema import AuraConfig
 from aura.domain.abort import AbortController
 from aura.domain.permission.rule import Rule
 from aura.domain.permission.safety import DEFAULT_SAFETY
 from aura.domain.permission.session import RuleSet
-from aura.domain.team import TEAM_LEADER_NAME, TeamRecord
+from aura.domain.team import TEAM_LEADER_NAME, TeammateMember, TeamRecord
 from aura.domain.tool import ToolMetadata
 from aura.infrastructure import llm
 from aura.infrastructure.persistence.storage import SessionStorage
@@ -1021,3 +1021,263 @@ def test_persist_oserror_is_journaled_not_raised(
     monkeypatch.setattr(Path, "open", _open_boom)
     mgr._persist()
     assert "team_persist_failed" in events
+
+
+# --- trivial state accessors (must reflect lifecycle, not lie) -----------------
+
+
+def test_is_active_tracks_team_lifecycle(tmp_path: Path) -> None:
+    """``is_active`` must flip with team existence so callers gate routing correctly."""
+    mgr, _ = _mgr(tmp_path)
+    assert mgr.is_active is False
+    mgr.create_team("alpha")
+    assert mgr.is_active is True
+    mgr.delete_team()
+    assert mgr.is_active is False
+
+
+def test_pending_and_drain_protocol_events_round_trip(tmp_path: Path) -> None:
+    """create_team emits one 'active' event; pending exposes it and drain hands it off once."""
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    pending = mgr.pending_protocol_events
+    assert len(pending) == 1
+    drained = mgr.drain_protocol_events()
+    assert drained == list(pending)
+    # Drain is destructive: a second drain yields nothing, never replays.
+    assert mgr.drain_protocol_events() == []
+    assert mgr.pending_protocol_events == ()
+
+
+def test_view_state_delegates_to_builder(tmp_path: Path) -> None:
+    """view_state must surface the active team id/name so the UI renders the live roster."""
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    snap = mgr.view_state()
+    assert snap.team_id == "alpha"
+    assert snap.name == "alpha"
+
+
+def test_persist_without_team_is_noop(tmp_path: Path) -> None:
+    """_persist before create_team must short-circuit, never touch storage paths."""
+    mgr, storage = _mgr(tmp_path)
+    mgr._persist()
+    assert not storage.team_config_path("alpha").exists()
+
+
+# --- aadd_member non-pane delegation + task-bearing handle ----------------------
+
+
+@pytest.mark.asyncio
+async def test_aadd_member_inprocess_delegates_to_add_member(tmp_path: Path) -> None:
+    """aadd_member with the default in_process backend must reuse the sync add path."""
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    member = await mgr.aadd_member("alice")
+    assert member.name == "alice"
+    assert any(m.name == "alice" for m in mgr.list_members())
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_aadd_member_registers_task_when_handle_carries_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pane handle exposing a live ``task`` must be tracked so its terminal status lands."""
+    import aura.application.teams.manager as mgr_mod
+
+    class _TaskBearingHandle:
+        pane_id = "pane-1"
+
+        def __init__(self, task: asyncio.Task[None]) -> None:
+            self.task = task
+            self.force_killed = False
+
+        async def force_kill(self) -> None:
+            self.force_killed = True
+
+        def is_alive(self) -> bool:
+            return not self.force_killed
+
+    class _TaskBearingBackend:
+        async def spawn(self, **_kwargs: Any) -> _TaskBearingHandle:
+            async def _done() -> None:
+                return
+
+            task: asyncio.Task[None] = asyncio.create_task(_done())
+            return _TaskBearingHandle(task)
+
+    monkeypatch.setattr(mgr_mod, "get_backend", lambda _bt: _TaskBearingBackend())
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    await mgr.aadd_member("alice", backend_type="pane")
+    task_id = mgr._members["alice"].task_id
+    assert task_id is not None
+    assert task_id in mgr._runtimes
+    record = await _wait_for_teammate_terminal(mgr)
+    assert record.status == "completed"
+
+
+# --- aremove_member force path -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_aremove_member_force_returns_false_and_tears_down(
+    tmp_path: Path,
+) -> None:
+    """Async force teardown must short-circuit grace, return False, and drop the row."""
+    async def parked(**kwargs: Any) -> None:
+        await kwargs["abort"].signal.wait()
+
+    mgr, _ = _mgr(tmp_path, runtime_runner=parked)
+    mgr.create_team("alpha")
+    mgr.add_member("alice")
+    await asyncio.sleep(0)
+
+    acked = await mgr.aremove_member("alice", force=True)
+    assert acked is False
+    assert all(m.name != "alice" for m in mgr.list_members())
+    await asyncio.sleep(0)
+    record = mgr._tasks_store.list(kind="teammate")[0]
+    assert record.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_aremove_absent_member_errors(tmp_path: Path) -> None:
+    """Async teardown of a never-added name must fail loudly, mirroring the sync guard."""
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    with pytest.raises(TeamError, match="not found in team"):
+        await mgr.aremove_member("ghost")
+
+
+# --- no-loop sync remove_member degrades to synchronous teardown ---------------
+
+
+def _seed_member(
+    mgr: TeamManager,
+    name: str,
+    *,
+    task_id: str | None = None,
+    backend: Any = None,
+) -> None:
+    """Register a roster row + runtime slot without a loop (sync-teardown coverage)."""
+    assert mgr._team is not None
+    mgr._team.members.append(TeammateMember(name=name, agent_type="general-purpose"))
+    slot = mgr._members.setdefault(name, Member())
+    slot.task_id = task_id
+    slot.backend = backend
+
+
+def test_sync_remove_without_loop_degrades_to_teardown(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Outside any event loop, non-force remove must tear down synchronously, not schedule."""
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    record = mgr._tasks_store.create(
+        description="teammate: alice",
+        prompt="idle",
+        kind="teammate",
+    )
+    abort = AbortController()
+    mgr._running_aborts[record.id] = abort
+    _seed_member(mgr, "alice", task_id=record.id)
+    events: list[str] = []
+    monkeypatch.setattr(
+        "aura.application.teams.manager.journal.write",
+        lambda kind, **_fields: events.append(kind),
+    )
+
+    mgr.remove_member("alice")
+
+    assert all(m.name != "alice" for m in mgr.list_members())
+    assert "team_member_removed" in events
+    # send_request branch posted a shutdown_request into the leader inbox.
+    inbox = mgr.mailbox().read_all("alice")
+    assert any(m.kind == "shutdown_request" for m in inbox)
+    assert mgr._running_aborts == {}
+    assert abort.aborted is True
+    assert isinstance(mgr._members.get("alice"), Member)
+
+
+def test_sync_force_remove_without_loop_skips_async_force_kill(
+    tmp_path: Path,
+) -> None:
+    """No loop means no force_kill task; the backend handle is dropped, never awaited."""
+    fake_backend = _FakePaneHandle()
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    _seed_member(mgr, "alice", backend=fake_backend)
+
+    mgr.remove_member("alice", force=True)
+
+    assert all(m.name != "alice" for m in mgr.list_members())
+    # force_kill is async; with no loop it must be skipped, leaving the flag untouched.
+    assert fake_backend.force_killed is False
+    assert mgr._members["alice"].backend is None
+
+
+def test_teardown_member_after_team_cleared_is_noop(tmp_path: Path) -> None:
+    """_teardown_member racing a delete_team (team already None) must return harmlessly."""
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    mgr._team = None
+    mgr._teardown_member("alice", send_request=False, journal_force=True)
+    assert mgr.team is None
+
+
+# --- cleanup_session_teams FileNotFoundError on rmtree -------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_rmtree_filenotfound_is_swallowed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A team dir vanishing mid-cleanup (FileNotFoundError) must not abort the sweep."""
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    events: list[str] = []
+    monkeypatch.setattr(
+        "aura.application.teams.manager.journal.write",
+        lambda kind, **_fields: events.append(kind),
+    )
+
+    def _rmtree_gone(_path: Any, *_args: Any, **_kwargs: Any) -> None:
+        raise FileNotFoundError("already removed")
+
+    monkeypatch.setattr(
+        "aura.application.teams.manager.shutil.rmtree", _rmtree_gone,
+    )
+    await mgr.cleanup_session_teams()
+    # FileNotFoundError is benign: the team is still cleaned from the session set.
+    assert "team_session_cleanup" in events
+    assert mgr._session_created_teams == set()
+
+
+def test_add_member_without_team_rejects(tmp_path: Path) -> None:
+    """add_member before create_team must fail fast, never spawn an orphan teammate."""
+    mgr, _ = _mgr(tmp_path)
+    with pytest.raises(TeamError, match="no team is active; call create_team first"):
+        mgr.add_member("alice")
+    assert mgr._tasks_store.list(kind="teammate") == []
+
+
+@pytest.mark.asyncio
+async def test_teardown_resolves_pending_ack_with_false(tmp_path: Path) -> None:
+    """A force teardown racing an unresolved shutdown ack must settle it False, not hang."""
+    mgr, _ = _mgr(tmp_path)
+    mgr.create_team("alpha")
+    loop = asyncio.get_running_loop()
+    ack: asyncio.Future[bool] = loop.create_future()
+    _seed_member(mgr, "alice")
+    mgr._members["alice"].shutdown_ack = ack
+
+    mgr.remove_member("alice", force=True)
+
+    assert ack.done()
+    assert ack.result() is False
+    assert mgr._members["alice"].shutdown_ack is None

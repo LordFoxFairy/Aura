@@ -11,11 +11,12 @@ import pytest
 
 from aura.application.session import AgentSession
 from aura.application.tasks.store import TasksStore
-from aura.application.teams.mailbox import Mailbox
+from aura.application.teams.mailbox import Mailbox, QueueMailboxNotifier
 from aura.application.teams.manager import TeamManager
 from aura.application.teams.runtime import (
     _drive_one_turn,
     _format_envelope,
+    _wait_for_message,
     run_teammate,
     run_teammate_main,
 )
@@ -735,3 +736,395 @@ async def test_runtime_blank_seed_prompt_does_not_drive_turn(
     )
 
     assert agent.prompts_seen == []  # blank seed never reached _drive_one_turn
+
+
+class _OneShotNotifier:
+    """Notifier driving exactly N successful loop turns, then stopping the loop.
+
+    Each ``wait_new`` call before the budget returns True (a message is ready) and
+    leaves the in-task loop running so coverage traces the loop body; the call past
+    the budget sets ``stop_event`` and returns False so the loop exits deterministically
+    with no polling, sleeps, or real filesystem watching.
+    """
+
+    def __init__(self, stop_event: asyncio.Event, *, turns: int = 1) -> None:
+        self._stop = stop_event
+        self._turns = turns
+        self.calls = 0
+
+    async def wait_new(self, member: str, *, timeout: float) -> bool:
+        del member, timeout
+        self.calls += 1
+        if self.calls > self._turns:
+            self._stop.set()
+            return False
+        return True
+
+    def signal(self, member: str) -> None:
+        del member
+
+
+@pytest.mark.asyncio
+async def test_wait_for_message_returns_false_when_stop_fires_first(
+    tmp_path: Path,
+) -> None:
+    """A stop signal must win the race against the mailbox so the loop can shut down."""
+    del tmp_path
+    stop = asyncio.Event()
+    stop.set()  # stop already pending: it must be the branch that resolves the wait
+    notifier = QueueMailboxNotifier()
+    result = await asyncio.wait_for(
+        _wait_for_message(notifier, "alice", stop, timeout=0.05),
+        timeout=5,
+    )
+    assert result is False  # stop_task in done -> caller breaks out of the loop
+
+
+@pytest.mark.asyncio
+async def test_wait_for_message_returns_true_on_new_message() -> None:
+    """A signaled mailbox must report a message so the loop proceeds to drain it."""
+    stop = asyncio.Event()
+    notifier = QueueMailboxNotifier()
+    notifier.signal("alice")  # a message arrived before the wait started
+    result = await asyncio.wait_for(
+        _wait_for_message(notifier, "alice", stop, timeout=0.05),
+        timeout=5,
+    )
+    assert result is True  # wait_task wins -> caller reads the unseen batch
+
+
+@pytest.mark.asyncio
+async def test_wait_for_message_returns_false_on_timeout() -> None:
+    """An idle slice must report no message so the loop re-checks its exit conditions."""
+    stop = asyncio.Event()
+    notifier = QueueMailboxNotifier()  # never signaled
+    result = await asyncio.wait_for(
+        _wait_for_message(notifier, "alice", stop, timeout=0.02),
+        timeout=5,
+    )
+    assert result is False  # wait_task.result() is False -> loop `continue`
+
+
+@pytest.mark.asyncio
+async def test_runtime_loop_drives_text_then_acks_and_exits(tmp_path: Path) -> None:
+    """One queued text message must drive exactly one model turn and advance the seen cursor."""
+    storage = _storage(tmp_path)
+    box = Mailbox(storage, "team-a")
+    box.append(_msg(body="ship it"))
+    agent = _ScriptedAgent(replies=["done"])
+    stop = asyncio.Event()
+    notifier: Any = _OneShotNotifier(stop, turns=1)
+    _agent: Any = agent
+
+    await asyncio.wait_for(
+        run_teammate(
+            agent=_agent, team_id="team-a", member_name="alice",
+            storage=storage, stop_event=stop, abort=AbortController(),
+            notifier=notifier,
+        ),
+        timeout=5,
+    )
+
+    assert agent.prompts_seen == ["<from-leader>\nship it\n</from-leader>"]
+    assert box.read_unseen("alice") == []  # message acked, cursor advanced
+
+
+@pytest.mark.asyncio
+async def test_runtime_loop_skips_empty_unseen_batch(tmp_path: Path) -> None:
+    """A wake-up with no actual unseen message must not drive a turn or crash the loop."""
+    storage = _storage(tmp_path)
+    Mailbox(storage, "team-a")  # inbox exists but is empty
+    agent = _ScriptedAgent(replies=["unused"])
+    stop = asyncio.Event()
+    # turns=1 lets wait_new report a message, but the mailbox is empty -> `continue`.
+    notifier: Any = _OneShotNotifier(stop, turns=1)
+    _agent: Any = agent
+
+    await asyncio.wait_for(
+        run_teammate(
+            agent=_agent, team_id="team-a", member_name="alice",
+            storage=storage, stop_event=stop, abort=AbortController(),
+            notifier=notifier,
+        ),
+        timeout=5,
+    )
+
+    assert agent.prompts_seen == []  # empty unseen short-circuits before any turn
+
+
+@pytest.mark.asyncio
+async def test_runtime_loop_acks_response_only_batch_without_turn(
+    tmp_path: Path,
+) -> None:
+    """A batch of only non-text kinds is consumed/acked but never reaches the model."""
+    storage = _storage(tmp_path)
+    box = Mailbox(storage, "team-a")
+    box.append(_msg(kind="shutdown_response", body="ok"))
+    agent = _ScriptedAgent(replies=["unused"])
+    stop = asyncio.Event()
+    notifier: Any = _OneShotNotifier(stop, turns=1)
+    _agent: Any = agent
+
+    await asyncio.wait_for(
+        run_teammate(
+            agent=_agent, team_id="team-a", member_name="alice",
+            storage=storage, stop_event=stop, abort=AbortController(),
+            notifier=notifier,
+        ),
+        timeout=5,
+    )
+
+    assert agent.prompts_seen == []  # no text kinds -> `continue`, no turn
+    assert box.read_unseen("alice") == []  # still acked so it can't redeliver forever
+
+
+@pytest.mark.asyncio
+async def test_runtime_loop_shutdown_acks_active_team(tmp_path: Path) -> None:
+    """A shutdown_request consumed in the loop must confirm + respond to unblock the leader."""
+    storage = _storage(tmp_path)
+    box = Mailbox(storage, "team-a")
+    box.append(_msg(kind="shutdown_request", body="wind down"))
+    team = _RecordingTeam(is_active=True)
+    agent = _TeamAgent(team)
+    stop = asyncio.Event()
+    notifier: Any = _OneShotNotifier(stop, turns=1)
+    _agent: Any = agent
+
+    await asyncio.wait_for(
+        run_teammate(
+            agent=_agent, team_id="team-a", member_name="alice",
+            storage=storage, stop_event=stop, abort=AbortController(),
+            notifier=notifier,
+        ),
+        timeout=5,
+    )
+
+    assert agent.prompts_seen == []  # shutdown breaks before any model turn
+    assert team.confirmed == [("alice", "wind down")]
+    assert team.sent == [
+        ("alice", "leader", "shutting down: wind down", "shutdown_response"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_loop_survives_per_turn_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A turn raising mid-loop is journaled and the loop continues to its clean exit."""
+    events: list[str] = []
+    monkeypatch.setattr(
+        "aura.infrastructure.persistence.journal.write",
+        lambda name, **_: events.append(name),
+    )
+    storage = _storage(tmp_path)
+    Mailbox(storage, "team-a").append(_msg(body="boom"))
+    agent: Any = _RaisingAgent()
+    stop = asyncio.Event()
+    notifier: Any = _OneShotNotifier(stop, turns=1)
+
+    await asyncio.wait_for(
+        run_teammate(
+            agent=agent, team_id="team-a", member_name="alice",
+            storage=storage, stop_event=stop, abort=AbortController(),
+            notifier=notifier,
+        ),
+        timeout=5,
+    )
+
+    assert "team_runtime_turn_failed" in events  # logged, not propagated
+    assert "team_runtime_exited" in events  # loop still reached its finally
+
+
+@pytest.mark.asyncio
+async def test_runtime_loop_breaks_on_abort_during_turn(tmp_path: Path) -> None:
+    """An AbortException raised by the turn must break the loop without a stop signal."""
+    storage = _storage(tmp_path)
+    Mailbox(storage, "team-a").append(_msg(body="go"))
+    agent: Any = _AbortingAgent()
+    stop = asyncio.Event()
+    # turns is generous; the AbortException must be what exits the loop, not the budget.
+    notifier: Any = _OneShotNotifier(stop, turns=99)
+
+    await asyncio.wait_for(
+        run_teammate(
+            agent=agent, team_id="team-a", member_name="alice",
+            storage=storage, stop_event=stop, abort=AbortController(),
+            notifier=notifier,
+        ),
+        timeout=5,
+    )
+
+    assert agent.prompts_seen  # the turn was attempted before aborting
+    assert not stop.is_set()  # abort broke the loop; the stop budget never tripped
+
+
+@pytest.mark.asyncio
+async def test_runtime_loop_stops_when_abort_already_set(tmp_path: Path) -> None:
+    """A pre-aborted controller must skip the loop body — the while guard short-circuits."""
+    storage = _storage(tmp_path)
+    Mailbox(storage, "team-a").append(_msg(body="never read"))
+    agent = _ScriptedAgent(replies=["unused"])
+    abort = AbortController()
+    abort.abort("pre-aborted")  # `not abort.aborted` is False on entry
+    stop = asyncio.Event()
+    notifier: Any = _OneShotNotifier(stop, turns=99)
+    _agent: Any = agent
+
+    await asyncio.wait_for(
+        run_teammate(
+            agent=_agent, team_id="team-a", member_name="alice",
+            storage=storage, stop_event=stop, abort=abort,
+            notifier=notifier,
+        ),
+        timeout=5,
+    )
+
+    assert agent.prompts_seen == []  # loop guard rejected entry; no turn, no wake-up
+    assert notifier.calls == 0  # _wait_for_message never invoked
+
+
+@pytest.mark.asyncio
+async def test_runtime_loop_idempotent_double_shutdown(tmp_path: Path) -> None:
+    """Two shutdown_requests in one batch must ack the team once — shutdown is idempotent."""
+    storage = _storage(tmp_path)
+    box = Mailbox(storage, "team-a")
+    box.append(_msg(kind="shutdown_request", body="first"))
+    box.append(_msg(kind="shutdown_request", body="second"))
+    team = _RecordingTeam(is_active=True)
+    agent = _TeamAgent(team)
+    stop = asyncio.Event()
+    notifier: Any = _OneShotNotifier(stop, turns=1)
+    _agent: Any = agent
+
+    await asyncio.wait_for(
+        run_teammate(
+            agent=_agent, team_id="team-a", member_name="alice",
+            storage=storage, stop_event=stop, abort=AbortController(),
+            notifier=notifier,
+        ),
+        timeout=5,
+    )
+
+    # `next(...)` picks the first shutdown; the loop breaks after one confirm/send pair.
+    assert team.confirmed == [("alice", "first")]
+    assert len(team.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_drive_turn_records_progress_and_permission_notes(
+    tmp_path: Path,
+) -> None:
+    """Tool progress and permission audits must both land as activity notes for the task."""
+    storage = _storage(tmp_path)
+    store = TasksStore()
+    record = store.create("teammate: alice", "(idle)", kind="teammate")
+    agent = _ProgressAgent(replies=["done"])
+    agent._teammate = TeammateBinding(task_id=record.id, tasks_store=store)
+    _agent: Any = agent
+
+    out = await _drive_one_turn(
+        agent=_agent, prompt="go", abort=AbortController(),
+        storage=storage, team_id="team-a", member_name="alice",
+    )
+
+    assert out == "done"
+    refreshed = store.get(record.id)
+    assert refreshed is not None
+    notes = refreshed.progress.recent_activities
+    assert "bash:stdout> hi" in notes  # ToolCallProgress note path
+    assert "permission:bash" in notes  # PermissionAudit note path
+
+
+@pytest.mark.asyncio
+async def test_drive_turn_abort_journals_and_reraises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An aborted turn must journal the abort and re-raise so the loop's abort handler runs."""
+    events: list[str] = []
+    monkeypatch.setattr(
+        "aura.infrastructure.persistence.journal.write",
+        lambda name, **_: events.append(name),
+    )
+    storage = _storage(tmp_path)
+    agent: Any = _AbortingAgent()
+
+    with pytest.raises(AbortException):
+        await _drive_one_turn(
+            agent=agent, prompt="go", abort=AbortController(),
+            storage=storage, team_id="team-a", member_name="alice",
+        )
+
+    assert "team_runtime_aborted" in events  # the except-AbortException branch ran
+
+
+@pytest.mark.parametrize("body", ["", " ", "0", "False"])
+@pytest.mark.asyncio
+async def test_drive_turn_returns_exact_final_for_edge_bodies(
+    tmp_path: Path, body: str,
+) -> None:
+    """The returned final text must be the verbatim message, even for falsy/edge strings."""
+    storage = _storage(tmp_path)
+    agent: Any = _LongFinalAgent(body)
+
+    out = await _drive_one_turn(
+        agent=agent, prompt="go", abort=AbortController(),
+        storage=storage, team_id="team-a", member_name="alice",
+    )
+
+    assert out == body  # no truthiness coercion of the model's final answer
+
+
+@pytest.mark.asyncio
+async def test_run_teammate_main_empty_model_name_keeps_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty model_name is falsy and must NOT rewrite router['default']."""
+    captured: dict[str, str] = {}
+
+    def _fake_build(config: AuraConfig, *, session_id: str = "") -> Any:
+        captured["default"] = config.router["default"]
+        return _ClosableAgent()
+
+    async def _fake_run(**kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "aura.application.teams.runtime.load_config", _minimal_config,
+    )
+    monkeypatch.setattr("aura.application.teams.runtime.build_agent", _fake_build)
+    monkeypatch.setattr("aura.application.teams.runtime.run_teammate", _fake_run)
+
+    rc = await run_teammate_main(
+        team_id="t4", member_name="erin", storage_root=str(tmp_path),
+        model_name="",
+    )
+    assert rc == 0
+    assert captured["default"] == "openai:gpt-4o-mini"  # empty override ignored
+
+
+@pytest.mark.asyncio
+async def test_run_teammate_main_suppresses_aclose_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failing aclose in the finally must be swallowed so teardown still returns 0."""
+
+    class _BadCloseAgent:
+        async def aclose(self, *, mcp_timeout: float = 5.0) -> None:
+            raise RuntimeError("close blew up")
+
+    def _fake_build(config: AuraConfig, *, session_id: str = "") -> Any:
+        return _BadCloseAgent()
+
+    async def _fake_run(**kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "aura.application.teams.runtime.load_config", _minimal_config,
+    )
+    monkeypatch.setattr("aura.application.teams.runtime.build_agent", _fake_build)
+    monkeypatch.setattr("aura.application.teams.runtime.run_teammate", _fake_run)
+
+    rc = await run_teammate_main(
+        team_id="t5", member_name="frank", storage_root=str(tmp_path),
+    )
+    assert rc == 0  # suppress(Exception) around aclose keeps the return value intact

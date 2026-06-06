@@ -101,9 +101,6 @@ class SessionRuntime:
     def buffer_partial_assistant_text(self, text: str) -> None:
         self._partial_assistant_text += text
 
-    def reset_partial_assistant_text(self) -> None:
-        self._partial_assistant_text = ""
-
     def take_partial_assistant_text(self) -> str:
         """Return + clear atomically so the abort flush isn't double-counted."""
         text = self._partial_assistant_text
@@ -130,9 +127,6 @@ class SessionRuntime:
 
     def mark_session_start_fired(self) -> None:
         self._session_start_fired = True
-
-    def rearm_session_start(self) -> None:
-        self._session_start_fired = False
 
     def clear(self) -> None:
         """Wipe the live session; does NOT rebuild Context / hooks / loop."""

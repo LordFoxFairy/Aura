@@ -9,10 +9,17 @@ import socket
 import time
 from collections import OrderedDict
 from collections.abc import Callable
-from typing import Any, Protocol, TypedDict, runtime_checkable
+from http.client import HTTPMessage
+from typing import IO, Any, Protocol, TypedDict, runtime_checkable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import (
+    HTTPRedirectHandler,
+    Request,
+    build_opener,
+    install_opener,
+    urlopen,
+)
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -83,6 +90,32 @@ def _reject_private_host(host: str) -> None:
             or ip.is_unspecified
         ):
             raise ToolError(f"refusing to fetch {host!r} — resolves to non-public IP {addr}")
+
+
+class _ValidatingRedirectHandler(HTTPRedirectHandler):
+    """Re-run the SSRF scheme/host guard on every redirect hop; urlopen would
+    otherwise follow a 302 to a private/metadata host without re-validation."""
+
+    def redirect_request(
+        self,
+        req: Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> Request | None:
+        if not (newurl.startswith("http://") or newurl.startswith("https://")):
+            raise ToolError(f"refusing redirect to non-http(s) URL: {newurl}")
+        host = urlparse(newurl).hostname
+        if not host:
+            raise ToolError(f"refusing redirect to malformed URL: {newurl}")
+        _reject_private_host(host)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+# Make the default opener (used by urlopen) re-validate every redirect hop.
+install_opener(build_opener(_ValidatingRedirectHandler()))
 
 
 class FetchedPage(TypedDict):

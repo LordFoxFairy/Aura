@@ -526,3 +526,28 @@ async def test_signal_aborted_breaks_long_running_tool() -> None:
         assert elapsed < 0.5, f"polling tool should bail within 0.5s, took {elapsed:.2f}s"
     finally:
         current_abort_signal.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_abort_between_turns_gate_keeps_answered_tool_messages_unique() -> None:
+    """The between-turns abort gate must NOT re-synthesise ToolMessages for calls
+    history already answered — a duplicate tool_call_id makes the next provider call 400."""
+    model = FakeChatModel(turns=[FakeTurn(message=AIMessage(content="unused"))])
+    loop_obj = AgentLoop(
+        model=model, registry=ToolRegistry([]), context=make_minimal_context(),
+        hooks=HookChain(),
+    )
+    abort = AbortController()
+    abort.abort("user_ctrl_c")  # aborted at turn start -> the line-266 gate fires
+    # History already holds a COMPLETED batch: the call is answered by a real ToolMessage.
+    history: list[BaseMessage] = [
+        HumanMessage(content="go"),
+        AIMessage(content="", tool_calls=[{"name": "q", "args": {}, "id": "tc_done"}]),
+        ToolMessage(content="ok", tool_call_id="tc_done", name="q"),
+    ]
+    with pytest.raises(AbortException):
+        async for _ in loop_obj.run_turn(history=history, abort=abort):
+            pass
+
+    ids = [m.tool_call_id for m in history if isinstance(m, ToolMessage)]
+    assert ids.count("tc_done") == 1, f"duplicate ToolMessage synthesised: {ids}"

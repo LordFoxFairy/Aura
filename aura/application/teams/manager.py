@@ -114,6 +114,7 @@ class TeamManager:
         )
         self._team: TeamRecord | None = None
         self._runtimes: dict[str, asyncio.Task[None]] = {}
+        self._teardown_tasks: set[asyncio.Task[object]] = set()
         self._members: dict[str, Member] = {}
         self._mailbox_notifier = QueueMailboxNotifier()
         self._teammate_terminal_intents: dict[str, str] = {}
@@ -671,10 +672,10 @@ class TeamManager:
                 except RuntimeError:
                     loop = None
                 if loop is not None:
-                    loop.create_task(backend_handle.force_kill())
+                    self._track_teardown(backend_handle.force_kill())
         if agent is not None:
             with contextlib.suppress(Exception):
-                asyncio.ensure_future(agent.aclose())
+                self._track_teardown(agent.aclose())
         if journal_force:
             journal.write(
                 "team_member_removed",
@@ -682,6 +683,12 @@ class TeamManager:
                 member=name,
                 forced=not already_acked,
             )
+
+    def _track_teardown(self, coro: Coroutine[Any, Any, object]) -> None:
+        # Hold a ref so the fire-and-forget teardown task isn't GC'd mid-flight.
+        task = asyncio.ensure_future(coro)
+        self._teardown_tasks.add(task)
+        task.add_done_callback(self._teardown_tasks.discard)
 
     def _set_teammate_cancel_intent(self, task_id: str) -> None:
         if task_id in self._runtimes:

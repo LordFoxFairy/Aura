@@ -99,6 +99,13 @@ def test_default_policy_blocks_writes_to_protected_globs(path_str: str) -> None:
     assert is_protected(path_str, DEFAULT_SAFETY, is_write=True) is True
 
 
+def test_default_policy_catches_macos_firmlink_etc() -> None:
+    """A /private/etc path (macOS firmlink target of /etc, e.g. via a symlink whose
+    resolved form is /private/etc/...) must still hit /etc protection, not dodge it."""
+    assert is_protected("/private/etc/hosts", DEFAULT_SAFETY, is_write=True) is True
+    assert is_protected("/private/etc/hosts", DEFAULT_SAFETY, is_write=False) is True
+
+
 def test_default_policy_blocks_writes_to_home_rc_files() -> None:
     home = Path.home()
     for rc in (".bashrc", ".zshrc", ".profile", ".bash_profile", ".zprofile"):

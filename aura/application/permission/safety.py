@@ -67,9 +67,14 @@ def _candidate_paths(path: Path | str) -> list[str]:
     except (OSError, RuntimeError):
         resolved_str = absolute_str
 
-    if resolved_str == absolute_str:
-        return [absolute_str]
-    return [absolute_str, resolved_str]
+    candidates = [absolute_str]
+    if resolved_str != absolute_str:
+        candidates.append(resolved_str)
+    # macOS firmlinks resolve /etc /var /tmp to /private/<name>; test the
+    # de-prefixed form too so absolute /etc(/**) patterns still catch a symlink.
+    if resolved_str.startswith(("/private/etc", "/private/var", "/private/tmp")):
+        candidates.append(resolved_str[len("/private") :])
+    return candidates
 
 
 def _compile_spec(patterns: tuple[str, ...]) -> pathspec.PathSpec:

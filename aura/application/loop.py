@@ -264,7 +264,13 @@ class AgentLoop:
                 journal.write("turn_begin", turn=self._state.turn_count + 1)
                 # Gate between turns so cancel doesn't race the next ainvoke.
                 if abort is not None and abort.aborted:
-                    self._synthesise_missing_tool_messages(history, set())
+                    # Answered ids must come from history; an empty set would
+                    # duplicate ToolMessages for already-completed calls (provider 400).
+                    answered = {
+                        m.tool_call_id for m in history
+                        if isinstance(m, ToolMessage)
+                    }
+                    self._synthesise_missing_tool_messages(history, answered)
                     raise AbortException(abort.reason or "aborted")
                 ai = await self._invoke_model_with_abort(history, abort)
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 import sys
 from email.message import Message
+from http.client import HTTPMessage
+from io import BytesIO
 from urllib.error import HTTPError
 from urllib.request import Request
 
@@ -21,6 +23,7 @@ from aura.tools.web_fetch import (
     WebFetchParams,
     WebFetchSuccess,
     _fetch,
+    _ValidatingRedirectHandler,
     make_web_fetch,
 )
 
@@ -671,3 +674,35 @@ async def test_arun_failure_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> No
     assert first["summary"] is None
     assert second["summary"] is None  # still a failure, never served stale-cached
     assert calls["n"] == 2  # model rebuilt on retry → first failure was not cached
+
+
+def test_redirect_to_cloud_metadata_ip_is_rejected() -> None:
+    """SSRF: a 302 to the 169.254.169.254 metadata endpoint must be refused — the
+    original-host guard alone would let urlopen follow the redirect and exfiltrate creds."""
+    handler = _ValidatingRedirectHandler()
+    req = Request("https://example.com/")
+    with pytest.raises(ToolError, match="non-public IP"):
+        handler.redirect_request(
+            req, BytesIO(b""), 302, "Found", HTTPMessage(),
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+        )
+
+
+def test_redirect_to_loopback_is_rejected() -> None:
+    """A redirect to 127.0.0.1 (internal service) must be refused on the hop."""
+    handler = _ValidatingRedirectHandler()
+    with pytest.raises(ToolError, match="non-public IP"):
+        handler.redirect_request(
+            Request("https://example.com/"), BytesIO(b""), 302, "Found",
+            HTTPMessage(), "http://127.0.0.1:8080/admin",
+        )
+
+
+def test_redirect_to_non_http_scheme_is_rejected() -> None:
+    """A redirect to file:// (or any non-http(s) scheme) must be refused before fetch."""
+    handler = _ValidatingRedirectHandler()
+    with pytest.raises(ToolError, match="non-http"):
+        handler.redirect_request(
+            Request("https://example.com/"), BytesIO(b""), 302, "Found",
+            HTTPMessage(), "file:///etc/passwd",
+        )

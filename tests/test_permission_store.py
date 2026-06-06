@@ -15,6 +15,8 @@ from aura.infrastructure.permission_store import (
     PermissionStoreError,
     ensure_local_settings,
     load,
+    load_ask_ruleset,
+    load_deny_ruleset,
     load_ruleset,
     save_rule,
 )
@@ -460,3 +462,250 @@ def test_load_ruleset_wildcard_in_known_covers_concrete_rule(tmp_path: Path) -> 
         known_tool_names={"bash", "mcp__github__*"},
     )
     assert rs.rules[0].tool == "mcp__github__create_issue"
+
+
+# --- malformed top-level shapes (Schema-crash boundary) -------------------
+
+
+@pytest.mark.parametrize("payload", ["[1, 2, 3]", '"a string"', "42", "true", "null"])
+def test_load_non_object_top_level_json_raises(tmp_path: Path, payload: str) -> None:
+    # A settings file whose root is a JSON array/scalar is structurally
+    # wrong; the loader must reject it (not silently coerce to {}), and
+    # the error must name the offending file so the user can fix it.
+    settings = tmp_path / ".aura" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(payload)
+    with pytest.raises(AuraConfigError) as exc:
+        load(tmp_path)
+    assert "object" in str(exc.value)
+    assert "settings.json" in exc.value.source
+
+
+@pytest.mark.parametrize("perms", ["[]", '"oops"', "5", "false"])
+def test_load_permissions_not_object_raises(tmp_path: Path, perms: str) -> None:
+    # ``permissions`` present but not an object is a typo we must surface,
+    # not skip — otherwise rules silently vanish with no allow list.
+    settings = tmp_path / ".aura" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text('{"permissions": ' + perms + "}")
+    with pytest.raises(AuraConfigError) as exc:
+        load(tmp_path)
+    assert "'permissions' must be an object" in str(exc.value)
+
+
+def test_load_local_non_object_top_level_names_local_file(tmp_path: Path) -> None:
+    # Same root-shape rejection on settings.local.json must point at the
+    # LOCAL file, not the project one, so the typo is found in one read.
+    local = tmp_path / ".aura" / "settings.local.json"
+    local.parent.mkdir()
+    local.write_text(json.dumps([1, 2]))
+    with pytest.raises(AuraConfigError) as exc:
+        load(tmp_path)
+    assert "settings.local.json" in exc.value.source
+
+
+# --- safety_exempt validation (cannot disarm a built-in protection) -------
+
+
+@pytest.mark.parametrize("bad_glob", ["!", "\\"])
+def test_load_invalid_safety_exempt_glob_raises(tmp_path: Path, bad_glob: str) -> None:
+    # A safety_exempt entry that pathspec cannot parse as a gitignore glob
+    # must surface as a config error naming the bad pattern, not crash deep
+    # inside pathspec or be silently dropped.
+    _write_settings(tmp_path, "settings.json", {"safety_exempt": [bad_glob]})
+    with pytest.raises(AuraConfigError) as exc:
+        load(tmp_path)
+    assert "safety_exempt" in str(exc.value)
+    assert "gitignore" in str(exc.value)
+
+
+@pytest.mark.parametrize("greedy", ["**", "/etc/**", "**/.ssh/**"])
+def test_load_safety_exempt_overlapping_builtin_protection_raises(
+    tmp_path: Path, greedy: str,
+) -> None:
+    # The whole point of safety_exempt is to carve narrow holes; a pattern
+    # that would re-expose a built-in protected path (ssh keys, /etc, .git)
+    # must be refused so a config typo can't disarm a default safety entry.
+    _write_settings(tmp_path, "settings.json", {"safety_exempt": [greedy]})
+    with pytest.raises(AuraConfigError) as exc:
+        load(tmp_path)
+    msg = str(exc.value)
+    assert "overlaps" in msg
+    assert "refusing to" in msg
+
+
+def test_load_narrow_safety_exempt_pattern_is_accepted(tmp_path: Path) -> None:
+    # The negative control: a pattern that matches no protected sample must
+    # pass cleanly, proving the overlap guard isn't a blanket rejection.
+    _write_settings(tmp_path, "settings.json", {"safety_exempt": ["build/cache/"]})
+    cfg = load(tmp_path)
+    assert cfg.safety_exempt == ["build/cache/"]
+
+
+def test_load_local_overlapping_safety_exempt_names_local_file(tmp_path: Path) -> None:
+    # An overlapping pattern in the LOCAL file must blame the local file so
+    # the user edits the right one.
+    _write_settings(tmp_path, "settings.local.json", {"safety_exempt": ["**"]})
+    with pytest.raises(AuraConfigError) as exc:
+        load(tmp_path)
+    assert "settings.local.json" in exc.value.source
+
+
+# --- statusline + prompt_timeout merge precedence -------------------------
+
+
+def test_load_statusline_from_project_is_merged(tmp_path: Path) -> None:
+    # statusline lives in project settings; load must surface it on the
+    # merged config (otherwise the configured status bar silently goes away).
+    _write_settings(
+        tmp_path, "settings.json",
+        {"statusline": {"command": "echo P", "enabled": False, "timeout_ms": 250}},
+    )
+    cfg = load(tmp_path)
+    assert cfg.statusline is not None
+    assert cfg.statusline.command == "echo P"
+    assert cfg.statusline.enabled is False
+    assert cfg.statusline.timeout_ms == 250
+
+
+def test_load_statusline_local_overrides_project(tmp_path: Path) -> None:
+    # When both files define statusline, the machine-local one wins — a dev
+    # can override the team's status bar without editing the shared file.
+    _write_settings(
+        tmp_path, "settings.json", {"statusline": {"command": "echo P"}},
+    )
+    _write_settings(
+        tmp_path, "settings.local.json", {"statusline": {"command": "echo L"}},
+    )
+    cfg = load(tmp_path)
+    assert cfg.statusline is not None
+    assert cfg.statusline.command == "echo L"
+
+
+def test_load_prompt_timeout_local_overrides_project(tmp_path: Path) -> None:
+    # prompt_timeout_sec in the local file must take precedence over the
+    # project value (line: local branch of the timeout merge).
+    _write_settings(tmp_path, "settings.json", {"prompt_timeout_sec": 11.0})
+    _write_settings(tmp_path, "settings.local.json", {"prompt_timeout_sec": 22.0})
+    cfg = load(tmp_path)
+    assert cfg.prompt_timeout_sec == 22.0
+
+
+@pytest.mark.parametrize("zero_timeout", [0.0, -1.0])
+def test_load_prompt_timeout_zero_and_negative_round_trip(
+    tmp_path: Path, zero_timeout: float,
+) -> None:
+    # Numeric boundary: the loader passes the raw value through to the
+    # schema; whatever the schema accepts for 0/-1 must survive the merge
+    # unchanged rather than being coerced to the 300s default.
+    _write_settings(
+        tmp_path, "settings.local.json", {"prompt_timeout_sec": zero_timeout},
+    )
+    cfg = load(tmp_path)
+    assert cfg.prompt_timeout_sec == zero_timeout
+
+
+# --- deny / ask rulesets (malformed entries journal + skip, never raise) --
+
+
+def test_load_deny_ruleset_parses_valid_entries(tmp_path: Path) -> None:
+    # deny rules guard destructive ops; valid entries must parse into the
+    # ruleset with the correct kind so the engine treats them as denials.
+    _write_settings(
+        tmp_path, "settings.json", {"deny": ["bash(rm -rf /)", "write_file(/etc)"]},
+    )
+    rs = load_deny_ruleset(tmp_path)
+    assert isinstance(rs, RuleSet)
+    assert [r.to_string() for r in rs.rules] == ["bash(rm -rf /)", "write_file(/etc)"]
+    assert all(r.kind == "deny" for r in rs.rules)
+
+
+def test_load_ask_ruleset_parses_valid_entries(tmp_path: Path) -> None:
+    # ask rules force a confirmation prompt; the loader must tag them with
+    # the ``ask`` kind, distinct from allow/deny.
+    _write_settings(tmp_path, "settings.json", {"ask": ["bash(git push)"]})
+    rs = load_ask_ruleset(tmp_path)
+    assert [r.to_string() for r in rs.rules] == ["bash(git push)"]
+    assert rs.rules[0].kind == "ask"
+
+
+@pytest.mark.parametrize("field", ["deny", "ask"])
+def test_load_kind_ruleset_skips_malformed_and_journals(
+    tmp_path: Path, field: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A typo in ONE deny/ask string must not nuke the whole list (unlike
+    # allow, which is strict): the bad entry is journalled for the user and
+    # the valid ones still load. We capture the journal at the module seam.
+    captured: list[dict[str, Any]] = []
+
+    def _fake_write(event: str, **fields: Any) -> None:
+        captured.append({"event": event, **fields})
+
+    monkeypatch.setattr(
+        "aura.infrastructure.permission_store.journal.write", _fake_write,
+    )
+    _write_settings(
+        tmp_path, "settings.json", {field: ["bash(good)", "bash(unclosed"]},
+    )
+    loader = load_deny_ruleset if field == "deny" else load_ask_ruleset
+    rs = loader(tmp_path)
+    assert [r.to_string() for r in rs.rules] == ["bash(good)"]
+    assert len(captured) == 1
+    assert captured[0]["event"] == "permission_rule_parse_failed"
+    assert captured[0]["kind"] == field
+    assert captured[0]["rule"] == "bash(unclosed"
+
+
+@pytest.mark.parametrize("field", ["deny", "ask"])
+def test_load_kind_ruleset_swallows_journal_failure(
+    tmp_path: Path, field: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Even if the journal write itself blows up, a malformed rule must not
+    # crash the load path — the rule is just dropped silently.
+    def _boom(event: str, **fields: Any) -> None:
+        raise RuntimeError("journal down")
+
+    monkeypatch.setattr(
+        "aura.infrastructure.permission_store.journal.write", _boom,
+    )
+    _write_settings(tmp_path, "settings.json", {field: ["bash(unclosed"]})
+    loader = load_deny_ruleset if field == "deny" else load_ask_ruleset
+    rs = loader(tmp_path)
+    assert rs.rules == ()
+
+
+@pytest.mark.parametrize("field", ["deny", "ask"])
+def test_load_kind_ruleset_empty_when_absent(tmp_path: Path, field: str) -> None:
+    # null/empty boundary: no settings file at all → an empty (not None)
+    # ruleset, so callers can iterate without guarding.
+    rs = (load_deny_ruleset if field == "deny" else load_ask_ruleset)(tmp_path)
+    assert rs.rules == ()
+
+
+# --- save_rule onto a file whose permissions value is non-dict ------------
+
+
+def test_save_rule_recovers_when_permissions_is_non_object(tmp_path: Path) -> None:
+    # A hand-edited settings.json with a junk ``permissions`` value (a list)
+    # must not crash save_rule; it resets to a clean object and writes the
+    # rule, keeping the tool usable after manual corruption.
+    settings = tmp_path / ".aura" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(json.dumps({"permissions": ["junk"], "keep": 1}))
+    save_rule(tmp_path, Rule(tool="bash", content="npm test"))
+    reloaded = json.loads(settings.read_text())
+    assert reloaded["permissions"]["allow"] == ["bash(npm test)"]
+    assert reloaded["keep"] == 1
+
+
+def test_save_rule_is_idempotent_after_corrupt_permissions(tmp_path: Path) -> None:
+    # Idempotency boundary: calling save_rule twice on a recovered file must
+    # not duplicate the rule.
+    settings = tmp_path / ".aura" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(json.dumps({"permissions": 5}))
+    rule = Rule(tool="bash", content="npm test")
+    save_rule(tmp_path, rule)
+    save_rule(tmp_path, rule)
+    reloaded = json.loads(settings.read_text())
+    assert reloaded["permissions"]["allow"] == [rule.to_string()]

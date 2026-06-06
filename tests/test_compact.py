@@ -11,7 +11,18 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from langchain_core.outputs import ChatGeneration, ChatResult
 
 from aura.application.compact.constants import MICROCOMPACT_CLEAR_MARKER
+from aura.application.compact.microcompact import MicrocompactPolicy
 from aura.application.compact.reactive import _is_prompt_too_long
+from aura.application.compact.summary_turn import (
+    SummaryCaps,
+    _fallback_summary,
+    _run_summary_turn_resilient,
+    _run_summary_turn_with_retry,
+    _serialize_tool_args,
+    compact_summary_messages,
+    compact_summary_prompt_budget,
+    estimate_compact_summary_tokens,
+)
 from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
 from aura.domain.skill import Skill
@@ -667,3 +678,311 @@ async def test_compact_recent_files_rendered_before_preserved_tail(
         for m in tail
     )
     await agent.aclose()
+
+
+# --- summary_turn.py unit-level boundary coverage -------------------------
+
+
+class _PromptTooLongModel(FakeChatModel):
+    """Summary model rejecting any prompt whose serialized chars exceed a cap.
+
+    Mirrors a provider that hard-caps prompt size: the resilient summarizer must
+    bisect the message list until each piece fits (or fall back deterministically).
+    """
+
+    def __init__(self, *, max_prompt_chars: int) -> None:
+        super().__init__(turns=[])
+        self.__dict__["max_prompt_chars"] = max_prompt_chars
+        self.__dict__["accepted_sizes"] = []
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **_: Any,
+    ) -> ChatResult:
+        self.__dict__["ainvoke_calls"] += 1
+        size = sum(len(str(m.content)) for m in messages)
+        if size > self.__dict__["max_prompt_chars"]:
+            raise RuntimeError("context length exceeded: prompt is too long")
+        self.__dict__["accepted_sizes"].append(size)
+        idx = self.__dict__["ainvoke_calls"]
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=f"S{idx}"))])
+
+    @property
+    def accepted_sizes(self) -> list[int]:
+        result: list[int] = self.__dict__["accepted_sizes"]
+        return result
+
+
+class _AlwaysTooLongModel(FakeChatModel):
+    """Summary model that rejects every prompt as too long, regardless of size.
+
+    Exercises the floor of the resilient summarizer: when even a single message
+    cannot be summarized, it must yield the deterministic fallback, never crash.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(turns=[])
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **_: Any,
+    ) -> ChatResult:
+        self.__dict__["ainvoke_calls"] += 1
+        raise RuntimeError("maximum context length is 1 token")
+
+
+class _NonPtlErrorModel(FakeChatModel):
+    """Summary model whose failure is NOT a prompt-size rejection.
+
+    Non-PTL errors are real faults: they must propagate, never be silently
+    swallowed by the bisect-and-fallback path.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(turns=[])
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **_: Any,
+    ) -> ChatResult:
+        self.__dict__["ainvoke_calls"] += 1
+        raise RuntimeError("upstream 503 service unavailable")
+
+
+def test_serialize_tool_args_falls_back_to_str_on_non_json_value() -> None:
+    """Unserializable tool args must not crash serialization — degrade to ``str``."""
+    weird: dict[str, Any] = {"obj": object()}
+    rendered = _serialize_tool_args(weird, caps=SummaryCaps())
+    # json.dumps(default=str) actually stringifies object() — force the except
+    # branch with a key that json cannot encode at all.
+    circular: dict[str, Any] = {}
+    circular["self"] = circular
+    rendered2 = _serialize_tool_args(circular, caps=SummaryCaps())
+    assert "obj" in rendered
+    assert "self" in rendered2
+
+
+def test_serialize_tool_args_caps_oversized_payload() -> None:
+    """Tool-arg blobs over the cap are truncated so one giant call can't bloat the prompt."""
+    caps = SummaryCaps(max_summary_tool_args_chars=20)
+    rendered = _serialize_tool_args({"k": "v" * 1_000}, caps=caps)
+    assert "truncated" in rendered
+    assert len(rendered) < 1_000
+
+
+def test_estimate_compact_summary_tokens_is_positive_for_content() -> None:
+    """Token estimate must stay strictly positive so budget math never divides by zero."""
+    tokens = estimate_compact_summary_tokens([HumanMessage(content="hello world")])
+    assert tokens > 0
+    # Empty history still includes the fixed prompt scaffolding → non-zero.
+    assert estimate_compact_summary_tokens([]) > 0
+
+
+def test_compact_summary_messages_returns_copy_when_no_policy(tmp_path: Path) -> None:
+    """No microcompact policy → summary sees a verbatim COPY, never the live list."""
+    model = FakeChatModel(turns=[FakeTurn(AIMessage(content="SUMMARY-TEXT"))])
+    agent = AgentSession(
+        config=_minimal_config(),
+        model=model,
+        storage=_storage(tmp_path),
+        microcompact_trigger_pairs=0,  # disable microcompact → policy is None
+    )
+    assert agent.microcompact_policy is None
+    history: list[BaseMessage] = [HumanMessage(content="a"), AIMessage(content="b")]
+    view = compact_summary_messages(agent, history)
+    assert view == history
+    assert view is not history  # defensive copy — mutating the view can't corrupt storage
+
+
+def test_compact_summary_messages_applies_policy_when_present(tmp_path: Path) -> None:
+    """A microcompact policy must reshape the summary view (clear-marker injected)."""
+    agent = _make_agent(tmp_path)
+    # trigger_pairs=1 with 3 read_file pairs (>1) and keep_recent=1 → oldest
+    # two tool payloads get cleared in the summary view.
+    policy = MicrocompactPolicy(trigger_pairs=1, keep_recent=1)
+    object.__setattr__(agent._loop, "_microcompact_policy", policy)
+    history: list[BaseMessage] = []
+    for i in range(3):
+        call_id = f"tc-{i}"
+        history.append(HumanMessage(content=f"u{i}"))
+        history.append(
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "read_file", "args": {"path": f"f{i}.py"}, "id": call_id}
+                ],
+            )
+        )
+        history.append(ToolMessage(content=f"RAW-{i}", tool_call_id=call_id, name="read_file"))
+    view = compact_summary_messages(agent, history)
+    blob = "\n".join(str(m.content) for m in view)
+    assert MICROCOMPACT_CLEAR_MARKER in blob
+    assert "RAW-0" not in blob  # oldest payload cleared
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (type("PromptTooLongError", (RuntimeError,), {})("boom"), True),
+        (type("PromptTooLong", (RuntimeError,), {})("boom"), True),
+        (RuntimeError("Error: {'code': '1261'} something else"), True),
+        (RuntimeError('Error: {"code": "1261"} other'), True),
+        (RuntimeError("totally unrelated network blip"), False),
+        (RuntimeError("code 9999 unknown"), False),
+    ],
+)
+def test_is_prompt_too_long_matrix(exc: BaseException, expected: bool) -> None:
+    """Provider PTL detection must catch type-name and bare error-code signals."""
+    assert _is_prompt_too_long(exc) is expected
+
+
+def test_compact_summary_prompt_budget_floor_on_nonpositive_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A zero/negative context window must not shrink the budget below the safe max."""
+    agent = _make_agent(tmp_path)
+    monkeypatch.setattr(AgentSession, "context_window", property(lambda _self: 0))
+    assert compact_summary_prompt_budget(agent) == 16_000
+
+
+def test_compact_summary_prompt_budget_clamps_small_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tiny positive window must clamp the prompt budget to the 2_000-token floor."""
+    agent = _make_agent(tmp_path)
+    monkeypatch.setattr(AgentSession, "context_window", property(lambda _self: 13_500))
+    # window - 13_000 = 500 < 2_000 floor → floor wins.
+    assert compact_summary_prompt_budget(agent) == 2_000
+
+
+@pytest.mark.asyncio
+async def test_run_summary_turn_with_retry_empty_history_returns_blank(
+    tmp_path: Path,
+) -> None:
+    """Empty history must summarize to an empty string, not invoke the model."""
+    model = FakeChatModel(turns=[])
+    result = await _run_summary_turn_with_retry(model, [])
+    assert result == ""
+    assert model.ainvoke_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_run_summary_turn_resilient_empty_returns_blank() -> None:
+    """Recursive base case: no messages → empty summary, zero model calls."""
+    model = FakeChatModel(turns=[])
+    result = await _run_summary_turn_resilient(model, [], depth=0)
+    assert result == ""
+    assert model.ainvoke_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_run_summary_turn_resilient_bisects_on_prompt_too_long() -> None:
+    """Oversized prompt must bisect-and-merge into a single combined summary."""
+    # Overhead alone is ~718 chars; cap 1100 admits single messages (~1030)
+    # but rejects pairs (~1330) → forces bisection to single-message leaves.
+    model = _PromptTooLongModel(max_prompt_chars=1_100)
+    messages: list[BaseMessage] = [HumanMessage(content="m" * 300) for _ in range(4)]
+
+    summary = await _run_summary_turn_resilient(model, messages, depth=0)
+
+    # The full list was rejected, leaves were accepted, then merged → non-empty.
+    assert summary != ""
+    assert model.ainvoke_calls > 1
+    # The model accepted at least one prompt, all within its cap.
+    assert model.accepted_sizes
+    assert all(size <= 1_100 for size in model.accepted_sizes)
+
+
+@pytest.mark.asyncio
+async def test_run_summary_turn_resilient_single_message_falls_back() -> None:
+    """A lone message the provider always rejects must yield the deterministic fallback."""
+    model = _AlwaysTooLongModel()
+    lone: list[BaseMessage] = [HumanMessage(content="x" * 5_000)]
+
+    summary = await _run_summary_turn_resilient(model, lone, depth=0)
+
+    assert "<goal>" in summary
+    assert "provider rejected the compact prompt size" in summary
+
+
+@pytest.mark.asyncio
+async def test_run_summary_turn_resilient_depth_cap_forces_fallback() -> None:
+    """Hitting the split-depth ceiling must stop recursion and fall back, not loop."""
+    model = _AlwaysTooLongModel()
+    caps = SummaryCaps(max_summary_split_depth=1)
+    messages: list[BaseMessage] = [HumanMessage(content="a"), HumanMessage(content="b")]
+
+    summary = await _run_summary_turn_resilient(model, messages, depth=5, caps=caps)
+
+    # depth (5) >= cap (1) with len>1 → immediate fallback, no further bisecting.
+    assert "<history-excerpt>" in summary
+
+
+@pytest.mark.asyncio
+async def test_run_summary_turn_resilient_propagates_non_ptl_error() -> None:
+    """Non-prompt-size failures must propagate — never be masked as a fallback summary."""
+    model = _NonPtlErrorModel()
+    messages: list[BaseMessage] = [HumanMessage(content="x")]
+
+    with pytest.raises(RuntimeError, match="503 service unavailable"):
+        await _run_summary_turn_resilient(model, messages, depth=0)
+
+
+@pytest.mark.asyncio
+async def test_run_summary_turn_with_retry_chains_partial_summaries() -> None:
+    """Budget-split history must summarize each chunk then fold partials into one."""
+    model = _PromptTooLongModel(max_prompt_chars=100_000)
+    # ~600 chars/message (~150 tokens). Budget 400 (> ~180 prompt overhead) admits
+    # one message per chunk but splits two → several chunks whose tiny partial
+    # summaries then fold back into a single converging prompt.
+    messages: list[BaseMessage] = [HumanMessage(content="z" * 600) for _ in range(6)]
+
+    summary = await _run_summary_turn_with_retry(
+        model, messages, max_prompt_tokens=400
+    )
+
+    # Multiple chunks → multiple model calls, then the partials collapse to one.
+    assert summary != ""
+    assert model.ainvoke_calls > 1
+
+
+def test_fallback_summary_truncates_oversized_excerpt() -> None:
+    """The deterministic fallback must cap its embedded excerpt to the char limit."""
+    caps = SummaryCaps(fallback_summary_char_limit=100, max_summary_message_chars=10_000)
+    messages: list[BaseMessage] = [HumanMessage(content="y" * 5_000)]
+
+    out = _fallback_summary(messages, caps=caps)
+
+    assert "(truncated)" in out
+    assert "<history-excerpt>" in out
+
+
+def test_fallback_summary_keeps_small_excerpt_intact() -> None:
+    """A small history excerpt survives verbatim inside the fallback envelope."""
+    messages: list[BaseMessage] = [HumanMessage(content="tiny")]
+    out = _fallback_summary(messages)
+    assert "tiny" in out
+    assert "(truncated)" not in out
+
+
+@pytest.mark.asyncio
+async def test_run_summary_turn_with_retry_single_chunk_direct_path() -> None:
+    """A history that fits one chunk takes the single-chunk path (one resilient call)."""
+    model = FakeChatModel(turns=[FakeTurn(AIMessage(content="ONE"))])
+    messages: list[BaseMessage] = [HumanMessage(content="short")]
+
+    summary = await _run_summary_turn_with_retry(
+        model, messages, max_prompt_tokens=16_000
+    )
+
+    assert summary == "ONE"
+    assert model.ainvoke_calls == 1

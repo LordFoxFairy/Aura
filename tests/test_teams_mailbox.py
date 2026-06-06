@@ -170,3 +170,135 @@ async def test_queue_notifier_edge_triggered_drain() -> None:
     assert await notifier.wait_new("alice", timeout=0.1) is True
     # No second wake without another signal.
     assert await notifier.wait_new("alice", timeout=0.1) is False
+
+
+def _inbox_for(tmp_path: Path, member: str = "alice") -> Path:
+    return _storage(tmp_path).team_inbox_path("team-a", member)
+
+
+def _replace_with_dir(path: Path) -> None:
+    """Occupy a file slot with a directory so open() raises IsADirectoryError
+    (an OSError subclass) — exercises the I/O-failure branch without faking it."""
+    if path.exists():
+        path.unlink()
+    path.mkdir()
+
+
+def test_mailbox_read_all_skips_blank_lines(tmp_path: Path) -> None:
+    """Blank/whitespace lines from interrupted appends must be skipped, not
+    surface as empty TeamMessage rows."""
+    box = Mailbox(_storage(tmp_path), "team-a")
+    box.append(_msg(body="first"))
+    inbox = _inbox_for(tmp_path)
+    with inbox.open("a", encoding="utf-8") as f:
+        f.write("\n")
+        f.write("   \n")
+    box.append(_msg(body="third"))
+    assert [m.body for m in box.read_all("alice")] == ["first", "third"]
+
+
+def test_mailbox_read_all_unreadable_inbox_returns_empty(tmp_path: Path) -> None:
+    """An inbox path that exists but can't be opened (corrupt/locked slot) must
+    degrade to an empty read, never crash the caller's drain loop."""
+    box = Mailbox(_storage(tmp_path), "team-a")
+    _replace_with_dir(_inbox_for(tmp_path))
+    assert box.read_all("alice") == []
+    assert box.read_unseen("alice") == []
+
+
+def test_mailbox_read_unseen_empty_inbox(tmp_path: Path) -> None:
+    """A member with no inbox file yet has zero unseen — the missing-file path
+    returns [] rather than raising."""
+    box = Mailbox(_storage(tmp_path), "team-a")
+    assert box.read_unseen("ghost") == []
+    assert box.read_all("ghost") == []
+
+
+def test_mailbox_ack_empty_list_is_noop(tmp_path: Path) -> None:
+    """Acking zero ids must not create or touch the .seen cursor file."""
+    box = Mailbox(_storage(tmp_path), "team-a")
+    box.append(_msg(body="one"))
+    seen_path = _inbox_for(tmp_path).with_suffix(".seen")
+    box.ack("alice", [])
+    assert not seen_path.exists()
+    assert [m.body for m in box.read_unseen("alice")] == ["one"]
+
+
+def test_mailbox_ack_tolerates_cursor_write_failure(tmp_path: Path) -> None:
+    """If the temp cursor file can't be written, ack swallows the error and the
+    message stays unseen — re-delivery keeps delivery at-least-once."""
+    box = Mailbox(_storage(tmp_path), "team-a")
+    m1 = _msg(body="one")
+    box.append(m1)
+    seen = _inbox_for(tmp_path).with_suffix(".seen")
+    tmp = seen.with_suffix(seen.suffix + ".tmp")
+    _replace_with_dir(tmp)
+    box.ack("alice", [m1.msg_id])
+    assert not seen.exists()
+    assert [m.body for m in box.read_unseen("alice")] == ["one"]
+
+
+def test_mailbox_load_seen_unreadable_cursor_treats_all_unseen(
+    tmp_path: Path,
+) -> None:
+    """An unreadable .seen cursor must fall back to 'nothing acked' so messages
+    are re-delivered rather than silently dropped."""
+    box = Mailbox(_storage(tmp_path), "team-a")
+    box.append(_msg(body="one"))
+    _replace_with_dir(_inbox_for(tmp_path).with_suffix(".seen"))
+    assert [m.body for m in box.read_unseen("alice")] == ["one"]
+
+
+def test_mailbox_multiple_recipients_isolated(tmp_path: Path) -> None:
+    """Each recipient owns a separate inbox — one member's messages and acks
+    must never bleed into another's unseen view."""
+    box = Mailbox(_storage(tmp_path), "team-a")
+    a = _msg(recipient="alice", body="for-alice")
+    b = _msg(recipient="bob", body="for-bob")
+    box.append(a)
+    box.append(b)
+    assert [m.body for m in box.read_unseen("alice")] == ["for-alice"]
+    assert [m.body for m in box.read_unseen("bob")] == ["for-bob"]
+    box.ack("alice", [a.msg_id])
+    assert box.read_unseen("alice") == []
+    assert [m.body for m in box.read_unseen("bob")] == ["for-bob"]
+
+
+def test_mailbox_ack_unknown_id_is_harmless(tmp_path: Path) -> None:
+    """Acking an id that was never delivered must persist quietly without
+    affecting real pending messages."""
+    box = Mailbox(_storage(tmp_path), "team-a")
+    m1 = _msg(body="real")
+    box.append(m1)
+    box.ack("alice", ["never-existed"])
+    assert [m.body for m in box.read_unseen("alice")] == ["real"]
+    box.ack("alice", [m1.msg_id, "another-ghost"])
+    assert box.read_unseen("alice") == []
+
+
+@pytest.mark.asyncio
+async def test_queue_notifier_wait_times_out_without_signal() -> None:
+    """A bare wait with no signal must return False at the deadline — the
+    timeout boundary of the queue path."""
+    notifier = QueueMailboxNotifier()
+    assert await notifier.wait_new("alice", timeout=0.05) is False
+
+
+@pytest.mark.asyncio
+async def test_file_notifier_signal_is_noop(tmp_path: Path) -> None:
+    """File-backed notifier polls the JSONL, so signal() is intentionally inert
+    and must not raise or alter unseen state."""
+    box = Mailbox(_storage(tmp_path), "team-a")
+    notifier = FileMailboxNotifier(box)
+    notifier.signal("alice")  # inert: must not raise or change unseen state
+    box.append(_msg(body="ready"))
+    assert await notifier.wait_new("alice", timeout=1.0) is True
+
+
+@pytest.mark.asyncio
+async def test_file_notifier_zero_timeout_returns_false(tmp_path: Path) -> None:
+    """A zero/negative remaining budget must short-circuit to False without an
+    extra poll sleep — the numeric deadline boundary."""
+    box = Mailbox(_storage(tmp_path), "team-a")
+    notifier = FileMailboxNotifier(box)
+    assert await notifier.wait_new("alice", timeout=0.0) is False

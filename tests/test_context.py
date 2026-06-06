@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+from typing import Any
 
 import pytest
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
     HumanMessage,
     SystemMessage,
 )
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.runnables import Runnable
+from langchain_core.tools import BaseTool
+from pydantic import ConfigDict
 
+from aura.application.memory import project_memory
 from aura.application.memory.context import (
     Context,
     NestedFragment,
@@ -967,3 +979,367 @@ def test_out_of_cwd_path_skips_nested_memory(tmp_path: Path) -> None:
     assert ctx._nested_fragments == []
     out = ctx.build([])
     assert all("<nested-memory " not in str(m.content) for m in out)
+
+
+# ── Fake Anthropic-typed model: drives the cache_control breakpoint path. ──
+
+
+class _AnthropicLikeModel(BaseChatModel):
+    """Reports ``_llm_type='anthropic-chat'`` so ``build`` stamps breakpoints."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
+
+    @property
+    def _llm_type(self) -> str:
+        return "anthropic-chat"
+
+    def bind_tools(
+        self,
+        tools: Sequence[dict[str, Any] | type | Any | BaseTool],
+        **_: Any,
+    ) -> Runnable[Any, AIMessage]:
+        return self
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **_: Any,
+    ) -> ChatResult:
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=""))])
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **_: Any,
+    ) -> ChatResult:
+        raise NotImplementedError
+
+
+class _ExplodingLlmTypeModel(_AnthropicLikeModel):
+    """``_llm_type`` raises — provider sniffing must swallow it, not crash build."""
+
+    @property
+    def _llm_type(self) -> str:
+        raise RuntimeError("boom")
+
+
+def test_anthropic_model_stamps_cache_control_on_system_and_memory(
+    tmp_path: Path,
+) -> None:
+    """Anthropic-shaped models must mark the static prefix for prompt-cache reuse."""
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="PRIMARY",
+        rules=RulesBundle(),
+        model=_AnthropicLikeModel(),
+    )
+    out = ctx.build([])
+    assert out[0].additional_kwargs.get("cache_control") == {"type": "ephemeral"}
+    memory = next(m for m in out[1:] if "<project-memory>" in str(m.content))
+    assert memory.additional_kwargs.get("cache_control") == {"type": "ephemeral"}
+
+
+def test_exploding_llm_type_swallowed_and_no_breakpoints(tmp_path: Path) -> None:
+    """A model whose ``_llm_type`` raises must not crash build nor stamp markers."""
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="PRIMARY",
+        rules=RulesBundle(),
+        model=_ExplodingLlmTypeModel(),
+    )
+    out = ctx.build([])
+    # Provider sniff failed → treated as non-Anthropic → zero breakpoints.
+    assert "cache_control" not in out[0].additional_kwargs
+    memory = next(m for m in out[1:] if "<project-memory>" in str(m.content))
+    assert "cache_control" not in memory.additional_kwargs
+
+
+# ── Accessor / mutator surface used by compact / restore paths. ──
+
+
+def test_read_records_property_returns_live_mutable_map(tmp_path: Path) -> None:
+    """compact/restore mutate read_records in place; the property must expose the live dict."""
+    target = tmp_path / "n.txt"
+    target.write_text("x")
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    ctx.record_read(target)
+    live = ctx.read_records
+    assert target.resolve() in live
+    # Mutating the returned dict is visible through read_status (same object).
+    live.clear()
+    assert ctx.read_status(target) == "never_read"
+
+
+def test_bind_read_records_replaces_map_wholesale(tmp_path: Path) -> None:
+    """compact rebuilds a Context then rebinds the preserved read-record map onto it."""
+    target = tmp_path / "n.txt"
+    target.write_text("hello")
+    st = target.stat()
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    assert ctx.read_status(target) == "never_read"
+    seeded = {target.resolve(): ContextReadRecord(mtime=st.st_mtime, size=st.st_size)}
+    ctx.bind_read_records(seeded)
+    assert ctx.read_records is seeded
+    assert ctx.read_status(target) == "fresh"
+
+
+def test_invoked_skills_property_reflects_recorded_invocations(tmp_path: Path) -> None:
+    """Invoked-skill bodies are re-rendered each build; the accessor backs that snapshot."""
+    skill = _skill("helper", "helps", "BODY")
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        skills=[skill],
+    )
+    assert ctx.invoked_skills == []
+    ctx.record_skill_invocation(skill)
+    assert ctx.invoked_skills == [skill]
+
+
+def test_record_skill_invocation_is_idempotent(tmp_path: Path) -> None:
+    """Re-invoking the same skill must not duplicate its <skill-invoked> block (idempotency)."""
+    skill = _skill("helper", "helps", "BODY")
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        skills=[skill],
+    )
+    ctx.record_skill_invocation(skill)
+    ctx.record_skill_invocation(skill)
+    assert ctx.invoked_skills == [skill]
+    out = ctx.build([])
+    invoked = [m for m in out if str(m.content).startswith('<skill-invoked name="helper">')]
+    assert len(invoked) == 1
+
+
+# ── Skill rendering edge: when_to_use annotation. ──
+
+
+def test_skill_when_to_use_appended_to_available_line(tmp_path: Path) -> None:
+    """A skill's when_to_use hint must reach the model so it triggers the skill correctly."""
+    skill = Skill(
+        name="deploy",
+        description="ships the build",
+        body="BODY",
+        source_path=tmp_path / "deploy" / "SKILL.md",
+        layer="user",
+        when_to_use="when the user asks to release",
+    )
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+        skills=[skill],
+    )
+    out = ctx.build([])
+    avail = next(m for m in out if str(m.content).startswith("<skills-available>"))
+    body = str(avail.content)
+    assert "- deploy: ships the build" in body
+    assert "[when to use: when the user asks to release]" in body
+
+
+# ── read_status partial branch. ──
+
+
+def test_read_status_partial_after_sliced_read(tmp_path: Path) -> None:
+    """A sliced (partial) read must report 'partial' so edits still demand a full read."""
+    target = tmp_path / "big.txt"
+    target.write_text("line\n" * 10)
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    ctx.record_read(target, partial=True)
+    assert ctx.read_status(target) == "partial"
+
+
+# ── OSError seams on Path.resolve / stat: failures must fail closed, not crash. ──
+
+
+def _patch_resolve_raises_for(
+    monkeypatch: pytest.MonkeyPatch, doomed: Path
+) -> None:
+    """Make ``Path.resolve`` raise OSError only for *doomed*; delegate otherwise.
+
+    Scoped to a unique path so pytest's own ``Path.resolve`` calls stay intact.
+    """
+    real_resolve = Path.resolve
+
+    def fake_resolve(self: Path, strict: bool = False) -> Path:
+        if self == doomed:
+            raise OSError("resolve denied")
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+
+
+def test_path_in_scope_resolve_oserror_is_out_of_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unresolvable path is treated as outside cwd, never crashing scope checks."""
+    doomed = tmp_path / "ghost.py"
+    _patch_resolve_raises_for(monkeypatch, doomed)
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    assert ctx._path_in_scope(doomed) is False
+
+
+def test_on_tool_touched_path_resolve_oserror_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A touched path that won't resolve must add neither nested memory nor rules."""
+    doomed = tmp_path / "ghost.py"
+    _patch_resolve_raises_for(monkeypatch, doomed)
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    ctx.on_tool_touched_path(doomed)
+    assert ctx._nested_fragments == []
+    assert ctx._matched_rules == []
+
+
+def test_record_read_resolve_oserror_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """record_read swallows an unresolvable path so a tool failure can't corrupt state."""
+    doomed = tmp_path / "ghost.txt"
+    _patch_resolve_raises_for(monkeypatch, doomed)
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    ctx.record_read(doomed)
+    assert ctx.read_records == {}
+
+
+def test_record_read_stat_oserror_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A path that resolves but cannot stat (e.g. deleted mid-read) records no fingerprint."""
+    missing = tmp_path / "never_created.txt"
+    doomed = missing.resolve()
+    real_stat = Path.stat
+
+    def fake_stat(self: Path, *, follow_symlinks: bool = True) -> Any:
+        if self == doomed:
+            raise OSError("stat failed")
+        return real_stat(self, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    ctx.record_read(missing)
+    assert ctx.read_records == {}
+
+
+def test_read_status_resolve_oserror_is_never_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unresolvable path read-status defaults to never_read, blocking edits safely."""
+    doomed = tmp_path / "ghost.txt"
+    _patch_resolve_raises_for(monkeypatch, doomed)
+    ctx = Context(
+        cwd=tmp_path,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    assert ctx.read_status(doomed) == "never_read"
+
+
+# ── Nested-memory walk edge cases. ──
+
+
+def test_touching_cwd_itself_loads_no_nested(tmp_path: Path) -> None:
+    """Touching cwd directly: its parent escapes cwd, so the walk-up does nothing."""
+    cwd = tmp_path / "p"
+    cwd.mkdir()
+    (cwd / "AURA.md").write_text("CWD-MEMO")
+    ctx = Context(
+        cwd=cwd,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    ctx.on_tool_touched_path(cwd)
+    assert ctx._nested_fragments == []
+    out = ctx.build([])
+    assert all("<nested-memory " not in str(m.content) for m in out)
+
+
+def test_nested_candidate_returning_none_content_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An AURA.md whose import-expansion yields None (unreadable) adds no fragment."""
+    cwd = tmp_path / "p"
+    src = cwd / "src"
+    src.mkdir(parents=True)
+    (src / "AURA.md").write_text("SRC-MEMO")
+    monkeypatch.setattr(project_memory, "read_with_imports", lambda _path: None)
+    ctx = Context(
+        cwd=cwd,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    ctx.on_tool_touched_path(src / "foo.py")
+    assert ctx._nested_fragments == []
+    out = ctx.build([])
+    assert all("<nested-memory " not in str(m.content) for m in out)
+
+
+def test_nested_candidate_resolve_oserror_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A candidate AURA.md path that fails to resolve is skipped, not fatal to the build."""
+    cwd = tmp_path / "p"
+    src = cwd / "src"
+    src.mkdir(parents=True)
+    aura_md = src / "AURA.md"
+    aura_md.write_text("SRC-MEMO")
+    _patch_resolve_raises_for(monkeypatch, aura_md)
+    ctx = Context(
+        cwd=cwd,
+        system_prompt="SYS",
+        primary_memory="",
+        rules=RulesBundle(),
+    )
+    ctx.on_tool_touched_path(src / "foo.py")
+    # The src/AURA.md candidate couldn't resolve → skipped, no fragment.
+    assert all("SRC-MEMO" not in f.content for f in ctx._nested_fragments)

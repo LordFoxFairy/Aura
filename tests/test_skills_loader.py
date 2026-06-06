@@ -1495,3 +1495,219 @@ def test_activate_conditional_twice_is_idempotent(tmp_path: Path) -> None:
     assert second == []
     reg = load_skills(cwd=cwd, home=home)
     assert [s.name for s in reg.list()] == ["pyhelp"]
+
+
+# --- OSError resilience on the file read / resolve seams ---------------------
+
+
+def _patch_read_bytes_raises(
+    monkeypatch: pytest.MonkeyPatch, target: Path, exc: OSError
+) -> None:
+    """Make ``Path.read_bytes`` raise only for ``target``; real behavior elsewhere."""
+    real_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(self: Path) -> bytes:
+        if self == target:
+            raise exc
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+
+
+def _patch_resolve_raises_for(
+    monkeypatch: pytest.MonkeyPatch, target: Path, *, skip_first: int = 0
+) -> None:
+    """Make ``Path.resolve`` raise OSError for ``target`` after ``skip_first`` hits."""
+    real_resolve = Path.resolve
+    state = {"hits": 0}
+
+    def fake_resolve(self: Path, *, strict: bool = False) -> Path:
+        if self == target:
+            state["hits"] += 1
+            if state["hits"] > skip_first:
+                raise OSError("resolve denied")
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+
+
+def test_read_bytes_oserror_treated_as_unreadable_parse_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mid-discovery read failure must journal parse_failed and skip, never crash the scan."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    skill_file = cwd / ".aura" / "skills" / "denied" / "SKILL.md"
+    _write(skill_file, "---\ndescription: present.\n---\nbody\n")
+    _patch_read_bytes_raises(monkeypatch, skill_file, PermissionError("no read"))
+
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        reg = load_skills(cwd=cwd, home=home)
+    finally:
+        journal_module.reset()
+
+    assert reg.list() == []
+    failed = [e for e in _events(log) if e["event"] == "skill_parse_failed"]
+    assert len(failed) == 1
+    assert failed[0]["error"] == "unreadable"
+
+
+def test_skill_md_vanishes_between_listing_and_read_is_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TOCTOU race (file gone after directory listing) must skip silently, not raise."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    skill_file = cwd / ".aura" / "skills" / "racy" / "SKILL.md"
+    _write(skill_file, "---\ndescription: present.\n---\nbody\n")
+    real_is_file = Path.is_file
+    state = {"hits": 0}
+
+    def fake_is_file(self: Path) -> bool:
+        # First probe (in _load_layer) passes; the _read_text re-check fails.
+        if self == skill_file:
+            state["hits"] += 1
+            return state["hits"] <= 1
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", fake_is_file)
+    reg = load_skills(cwd=cwd, home=home)
+    assert reg.list() == []
+    # Both probes were exercised: listing-pass then read-recheck-fail.
+    assert state["hits"] == 2
+
+
+def test_source_resolve_oserror_emits_resolve_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the canonical source path can't be resolved, the skill is dropped with a clear event."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    skill_file = cwd / ".aura" / "skills" / "noresolve" / "SKILL.md"
+    _write(skill_file, "---\ndescription: present.\n---\nbody\n")
+    # First resolve hit is _emit/unsupported-free path: the source resolve at the
+    # ``source = skill_file.resolve()`` site is the first call on this file here.
+    _patch_resolve_raises_for(monkeypatch, skill_file, skip_first=0)
+
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        reg = load_skills(cwd=cwd, home=home)
+    finally:
+        journal_module.reset()
+
+    assert reg.list() == []
+    failed = [e for e in _events(log) if e["event"] == "skill_parse_failed"]
+    assert len(failed) == 1
+    assert failed[0]["error"] == "resolve failed"
+
+
+def test_base_dir_resolve_oserror_falls_back_to_unresolved_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A base_dir resolve failure must degrade to the raw parent, still yielding a usable skill."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    skill_dir = cwd / ".aura" / "skills" / "basedir"
+    skill_file = skill_dir / "SKILL.md"
+    _write(skill_file, "---\ndescription: present.\n---\nbody\n")
+    real_resolve = Path.resolve
+
+    def fake_resolve(self: Path, *, strict: bool = False) -> Path:
+        # Only the parent-dir resolve fails; the source-path resolve succeeds.
+        if self == skill_dir:
+            raise OSError("parent resolve denied")
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    reg = load_skills(cwd=cwd, home=home)
+    skill = reg.get("basedir")
+    assert skill is not None
+    # base_dir falls back to the *unresolved* parent directory path.
+    assert skill.base_dir == skill_dir
+
+
+def test_unsupported_frontmatter_resolve_oserror_uses_raw_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When auditing unsupported fields and resolve fails, the event still records a raw path."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    skill_file = cwd / ".aura" / "skills" / "extra" / "SKILL.md"
+    _write(
+        skill_file,
+        "---\ndescription: present.\nmodel: gpt\n---\nbody\n",
+    )
+    real_resolve = Path.resolve
+
+    def fake_resolve(self: Path, *, strict: bool = False) -> Path:
+        # The unsupported-frontmatter audit resolves the file first; make only
+        # that site raise by failing the very first resolve of this file.
+        if self == skill_file:
+            raise OSError("audit resolve denied")
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        load_skills(cwd=cwd, home=home)
+    finally:
+        journal_module.reset()
+
+    audit = [e for e in _events(log) if e["event"] == "skill_unsupported_frontmatter"]
+    assert len(audit) == 1
+    # source_path falls back to the un-resolved string when resolve() raises.
+    assert audit[0]["source_path"] == str(skill_file)
+    assert audit[0]["fields"] == ["model"]
+
+
+def test_emit_parse_failed_resolve_oserror_uses_raw_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A parse-failed event must still record a path even when resolve() itself raises."""
+    home = tmp_path / "home"
+    home.mkdir()
+    cwd = tmp_path / "proj"
+    cwd.mkdir()
+    skill_file = cwd / ".aura" / "skills" / "nodesc" / "SKILL.md"
+    # Missing description forces _emit_parse_failed; resolve() inside it then fails.
+    _write(skill_file, "---\nname: x\n---\nbody\n")
+    real_resolve = Path.resolve
+
+    def fake_resolve(self: Path, *, strict: bool = False) -> Path:
+        if self == skill_file:
+            raise OSError("emit resolve denied")
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+
+    log = tmp_path / "events.jsonl"
+    journal_module.reset()
+    journal_module.configure(log)
+    try:
+        reg = load_skills(cwd=cwd, home=home)
+    finally:
+        journal_module.reset()
+
+    assert reg.list() == []
+    failed = [e for e in _events(log) if e["event"] == "skill_parse_failed"]
+    assert len(failed) == 1
+    # The raw (unresolved) path is journaled as the fallback.
+    assert failed[0]["path"] == str(skill_file)

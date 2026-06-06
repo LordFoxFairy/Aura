@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -10,11 +12,16 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from aura.application.hooks import HookChain
+from aura.application.hooks.permission import _deny_message, make_permission_hook
 from aura.application.loop_state import LoopState
+from aura.application.permission.asker import AskerResponse
 from aura.domain.permission.decision import Decision, DecisionReason
+from aura.domain.permission.matchers import exact_match_on
 from aura.domain.permission.outcome import Allow, Ask, Block, Outcome, Replace
 from aura.domain.permission.rule import Rule
+from aura.domain.permission.session import RuleSet, SessionRuleSet
 from aura.domain.tool import ToolResult
+from aura.infrastructure.permission_store import PermissionStoreError
 from aura.tools.base import build_tool
 
 
@@ -683,3 +690,283 @@ async def test_pre_tool_ask_beats_allow() -> None:
     chain = HookChain(pre_tool=[allower, asker])
     outcome = await chain.run_pre_tool(tool=_stub_tool, args={}, state=LoopState())
     assert isinstance(outcome, Ask)
+
+
+# --- make_permission_hook boundary coverage ------------------------------
+#
+# These tests drive the permission PreToolHook through its lesser-trodden
+# branches: plan-mode preview fallbacks, ask-rule asker failure/install,
+# session-scope rule install, and the defensive deny-message formatter.
+# The hook is exercised at its public seam; only the pure message/preview
+# helpers are called directly where the public path cannot reach the branch.
+
+
+class _PermP(BaseModel):
+    command: str = ""
+
+
+def _perm_noop(command: str = "") -> dict[str, Any]:
+    return {}
+
+
+def _bash_tool(
+    *,
+    args_preview: Any = None,
+) -> BaseTool:
+    return build_tool(
+        name="bash",
+        description="bash",
+        args_schema=_PermP,
+        func=_perm_noop,
+        rule_matcher=exact_match_on("command"),
+        args_preview=args_preview,
+    )
+
+
+@dataclass
+class _RecordingAsker:
+    """Stub asker — returns a canned response and records each invocation."""
+
+    response: AskerResponse | None = None
+    calls: list[dict[str, Any]] = field(default_factory=list)
+
+    async def __call__(
+        self, *, tool: BaseTool, args: dict[str, Any], rule_hint: Rule
+    ) -> AskerResponse:
+        self.calls.append({"tool": tool.name, "args": dict(args)})
+        if self.response is None:
+            raise AssertionError("asker invoked without a configured response")
+        return self.response
+
+
+@dataclass
+class _ExplodingAsker:
+    """Stub asker that raises — proves the prompt path fails closed (deny)."""
+
+    calls: list[str] = field(default_factory=list)
+
+    async def __call__(
+        self, *, tool: BaseTool, args: dict[str, Any], rule_hint: Rule
+    ) -> AskerResponse:
+        self.calls.append(tool.name)
+        raise RuntimeError("asker exploded")
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_preview_falls_back_when_preview_callable_raises(
+    tmp_path: Path,
+) -> None:
+    """A broken ``args_preview`` must never crash the gate — plan mode still
+    emits a deny message built from the raw args repr instead."""
+
+    def _boom(_args: dict[str, Any]) -> str:
+        raise RuntimeError("preview boom")
+
+    hook = make_permission_hook(
+        asker=_RecordingAsker(),
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=tmp_path,
+        mode="plan",
+    )
+    outcome = await hook(
+        tool=_bash_tool(args_preview=_boom),
+        args={"command": "deploy"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Replace)
+    assert outcome.result.error is not None
+    assert "plan mode" in outcome.result.error
+    assert "command='deploy'" in outcome.result.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("preview_out", ["", None, 0, []])
+async def test_plan_mode_preview_falls_back_on_empty_or_nonstr(
+    tmp_path: Path, preview_out: Any
+) -> None:
+    """Empty/non-str preview output is rejected — the gate falls back to the
+    raw args repr so the dry-run message is never blank."""
+
+    def _preview(_args: dict[str, Any]) -> Any:
+        return preview_out
+
+    hook = make_permission_hook(
+        asker=_RecordingAsker(),
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=tmp_path,
+        mode="plan",
+    )
+    outcome = await hook(
+        tool=_bash_tool(args_preview=_preview),
+        args={"command": "ship"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Replace)
+    assert outcome.result.error is not None
+    assert "command='ship'" in outcome.result.error
+
+
+@pytest.mark.asyncio
+async def test_plan_mode_preview_truncates_overlong_args(tmp_path: Path) -> None:
+    """An enormous args payload must be clamped so the dry-run line stays
+    bounded — the message ends in an ellipsis, not a multi-KB dump."""
+    hook = make_permission_hook(
+        asker=_RecordingAsker(),
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        project_root=tmp_path,
+        mode="plan",
+    )
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "Z" * 5000},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Replace)
+    assert outcome.result.error is not None
+    # 200-char preview cap + the surrounding "plan mode: ... bash(...)" frame.
+    assert len(outcome.result.error) < 300
+    assert outcome.result.error.endswith("…)")
+
+
+@pytest.mark.asyncio
+async def test_ask_rule_asker_failure_fails_closed_to_deny(
+    tmp_path: Path,
+) -> None:
+    """When an ask-rule forces a prompt and the asker raises, the gate must
+    fail closed: deny the call rather than leak an allow on a crash."""
+    ask_rules = RuleSet(rules=(Rule(tool="bash", content="git push", kind="ask"),))
+    asker = _ExplodingAsker()
+    hook = make_permission_hook(
+        asker=asker,
+        session=SessionRuleSet(),
+        rules=RuleSet(),
+        ask_rules=ask_rules,
+        project_root=tmp_path,
+    )
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "git push"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Replace)
+    assert outcome.decision.reason == "user_deny"
+    assert outcome.result.error is not None
+    assert "denied" in outcome.result.error
+    assert asker.calls == ["bash"]
+
+
+@pytest.mark.asyncio
+async def test_ask_rule_always_session_scope_installs_into_session(
+    tmp_path: Path,
+) -> None:
+    """An ask-rule prompt answered 'always' at session scope installs the
+    rule into the in-memory SessionRuleSet — no project file is written."""
+    ask_rules = RuleSet(rules=(Rule(tool="bash", content="git push", kind="ask"),))
+    installed = Rule(tool="bash", content="git push", kind="allow")
+    asker = _RecordingAsker(
+        response=AskerResponse(choice="always", scope="session", rule=installed)
+    )
+    session = SessionRuleSet()
+    hook = make_permission_hook(
+        asker=asker,
+        session=session,
+        rules=RuleSet(),
+        ask_rules=ask_rules,
+        project_root=tmp_path,
+    )
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "git push"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Allow)
+    assert outcome.decision.reason == "user_always"
+    assert installed in session.rules()
+    assert not (tmp_path / ".aura").exists()
+
+
+@pytest.mark.asyncio
+async def test_asker_always_session_scope_installs_and_allows(
+    tmp_path: Path,
+) -> None:
+    """The default prompt path (no ask-rule) answered 'always'/session
+    installs the rule and allows — the session-scope arm of the asker tail."""
+    installed = Rule(tool="bash", content="ls -la", kind="allow")
+    asker = _RecordingAsker(
+        response=AskerResponse(choice="always", scope="session", rule=installed)
+    )
+    session = SessionRuleSet()
+    hook = make_permission_hook(
+        asker=asker,
+        session=session,
+        rules=RuleSet(),
+        project_root=tmp_path,
+    )
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "ls -la"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Allow)
+    assert outcome.decision.reason == "user_always"
+    assert installed in session.rules()
+
+
+@pytest.mark.asyncio
+async def test_asker_always_project_scope_degrades_to_session_on_save_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A project-scope 'always' whose disk save fails must degrade to a
+    session install rather than lose the user's consent — idempotent and
+    crash-free even when persistence is unavailable."""
+
+    def _failing_save(*_a: object, **_k: object) -> None:
+        raise PermissionStoreError(source="settings.json", detail="disk full")
+
+    monkeypatch.setattr(
+        "aura.application.hooks.permission.save_rule", _failing_save
+    )
+    installed = Rule(tool="bash", content="ls -la", kind="allow")
+    asker = _RecordingAsker(
+        response=AskerResponse(choice="always", scope="project", rule=installed)
+    )
+    session = SessionRuleSet()
+    hook = make_permission_hook(
+        asker=asker,
+        session=session,
+        rules=RuleSet(),
+        project_root=tmp_path,
+    )
+    outcome = await hook(
+        tool=_bash_tool(),
+        args={"command": "ls -la"},
+        state=LoopState(),
+    )
+    assert isinstance(outcome, Allow)
+    assert outcome.decision.reason == "user_always"
+    # Save failed → degraded to in-memory session install.
+    assert installed in session.rules()
+
+
+def test_deny_message_rule_deny_without_rule_uses_generic_text() -> None:
+    """Defensive: a rule_deny decision carrying no rule still produces a
+    coherent denial string, never an attribute error on ``rule``."""
+    decision = Decision(allow=False, reason="rule_deny", rule=None)
+    assert _deny_message(decision) == "denied: deny rule"
+
+
+def test_deny_message_unknown_reason_falls_back_to_plain_denied() -> None:
+    """A deny reason with no dedicated message branch falls back to the bare
+    'denied' string instead of crashing the short-circuit builder."""
+    decision = Decision(allow=False, reason="plan_mode_blocked")
+    assert _deny_message(decision) == "denied"
+
+
+def test_deny_message_user_deny_with_feedback_appends_note() -> None:
+    """User-deny feedback is surfaced in the denial note so the model can
+    read why the human refused, not just that it was refused."""
+    decision = Decision(allow=False, reason="user_deny")
+    assert _deny_message(decision, feedback="too risky") == "denied: user — note: too risky"

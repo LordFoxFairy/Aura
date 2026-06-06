@@ -14,7 +14,6 @@ import pytest
 
 from aura.domain.tool import (
     resolve_is_destructive,
-    resolve_is_read_only,
     tool_metadata,
 )
 
@@ -93,35 +92,6 @@ def test_resolve_is_destructive_truthy_non_bool_coerces() -> None:
     # it to a raw return.
     meta = {"is_destructive": 1}
     assert resolve_is_destructive(meta, {}) is True
-
-
-def test_resolve_is_read_only_none_metadata_returns_false() -> None:
-    assert resolve_is_read_only(None, {}) is False
-
-
-def test_resolve_is_read_only_static_true() -> None:
-    meta = tool_metadata(is_read_only=True)
-    assert resolve_is_read_only(meta, {}) is True
-
-
-def test_resolve_is_read_only_callable_returns_classifier_result() -> None:
-    def classifier(args: dict[str, Any]) -> bool:
-        return bool(args.get("command", "").startswith("cat"))
-
-    meta = tool_metadata(is_read_only=classifier)
-    assert resolve_is_read_only(meta, {"command": "cat /etc/hosts"}) is True
-    assert resolve_is_read_only(meta, {"command": "rm -rf /"}) is False
-
-
-def test_resolve_is_read_only_callable_exception_fails_closed_false() -> None:
-    # For is_read_only, the fail-safe direction is False — a tool that
-    # CAN'T prove it's read-only should not be treated as read-only.
-    # Contrast with is_destructive, where ambiguity ≙ True.
-    def broken(_args: dict[str, Any]) -> bool:
-        raise ValueError("boom")
-
-    meta = tool_metadata(is_read_only=broken)
-    assert resolve_is_read_only(meta, {}) is False
 
 
 def test_tool_metadata_accepts_static_bool() -> None:

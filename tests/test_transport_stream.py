@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any, cast
@@ -11,11 +10,7 @@ import pytest
 
 from aura.application.loop_state import LoopSlots
 from aura.domain.events import AssistantDelta, Final, ToolCallStarted
-from aura.infrastructure.wire.stream import (
-    encode_sse,
-    stream_agent_wire,
-    stream_agent_wire_sse,
-)
+from aura.infrastructure.wire.stream import stream_agent_wire
 
 
 class _FakeAgent:
@@ -298,31 +293,3 @@ async def test_stream_agent_wire_emits_aura_state_last_even_after_post_final_eve
         )
     ]
     assert events[-1]["event"] == "aura_state"
-
-
-def test_encode_sse_emits_single_aura_frame() -> None:
-    frame = encode_sse(cast(Any, {"event": "foo", "x": 1}))
-    assert frame == 'event: aura\ndata: {"event": "foo", "x": 1}\n\n'
-
-
-@pytest.mark.asyncio
-async def test_stream_agent_wire_sse_yields_well_formed_frames() -> None:
-    ticks = _clock([10.0, 12.5])
-    frames = [
-        frame
-        async for frame in stream_agent_wire_sse(
-            _FakeAgent(),
-            "hello",
-            clock=lambda: next(ticks),
-        )
-    ]
-    assert len(frames) == 4
-    for frame in frames:
-        assert frame.startswith("event: aura\ndata: ")
-        assert frame.endswith("\n\n")
-        payload = json.loads(frame.split("\ndata: ", 1)[1].rstrip("\n"))
-        assert "event" in payload
-    assert json.loads(frames[0].split("\ndata: ", 1)[1].rstrip("\n")) == {
-        "event": "assistant_delta",
-        "text": "hi",
-    }

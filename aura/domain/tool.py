@@ -84,13 +84,6 @@ def resolve_is_destructive(
     return _resolve_flag(metadata, "is_destructive", args, fail_safe=True)
 
 
-def resolve_is_read_only(
-    metadata: dict[str, Any] | None,
-    args: dict[str, Any],
-) -> bool:
-    return _resolve_flag(metadata, "is_read_only", args, fail_safe=False)
-
-
 def _resolve_flag(
     metadata: dict[str, Any] | None,
     key: str,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol, runtime_checkable
@@ -47,22 +46,6 @@ async def stream_agent_wire(
     for payload in _drain_coordination_events(agent):
         yield payload
     yield agent_state_to_wire(agent, clock() - turn_start)
-
-
-def encode_sse(payload: WireEvent, *, event: str = "aura") -> str:
-    """Encode one wire event as a single SSE frame."""
-    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
-async def stream_agent_wire_sse(
-    agent: Any,
-    prompt: str,
-    *,
-    clock: Callable[[], float] = time.monotonic,
-) -> AsyncIterator[str]:
-    """Run ``agent.astream`` and yield encoded SSE frames."""
-    async for wire_event in stream_agent_wire(agent, prompt, clock=clock):
-        yield encode_sse(wire_event)
 
 
 def _drain_coordination_events(agent: Any) -> list[WireEvent]:

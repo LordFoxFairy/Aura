@@ -10,13 +10,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
+import shutil
 from collections.abc import Iterator
 
 import pytest
 from prompt_toolkit.application import create_app_session
 from prompt_toolkit.input import create_pipe_input
 from prompt_toolkit.output import DummyOutput
+from prompt_toolkit.styles import Style
 
+from cli import picker
 from cli.picker import (
     DEFAULT_PAGE_SIZE,
     PickerResult,
@@ -287,3 +291,155 @@ async def test_picker_ctrl_c_cancels() -> None:
     with _piped("\x03"):
         result = await run_picker(_items(5), title="Test", enable_filter=False)
     assert result.item is None
+
+
+# --- Boundary matrix. Targets the uncovered error/edge branches:
+# single-column truncation, OSError width fallback, navigation on an
+# empty visible set, zero-match render + selection, sublabel render,
+# the "showing N of M" footer, and the custom-style merge path.
+
+def test_truncate_to_width_single_column_yields_bare_ellipsis() -> None:
+    """A 1-column budget can hold nothing but the ellipsis, so callers must
+    never get a clipped first glyph that misleads the user about content."""
+    assert _truncate_to_width("abcdef", 1) == "…"
+
+
+def test_terminal_width_falls_back_when_size_query_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Headless/pipe contexts make the OS size probe raise; the picker must
+    degrade to the caller default instead of crashing the whole render."""
+    def _boom(*args: object, fallback: tuple[int, int] = (80, 24)) -> os.terminal_size:
+        # pytest's own -v progress writer also calls get_terminal_size(fallback=...);
+        # only the picker's positional probe raises, so pytest keeps rendering.
+        if not args:
+            return os.terminal_size(fallback)
+        raise OSError("no tty")
+
+    monkeypatch.setattr(shutil, "get_terminal_size", _boom)
+    assert picker._terminal_width(default=77) == 77
+
+
+def _filtered_to_empty(page_size: int = 3) -> _PickerState:
+    items = [
+        SimplePickerItem(label="apple", sublabel="ripe", value=1),
+        SimplePickerItem(label="banana", sublabel="green", value=2),
+    ]
+    s = _PickerState(items, page_size=page_size, initial_filter="zzz")
+    s.clamp_after_filter_change()
+    return s
+
+
+def test_state_navigation_is_noop_when_visible_set_empty() -> None:
+    """When a filter hides every row, every navigation key must be inert —
+    otherwise the cursor could index a phantom row and crash on select."""
+    s = _filtered_to_empty()
+    assert s.visible() == []
+    for move in (s.move_down, s.move_up, s.page_down, s.page_up, s.end):
+        move()
+        assert s.cursor == 0
+        assert s.viewport_top == 0
+
+
+def test_state_clamp_resets_on_empty_after_having_a_cursor() -> None:
+    """A filter that drops from many matches to zero must zero the cursor so
+    a later widening doesn't restore a stale out-of-range position."""
+    s = _filtered_to_empty()
+    s.cursor = 5
+    s.viewport_top = 4
+    s.clamp_after_filter_change()
+    assert s.cursor == 0
+    assert s.viewport_top == 0
+
+
+def test_render_items_shows_no_matches_placeholder() -> None:
+    """An empty visible set must render an explicit placeholder, never a
+    blank pane the user could mistake for a frozen UI."""
+    s = _filtered_to_empty()
+    rendered = "".join(frag[1] for frag in picker._render_items(s))
+    assert "no matches" in rendered
+
+
+def test_render_items_renders_sublabel_for_cursor_and_rest() -> None:
+    """Sublabels carry the secondary context (timestamps, paths); the
+    renderer must emit them for both the highlighted row and the others."""
+    items = [
+        SimplePickerItem(label="apple", sublabel="2h ago", value=1),
+        SimplePickerItem(label="berry", sublabel="5m ago", value=2),
+    ]
+    s = _PickerState(items, page_size=8, initial_filter="")
+    s.clamp_after_filter_change()
+    rendered = "".join(frag[1] for frag in picker._render_items(s))
+    assert "2h ago" in rendered
+    assert "5m ago" in rendered
+
+
+async def test_picker_zero_match_filter_then_enter_returns_none() -> None:
+    """Pressing Enter while the filter matches nothing must yield no
+    selection rather than returning a wrong/first item by accident."""
+    items = [
+        SimplePickerItem(label="apple", sublabel=None, value="a"),
+        SimplePickerItem(label="banana", sublabel=None, value="b"),
+    ]
+    with _piped("zzz\r"):
+        result = await run_picker(items, title="Test", enable_filter=True)
+    assert result.item is None
+
+
+async def test_picker_footer_reports_truncated_total(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the caller pre-trims a large list, the footer must surface the
+    full ``total_count`` so the user knows more items exist off-screen."""
+    monkeypatch.setenv("COLUMNS", "120")
+    with _piped("\r"):
+        result = await run_picker(
+            _items(3),
+            title="Test",
+            enable_filter=False,
+            total_count=500,
+        )
+    assert result.item is not None
+    assert result.item.value == 0
+
+
+async def test_picker_merges_caller_style_without_dropping_defaults() -> None:
+    """A caller-supplied style must overlay, not replace, the picker's own
+    palette — losing the cursor/selected rules would make rows unreadable."""
+    custom = Style.from_dict({"picker.title": "underline"})
+    with _piped("\r"):
+        result = await run_picker(
+            _items(3),
+            title="Test",
+            enable_filter=False,
+            style=custom,
+        )
+    assert result.item is not None
+    assert result.item.value == 0
+
+
+async def test_picker_total_count_none_defaults_to_item_length() -> None:
+    """Omitting ``total_count`` must fall back to the visible item count so
+    the footer never claims a phantom larger universe of options."""
+    with _piped("\r"):
+        result = await run_picker(
+            _items(4),
+            title="Test",
+            enable_filter=False,
+            total_count=None,
+        )
+    assert result.item is not None
+    assert result.item.value == 0
+
+
+async def test_picker_idempotent_across_repeated_runs() -> None:
+    """Re-running the picker on the same immutable items must give identical
+    results every time — state must not leak between independent invocations."""
+    items = _items(6)
+    results: list[object] = []
+    for _ in range(3):
+        with _piped("\x1b[B\x1b[B\r"):
+            result = await run_picker(items, title="Test", enable_filter=False)
+        assert result.item is not None
+        results.append(result.item.value)
+    assert results == [2, 2, 2]

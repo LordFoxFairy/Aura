@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -13,6 +14,7 @@ from aura.application.memory.project_memory import (
     load_project_memory,
     read_with_imports,
 )
+from aura.infrastructure.persistence import journal
 
 
 def _patch_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
@@ -576,3 +578,435 @@ class TestReadWithImports:
         f = tmp_path / "parent.md"
         f.write_text("pre\n@./child.md\npost")
         assert read_with_imports(f) == "pre\nCHILD\npost"
+
+    def test_resolve_oserror_returns_raw_unexpanded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the file resolves with OSError, return its raw text rather than failing the read."""
+        f = tmp_path / "parent.md"
+        f.write_text("pre\n@./child.md\npost")
+        (tmp_path / "child.md").write_text("CHILD")
+
+        original_resolve = Path.resolve
+
+        def _maybe_raise(self: Path, strict: bool = False) -> Path:
+            if self.name == "parent.md":
+                raise OSError("ELOOP")
+            return original_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", _maybe_raise)
+        # resolve 失败 → 跳过 @imports 展开，原文逐字返回（@-line 未被替换）。
+        assert read_with_imports(f) == "pre\n@./child.md\npost"
+
+
+def _fake_run_factory(
+    *, returncode: int, stdout: str, raises: type[BaseException] | None = None
+) -> Any:
+    # subprocess.run 的替身：固定返回值或抛出指定异常，隔离真实 git。
+    def _run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if raises is not None:
+            raise raises("boom")
+        return subprocess.CompletedProcess(
+            args=["git"], returncode=returncode, stdout=stdout, stderr=""
+        )
+
+    return _run
+
+
+class TestGitRootDetection:
+    """`_detect_git_root` via the subprocess seam: success, failure, crash paths."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self) -> Iterator[None]:
+        # git-root 行为会改变 ancestors，必须隔离模块级缓存防串味。
+        clear_cache()
+        yield
+        clear_cache()
+
+    def test_git_root_caps_walk_excludes_above_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Inside a repo the walk must stop at git root — ancestor memory above is invisible."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        above = tmp_path / "above"
+        root = above / "repo"
+        inner = root / "pkg"
+        inner.mkdir(parents=True)
+        (above / "AURA.md").write_text("ABOVE-ROOT")
+        (root / "AURA.md").write_text("REPO-ROOT")
+        (inner / "AURA.md").write_text("PKG")
+
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            _fake_run_factory(returncode=0, stdout=f"{root.resolve()}\n"),
+        )
+        result = load_project_memory(inner)
+        # 仅 root 及其下层被收录，above 被排除在 git 边界外。
+        assert result == "REPO-ROOT\n\nPKG"
+        assert "ABOVE-ROOT" not in result
+
+    def test_git_root_equal_to_cwd_single_ancestor(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When cwd is the git root itself, only that one directory is scanned."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        root = tmp_path / "repo"
+        root.mkdir()
+        (root / "AURA.md").write_text("ONLY-ROOT")
+
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            _fake_run_factory(returncode=0, stdout=f"{root.resolve()}\n"),
+        )
+        assert load_project_memory(root) == "ONLY-ROOT"
+
+    def test_git_root_not_an_ancestor_degrades_to_fs_walk(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reported git root unrelated to cwd must not corrupt the walk — degrade to fs root."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        outer = tmp_path / "x"
+        inner = outer / "y"
+        inner.mkdir(parents=True)
+        (outer / "AURA.md").write_text("OUTER")
+        (inner / "AURA.md").write_text("INNER")
+
+        unrelated = tmp_path / "somewhere_else"
+        unrelated.mkdir()
+        monkeypatch.setattr(
+            subprocess,
+            "run",
+            _fake_run_factory(returncode=0, stdout=f"{unrelated.resolve()}\n"),
+        )
+        # cwd 不在所谓 git_root 之下 —— 退化为完整 fs-root 走查，两层都收录。
+        assert load_project_memory(inner) == "OUTER\n\nINNER"
+
+    def test_git_nonzero_returncode_falls_back_to_fs_walk(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`git rev-parse` failing (not a repo) must fall back to filesystem-root walk."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        outer = tmp_path / "x"
+        inner = outer / "y"
+        inner.mkdir(parents=True)
+        (outer / "AURA.md").write_text("OUTER")
+        (inner / "AURA.md").write_text("INNER")
+
+        monkeypatch.setattr(
+            subprocess, "run", _fake_run_factory(returncode=128, stdout="")
+        )
+        assert load_project_memory(inner) == "OUTER\n\nINNER"
+
+    def test_git_empty_stdout_falls_back_to_fs_walk(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Zero-length git output (zero/null boundary) is treated as 'no root', not as cwd."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        outer = tmp_path / "x"
+        inner = outer / "y"
+        inner.mkdir(parents=True)
+        (outer / "AURA.md").write_text("OUTER")
+        (inner / "AURA.md").write_text("INNER")
+
+        monkeypatch.setattr(
+            subprocess, "run", _fake_run_factory(returncode=0, stdout="   \n")
+        )
+        assert load_project_memory(inner) == "OUTER\n\nINNER"
+
+    @pytest.mark.parametrize(
+        "exc",
+        [FileNotFoundError, subprocess.TimeoutExpired, OSError],
+    )
+    def test_git_subprocess_crash_falls_back_to_fs_walk(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        exc: type[BaseException],
+    ) -> None:
+        """git missing / timing out / OS error must never crash memory loading."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("PROJECT")
+
+        def _raise(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+            if exc is subprocess.TimeoutExpired:
+                raise subprocess.TimeoutExpired(cmd="git", timeout=2)
+            raise exc("boom")
+
+        monkeypatch.setattr(subprocess, "run", _raise)
+        assert load_project_memory(cwd) == "PROJECT"
+
+    def test_git_root_path_resolve_oserror_falls_back(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A git root string that fails to resolve must degrade to fs walk, not crash."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        outer = tmp_path / "x"
+        inner = outer / "y"
+        inner.mkdir(parents=True)
+        (outer / "AURA.md").write_text("OUTER")
+        (inner / "AURA.md").write_text("INNER")
+
+        bogus_root = "/nonexistent/git/root"
+        monkeypatch.setattr(
+            subprocess, "run", _fake_run_factory(returncode=0, stdout=f"{bogus_root}\n")
+        )
+
+        original_resolve = Path.resolve
+
+        def _maybe_raise(self: Path, strict: bool = False) -> Path:
+            # 仅 git 输出路径字符串触发 OSError，其余 resolve 正常工作。
+            if str(self) == bogus_root:
+                raise OSError("ENOENT")
+            return original_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", _maybe_raise)
+        # git_root 解析失败 → None → 退化为完整 fs-root 走查，两层都收录。
+        assert load_project_memory(inner) == "OUTER\n\nINNER"
+
+
+class TestAutoMemoryLayer:
+    """`auto_memory_dir` MEMORY.md is the final recall layer with its own cache key."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self) -> Iterator[None]:
+        clear_cache()
+        yield
+        clear_cache()
+
+    def test_memory_md_appended_last(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Auto-recall MEMORY.md must concatenate after project layers, never before."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("PROJECT")
+        mem_dir = tmp_path / "mem"
+        mem_dir.mkdir()
+        (mem_dir / "MEMORY.md").write_text("RECALL")
+
+        result = load_project_memory(cwd, auto_memory_dir=mem_dir)
+        assert result == "PROJECT\n\nRECALL"
+
+    def test_missing_memory_md_dir_omits_layer(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A configured recall dir with no MEMORY.md must drop the layer, not inject blanks."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("PROJECT")
+        mem_dir = tmp_path / "mem"
+        mem_dir.mkdir()
+
+        assert load_project_memory(cwd, auto_memory_dir=mem_dir) == "PROJECT"
+
+    def test_memory_md_keys_cache_separately_from_no_recall(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same cwd with vs without a recall dir are distinct cache keys — no cross-bleed."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("PROJECT")
+        mem_dir = tmp_path / "mem"
+        mem_dir.mkdir()
+        (mem_dir / "MEMORY.md").write_text("RECALL")
+
+        without = load_project_memory(cwd)
+        with_recall = load_project_memory(cwd, auto_memory_dir=mem_dir)
+        assert without == "PROJECT"
+        assert with_recall == "PROJECT\n\nRECALL"
+        # 再次取无 recall 变体应命中独立缓存，仍为纯 PROJECT。
+        assert load_project_memory(cwd) == "PROJECT"
+
+
+class TestReadRawBoundaries:
+    """`_read_raw` byte-cap and I/O-error defenses surfaced through the public loader."""
+
+    def test_oversize_file_truncated_with_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file over the 25 KB cap is truncated and tagged so the model knows to split it."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        big = "x" * 25_001
+        (cwd / "AURA.md").write_text(big)
+
+        result = load_project_memory(cwd)
+        assert "WARNING: this file is 25001 bytes" in result
+        assert "limit: 25000" in result
+        # 截断后正文长度恰为 cap，超量被丢弃。
+        assert result.count("x") == 25_000
+
+    def test_exactly_at_cap_not_truncated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Off-by-one boundary: a file exactly at the cap must pass through untouched."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        exact = "y" * 25_000
+        (cwd / "AURA.md").write_text(exact)
+
+        result = load_project_memory(cwd)
+        assert "WARNING" not in result
+        assert result == exact
+
+    def test_read_bytes_oserror_skips_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A readable-but-unreadable file (perm/IO error) is skipped, not fatal."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        target = cwd / "AURA.md"
+        target.write_text("UNREACHABLE")
+
+        original_read_bytes = Path.read_bytes
+
+        def _maybe_fail(self: Path) -> bytes:
+            if self.resolve() == target.resolve():
+                raise OSError("EIO")
+            return original_read_bytes(self)
+
+        monkeypatch.setattr(Path, "read_bytes", _maybe_fail)
+        assert load_project_memory(cwd) == ""
+
+
+class TestResolveImportBoundaries:
+    """`_resolve_import` tilde-home, resolve crash, and non-text extension guards."""
+
+    def test_bare_tilde_imports_home_dir_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`@~` resolving to a home *dir* (not a file) yields no expansion, line dropped."""
+        home = tmp_path / "home"
+        home.mkdir()
+        _patch_home(monkeypatch, home)
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("pre\n@~\npost")
+
+        # ~ 解析为目录而非文件 —— import 被静默丢弃。
+        assert load_project_memory(cwd) == "pre\npost"
+
+    def test_resolve_oserror_on_import_drops_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An import target whose path resolution raises OSError is dropped, not propagated."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "AURA.md").write_text("pre\n@./weird.md\npost")
+
+        original_resolve = Path.resolve
+
+        def _maybe_raise(self: Path, strict: bool = False) -> Path:
+            if self.name == "weird.md":
+                raise OSError("ELOOP")
+            return original_resolve(self, strict=strict)
+
+        monkeypatch.setattr(Path, "resolve", _maybe_raise)
+        assert load_project_memory(cwd) == "pre\npost"
+
+    def test_non_text_extension_skipped_and_journaled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Binary/opaque extensions never enter the prompt and the skip is audited."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "data.bin").write_text("BINARY-PAYLOAD")
+        (cwd / "AURA.md").write_text("pre\n@./data.bin\npost")
+
+        events: list[tuple[str, dict[str, Any]]] = []
+
+        def _capture(event: str, /, **fields: Any) -> None:
+            events.append((event, fields))
+
+        monkeypatch.setattr(journal, "write", _capture)
+        result = load_project_memory(cwd)
+        assert result == "pre\npost"
+        assert "BINARY-PAYLOAD" not in result
+        assert [e for e, _ in events] == ["import_non_text_skipped"]
+        assert events[0][1]["suffix"] == ".bin"
+
+    def test_text_extension_whitelist_allows_non_md(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Whitelisted non-.md text (e.g. .txt) is allowed in, proving the guard is a filter."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        (cwd / "notes.txt").write_text("TXT-CONTENT")
+        (cwd / "AURA.md").write_text("@./notes.txt")
+
+        assert load_project_memory(cwd) == "TXT-CONTENT"
+
+
+class TestExpandReadRace:
+    """`_expand`: an import target that vanishes between resolution and read drops cleanly."""
+
+    def test_child_read_returns_none_after_resolution(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A resolved import that becomes unreadable mid-expansion is dropped, not crashed."""
+        _patch_home(monkeypatch, tmp_path / "home")
+        (tmp_path / "home").mkdir()
+
+        cwd = tmp_path / "project"
+        cwd.mkdir()
+        child = cwd / "child.md"
+        child.write_text("CHILD")
+        (cwd / "AURA.md").write_text("pre\n@./child.md\npost")
+
+        original_read_bytes = Path.read_bytes
+
+        def _vanish_child(self: Path) -> bytes:
+            if self.name == "child.md":
+                raise OSError("vanished")
+            return original_read_bytes(self)
+
+        monkeypatch.setattr(Path, "read_bytes", _vanish_child)
+        result = load_project_memory(cwd)
+        assert result == "pre\npost"
+        assert "CHILD" not in result

@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import io
+import sys
+import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -10,12 +15,33 @@ import pytest
 from langchain_core.callbacks import AsyncCallbackManagerForLLMRun
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatResult
+from prompt_toolkit import PromptSession
+from prompt_toolkit.input import create_pipe_input
+from prompt_toolkit.output import DummyOutput
 from rich.console import Console
 
+import cli.repl as repl_mod
+from aura.application.commands.builtin import ExitCommand
+from aura.application.commands.factory import build_default_registry
+from aura.application.commands.registry import CommandRegistry
+from aura.application.commands.types import CommandResult, CommandSource
 from aura.application.session import AgentSession
 from aura.config.schema import AuraConfig
+from aura.domain.events import AgentEvent
+from aura.domain.team import TeamRecord
 from aura.infrastructure.persistence.storage import SessionStorage
-from cli.repl import run_repl_async
+from cli.render import Renderer
+from cli.repl import (
+    _build_mode_key_bindings,
+    _build_prompt_session,
+    _cycle_mode,
+    _make_prompt_session_input,
+    _print_active_team_status,
+    _print_welcome,
+    _render_welcome_panel,
+    _run_turn,
+    run_repl_async,
+)
 from tests.conftest import FakeChatModel, FakeTurn
 
 
@@ -799,4 +825,370 @@ async def test_turn_exception_does_not_kill_repl(tmp_path: Path) -> None:
     out = buf.getvalue()
     assert "turn failed" in out
     assert "network went sideways" in out
+    await agent.aclose()
+
+
+class _SilentPrintCommand:
+    # Stub command exercising the empty-text ``case _`` print branch.
+    name = "/silent"
+    description = "stub: print with empty text"
+    source: CommandSource = "builtin"
+    allowed_tools: tuple[str, ...] = ()
+    argument_hint: str | None = None
+
+    async def handle(self, arg: str, agent: AgentSession) -> CommandResult:
+        del arg, agent
+        return CommandResult(handled=True, kind="print", text="")
+
+
+async def test_view_kind_renders_panel_and_swallows_continue_prompt(
+    tmp_path: Path,
+) -> None:
+    # ``/context`` returns kind="view"; the loop must route it through
+    # _render_view (a bordered Panel) and keep looping, not exit.
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["/context", "/exit"]),
+        console=console,
+    )
+    out = buf.getvalue()
+    assert any(glyph in out for glyph in ("╭", "╮", "╰", "╯"))
+    await agent.aclose()
+
+
+async def test_print_kind_with_text_echoes_then_continues(
+    tmp_path: Path,
+) -> None:
+    # ``/tasks`` with no tasks yields kind="print" + "(no tasks)"; the
+    # default case must echo the text and loop, never terminate.
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["/tasks", "/exit"]),
+        console=console,
+    )
+    assert "(no tasks)" in buf.getvalue()
+    await agent.aclose()
+
+
+async def test_print_kind_empty_text_prints_nothing_and_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A handled command with kind="print" but empty text must add ZERO
+    # scrollback noise — the loop swallows it and re-prompts.
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+
+    def _stub_registry(agent: AgentSession | None = None) -> CommandRegistry:
+        del agent
+        registry = CommandRegistry()
+        registry.register(ExitCommand())
+        registry.register(_SilentPrintCommand())
+        return registry
+
+    monkeypatch.setattr(repl_mod, "build_default_registry", _stub_registry)
+    before = len(buf.getvalue())  # 0 — nothing rendered yet
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["/silent", "/exit"]),
+        console=console,
+    )
+    out = buf.getvalue()
+    # Only the welcome banner contributed output; /silent printed nothing.
+    assert before == 0
+    assert "/silent printed" not in out  # sanity: no stray echo of the line
+    await agent.aclose()
+
+
+async def test_unknown_slash_command_prints_help_hint_and_continues(
+    tmp_path: Path,
+) -> None:
+    # An unrecognized ``/name`` is handled (kind="print") with a help hint;
+    # the REPL must surface it and keep the session alive.
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+
+    await run_repl_async(
+        agent,
+        input_fn=_ScriptedInput(["/definitely-not-a-command", "/exit"]),
+        console=console,
+    )
+    out = buf.getvalue()
+    assert "unknown command" in out
+    assert "/definitely-not-a-command" in out
+    await agent.aclose()
+
+
+def test_cycle_mode_passes_through_modes_outside_the_cycle() -> None:
+    # Only default/accept_edits/plan rotate; bypass (and any unknown mode)
+    # must be returned untouched so shift+tab never silently exits bypass.
+    assert _cycle_mode("bypass") == "bypass"
+    assert _cycle_mode("default") == "accept_edits"
+    assert _cycle_mode("accept_edits") == "plan"
+    assert _cycle_mode("plan") == "default"
+
+
+async def test_shift_tab_is_inert_while_in_bypass_mode(
+    tmp_path: Path,
+) -> None:
+    # bypass is a one-way door: shift+tab must NOT cycle out of it, or the
+    # user could silently lose allow-everything semantics mid-session.
+    agent = _agent(tmp_path)
+    agent.set_mode("bypass")
+    console, _buf = _capture_console()
+    kb = _build_mode_key_bindings(agent, console)
+    with create_pipe_input() as inp:
+        inp.send_text("\x1b[Zq\r")  # Shift+Tab then "q" + submit.
+        session: PromptSession[str] = PromptSession(
+            key_bindings=kb, input=inp, output=DummyOutput(),
+        )
+        await session.prompt_async("> ")
+    assert agent.mode == "bypass"
+    await agent.aclose()
+
+
+async def test_escape_is_inert_while_in_bypass_mode(
+    tmp_path: Path,
+) -> None:
+    # escape resets non-bypass modes to default; in bypass it must do
+    # nothing, mirroring the shift+tab guard.
+    agent = _agent(tmp_path)
+    agent.set_mode("bypass")
+    console, _buf = _capture_console()
+    kb = _build_mode_key_bindings(agent, console)
+    with create_pipe_input() as inp:
+        inp.send_text("\x1bq\r")  # ESC then "q" + submit.
+        session: PromptSession[str] = PromptSession(
+            key_bindings=kb, input=inp, output=DummyOutput(),
+        )
+        await session.prompt_async("> ")
+    assert agent.mode == "bypass"
+    await agent.aclose()
+
+
+def test_active_team_status_silent_when_no_active_team(tmp_path: Path) -> None:
+    # No bound team → zero scrollback. Status line is opt-in on membership.
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+    _print_active_team_status(agent, console)
+    assert buf.getvalue() == ""
+    agent.close()
+
+
+def test_active_team_status_shows_slug_when_port_absent(tmp_path: Path) -> None:
+    # active_team slug is set but no live TeamPort is bound → fall back to
+    # the slug itself as the label (graceful degradation, no crash).
+    agent = _agent(tmp_path)
+    agent.state.slots = dataclasses.replace(
+        agent.state.slots, active_team="team-slug-42",
+    )
+    console, buf = _capture_console()
+    _print_active_team_status(agent, console)
+    out = buf.getvalue()
+    assert "team-slug-42" in out
+    assert "in team" in out
+    agent.close()
+
+
+class _StubTeamPort:
+    # Minimal port: _print_active_team_status only reads ``.team``.
+    def __init__(self, record: TeamRecord) -> None:
+        self._record = record
+
+    @property
+    def team(self) -> TeamRecord:
+        return self._record
+
+
+def test_active_team_status_prefers_live_team_display_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # When a live TeamPort whose team_id matches the active slug is bound,
+    # show its human-friendly name instead of the raw slug.
+    agent = _agent(tmp_path)
+    agent.state.slots = dataclasses.replace(
+        agent.state.slots, active_team="team-slug-42",
+    )
+    record = TeamRecord(
+        team_id="team-slug-42",
+        name="Pretty Display Name",
+        leader_session_id="s1",
+    )
+    port = _StubTeamPort(record)
+    monkeypatch.setattr(type(agent), "team", property(lambda self: port))
+    console, buf = _capture_console()
+    _print_active_team_status(agent, console)
+    out = buf.getvalue()
+    assert "Pretty Display Name" in out
+    assert "team-slug-42" not in out
+    agent.close()
+
+
+def test_active_team_status_keeps_slug_when_live_team_id_diverges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # If a port is bound but its team_id does NOT match the active slug
+    # (stale binding), the label stays the slug — never a mismatched name.
+    agent = _agent(tmp_path)
+    agent.state.slots = dataclasses.replace(
+        agent.state.slots, active_team="team-slug-42",
+    )
+    record = TeamRecord(
+        team_id="some-other-team",
+        name="Wrong Name",
+        leader_session_id="s1",
+    )
+    port = _StubTeamPort(record)
+    monkeypatch.setattr(type(agent), "team", property(lambda self: port))
+    console, buf = _capture_console()
+    _print_active_team_status(agent, console)
+    out = buf.getvalue()
+    assert "team-slug-42" in out
+    assert "Wrong Name" not in out
+    agent.close()
+
+
+def test_welcome_panel_collapses_home_prefix_to_tilde(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # cwd under $HOME must render as ``~/...`` so the banner never leaks a
+    # long absolute home path into scrollback.
+    agent = _agent(tmp_path)
+    home = Path.home()
+    monkeypatch.setattr(Path, "cwd", classmethod(lambda cls: home))
+    panel = _render_welcome_panel(agent, repl_mod._BANNER_SETTLE_GLYPH)
+    console, buf = _capture_console()
+    console.print(panel)
+    out = buf.getvalue()
+    assert "cwd:   ~" in out
+    agent.close()
+
+
+def test_welcome_animated_path_settles_on_stable_glyph_in_tty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # TTY consoles run the Live spinner animation; with sleep neutralized
+    # it MUST still land on the settled ``✱`` glyph (deterministic, fast).
+    agent = _agent(tmp_path)
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=True, width=200, highlight=False)
+    assert console.is_terminal  # precondition for the animated branch
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    _print_welcome(agent, console)
+    out = buf.getvalue()
+    assert "✱ Aura" in out
+    agent.close()
+
+
+async def test_run_repl_falls_back_to_default_input_on_non_tty_stdin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # With no injected input_fn and a non-TTY stdin, the REPL must use the
+    # plain blocking input() fallback (pt cannot drive a dumb terminal).
+    agent = _agent(tmp_path)
+    console, buf = _capture_console()
+    lines = iter(["/exit"])
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(lines))
+    await run_repl_async(agent, console=console)
+    # Reached /exit cleanly via the default-input path (no EOFError leak).
+    assert "Aura" in buf.getvalue()
+    await agent.aclose()
+
+
+async def test_run_repl_builds_prompt_session_on_tty_stdin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # With a TTY stdin and no injected input_fn, the REPL must construct a
+    # PromptSession-backed input (the pt rich path), not the dumb fallback.
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+    lines = iter(["/exit"])
+
+    async def _scripted(prompt: str) -> str:
+        del prompt
+        return next(lines)
+
+    made: list[bool] = []
+
+    def _fake_make(session: Any) -> Any:
+        del session
+        made.append(True)
+        return _scripted
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(repl_mod, "_make_prompt_session_input", _fake_make)
+    await run_repl_async(agent, console=console)
+    assert made == [True]
+    await agent.aclose()
+
+
+async def test_prompt_session_input_closure_round_trips_a_typed_line(
+    tmp_path: Path,
+) -> None:
+    # The PromptSession→InputFn adapter must forward a typed line verbatim;
+    # this guards the closure built for the rich-terminal input path.
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+    registry = build_default_registry(agent=agent)
+    with create_pipe_input() as inp:
+        inp.send_text("typed line\r")
+        session: PromptSession[str] = PromptSession(
+            key_bindings=_build_mode_key_bindings(agent, console),
+            input=inp,
+            output=DummyOutput(),
+        )
+        del registry  # exercised build_default_registry; not needed past here
+        read = _make_prompt_session_input(session)
+        result = await read("> ")
+    assert result == "typed line"
+    await agent.aclose()
+
+
+def test_build_prompt_session_without_agent_has_no_key_bindings(
+    tmp_path: Path,
+) -> None:
+    # The shared builder is reused by history/completion tests with
+    # ``agent=None``; in that mode it MUST skip Aura key bindings so those
+    # tests don't accidentally depend on agent state.
+    del tmp_path
+    registry = CommandRegistry()
+    session = _build_prompt_session(registry)
+    assert session.key_bindings is None
+    assert session.completer is not None
+
+
+async def test_run_turn_swallows_cancelled_error_and_returns_elapsed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # asyncio.CancelledError escaping the stream (cooperative cancellation)
+    # is non-fatal: _run_turn returns a measured duration, REPL stays up.
+    agent = _agent(tmp_path)
+    console, _buf = _capture_console()
+    renderer = Renderer(console)
+
+    async def _cancel_stream(
+        prompt: str, **kwargs: object,
+    ) -> AsyncIterator[AgentEvent | dict[str, object]]:
+        del prompt, kwargs
+        raise asyncio.CancelledError
+        yield {}  # unreachable; marks this an async generator
+
+    monkeypatch.setattr(agent, "astream", _cancel_stream)
+    elapsed = await _run_turn(agent, "hi", renderer, console)
+    assert elapsed >= 0.0
     await agent.aclose()

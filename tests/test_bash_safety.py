@@ -544,3 +544,202 @@ def test_brace_expansion_helper_single_alternative_pass_through() -> None:
     """``{onlyone}`` is not a real list → return as literal."""
     from aura.application.permission.bash_safety import _expand_braces
     assert _expand_braces("/etc/{onlyone}") == ["/etc/{onlyone}"]
+
+
+# ---------------------------------------------------------------------------
+# Lexer-helper boundary coverage (bash_safety_lex internals).
+#
+# The four quote-aware lexers below are the segmentation substrate every Tier A
+# rule sits on; a single mis-split here silently disarms an entire rule family,
+# so each separator/quote/escape branch is pinned directly rather than only
+# through the public ``check_bash_safety`` dispatch.
+# ---------------------------------------------------------------------------
+
+from aura.application.permission.bash_safety_lex import (  # noqa: E402
+    _first_token,
+    _pipe_segments_quote_aware,
+    _split_segments_quote_aware,
+)
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("a;b", ["a", "b"]),
+        ("a&&b", ["a", "b"]),
+        ("a||b", ["a", "b"]),
+        ("a|b", ["a", "b"]),
+        ("a\nb", ["a", "b"]),
+    ],
+)
+def test_split_segments_each_separator_kind(
+    command: str, expected: list[str]
+) -> None:
+    """Every shell separator family must break a segment, or a Tier A rule
+    scanning per-segment would never see the second command."""
+    assert _split_segments_quote_aware(command) == expected
+
+
+def test_split_segments_empty_input_yields_single_empty_segment() -> None:
+    """Empty command still yields exactly one (empty) segment so downstream
+    ``for seg in segments`` loops never index into nothing."""
+    assert _split_segments_quote_aware("") == [""]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("a';'b", ["a';'b"]),
+        ("a'&&'b", ["a'&&'b"]),
+        ("a'|'b", ["a'|'b"]),
+    ],
+)
+def test_split_segments_separator_inside_single_quotes_is_literal(
+    command: str, expected: list[str]
+) -> None:
+    """A separator inside single quotes is data, not control flow — splitting
+    it would shatter a quoted literal into phantom commands."""
+    assert _split_segments_quote_aware(command) == expected
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ('a";"b', ['a";"b']),
+        ('a"&&"b', ['a"&&"b']),
+        ('a"|"b', ['a"|"b']),
+    ],
+)
+def test_split_segments_separator_inside_double_quotes_is_literal(
+    command: str, expected: list[str]
+) -> None:
+    """Double quotes equally suppress separator semantics; the run stays one
+    segment so ``echo "a;b"`` is not mis-read as two statements."""
+    assert _split_segments_quote_aware(command) == expected
+
+
+def test_split_segments_single_quote_inert_inside_double_quotes() -> None:
+    """A ``'`` inside a double-quoted run must not toggle single-quote state,
+    else the closing ``"`` would be mis-tracked and separators leak through."""
+    assert _split_segments_quote_aware('a"o\'k"b') == ['a"o\'k"b']
+
+
+def test_split_segments_escaped_separator_outside_quotes_not_split() -> None:
+    r"""A backslash-escaped ``;`` outside quotes is one literal char, so
+    ``a\;b`` is a single command, never two."""
+    assert _split_segments_quote_aware("a\\;b") == ["a\\;b"]
+
+
+def test_split_segments_trailing_backslash_kept_not_indexed_past_end() -> None:
+    r"""A lone trailing ``\`` (no following char) must be emitted verbatim,
+    proving the ``i + 1 < n`` guard prevents an index overrun."""
+    assert _split_segments_quote_aware("foo\\") == ["foo\\"]
+
+
+def test_split_segments_backslash_inert_inside_single_quotes() -> None:
+    r"""Inside single quotes a backslash is a literal, not an escape, so the
+    quote state stays correct and ``'\'`` does not consume the closing quote."""
+    assert _split_segments_quote_aware("a'\\'b") == ["a'\\'b"]
+
+
+def test_pipe_segments_double_pipe_preserved_not_split() -> None:
+    """``||`` is logical-OR, not a pipeline; the pipe-to-shell scan must keep
+    it intact or it would hallucinate a stage boundary that does not exist."""
+    assert _pipe_segments_quote_aware("a||b") == ["a||b"]
+
+
+def test_pipe_segments_single_pipe_splits() -> None:
+    """A bare ``|`` is a real pipeline boundary and must break stages so the
+    terminal ``| sh`` stage is isolatable."""
+    assert _pipe_segments_quote_aware("a|b") == ["a", "b"]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("a'|'b", ["a'|'b"]),
+        ('a"|"b', ['a"|"b']),
+        ("a'||'b", ["a'||'b"]),
+    ],
+)
+def test_pipe_segments_pipe_inside_quotes_is_literal(
+    command: str, expected: list[str]
+) -> None:
+    """Quoted pipe characters are data; splitting them would let an attacker
+    smuggle ``| sh`` as a string yet dodge the pipeline scan."""
+    assert _pipe_segments_quote_aware(command) == expected
+
+
+def test_pipe_segments_escaped_pipe_not_split() -> None:
+    r"""``a\|b`` escapes the pipe to a literal, so it stays one stage."""
+    assert _pipe_segments_quote_aware("a\\|b") == ["a\\|b"]
+
+
+def test_pipe_segments_trailing_backslash_kept() -> None:
+    r"""A trailing ``\`` with no successor must be emitted, exercising the
+    ``i + 1 < n`` boundary guard without an overrun."""
+    assert _pipe_segments_quote_aware("x\\") == ["x\\"]
+
+
+def test_pipe_segments_empty_input_yields_single_empty_segment() -> None:
+    """Empty pipeline still yields one empty stage so callers iterating stages
+    never face an empty list."""
+    assert _pipe_segments_quote_aware("") == [""]
+
+
+def test_first_token_empty_string_returns_none() -> None:
+    """An empty segment has no command word — returning None lets rules skip
+    it rather than crash on an absent token."""
+    assert _first_token("") is None
+
+
+def test_first_token_whitespace_only_returns_none() -> None:
+    """Whitespace-only segment strips to empty, so there is no first token."""
+    assert _first_token("   \t  ") is None
+
+
+def test_first_token_skips_leading_var_assignment() -> None:
+    """``FOO=bar ls`` runs ``ls`` with an inline env var; the first *command*
+    token is ``ls``, not the assignment, or rules would gate the wrong word."""
+    assert _first_token("FOO=bar ls") == "ls"
+
+
+def test_first_token_only_assignment_returns_none() -> None:
+    """A segment that is purely ``FOO=bar`` has no command word at all."""
+    assert _first_token("FOO=bar") is None
+
+
+def test_first_token_underscore_in_lhs_still_treated_as_assignment() -> None:
+    """``MY_VAR=x cmd`` — underscores are valid in env-var names, so the
+    assignment is skipped and ``cmd`` is the command word."""
+    assert _first_token("MY_VAR=x cmd") == "cmd"
+
+
+def test_first_token_leading_equals_not_an_assignment() -> None:
+    """A token beginning with ``=`` is not a ``VAR=value`` assignment, so it
+    is the command word itself and must be returned, not skipped."""
+    assert _first_token("=bar cmd") == "=bar"
+
+
+def test_first_token_non_alpha_lhs_not_an_assignment() -> None:
+    """A first char that is not a letter (``1FOO=bar``) disqualifies the
+    assignment heuristic, so the whole token is the command word."""
+    assert _first_token("1FOO=bar cmd") == "1FOO=bar"
+
+
+def test_first_token_non_alnum_lhs_not_an_assignment() -> None:
+    """``FO-O=x`` has a dash in the name — not a valid env var, so it is not
+    skipped and is returned as the command word."""
+    assert _first_token("FO-O=x cmd") == "FO-O=x"
+
+
+def test_first_token_multi_equals_assignment_skipped() -> None:
+    """``a=b=c cmd`` is still a valid assignment (value contains ``=``); the
+    command word is ``cmd``."""
+    assert _first_token("a=b=c cmd") == "cmd"
+
+
+def test_first_token_unbalanced_quote_returns_none_not_crash() -> None:
+    """An unparseable segment (``shlex`` raises ``ValueError``) must fail open
+    to None — a parse error is not a license to crash the safety check."""
+    assert _first_token('echo "unclosed') is None

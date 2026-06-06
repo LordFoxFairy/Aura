@@ -14,6 +14,7 @@ from aura.application.tasks.store import TasksStore
 from aura.application.teams.mailbox import Mailbox
 from aura.application.teams.manager import TeamManager
 from aura.application.teams.runtime import (
+    _drive_one_turn,
     _format_envelope,
     run_teammate,
     run_teammate_main,
@@ -604,3 +605,133 @@ async def test_run_teammate_main_closes_agent_even_when_loop_raises(
             team_id="t3", member_name="dave", storage_root=str(tmp_path),
         )
     assert agent.closed == 1  # finally ran despite the loop raising
+
+
+class _BlankProgressAgent(_ScriptedAgent):
+    """Emits a whitespace-only ToolCallProgress chunk to exercise the empty-chunk skip."""
+
+    async def astream(self, prompt: str, *, abort: Any = None) -> Any:
+        self.prompts_seen.append(prompt)
+        yield ToolCallStarted("bash", {"command": "true"}, id="tc_blank")
+        yield ToolCallProgress("bash", "stdout", "   \n", id="tc_blank")
+        yield Final(message="done", reason="natural")
+
+
+@pytest.mark.asyncio
+async def test_drive_turn_skips_blank_progress_chunk(tmp_path: Path) -> None:
+    """A whitespace-only tool chunk must not pollute the activity log — only real lines persist."""
+    storage = _storage(tmp_path)
+    store = TasksStore()
+    record = store.create("teammate: alice", "(idle)", kind="teammate")
+    agent = _BlankProgressAgent()
+    agent._teammate = TeammateBinding(task_id=record.id, tasks_store=store)
+    _agent: Any = agent
+
+    out = await _drive_one_turn(
+        agent=_agent, prompt="go", abort=AbortController(),
+        storage=storage, team_id="team-a", member_name="alice",
+    )
+
+    assert out == "done"
+    refreshed = store.get(record.id)
+    assert refreshed is not None
+    assert refreshed.progress.tool_count == 1  # the start still counted
+    notes = refreshed.progress.recent_activities
+    assert "bash" in notes
+    assert not any("stdout>" in n for n in notes)  # blank chunk produced no note
+
+
+class _LongFinalAgent(_ScriptedAgent):
+    """Yields an oversized Final so the 500-char transcript truncation boundary is exercised."""
+
+    def __init__(self, body: str) -> None:
+        super().__init__(replies=[body])
+        self._body = body
+
+    async def astream(self, prompt: str, *, abort: Any = None) -> Any:
+        self.prompts_seen.append(prompt)
+        yield Final(message=self._body, reason="natural")
+
+
+@pytest.mark.asyncio
+async def test_drive_turn_truncates_transcript_to_500_chars(tmp_path: Path) -> None:
+    """Transcript is a bounded audit trail — a huge final answer is capped at 500 chars on disk."""
+    storage = _storage(tmp_path)
+    body = "x" * 1200
+    agent: Any = _LongFinalAgent(body)
+
+    out = await _drive_one_turn(
+        agent=agent, prompt="go", abort=AbortController(),
+        storage=storage, team_id="team-a", member_name="alice",
+    )
+
+    assert out == body  # the returned final text is NOT truncated, only the transcript
+    written = storage.team_transcript_path("team-a", "alice").read_text(encoding="utf-8")
+    assert "x" * 500 in written
+    assert "x" * 501 not in written  # capped at the 500-char slice
+
+
+@pytest.mark.asyncio
+async def test_drive_turn_without_teammate_binding_skips_task_recording(
+    tmp_path: Path,
+) -> None:
+    """An unbound agent (no task) must still complete a turn — task recording is purely additive."""
+    storage = _storage(tmp_path)
+    agent = _ScriptedAgent(replies=["ok"])
+    assert agent.teammate is None  # no binding: every record_* call must short-circuit
+    _agent: Any = agent
+
+    out = await _drive_one_turn(
+        agent=_agent, prompt="go", abort=AbortController(),
+        storage=storage, team_id="team-a", member_name="alice",
+    )
+
+    assert out == "ok"  # turn drives to a Final despite no tracking sink
+    written = storage.team_transcript_path("team-a", "alice").read_text(encoding="utf-8")
+    assert "Final" in written  # transcript still records the event type
+
+
+@pytest.mark.asyncio
+async def test_drive_turn_suppresses_transcript_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unwritable transcript can't abort the turn — the OSError is suppressed, final returns."""
+    storage = _storage(tmp_path)
+    agent = _ScriptedAgent(replies=["resilient"])
+    _agent: Any = agent
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "open", _boom)
+
+    out = await _drive_one_turn(
+        agent=_agent, prompt="go", abort=AbortController(),
+        storage=storage, team_id="team-a", member_name="alice",
+    )
+
+    assert out == "resilient"  # suppress(OSError) keeps the turn alive
+
+
+@pytest.mark.parametrize("seed", ["", "   ", "\n\t "])
+@pytest.mark.asyncio
+async def test_runtime_blank_seed_prompt_does_not_drive_turn(
+    tmp_path: Path, seed: str,
+) -> None:
+    """A blank/whitespace seed must be ignored — only real text triggers an immediate turn."""
+    storage = _storage(tmp_path)
+    agent = _ScriptedAgent(replies=["should-not-run"])
+    stop = asyncio.Event()
+    stop.set()  # stop immediately so the loop body never runs; only the seed path matters
+    _agent: Any = agent
+
+    await asyncio.wait_for(
+        run_teammate(
+            agent=_agent, team_id="team-a", member_name="alice",
+            storage=storage, stop_event=stop, abort=AbortController(),
+            seed_prompt=seed,
+        ),
+        timeout=10,
+    )
+
+    assert agent.prompts_seen == []  # blank seed never reached _drive_one_turn

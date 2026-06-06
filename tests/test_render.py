@@ -11,9 +11,13 @@ from aura.domain.events import (
     Final,
     PermissionAudit,
     ToolCallCompleted,
+    ToolCallProgress,
     ToolCallStarted,
 )
-from cli.render import Renderer
+from cli.render import (
+    Renderer,
+    compact_args,
+)
 
 
 def _capture() -> tuple[Renderer, io.StringIO]:
@@ -481,3 +485,500 @@ def test_final_event_flushes_pending_text() -> None:
     r.on_event(Final(message="pending"))
     # Flush happens on Final, before finish() adds its trailing newline.
     assert "pending" in buf.getvalue()
+
+
+def test_final_aborted_reason_renders_cancellation_notice() -> None:
+    # A user-aborted turn must visibly tell the operator it was cancelled,
+    # not silently end — otherwise an abort looks like a hang.
+    r, buf = _capture()
+    r.on_event(Final(message="", reason="aborted"))
+    assert "cancelled by user" in buf.getvalue()
+
+
+def test_final_max_turns_reason_renders_limit_notice() -> None:
+    # Hitting the turn ceiling must surface a distinct reason so the user
+    # knows the loop stopped on a budget, not on task completion.
+    r, buf = _capture()
+    r.on_event(Final(message="", reason="max_turns"))
+    assert "max turns reached" in buf.getvalue()
+
+
+def test_final_length_recovery_exhausted_renders_truncation_warning() -> None:
+    # After 3 failed length-recovery retries the output is truncated; the
+    # user must be told to /retry rather than trust a cut-off answer.
+    r, buf = _capture()
+    r.on_event(Final(message="", reason="length_recovery_exhausted"))
+    out = buf.getvalue()
+    assert "truncated" in out
+    assert "/retry" in out
+
+
+def test_final_natural_reason_emits_no_status_line() -> None:
+    # A natural completion is the silent happy path — no banner should be
+    # printed, so prior tool/prose output is the last thing on screen.
+    r, buf = _capture()
+    r.on_event(Final(message="all good", reason="natural"))
+    assert buf.getvalue() == ""
+
+
+def test_final_flushes_pending_tool_as_running_header() -> None:
+    # If the turn ends (Final) while a ToolCallStarted is still buffered,
+    # the header must be flushed as a ◆ running line — never dropped — so
+    # the user sees the tool that was in flight when the loop stopped.
+    r, buf = _capture()
+    r.on_event(ToolCallStarted(name="bash", input={"command": "sleep 1"}))
+    r.on_event(Final(message="", reason="aborted"))
+    out = buf.getvalue()
+    assert "◆" in out
+    assert "bash" in out
+    # ◆ header precedes the abort notice.
+    assert out.index("◆") < out.index("cancelled by user")
+
+
+def test_progress_empty_chunk_emits_nothing() -> None:
+    # A progress chunk that is only newlines/whitespace carries no signal;
+    # rendering an empty ``│`` line would be visual noise. It is dropped.
+    r, buf = _capture()
+    r.on_event(ToolCallStarted(name="bash", input={"command": "x"}))
+    r.on_event(ToolCallProgress(name="bash", stream="stdout", chunk="\n\n"))
+    out = buf.getvalue()
+    # The Started header flushed as ◆ (progress forces it), but no nested
+    # ``│`` body line was emitted for the empty chunk.
+    assert "│" not in out
+
+
+def test_two_consecutive_started_flushes_first_as_running() -> None:
+    # Back-to-back ToolCallStarted with no completion between them: the
+    # first must flush as a ◆ running line so it isn't overwritten and
+    # lost when the second tool takes the pending slot.
+    r, buf = _capture()
+    r.on_event(ToolCallStarted(name="read_file", input={"path": "/a"}))
+    r.on_event(ToolCallStarted(name="grep", input={"pattern": "x"}))
+    out = buf.getvalue()
+    assert "read_file" in out
+    assert "◆" in out
+
+
+def test_compact_args_passes_short_payload_verbatim() -> None:
+    # Short tool args must render exactly (compact JSON, no separators
+    # spaces) so the inline header stays scannable.
+    assert compact_args({"path": "/x"}) == '{"path":"/x"}'
+
+
+def test_compact_args_truncates_oversize_payload_with_ellipsis() -> None:
+    # Oversize args are clipped to max_len + ellipsis so a giant tool input
+    # can't blow up the single-line header.
+    out = compact_args({"data": "y" * 500}, max_len=20)
+    assert out.endswith("…")
+    assert len(out) == 21
+
+
+def test_compact_args_preserves_non_ascii_unescaped() -> None:
+    # ensure_ascii=False keeps human-readable CJK/emoji in the header
+    # instead of \\uXXXX noise.
+    assert "世界" in compact_args({"q": "世界"})
+
+
+def test_read_file_partial_summary_shows_of_total() -> None:
+    # A partial read must label itself ``N of M lines (partial)`` so the
+    # user knows the file was not fully loaded.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="read_file",
+        output={"content": "x", "lines": 50, "total_lines": 200, "partial": True},
+    ))
+    assert "50 of 200 lines (partial)" in buf.getvalue()
+
+
+def test_read_file_non_dict_output_falls_back_to_str() -> None:
+    # A malformed (non-dict) read_file payload must not crash the
+    # formatter; it degrades to ``str(output)``.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="read_file", output="raw-string-output"))
+    assert "raw-string-output" in buf.getvalue()
+
+
+def test_write_file_bytes_contract_key_summary() -> None:
+    # The contract key ``bytes`` must render ``N bytes written``.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="write_file", output={"bytes": 128}))
+    assert "128 bytes written" in buf.getvalue()
+
+
+def test_write_file_written_impl_key_summary() -> None:
+    # The current-impl key ``written`` must also map to ``N bytes
+    # written`` — both shapes are accepted.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="write_file", output={"written": 64}))
+    assert "64 bytes written" in buf.getvalue()
+
+
+def test_write_file_non_dict_output_falls_back() -> None:
+    # Unknown/non-dict write_file output degrades to the generic
+    # ``written`` label rather than raising.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="write_file", output=None))
+    assert "written" in buf.getvalue()
+
+
+def test_edit_file_created_singular_line_label() -> None:
+    # A freshly-created file with one line must read ``created (1 line)`` —
+    # singular, not ``1 lines``.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="edit_file", output={"created": True, "replacements": 1},
+    ))
+    assert "created (1 line)" in buf.getvalue()
+
+
+def test_edit_file_created_plural_lines_label() -> None:
+    # Multi-line creation pluralizes: ``created (3 lines)``.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="edit_file", output={"created": True, "replacements": 3},
+    ))
+    assert "created (3 lines)" in buf.getvalue()
+
+
+def test_edit_file_zero_replacements_pluralizes() -> None:
+    # Zero replacements must say ``0 replacements`` (plural) — the
+    # singular form is reserved for exactly one.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="edit_file", output={"replacements": 0}))
+    assert "0 replacements" in buf.getvalue()
+
+
+def test_edit_file_single_replacement_singular() -> None:
+    # Exactly one replacement is singular: ``1 replacement``.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="edit_file", output={"replacements": 1}))
+    out = buf.getvalue()
+    assert "1 replacement" in out
+    assert "replacements" not in out
+
+
+def test_edit_file_non_dict_output_falls_back() -> None:
+    # Non-dict edit payload degrades to the generic ``edited`` label.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="edit_file", output=42))
+    assert "edited" in buf.getvalue()
+
+
+def test_grep_files_with_matches_singular_and_plural() -> None:
+    # files_with_matches mode counts files with correct pluralization.
+    r1, b1 = _capture()
+    r1.on_event(ToolCallCompleted(
+        name="grep", output={"mode": "files_with_matches", "files": ["a.py"]},
+    ))
+    assert "1 file" in b1.getvalue()
+    r2, b2 = _capture()
+    r2.on_event(ToolCallCompleted(
+        name="grep",
+        output={"mode": "files_with_matches", "files": ["a.py", "b.py"]},
+    ))
+    assert "2 files" in b2.getvalue()
+
+
+def test_grep_content_mode_pluralizes_matches_es() -> None:
+    # content mode pluralizes ``match`` → ``matches`` and surfaces the
+    # truncation flag when results were capped.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="grep",
+        output={"mode": "content", "matches": [{}, {}], "truncated": True},
+    ))
+    out = buf.getvalue()
+    assert "2 matches" in out
+    assert "(truncated)" in out
+
+
+def test_grep_content_mode_single_match_singular() -> None:
+    # A single content match is singular: ``1 match``.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="grep", output={"mode": "content", "matches": [{}]},
+    ))
+    out = buf.getvalue()
+    assert "1 match" in out
+    assert "matches" not in out
+
+
+def test_grep_count_mode_uses_total() -> None:
+    # count mode reports the ``total`` integer, pluralized.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="grep", output={"mode": "count", "total": 7},
+    ))
+    assert "7 matches" in buf.getvalue()
+
+
+def test_grep_count_mode_single_total_singular() -> None:
+    # A count total of exactly 1 is singular.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="grep", output={"mode": "count", "total": 1},
+    ))
+    out = buf.getvalue()
+    assert "1 match" in out
+    assert "matches" not in out
+
+
+def test_grep_unknown_mode_or_non_dict_falls_back() -> None:
+    # An unrecognized grep mode (or non-dict payload) degrades to the
+    # generic ``searched`` label without raising.
+    r1, b1 = _capture()
+    r1.on_event(ToolCallCompleted(name="grep", output={"mode": "??"}))
+    assert "searched" in b1.getvalue()
+    r2, b2 = _capture()
+    r2.on_event(ToolCallCompleted(name="grep", output=None))
+    assert "searched" in b2.getvalue()
+
+
+def test_glob_count_key_and_truncation() -> None:
+    # glob prefers the explicit ``count`` key and appends the truncation
+    # marker when capped.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="glob", output={"count": 12, "files": [], "truncated": True},
+    ))
+    out = buf.getvalue()
+    assert "12 files" in out
+    assert "(truncated)" in out
+
+
+def test_glob_falls_back_to_files_length_singular() -> None:
+    # Without a ``count`` key, glob derives the number from ``files``
+    # length and pluralizes; one file is singular.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="glob", output={"files": ["only.py"]}))
+    out = buf.getvalue()
+    assert "1 file" in out
+    assert "files" not in out
+
+
+def test_glob_non_dict_output_falls_back() -> None:
+    # Non-dict glob payload degrades to ``globbed``.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="glob", output=None))
+    assert "globbed" in buf.getvalue()
+
+
+def test_bash_success_zero_exit_renders_ok_without_marker() -> None:
+    # exit_code 0 renders bare ``ok`` — no ``(exit N)`` noise on success.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="bash",
+        output={"exit_code": 0, "truncated": False, "killed_at_hard_ceiling": False},
+    ))
+    out = buf.getvalue()
+    assert "ok" in out
+    assert "exit" not in out
+
+
+def test_bash_killed_at_hard_ceiling_summary() -> None:
+    # A bash process killed at the 100 MB output ceiling must say so with
+    # its exit marker — the operator needs to know it was force-killed.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="bash",
+        output={
+            "exit_code": 137, "truncated": True, "killed_at_hard_ceiling": True,
+        },
+    ))
+    out = buf.getvalue()
+    assert "killed at 100 MB ceiling" in out
+    assert "exit 137" in out
+
+
+def test_bash_truncated_output_summary() -> None:
+    # Truncated (but not killed) output reports ``output truncated`` so the
+    # user knows the tail is missing.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="bash",
+        output={
+            "exit_code": 1, "truncated": True, "killed_at_hard_ceiling": False,
+        },
+    ))
+    out = buf.getvalue()
+    assert "output truncated" in out
+    assert "exit 1" in out
+
+
+def test_bash_non_dict_output_falls_back() -> None:
+    # Non-dict bash payload degrades to ``executed``.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="bash", output="weird"))
+    assert "executed" in buf.getvalue()
+
+
+def test_task_create_summary_truncates_task_id_to_eight() -> None:
+    # task_create shows only the first 8 chars of the UUID plus the
+    # description — a full UUID would bloat the inline header.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="task_create",
+        output={"task_id": "0123456789abcdef", "description": "do work"},
+    ))
+    out = buf.getvalue()
+    assert "01234567" in out
+    assert "do work" in out
+    assert "89abcdef" not in out
+
+
+def test_task_create_missing_fields_uses_placeholders() -> None:
+    # A task_create payload missing both keys must not raise; it renders
+    # the ``?`` id placeholder and an empty description.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="task_create", output={}))
+    assert "task ?" in buf.getvalue()
+
+
+def test_task_create_non_dict_output_falls_back() -> None:
+    # Non-dict task_create payload degrades to ``spawned``.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="task_create", output=None))
+    assert "spawned" in buf.getvalue()
+
+
+def test_search_tool_folds_long_content_output() -> None:
+    # A search-command tool (read_file) whose text output exceeds the fold
+    # threshold (20 lines) must render head/tail with an elision marker and
+    # a ``[N lines total, M shown]`` footer — not dump the whole blob.
+    r, buf = _capture()
+    body = "\n".join(f"line{i}" for i in range(40))
+    r.on_event(ToolCallCompleted(
+        name="read_file",
+        output={"content": body, "lines": 40, "total_lines": 40, "partial": False},
+    ))
+    out = buf.getvalue()
+    assert "…" in out
+    assert "40 lines total" in out
+    assert "15 shown" in out  # 10 head + 5 tail
+    assert "line0" in out      # head present
+    assert "line39" in out     # tail present
+    assert "line20" not in out  # middle elided
+
+
+def test_search_tool_short_output_not_folded() -> None:
+    # Below the fold threshold the output is shown inline with no elision
+    # marker or fold footer — folding only kicks in past 20 lines.
+    r, buf = _capture()
+    body = "\n".join(f"line{i}" for i in range(5))
+    r.on_event(ToolCallCompleted(
+        name="read_file",
+        output={"content": body, "lines": 5, "total_lines": 5, "partial": False},
+    ))
+    out = buf.getvalue()
+    assert "lines total" not in out
+
+
+def test_grep_matches_fold_renders_path_line_text() -> None:
+    # grep ``matches`` extraction must join each hit as ``path:line:text``
+    # and fold when the list is long — proving the dict-match branch of
+    # _extract_text feeds the folder.
+    r, buf = _capture()
+    matches = [
+        {"path": f"f{i}.py", "line": i, "text": f"hit{i}"} for i in range(30)
+    ]
+    r.on_event(ToolCallCompleted(
+        name="grep", output={"mode": "content", "matches": matches},
+    ))
+    out = buf.getvalue()
+    assert "f0.py:0:hit0" in out
+    assert "30 lines total" in out
+
+
+def test_grep_matches_non_dict_entries_stringified() -> None:
+    # Non-dict entries in the matches list must be coerced via str()
+    # rather than crashing the path/line/text accessor.
+    r, buf = _capture()
+    matches: list[object] = [f"raw-match-{i}" for i in range(25)]
+    r.on_event(ToolCallCompleted(
+        name="grep", output={"mode": "content", "matches": matches},
+    ))
+    out = buf.getvalue()
+    assert "raw-match-0" in out
+    assert "lines total" in out
+
+
+def test_glob_files_list_folds_when_long() -> None:
+    # glob ``files`` extraction joins entries by newline and folds when
+    # long — exercises the files-list branch of _extract_text.
+    r, buf = _capture()
+    files = [f"path/to/file{i}.py" for i in range(30)]
+    r.on_event(ToolCallCompleted(
+        name="glob", output={"count": 30, "files": files},
+    ))
+    out = buf.getvalue()
+    assert "path/to/file0.py" in out
+    assert "30 lines total" in out
+
+
+def test_web_search_results_fold_renders_title_and_url() -> None:
+    # web_search ``results`` extraction formats each hit as
+    # ``title — url`` and folds long lists.
+    r, buf = _capture()
+    results = [
+        {"title": f"Title {i}", "url": f"http://x/{i}"} for i in range(30)
+    ]
+    r.on_event(ToolCallCompleted(name="web_search", output={"results": results}))
+    out = buf.getvalue()
+    assert "Title 0 — http://x/0" in out
+    assert "30 lines total" in out
+
+
+def test_web_search_results_non_dict_entries_stringified() -> None:
+    # Non-dict result entries are coerced via str() in the results branch.
+    r, buf = _capture()
+    results: list[object] = [f"plain-{i}" for i in range(25)]
+    r.on_event(ToolCallCompleted(name="web_search", output={"results": results}))
+    out = buf.getvalue()
+    assert "plain-0" in out
+    assert "lines total" in out
+
+
+def test_search_tool_string_output_folds_directly() -> None:
+    # When a search tool's output is a bare string (not a dict), it folds
+    # directly — covers the str branch of _extract_text.
+    r, buf = _capture()
+    body = "\n".join(f"row{i}" for i in range(30))
+    r.on_event(ToolCallCompleted(name="web_search", output=body))
+    out = buf.getvalue()
+    assert "row0" in out
+    assert "30 lines total" in out
+
+
+def test_search_tool_unextractable_dict_skips_fold() -> None:
+    # A search-tool dict with no matches/files/content/results yields None
+    # from _extract_text, so no fold block renders — only the ✓ summary.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(name="grep", output={"mode": "count", "total": 0}))
+    out = buf.getvalue()
+    assert "✓" in out
+    assert "lines total" not in out
+
+
+def test_tool_error_panel_includes_actionable_hint() -> None:
+    # When the error text matches a known hint pattern (e.g. "ripgrep"),
+    # the panel body must append the remediation hint — the operator gets
+    # a fix, not just a failure.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="grep", output=None, error="ripgrep binary not found on PATH",
+    ))
+    out = buf.getvalue()
+    assert "grep failed" in out
+    assert "install ripgrep" in out
+
+
+def test_tool_error_panel_without_hint_shows_only_message() -> None:
+    # An error with no matching hint pattern renders just the message in
+    # the panel — no spurious blank hint section.
+    r, buf = _capture()
+    r.on_event(ToolCallCompleted(
+        name="bash", output=None, error="totally unmatched failure mode",
+    ))
+    out = buf.getvalue()
+    assert "totally unmatched failure mode" in out
+    assert "install ripgrep" not in out

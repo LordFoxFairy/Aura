@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import pytest
+from langchain_core.language_models import BaseChatModel
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 
-from aura.config.schema import AuraConfigError, ProviderConfig
+from aura.config.schema import AuraConfig, AuraConfigError, ProviderConfig
 from aura.infrastructure.llm import (
+    _DEFAULT_CONTEXT_WINDOW,
     MissingCredentialError,
     MissingProviderDependencyError,
+    UnknownModelSpecError,
     create,
+    get_context_window,
+    make_model_for_spec,
+    make_summary_model_factory,
+    resolve,
 )
 
 
@@ -291,3 +300,239 @@ def test_protocols_dict_matches_provider_literal() -> None:
         "requires updating BOTH aura/core/llm.py::_PROTOCOLS AND "
         "aura/config/schema.py::ProviderConfig.protocol."
     )
+
+
+# --- _load_class: real SDK branches + missing-dependency guard -------------
+
+
+@pytest.mark.parametrize(
+    ("protocol", "expected_class_name"),
+    [
+        ("openai", "ChatOpenAI"),
+        ("anthropic", "ChatAnthropic"),
+        ("ollama", "ChatOllama"),
+    ],
+)
+def test_load_class_returns_real_sdk_class(protocol: str, expected_class_name: str) -> None:
+    """Each protocol must map to its concrete BaseChatModel subclass, never a stub."""
+    from aura.infrastructure.llm import _load_class
+
+    cls = _load_class(protocol)
+    assert cls.__name__ == expected_class_name
+    assert issubclass(cls, BaseChatModel)
+
+
+@pytest.mark.parametrize(
+    ("protocol", "module_name", "extra"),
+    [
+        ("openai", "langchain_openai", "openai"),
+        ("anthropic", "langchain_anthropic", "anthropic"),
+        ("ollama", "langchain_ollama", "ollama"),
+    ],
+)
+def test_load_class_missing_sdk_raises_install_hint(
+    monkeypatch: pytest.MonkeyPatch, protocol: str, module_name: str, extra: str
+) -> None:
+    """A torn-out provider SDK surfaces a pip-install hint, not a raw ImportError."""
+    from aura.infrastructure.llm import _load_class
+
+    # Injecting None forces `from <module> import X` to raise ModuleNotFoundError.
+    monkeypatch.setitem(sys.modules, module_name, None)
+
+    with pytest.raises(MissingProviderDependencyError) as exc_info:
+        _load_class(protocol)
+
+    assert f"{module_name} not installed" in exc_info.value.detail
+    assert f"aura[{extra}]" in exc_info.value.detail
+
+
+# --- get_context_window: longest-prefix substring match --------------------
+
+
+@pytest.mark.parametrize(
+    ("spec", "expected"),
+    [
+        ("claude-3-5-sonnet-20241022", 200_000),
+        ("openai:gpt-4o-mini", 128_000),
+        ("gpt-4o", 128_000),
+        ("openrouter:deepseek-reasoner", 64_000),
+        ("qwen-long", 10_000_000),
+    ],
+)
+def test_get_context_window_known_models(spec: str, expected: int) -> None:
+    """Status-bar pressure ratio depends on the right window for each known model."""
+    assert get_context_window(spec) == expected
+
+
+def test_get_context_window_longest_substring_wins() -> None:
+    """'gpt-4o' (128k) must beat the shorter substring 'gpt-4' (8k) on overlap."""
+    assert get_context_window("gpt-4o") == 128_000
+    assert get_context_window("gpt-4") == 8_192
+
+
+def test_get_context_window_is_case_insensitive() -> None:
+    """A model spec is lowercased before lookup so casing never drifts the window."""
+    assert get_context_window("GPT-5") == get_context_window("gpt-5") == 400_000
+
+
+def test_get_context_window_strips_provider_prefix() -> None:
+    """Only the portion after the last ':' names the model; the prefix is ignored."""
+    assert get_context_window("any-provider:gpt-4") == 8_192
+
+
+@pytest.mark.parametrize("spec", ["", "totally-unknown-model", "x"])
+def test_get_context_window_unknown_falls_back_to_default(spec: str) -> None:
+    """An unrecognised or empty spec floors at the 128k default, never KeyErrors."""
+    assert get_context_window(spec) == _DEFAULT_CONTEXT_WINDOW
+    assert _DEFAULT_CONTEXT_WINDOW == 128_000
+
+
+# --- resolve: router alias once, then provider:model -----------------------
+
+
+def _two_provider_cfg() -> AuraConfig:
+    return AuraConfig(
+        providers=[
+            ProviderConfig(name="openai", protocol="openai", api_key_env="OPENAI_API_KEY"),
+            ProviderConfig(name="anthropic", protocol="anthropic"),
+        ],
+        router={"default": "openai:gpt-4o-mini", "fast": "anthropic:claude-3-5-haiku"},
+    )
+
+
+def test_resolve_router_alias() -> None:
+    """A router alias expands to the configured provider:model pair."""
+    cfg = _two_provider_cfg()
+    provider, model = resolve("fast", cfg=cfg)
+    assert provider.name == "anthropic"
+    assert model == "claude-3-5-haiku"
+
+
+def test_resolve_direct_provider_model() -> None:
+    """A bare 'provider:model' spec resolves without any router entry."""
+    cfg = _two_provider_cfg()
+    provider, model = resolve("anthropic:claude-3-opus", cfg=cfg)
+    assert provider.name == "anthropic"
+    assert model == "claude-3-opus"
+
+
+def test_resolve_model_name_keeps_inner_colons() -> None:
+    """Only the first ':' splits provider from model; later colons stay in the name."""
+    cfg = _two_provider_cfg()
+    provider, model = resolve("openai:org:gpt-4o", cfg=cfg)
+    assert provider.name == "openai"
+    assert model == "org:gpt-4o"
+
+
+def test_resolve_alias_is_applied_only_once() -> None:
+    """Router lookup is a single hop; an alias whose target is another alias never chains."""
+    cfg = AuraConfig(
+        providers=[
+            ProviderConfig(name="openai", protocol="openai", api_key_env="OPENAI_API_KEY"),
+        ],
+        router={"default": "openai:gpt-4o-mini", "hop": "openai:gpt-4o"},
+    )
+    # 'default' -> 'openai:gpt-4o-mini'; the value is not re-resolved as an alias.
+    provider, model = resolve("default", cfg=cfg)
+    assert provider.name == "openai"
+    assert model == "gpt-4o-mini"
+
+
+def test_resolve_no_colon_raises_unknown_spec() -> None:
+    """A bareword that is neither alias nor provider:model is rejected loudly."""
+    cfg = _two_provider_cfg()
+    with pytest.raises(UnknownModelSpecError) as exc_info:
+        resolve("bareword", cfg=cfg)
+    assert "bareword" in exc_info.value.detail
+
+
+def test_resolve_unknown_provider_lists_known() -> None:
+    """An unknown provider names the offender and enumerates valid providers."""
+    cfg = _two_provider_cfg()
+    with pytest.raises(UnknownModelSpecError) as exc_info:
+        resolve("ghost:model", cfg=cfg)
+    assert "ghost" in exc_info.value.detail
+    assert "openai" in exc_info.value.detail
+    assert "anthropic" in exc_info.value.detail
+
+
+def test_resolve_unknown_spec_is_aura_config_error() -> None:
+    """UnknownModelSpecError stays in the AuraConfigError hierarchy for uniform handling."""
+    assert issubclass(UnknownModelSpecError, AuraConfigError)
+
+
+# --- make_model_for_spec: one-shot resolve+create --------------------------
+
+
+def test_make_model_for_spec_resolves_then_creates(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one-shot helper routes the alias and hands the model name to the SDK class."""
+    from aura.infrastructure import llm
+
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+
+    cfg = _two_provider_cfg()
+    model = make_model_for_spec("default", cfg)
+
+    assert isinstance(model, _StubOpenAI)
+    assert _stub_kwargs(model)["model"] == "gpt-4o-mini"
+
+
+def test_make_model_for_spec_propagates_resolve_error() -> None:
+    """A bad spec fails at resolve time before any SDK construction is attempted."""
+    cfg = _two_provider_cfg()
+    with pytest.raises(UnknownModelSpecError):
+        make_model_for_spec("ghost:model", cfg)
+
+
+# --- make_summary_model_factory: lazy + memoized ---------------------------
+
+
+def _fake_main_model() -> BaseChatModel:
+    return GenericFakeChatModel(messages=iter(["main"]))
+
+
+def test_summary_factory_none_spec_reuses_main_model() -> None:
+    """No summary_spec means the summary model IS the main model (no second SDK call)."""
+    cfg = _two_provider_cfg()
+    main = _fake_main_model()
+    factory = make_summary_model_factory(cfg, main, summary_spec=None)
+    assert factory() is main
+
+
+def test_summary_factory_none_spec_is_idempotent() -> None:
+    """Repeated factory calls return the identical cached object, never a fresh one."""
+    cfg = _two_provider_cfg()
+    main = _fake_main_model()
+    factory = make_summary_model_factory(cfg, main, summary_spec=None)
+    assert factory() is factory() is main
+
+
+def test_summary_factory_explicit_spec_creates_and_caches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit summary_spec builds a distinct model once, then serves it from cache."""
+    from aura.infrastructure import llm
+
+    monkeypatch.setattr(llm, "_load_class", lambda _p: _StubOpenAI)
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+
+    cfg = _two_provider_cfg()
+    main = _fake_main_model()
+    factory = make_summary_model_factory(cfg, main, summary_spec="default")
+
+    first = factory()
+    second = factory()
+    assert isinstance(first, _StubOpenAI)
+    assert first is second  # memoized
+    assert first is not main
+    assert _stub_kwargs(first)["model"] == "gpt-4o-mini"
+
+
+def test_summary_factory_bad_spec_surfaces_on_first_call_only() -> None:
+    """A bad summary_spec must not raise at construction; it surfaces lazily on first call."""
+    cfg = _two_provider_cfg()
+    main = _fake_main_model()
+    factory = make_summary_model_factory(cfg, main, summary_spec="ghost:model")
+    with pytest.raises(UnknownModelSpecError):
+        factory()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -626,3 +626,350 @@ class TestOutOfCwdRuleWarning:
             f"{outside1}/**/*.py",
             f"{outside2}/**/*.py",
         ]
+
+
+def _make_project_rules(cwd: Path) -> Path:
+    rules_dir = cwd / ".aura" / "rules"
+    rules_dir.mkdir(parents=True)
+    return rules_dir
+
+
+class TestFrontmatterEdgeCases:
+    """Frontmatter parser must degrade to 'no frontmatter' on degenerate heads."""
+
+    def test_empty_file_is_unconditional_empty_body(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A zero-byte rule file must not crash the scan; it lands unconditional."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        (rules_dir / "empty.md").write_text("")
+
+        bundle = load_rules(cwd)
+        assert len(bundle.unconditional) == 1
+        assert bundle.conditional == []
+        assert bundle.unconditional[0].globs == ()
+        assert bundle.unconditional[0].content == ""
+
+    def test_open_fence_without_close_treated_as_body(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Unterminated frontmatter must not eat the body; whole file is content."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        # Opening '---' but no closing fence anywhere in the file.
+        (rules_dir / "open.md").write_text("---\npaths: src/*.py\nstill body\n")
+
+        bundle = load_rules(cwd)
+        assert bundle.conditional == []
+        assert len(bundle.unconditional) == 1
+        rule = bundle.unconditional[0]
+        assert rule.globs == ()
+        # The raw '---' line and the fake 'paths:' survive as literal body.
+        assert "paths: src/*.py" in rule.content
+        assert "still body" in rule.content
+
+    def test_dots_closing_fence_accepted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """YAML '...' document-end terminator must close frontmatter like '---'."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        (rules_dir / "dots.md").write_text("---\npaths: \"*.py\"\n...\nbody-here\n")
+
+        bundle = load_rules(cwd)
+        assert len(bundle.conditional) == 1
+        assert bundle.conditional[0].globs == ("*.py",)
+        assert bundle.conditional[0].content.strip() == "body-here"
+
+    def test_top_level_yaml_list_is_unconditional(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-mapping YAML head (a bare list) is not a paths spec → unconditional."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        # Frontmatter parses to a list, not a dict → _extract_globs returns ().
+        (rules_dir / "list.md").write_text("---\n- a\n- b\n---\nbody\n")
+
+        bundle = load_rules(cwd)
+        assert bundle.conditional == []
+        assert len(bundle.unconditional) == 1
+        assert bundle.unconditional[0].globs == ()
+
+    def test_top_level_yaml_scalar_is_unconditional(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A scalar YAML head (a bare string) carries no paths → unconditional."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        (rules_dir / "scalar.md").write_text("---\njust-a-string\n---\nbody\n")
+
+        bundle = load_rules(cwd)
+        assert bundle.conditional == []
+        assert len(bundle.unconditional) == 1
+        assert bundle.unconditional[0].globs == ()
+
+
+class TestUniversalGlobNormalization:
+    """A rule globbing everything is unconditional — it must not be a path filter."""
+
+    @pytest.mark.parametrize("spec", ["**", "**/*", "**, **/*"])
+    def test_universal_globs_collapse_to_unconditional(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spec: str
+    ) -> None:
+        """Match-everything globs degrade to unconditional so they always apply."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        (rules_dir / "all.md").write_text(f"---\npaths: \"{spec}\"\n---\nbody\n")
+
+        bundle = load_rules(cwd)
+        assert bundle.conditional == []
+        assert len(bundle.unconditional) == 1
+        assert bundle.unconditional[0].globs == ()
+
+    def test_universal_mixed_with_specific_stays_conditional(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only an all-universal set collapses; one specific glob keeps it conditional."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        (rules_dir / "mix.md").write_text("---\npaths: \"**, src/*.py\"\n---\nbody\n")
+
+        bundle = load_rules(cwd)
+        assert bundle.unconditional == []
+        assert len(bundle.conditional) == 1
+        assert bundle.conditional[0].globs == ("**", "src/*.py")
+
+
+class TestMatchDedup:
+    """Two rules sharing one source must yield at most one match, even on overlap."""
+
+    def test_two_rules_same_source_collapse_to_one(self, tmp_path: Path) -> None:
+        """Re-loaded duplicate rules from one file must never double-fire on a path."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        target = proj / "foo.py"
+        target.write_text("")
+        src = proj / ".aura" / "rules" / "r.md"
+        src.parent.mkdir(parents=True)
+        src.write_text("body")
+        # Distinct Rule objects, identical resolved source_path.
+        first = _make_rule(src, proj, ("*.py",))
+        second = _make_rule(src, proj, ("*.py",))
+
+        bundle = RulesBundle(unconditional=[], conditional=[first, second])
+        result = match(bundle, target)
+        assert len(result) == 1
+        assert result[0] is first
+
+    def test_match_resolve_oserror_falls_back_to_unresolved(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A path that cannot be resolved (e.g. broken symlink) still matches by name."""
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        target = proj / "foo.py"
+        target.write_text("")
+        src = proj / ".aura" / "rules" / "r.md"
+        src.parent.mkdir(parents=True)
+        src.write_text("body")
+        rule = _make_rule(src, proj, ("*.py",))
+
+        original_resolve = cast(Callable[..., Path], Path.resolve)
+
+        def failing_resolve(self: Path, *args: Any, **kwargs: Any) -> Path:
+            if self == target:
+                raise OSError("cannot resolve")
+            return original_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", failing_resolve)
+        result = match(RulesBundle(unconditional=[], conditional=[rule]), target)
+        assert result == [rule]
+
+
+class TestScanIoFailures:
+    """Filesystem hiccups mid-scan must drop the offending file, never crash."""
+
+    def test_rglob_oserror_yields_empty_bundle(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If the rules dir becomes unreadable mid-walk, the layer yields no rules."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        (rules_dir / "a.md").write_text("A\n")
+
+        def failing_rglob(self: Path, *args: Any, **kwargs: Any) -> Any:
+            raise OSError("rglob denied")
+
+        monkeypatch.setattr(Path, "rglob", failing_rglob)
+        bundle = load_rules(cwd, force_reload=True)
+        assert bundle.unconditional == []
+        assert bundle.conditional == []
+
+    def test_read_bytes_oserror_drops_only_that_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unreadable rule file is skipped; sibling readable rules survive."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        (rules_dir / "bad.md").write_text("BAD\n")
+        (rules_dir / "ok.md").write_text("OK\n")
+
+        original_read = cast(Callable[..., bytes], Path.read_bytes)
+
+        def failing_read(self: Path, *args: Any, **kwargs: Any) -> bytes:
+            if self.name == "bad.md":
+                raise OSError("read denied")
+            return original_read(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_bytes", failing_read)
+        bundle = load_rules(cwd, force_reload=True)
+        names = {r.source_path.name for r in bundle.unconditional}
+        assert names == {"ok.md"}
+
+    def test_build_rule_resolve_oserror_drops_only_that_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file whose source path can't be resolved is dropped, siblings kept."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        (rules_dir / "stale.md").write_text("STALE\n")
+        (rules_dir / "good.md").write_text("GOOD\n")
+
+        original_resolve = cast(Callable[..., Path], Path.resolve)
+
+        def failing_resolve(self: Path, *args: Any, **kwargs: Any) -> Path:
+            if self.name == "stale.md":
+                raise OSError("resolve denied")
+            return original_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", failing_resolve)
+        bundle = load_rules(cwd, force_reload=True)
+        names = {r.source_path.name for r in bundle.unconditional}
+        assert names == {"good.md"}
+
+    def test_file_vanishing_between_walk_and_read_is_dropped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A rule deleted after rglob lists it (TOCTOU) is skipped, not fatal."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        (rules_dir / "ghost.md").write_text("GHOST\n")
+        (rules_dir / "real.md").write_text("REAL\n")
+
+        original_is_file = cast(Callable[..., bool], Path.is_file)
+        # ghost.md passes _scan_layer's is_file() but vanishes before _read_text's.
+        seen_ghost = {"count": 0}
+
+        def flaky_is_file(self: Path, *args: Any, **kwargs: Any) -> bool:
+            if self.name == "ghost.md":
+                seen_ghost["count"] += 1
+                return seen_ghost["count"] == 1
+            return original_is_file(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "is_file", flaky_is_file)
+        bundle = load_rules(cwd, force_reload=True)
+        names = {r.source_path.name for r in bundle.unconditional}
+        assert names == {"real.md"}
+
+    def test_directory_named_dot_md_is_skipped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A subdirectory literally named 'x.md' must not be parsed as a rule file."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        (rules_dir / "fakedir.md").mkdir()
+        (rules_dir / "good.md").write_text("GOOD\n")
+
+        bundle = load_rules(cwd, force_reload=True)
+        names = {r.source_path.name for r in bundle.unconditional}
+        assert names == {"good.md"}
+
+
+class TestOutOfCwdResolveFailure:
+    """An absolute glob whose prefix can't be resolved is conservatively flagged."""
+
+    def test_unresolvable_absolute_prefix_is_offender(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If we can't prove the absolute glob lives under cwd, warn rather than trust it."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        sentinel = "/SENTINEL_UNRESOLVABLE"
+        rule_md = rules_dir / "stray.md"
+        rule_md.write_text(f"---\npaths: \"{sentinel}/**/*.py\"\n---\nbody\n")
+
+        original_resolve = cast(Callable[..., Path], Path.resolve)
+
+        def failing_resolve(self: Path, *args: Any, **kwargs: Any) -> Path:
+            if str(self).startswith(sentinel):
+                raise OSError("resolve denied")
+            return original_resolve(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", failing_resolve)
+        log = tmp_path / "events.jsonl"
+        journal_module.configure(log)
+        try:
+            load_rules(cwd, force_reload=True)
+        finally:
+            journal_module.reset()
+
+        events = _read_events(log)
+        warnings = [e for e in events if e["event"] == "out_of_cwd_rule_warning"]
+        assert len(warnings) == 1, f"expected 1 warning, got {events}"
+        assert warnings[0]["patterns"] == [f"{sentinel}/**/*.py"]
+
+
+class TestCacheIdempotency:
+    """Repeated load/clear cycles must stay deterministic and isolated per cwd."""
+
+    def test_double_clear_cache_is_idempotent(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Clearing an already-clear cache must be a no-op, never raise KeyError."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd = tmp_path / "project"
+        rules_dir = _make_project_rules(cwd)
+        (rules_dir / "r.md").write_text("---\npaths: \"*.py\"\n---\nbody\n")
+
+        load_rules(cwd)
+        clear_cache(cwd)
+        clear_cache(cwd)
+        clear_cache()
+        # A fresh load still succeeds and is stable across repeats.
+        again = load_rules(cwd)
+        assert again is load_rules(cwd)
+        assert len(again.conditional) == 1
+
+    def test_distinct_cwds_cache_independently(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two projects must not share a cache slot; each keeps its own rules."""
+        _isolate_user_layer(monkeypatch, tmp_path)
+        cwd_a = tmp_path / "a"
+        cwd_b = tmp_path / "b"
+        (cwd_a / ".aura" / "rules").mkdir(parents=True)
+        (cwd_b / ".aura" / "rules").mkdir(parents=True)
+        (cwd_a / ".aura" / "rules" / "a.md").write_text("AAA\n")
+        (cwd_b / ".aura" / "rules" / "b.md").write_text("BBB\n")
+
+        bundle_a = load_rules(cwd_a)
+        bundle_b = load_rules(cwd_b)
+        assert {r.source_path.name for r in bundle_a.unconditional} == {"a.md"}
+        assert {r.source_path.name for r in bundle_b.unconditional} == {"b.md"}
+        # Clearing one leaves the other's cached reference intact.
+        clear_cache(cwd_a)
+        assert load_rules(cwd_b) is bundle_b

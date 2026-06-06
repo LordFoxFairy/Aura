@@ -465,3 +465,353 @@ async def test_emitter_failure_does_not_propagate(tmp_path: Path) -> None:
     await agent.aclose()
 
 
+@pytest.mark.asyncio
+async def test_microcompact_policy_present_but_nothing_cleared_skips(
+    tmp_path: Path,
+) -> None:
+    """A live policy that finds no clearable pair is still a no-op pass-through.
+
+    Below ``trigger_pairs`` the view stays identical; the method must
+    return the SAME list object and emit ``skipped`` (not ``ok``), so a
+    quiet turn never fabricates a false "compaction happened" signal.
+    """
+    from langchain_core.messages import ToolMessage
+    agent = _agent(tmp_path)
+    events: list[dict[str, Any]] = []
+    policy = MicrocompactPolicy(trigger_pairs=2, keep_recent=1)
+    compactor = _make_compactor(agent, events=events, microcompact_policy=policy)
+
+    # One pair only → len(pairs)=1 <= trigger_pairs=2 → nothing cleared.
+    msgs: list[Any] = [
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "read_file", "args": {}, "id": "call-0"}],
+        ),
+        ToolMessage(content="contents", tool_call_id="call-0"),
+    ]
+    out = await compactor.microcompact(msgs, agent.state.slots)
+
+    assert out is msgs
+    assert len(events) == 1
+    assert events[0]["trigger"] == "microcompact"
+    assert events[0]["outcome"] == "skipped"
+    assert events[0]["tokens_before"] == events[0]["tokens_after"]
+    await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_auto_zero_threshold_disables_compaction(
+    tmp_path: Path,
+) -> None:
+    """Threshold of 0 (disabled) must short-circuit before any token math.
+
+    ``effective_auto_compact_threshold() <= 0`` means the operator turned
+    auto-compaction off; even with usage far above any sane line the
+    method returns ``None`` + ``skipped`` without consulting usage, so a
+    disabled threshold can never trigger a run.
+    """
+    agent = _agent(tmp_path, threshold=0)
+    agent.state.total_tokens_used = 999_999
+    events: list[dict[str, Any]] = []
+    compactor = _make_compactor(agent, events=events)
+
+    seen: list[str] = []
+
+    async def _track(
+        self: AgentSession, *, source: CompactSource = "manual",
+    ) -> CompactResult:
+        seen.append(source)
+        return CompactResult(before_tokens=1, after_tokens=1, source=source)
+
+    with patch.object(AgentSession, "compact", _track):
+        result = await compactor.auto(
+            [], agent.state.slots, model="openai:gpt-4o-mini",
+        )
+
+    assert result is None
+    assert seen == []  # guard fired before delegating
+    assert len(events) == 1
+    assert events[0]["trigger"] == "auto"
+    assert events[0]["outcome"] == "skipped"
+    await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_auto_estimator_fallback_below_threshold_skips(
+    tmp_path: Path,
+) -> None:
+    """Zero recorded usage → estimate the prompt; under threshold still skips.
+
+    When ``total_tokens_used == 0`` (usage_metadata absent) the method
+    falls back to ``estimate_history_tokens``. An empty history estimates
+    only the pinned prefix (~few thousand tokens); with a huge threshold
+    that stays under the line, so the run is correctly skipped.
+    """
+    agent = _agent(tmp_path, threshold=10_000_000)
+    assert agent.state.total_tokens_used == 0
+    events: list[dict[str, Any]] = []
+    compactor = _make_compactor(agent, events=events)
+
+    seen: list[str] = []
+
+    async def _track(
+        self: AgentSession, *, source: CompactSource = "manual",
+    ) -> CompactResult:
+        seen.append(source)
+        return CompactResult(before_tokens=1, after_tokens=1, source=source)
+
+    with patch.object(AgentSession, "compact", _track):
+        result = await compactor.auto(
+            [], agent.state.slots, model="openai:gpt-4o-mini",
+        )
+
+    assert result is None
+    assert seen == []
+    assert len(events) == 1
+    assert events[0]["outcome"] == "skipped"
+    # Skip event carries the ESTIMATED count, not the raw 0.
+    assert events[0]["tokens_before"] > 0
+    await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_auto_estimator_fallback_above_threshold_runs(
+    tmp_path: Path,
+) -> None:
+    """Zero usage but estimate over threshold → run, journaled as estimator.
+
+    Confirms the estimator branch can itself trigger a compaction and that
+    the trigger record flags ``used_estimator=True`` so audits can tell a
+    real-usage trigger from a fallback-estimate one.
+    """
+    log = tmp_path / "audit.jsonl"
+    journal.configure(log)
+    try:
+        agent = _agent(tmp_path, threshold=10)
+        assert agent.state.total_tokens_used == 0
+        events: list[dict[str, Any]] = []
+        compactor = _make_compactor(agent, events=events)
+
+        async def _ok(
+            self: AgentSession, *, source: CompactSource = "manual",
+        ) -> CompactResult:
+            return CompactResult(
+                before_tokens=4000, after_tokens=20, source=source,
+            )
+
+        with patch.object(AgentSession, "compact", _ok):
+            result = await compactor.auto(
+                [], agent.state.slots, model="openai:gpt-4o-mini",
+            )
+
+        assert result is not None
+        assert result.after_tokens == 20
+        triggered = [
+            ev for ev in _read_journal(log)
+            if ev.get("event") == "auto_compact_triggered"
+        ]
+        assert len(triggered) == 1
+        assert triggered[0]["used_estimator"] is True
+        assert any(
+            ev["trigger"] == "auto" and ev["outcome"] == "ok" for ev in events
+        )
+        await agent.aclose()
+    finally:
+        journal.reset()
+
+
+@pytest.mark.asyncio
+async def test_auto_at_threshold_boundary_skips(tmp_path: Path) -> None:
+    """Usage exactly equal to threshold is NOT over the line → skip.
+
+    The guard is ``used <= threshold``; an off-by-one here would compact
+    one turn early on every session. Pinning equality proves the
+    inclusive boundary holds.
+    """
+    agent = _agent(tmp_path, threshold=50)
+    agent.state.total_tokens_used = 50
+    events: list[dict[str, Any]] = []
+    compactor = _make_compactor(agent, events=events)
+
+    seen: list[str] = []
+
+    async def _track(
+        self: AgentSession, *, source: CompactSource = "manual",
+    ) -> CompactResult:
+        seen.append(source)
+        return CompactResult(before_tokens=1, after_tokens=1, source=source)
+
+    with patch.object(AgentSession, "compact", _track):
+        result = await compactor.auto(
+            [], agent.state.slots, model="openai:gpt-4o-mini",
+        )
+
+    assert result is None
+    assert seen == []
+    assert events[0]["outcome"] == "skipped"
+    await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_auto_breaker_records_circuit_breaker_journal(
+    tmp_path: Path,
+) -> None:
+    """A tripped breaker must leave an auditable ``circuit_breaker`` record.
+
+    Operators diagnosing "why did compaction stop" rely on the
+    ``auto_compact_skipped_circuit_breaker`` event carrying the failure
+    count + threshold; this pins that the blocked path journals it.
+    """
+    import dataclasses as _dc
+    log = tmp_path / "audit.jsonl"
+    journal.configure(log)
+    try:
+        agent = _agent(tmp_path, threshold=10)
+        agent.state.total_tokens_used = 100
+        agent.state.slots = _dc.replace(
+            agent.state.slots,
+            consecutive_compact_failures=agent.config.compact
+            .max_consecutive_failures,
+        )
+        events: list[dict[str, Any]] = []
+        compactor = _make_compactor(agent, events=events)
+
+        async def _never(
+            self: AgentSession, *, source: CompactSource = "manual",
+        ) -> CompactResult:
+            raise AssertionError("breaker should block delegation")
+
+        with patch.object(AgentSession, "compact", _never):
+            result = await compactor.auto(
+                [], agent.state.slots, model="openai:gpt-4o-mini",
+            )
+
+        assert result is None
+        breaker = [
+            ev for ev in _read_journal(log)
+            if ev.get("event") == "auto_compact_skipped_circuit_breaker"
+        ]
+        assert len(breaker) == 1
+        assert breaker[0]["consecutive_failures"] == (
+            agent.config.compact.max_consecutive_failures
+        )
+        assert breaker[0]["threshold"] == 10
+        assert events[-1]["outcome"] == "skipped"
+        await agent.aclose()
+    finally:
+        journal.reset()
+
+
+@pytest.mark.asyncio
+async def test_manual_failure_emits_failed_and_reraises(
+    tmp_path: Path,
+) -> None:
+    """A failing manual compact surfaces the error AND emits ``failed``.
+
+    Manual is user-explicit; swallowing the exception would hide a broken
+    summarizer from the operator who just typed ``/compact``. The original
+    error must propagate while still leaving a ``failed`` audit event.
+    """
+    agent = _agent(tmp_path)
+    events: list[dict[str, Any]] = []
+    compactor = _make_compactor(agent, events=events)
+
+    async def _boom(
+        self: AgentSession, *, source: CompactSource = "manual",
+    ) -> CompactResult:
+        raise RuntimeError("summarizer down")
+
+    with (
+        patch.object(AgentSession, "compact", _boom),
+        pytest.raises(RuntimeError, match="summarizer down"),
+    ):
+        await compactor.manual([], agent.state.slots)
+
+    assert len(events) == 1
+    assert events[0]["trigger"] == "manual"
+    assert events[0]["outcome"] == "failed"
+    await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_microcompact_token_count_handles_list_content_blocks(
+    tmp_path: Path,
+) -> None:
+    """``before`` token math must walk list-shaped content, not just str.
+
+    Multimodal/tool-augmented turns carry content as a list of dict text
+    blocks and bare strings. ``_msg_chars`` sums those; a regression to
+    str-only would report ``tokens_before=0`` and corrupt every compact
+    event. Policy=None keeps this a pure measurement test.
+    """
+    agent = _agent(tmp_path)
+    events: list[dict[str, Any]] = []
+    compactor = _make_compactor(agent, events=events, microcompact_policy=None)
+
+    msgs: list[Any] = [
+        HumanMessage(
+            content=[
+                {"type": "text", "text": "hello"},
+                {"type": "image", "url": "x"},  # no 'text' key → contributes 0
+                "world",  # bare str block, last → exercises loop tail path
+            ],
+        ),
+    ]
+    out = await compactor.microcompact(msgs, agent.state.slots)
+
+    assert out is msgs
+    # "hello" (5) + "world" (5) = 10; image block adds nothing.
+    assert events[0]["tokens_before"] == 10
+    assert events[0]["tokens_after"] == 10
+    await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_microcompact_token_count_zero_for_unknown_content_shape(
+    tmp_path: Path,
+) -> None:
+    """Non-str / non-list content degrades to a 0 char count, never crashes.
+
+    Defensive null-zero boundary: if a provider hands back an exotic
+    content payload, the measurement returns 0 rather than raising, so the
+    compact pipeline stays alive. Built via ``model_construct`` to bypass
+    validation and inject the off-spec shape.
+    """
+    agent = _agent(tmp_path)
+    events: list[dict[str, Any]] = []
+    compactor = _make_compactor(agent, events=events, microcompact_policy=None)
+
+    weird = HumanMessage.model_construct(content=12345)
+    out = await compactor.microcompact([weird], agent.state.slots)
+
+    assert len(out) == 1
+    assert events[0]["tokens_before"] == 0
+    assert events[0]["outcome"] == "skipped"
+    await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_microcompact_token_count_skips_unexpected_list_block(
+    tmp_path: Path,
+) -> None:
+    """A list block that is neither a text dict nor a bare str adds 0.
+
+    Schema-crash boundary: a malformed content list (e.g. a stray int
+    block from a buggy provider) must be skipped, not summed or raised on.
+    Built via ``model_construct`` to inject the off-spec block shape.
+    """
+    agent = _agent(tmp_path)
+    events: list[dict[str, Any]] = []
+    compactor = _make_compactor(agent, events=events, microcompact_policy=None)
+
+    weird = HumanMessage.model_construct(
+        content=["ok", 999, {"type": "text", "text": "yes"}],
+    )
+    out = await compactor.microcompact([weird], agent.state.slots)
+
+    assert len(out) == 1
+    # "ok" (2) + "yes" (3) = 5; the int block contributes nothing.
+    assert events[0]["tokens_before"] == 5
+    assert events[0]["outcome"] == "skipped"
+    await agent.aclose()
+

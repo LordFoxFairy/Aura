@@ -105,7 +105,7 @@ class _ValidatingRedirectHandler(HTTPRedirectHandler):
         headers: HTTPMessage,
         newurl: str,
     ) -> Request | None:
-        if not (newurl.startswith("http://") or newurl.startswith("https://")):
+        if not newurl.startswith(("http://", "https://")):
             raise ToolError(f"refusing redirect to non-http(s) URL: {newurl}")
         host = urlparse(newurl).hostname
         if not host:
@@ -150,7 +150,7 @@ WebFetchResult = WebFetchSuccess | WebFetchFailure
 
 
 def _fetch(url: str, timeout: int = _DEFAULT_TIMEOUT) -> FetchedPage:
-    if not (url.startswith("http://") or url.startswith("https://")):
+    if not url.startswith(("http://", "https://")):
         raise ToolError(f"not an http(s) URL: {url}")
 
     parsed = urlparse(url)
@@ -355,9 +355,7 @@ class WebFetch(Tool):
 
     def validate_input(self, args: dict[str, Any]) -> ValidationResult:
         url = args.get("url", "")
-        if not isinstance(url, str) or not (
-            url.startswith("http://") or url.startswith("https://")
-        ):
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
             return ValidationResult(
                 invalid=True,
                 reason=f"not an http(s) URL: {url}",

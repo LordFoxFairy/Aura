@@ -70,7 +70,7 @@ def _extract_bash_mutation_targets(command: str) -> list[str]:
                 if i + 1 >= len(tokens):
                     continue
                 target = tokens[i + 1]
-                if target.startswith("/dev/") or target.startswith("("):
+                if target.startswith(("/dev/", "(")):
                     continue
                 targets.append(target)
             elif match := re.fullmatch(r"(\d*)?(>{1,2})(.*)", tok):
@@ -83,7 +83,7 @@ def _extract_bash_mutation_targets(command: str) -> list[str]:
                     if i + 1 >= len(tokens):
                         continue
                     target = tokens[i + 1]
-                if target.startswith("/dev/") or target.startswith("("):
+                if target.startswith(("/dev/", "(")):
                     continue
                 targets.append(target)
 

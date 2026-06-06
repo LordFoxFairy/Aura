@@ -58,7 +58,7 @@ def _reject_blocked_device(path: str) -> None:
 
 
 def _decode_with_bom(data: bytes) -> str:
-    if data.startswith(b"\xff\xfe") or data.startswith(b"\xfe\xff"):
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
         return data.decode("utf-16")
     if data.startswith(b"\xef\xbb\xbf"):
         return data[3:].decode("utf-8")

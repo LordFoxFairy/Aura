@@ -7,12 +7,12 @@ from collections.abc import Callable
 from typing import Any, Literal, TypedDict
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator
 
 from aura.application.loop_state import LoopState
 from aura.domain.permission.session import SessionRuleSet
 from aura.domain.skill import Skill
-from aura.domain.tool import ToolError, ToolMetadata
+from aura.domain.tool import ToolError, ToolMetadata, coerce_json_collection
 from aura.infrastructure.persistence import journal
 from aura.infrastructure.skills.command import install_skill_allow_rules
 from aura.infrastructure.skills.errors import format_missing_args_error
@@ -36,6 +36,11 @@ class SkillParams(BaseModel):
         default=None,
         description="Positional arg values matching the skill's declared arguments.",
     )
+
+    @field_validator("arguments", mode="before")
+    @classmethod
+    def _coerce_arguments(cls, v: object) -> object:
+        return coerce_json_collection(v)
 
 
 class SkillResult(TypedDict):

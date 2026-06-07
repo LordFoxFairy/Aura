@@ -6,9 +6,9 @@ from collections.abc import Awaitable, Callable
 from typing import Any, TypedDict
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from aura.domain.tool import ToolMetadata
+from aura.domain.tool import ToolMetadata, coerce_json_collection
 
 
 class FormOptionDict(TypedDict, total=False):
@@ -45,9 +45,19 @@ class FormQuestion(BaseModel):
     options: list[FormOption] | None = None
     free_text_placeholder: str | None = None
 
+    @field_validator("options", mode="before")
+    @classmethod
+    def _coerce_options(cls, v: object) -> object:
+        return coerce_json_collection(v)
+
 
 class AskUserQuestionParams(BaseModel):
     questions: list[FormQuestion] = Field(min_length=1, max_length=4)
+
+    @field_validator("questions", mode="before")
+    @classmethod
+    def _coerce_questions(cls, v: object) -> object:
+        return coerce_json_collection(v)
 
 
 class AskUserResult(TypedDict):

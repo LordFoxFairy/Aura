@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -74,6 +75,18 @@ def tool_metadata(
         "timeout_sec": timeout_sec,
         "is_search_command": is_search_command,
     }
+
+
+def coerce_json_collection(value: object) -> object:
+    # Weak models often stringify list/dict tool args; decode JSON-looking strings.
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped[:1] in ("[", "{"):
+            try:
+                return json.loads(stripped)
+            except ValueError:
+                return value
+    return value
 
 
 def resolve_is_destructive(

@@ -5,17 +5,22 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from aura.application.loop_state import LoopState
 from aura.domain.todos import TodoItem
-from aura.domain.tool import ToolMetadata
+from aura.domain.tool import ToolMetadata, coerce_json_collection
 
 
 class TodoWriteParams(BaseModel):
     todos: list[TodoItem] = Field(
         ..., description="Complete new list; replaces prior state."
     )
+
+    @field_validator("todos", mode="before")
+    @classmethod
+    def _coerce_todos(cls, v: object) -> object:
+        return coerce_json_collection(v)
 
     @model_validator(mode="after")
     def _ensure_single_in_progress(self) -> TodoWriteParams:

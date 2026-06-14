@@ -31,8 +31,14 @@ class _PrintAgent:
     state = object()
     hooks = HookChain()
 
-    def __init__(self, events: list[object] | None = None) -> None:
+    def __init__(
+        self,
+        events: list[object] | None = None,
+        *,
+        stream: AsyncIterator[object] | None = None,
+    ) -> None:
         self.events = events or []
+        self._stream = stream
         self.order: list[str] = []
         self.storage = _FakeStorage(self.order)
         self.session_id = "print-test-session"
@@ -41,10 +47,16 @@ class _PrintAgent:
         self.closed_async = False
         self.closed_sync = False
 
-    async def astream(self, prompt: str) -> AsyncIterator[object]:
+    def astream(self, prompt: str) -> AsyncIterator[object]:
         self.last_prompt = prompt
-        for event in self.events:
-            yield event
+        if self._stream is not None:
+            return self._stream
+
+        async def _gen() -> AsyncIterator[object]:
+            for event in self.events:
+                yield event
+
+        return _gen()
 
     async def aconnect(self) -> None:
         self.connected = True
@@ -61,6 +73,28 @@ class _PrintAgent:
 
     def clear_session(self) -> None:
         self.cleared_session = True
+
+
+class _ClosableEventStream:
+    def __init__(self, events: list[object]) -> None:
+        self._events = events
+        self._idx = 0
+        self.closed = False
+        self.consumed = 0
+
+    def __aiter__(self) -> _ClosableEventStream:
+        return self
+
+    async def __anext__(self) -> object:
+        if self._idx >= len(self._events):
+            raise StopAsyncIteration
+        event = self._events[self._idx]
+        self._idx += 1
+        self.consumed += 1
+        return event
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 class _FakeWatcher:
@@ -230,6 +264,337 @@ def test_main_print_mode_handles_clear_command_without_repl(
     out = capsys.readouterr()
     assert out.out == "session cleared\n"
     assert agent.cleared_session is True
+
+
+def test_main_print_mode_handles_resume_listing_view_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_dir = _write_min_layout(tmp_path, settings={})
+    agent = _PrintAgent()
+
+    def fake_build_agent(*_args: object, **_kwargs: object) -> _PrintAgent:
+        return agent
+
+    def fake_build_default_registry(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    async def fake_dispatch(
+        line: str, _agent: object, _registry: object
+    ) -> object:
+        from aura.application.commands.types import CommandResult
+
+        assert line == "/resume"
+        return CommandResult(
+            handled=True,
+            kind="view",
+            text=(
+                "recent sessions:\n"
+                "  default  (just now)\n\n"
+                "/resume <session_id> to restore one.\n"
+            ),
+        )
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FAKE_API_KEY", "dummy")
+    monkeypatch.setattr(sys, "argv", ["aura", "-p", "/resume"])
+    monkeypatch.setattr(_main_mod, "build_agent", fake_build_agent)
+    monkeypatch.setattr(_main_mod, "FileWatcher", _FakeWatcher)
+    monkeypatch.setattr(
+        _main_mod, "build_default_registry", fake_build_default_registry
+    )
+    monkeypatch.setattr(_main_mod, "dispatch", fake_dispatch)
+    monkeypatch.setattr(_main_mod, "AgentSession", _PrintAgent)
+
+    assert _main_mod.main() == 0
+    out = capsys.readouterr()
+    assert out.out == (
+        "recent sessions:\n"
+        "  default  (just now)\n\n"
+        "/resume <session_id> to restore one.\n"
+    )
+    assert out.err == ""
+
+
+def test_main_print_mode_handles_resume_not_found(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_dir = _write_min_layout(tmp_path, settings={})
+    agent = _PrintAgent()
+
+    def fake_build_agent(*_args: object, **_kwargs: object) -> _PrintAgent:
+        return agent
+
+    def fake_build_default_registry(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    async def fake_dispatch(
+        line: str, _agent: object, _registry: object
+    ) -> object:
+        from aura.application.commands.types import CommandResult
+
+        assert line == "/resume ghost"
+        return CommandResult(
+            handled=True,
+            kind="print",
+            text="session 'ghost' not found",
+        )
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FAKE_API_KEY", "dummy")
+    monkeypatch.setattr(sys, "argv", ["aura", "-p", "/resume ghost"])
+    monkeypatch.setattr(_main_mod, "build_agent", fake_build_agent)
+    monkeypatch.setattr(_main_mod, "FileWatcher", _FakeWatcher)
+    monkeypatch.setattr(
+        _main_mod, "build_default_registry", fake_build_default_registry
+    )
+    monkeypatch.setattr(_main_mod, "dispatch", fake_dispatch)
+    monkeypatch.setattr(_main_mod, "AgentSession", _PrintAgent)
+
+    assert _main_mod.main() == 0
+    out = capsys.readouterr()
+    assert out.out == "session 'ghost' not found\n"
+    assert out.err == ""
+
+
+def test_main_print_mode_handles_stats_empty_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_dir = _write_min_layout(tmp_path, settings={})
+    agent = _PrintAgent()
+
+    def fake_build_agent(*_args: object, **_kwargs: object) -> _PrintAgent:
+        return agent
+
+    def fake_build_default_registry(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    async def fake_dispatch(
+        line: str, _agent: object, _registry: object
+    ) -> object:
+        from aura.application.commands.types import CommandResult
+
+        assert line == "/stats"
+        return CommandResult(
+            handled=True,
+            kind="print",
+            text=(
+                "No usage recorded yet — /stats becomes useful "
+                "once the agent has completed at least one turn."
+            ),
+        )
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FAKE_API_KEY", "dummy")
+    monkeypatch.setattr(sys, "argv", ["aura", "-p", "/stats"])
+    monkeypatch.setattr(_main_mod, "build_agent", fake_build_agent)
+    monkeypatch.setattr(_main_mod, "FileWatcher", _FakeWatcher)
+    monkeypatch.setattr(
+        _main_mod, "build_default_registry", fake_build_default_registry
+    )
+    monkeypatch.setattr(_main_mod, "dispatch", fake_dispatch)
+    monkeypatch.setattr(_main_mod, "AgentSession", _PrintAgent)
+
+    assert _main_mod.main() == 0
+    out = capsys.readouterr()
+    assert out.out == (
+        "No usage recorded yet — /stats becomes useful "
+        "once the agent has completed at least one turn.\n"
+    )
+    assert out.err == ""
+
+
+def test_main_print_mode_handles_tasks_empty_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_dir = _write_min_layout(tmp_path, settings={})
+    agent = _PrintAgent()
+
+    def fake_build_agent(*_args: object, **_kwargs: object) -> _PrintAgent:
+        return agent
+
+    def fake_build_default_registry(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    async def fake_dispatch(
+        line: str, _agent: object, _registry: object
+    ) -> object:
+        from aura.application.commands.types import CommandResult
+
+        assert line == "/tasks"
+        return CommandResult(handled=True, kind="print", text="(no tasks)")
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FAKE_API_KEY", "dummy")
+    monkeypatch.setattr(sys, "argv", ["aura", "-p", "/tasks"])
+    monkeypatch.setattr(_main_mod, "build_agent", fake_build_agent)
+    monkeypatch.setattr(_main_mod, "FileWatcher", _FakeWatcher)
+    monkeypatch.setattr(
+        _main_mod, "build_default_registry", fake_build_default_registry
+    )
+    monkeypatch.setattr(_main_mod, "dispatch", fake_dispatch)
+    monkeypatch.setattr(_main_mod, "AgentSession", _PrintAgent)
+
+    assert _main_mod.main() == 0
+    out = capsys.readouterr()
+    assert out.out == "(no tasks)\n"
+    assert out.err == ""
+
+
+def test_main_print_mode_prefixes_generic_tool_failures_on_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_dir = _write_min_layout(tmp_path, settings={})
+    agent = _PrintAgent(
+        events=[
+            ToolCallCompleted(
+                name="read_file",
+                output=None,
+                error="not found: /definitely/missing.txt",
+            )
+        ]
+    )
+
+    def fake_build_agent(*_args: object, **_kwargs: object) -> _PrintAgent:
+        return agent
+
+    def fake_build_default_registry(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    async def fake_dispatch(
+        line: str, _agent: object, _registry: object
+    ) -> object:
+        from aura.application.commands.types import CommandResult
+
+        return CommandResult(handled=False, kind="noop", text="")
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FAKE_API_KEY", "dummy")
+    monkeypatch.setattr(sys, "argv", ["aura", "-p", "read missing file"])
+    monkeypatch.setattr(_main_mod, "build_agent", fake_build_agent)
+    monkeypatch.setattr(_main_mod, "FileWatcher", _FakeWatcher)
+    monkeypatch.setattr(
+        _main_mod, "build_default_registry", fake_build_default_registry
+    )
+    monkeypatch.setattr(_main_mod, "dispatch", fake_dispatch)
+
+    assert _main_mod.main() == 2
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "read_file failed: not found: /definitely/missing.txt" in out.err
+
+
+def test_main_print_mode_drains_event_stream_after_tool_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_dir = _write_min_layout(tmp_path, settings={})
+    stream = _ClosableEventStream(
+        [
+            ToolCallCompleted(
+                name="read_file",
+                output=None,
+                error="not found: /definitely/missing.txt",
+            ),
+            Final("ignored"),
+        ]
+    )
+    agent = _PrintAgent(stream=stream)
+
+    def fake_build_agent(*_args: object, **_kwargs: object) -> _PrintAgent:
+        return agent
+
+    def fake_build_default_registry(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    async def fake_dispatch(
+        line: str, _agent: object, _registry: object
+    ) -> object:
+        from aura.application.commands.types import CommandResult
+
+        return CommandResult(handled=False, kind="noop", text="")
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FAKE_API_KEY", "dummy")
+    monkeypatch.setattr(sys, "argv", ["aura", "-p", "read missing file"])
+    monkeypatch.setattr(_main_mod, "build_agent", fake_build_agent)
+    monkeypatch.setattr(_main_mod, "FileWatcher", _FakeWatcher)
+    monkeypatch.setattr(
+        _main_mod, "build_default_registry", fake_build_default_registry
+    )
+    monkeypatch.setattr(_main_mod, "dispatch", fake_dispatch)
+
+    assert _main_mod.main() == 2
+    capsys.readouterr()
+    assert stream.consumed == 2
+
+
+def test_main_print_mode_surfaces_actionable_ask_user_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_dir = _write_min_layout(tmp_path, settings={})
+    agent = _PrintAgent(
+        events=[
+            ToolCallCompleted(
+                name="ask_user_question",
+                output=None,
+                error=(
+                    "print mode cannot ask follow-up questions interactively; "
+                    "rerun in the REPL or remove the need for ask_user_question"
+                ),
+            )
+        ]
+    )
+
+    def fake_build_agent(*_args: object, **_kwargs: object) -> _PrintAgent:
+        return agent
+
+    def fake_build_default_registry(*_args: object, **_kwargs: object) -> object:
+        return object()
+
+    async def fake_dispatch(
+        line: str, _agent: object, _registry: object
+    ) -> object:
+        from aura.application.commands.types import CommandResult
+
+        return CommandResult(handled=False, kind="noop", text="")
+
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("FAKE_API_KEY", "dummy")
+    monkeypatch.setattr(sys, "argv", ["aura", "-p", "ask a follow-up question"])
+    monkeypatch.setattr(_main_mod, "build_agent", fake_build_agent)
+    monkeypatch.setattr(_main_mod, "FileWatcher", _FakeWatcher)
+    monkeypatch.setattr(
+        _main_mod, "build_default_registry", fake_build_default_registry
+    )
+    monkeypatch.setattr(_main_mod, "dispatch", fake_dispatch)
+
+    assert _main_mod.main() == 2
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert (
+        "print mode cannot ask follow-up questions; rerun without -p "
+        "(interactive REPL) or make the prompt self-contained"
+    ) in out.err
 
 
 def test_main_print_mode_reports_permission_failure_on_stderr(

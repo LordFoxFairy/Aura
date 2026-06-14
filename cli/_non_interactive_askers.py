@@ -9,8 +9,8 @@ from aura.tools.ask_user import FormQuestionDict, UserAsker
 
 PRINT_MODE_PERMISSION_FEEDBACK = "print_mode_permission_required"
 PRINT_MODE_USER_QUESTION_ERROR = (
-    "print mode cannot ask follow-up questions interactively; "
-    "rerun in the REPL or remove the need for ask_user_question"
+    "print mode cannot ask follow-up questions; "
+    "rerun without -p (interactive REPL) or make the prompt self-contained"
 )
 
 

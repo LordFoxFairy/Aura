@@ -309,7 +309,10 @@ async def _run_print_mode(agent: AgentSession | _PrintStreamAgent, prompt: str) 
     parts: list[str] = []
     final_message = ""
     saw_error = False
+    pending_error: ToolError | None = None
     async for event in agent.astream(prompt):
+        if pending_error is not None:
+            continue
         if isinstance(event, AssistantDelta):
             parts.append(event.text)
         elif isinstance(event, Final):
@@ -317,13 +320,21 @@ async def _run_print_mode(agent: AgentSession | _PrintStreamAgent, prompt: str) 
         elif isinstance(event, ToolCallCompleted) and event.error:
             saw_error = True
             if PRINT_MODE_PERMISSION_FEEDBACK in event.error:
-                raise ToolError(
+                pending_error = ToolError(
                     "print mode cannot satisfy this tool's permission prompt; "
                     "rerun in the REPL or add an allow rule"
                 )
-            if PRINT_MODE_USER_QUESTION_ERROR in event.error:
-                raise ToolError(PRINT_MODE_USER_QUESTION_ERROR)
-            raise ToolError(event.error)
+            elif (
+                event.name == "ask_user_question"
+                or PRINT_MODE_USER_QUESTION_ERROR in event.error
+            ):
+                pending_error = ToolError(PRINT_MODE_USER_QUESTION_ERROR)
+            else:
+                pending_error = ToolError(
+                    f"{event.name} failed: {event.error}"
+                )
+    if pending_error is not None:
+        raise pending_error
     text = "".join(parts)
     if text.strip():
         return text
